@@ -42,6 +42,18 @@ class PartsManager:
         return [child.GetName() for child in load_prims_prim.GetChildren()]
 
     @classmethod
+    def get_load_prims(cls) -> list:
+        """load_prims 아래 직계 자식 프림 객체 목록을 반환."""
+        stage = cls.get_stage()
+        if stage is None:
+            return []
+        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
+        if not load_prims_prim.IsValid():
+            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
+            return []
+        return list(load_prims_prim.GetChildren())
+
+    @classmethod
     def get_load_prim_paths(cls) -> list[str]:
         """load_prims 아래 직계 자식 프림의 전체 SdfPath(문자열) 목록을 반환."""
         stage = cls.get_stage()
