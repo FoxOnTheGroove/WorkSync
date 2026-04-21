@@ -20,14 +20,19 @@ class PrimNode:
 
 class PartsManager:
 
-    @staticmethod
-    def get_stage() -> Usd.Stage:
+    @classmethod
+    def initialize(cls) -> None:
+        """확장 시작 시 호출. 추후 _instance 등 클래스 레벨 상태 초기화에 사용."""
+        pass
+
+    @classmethod
+    def get_stage(cls) -> Usd.Stage:
         return omni.usd.get_context().get_stage()
 
-    @staticmethod
-    def get_load_prim_names() -> list[str]:
+    @classmethod
+    def get_load_prim_names(cls) -> list[str]:
         """load_prims 아래 직계 자식 프림의 이름 목록을 반환."""
-        stage = PartsManager.get_stage()
+        stage = cls.get_stage()
         if stage is None:
             return []
         load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
@@ -36,10 +41,10 @@ class PartsManager:
             return []
         return [child.GetName() for child in load_prims_prim.GetChildren()]
 
-    @staticmethod
-    def get_load_prim_paths() -> list[str]:
+    @classmethod
+    def get_load_prim_paths(cls) -> list[str]:
         """load_prims 아래 직계 자식 프림의 전체 SdfPath(문자열) 목록을 반환."""
-        stage = PartsManager.get_stage()
+        stage = cls.get_stage()
         if stage is None:
             return []
         load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
@@ -48,21 +53,21 @@ class PartsManager:
             return []
         return [str(child.GetPath()) for child in load_prims_prim.GetChildren()]
 
-    @staticmethod
-    def get_prim_tree() -> list:
+    @classmethod
+    def get_prim_tree(cls) -> list:
         """load_prims 아래 전체 계층을 PrimNode 트리로 반환."""
-        stage = PartsManager.get_stage()
+        stage = cls.get_stage()
         if stage is None:
             return []
         load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
         if not load_prims_prim.IsValid():
             print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
             return []
-        return [PartsManager._build_subtree(child, depth=0) for child in load_prims_prim.GetChildren()]
+        return [cls._build_subtree(child, depth=0) for child in load_prims_prim.GetChildren()]
 
-    @staticmethod
-    def _build_subtree(prim: Usd.Prim, depth: int) -> PrimNode:
-        children = [PartsManager._build_subtree(child, depth + 1) for child in prim.GetChildren()]
+    @classmethod
+    def _build_subtree(cls, prim: Usd.Prim, depth: int) -> PrimNode:
+        children = [cls._build_subtree(child, depth + 1) for child in prim.GetChildren()]
         return PrimNode(
             prim=prim,
             path=str(prim.GetPath()),
@@ -73,10 +78,10 @@ class PartsManager:
             is_leaf=(len(children) == 0),
         )
 
-    @staticmethod
-    def get_visibility(path: str) -> bool:
+    @classmethod
+    def get_visibility(cls, path: str) -> bool:
         """ComputeVisibility()로 상속을 반영한 실제 가시성을 반환."""
-        stage = PartsManager.get_stage()
+        stage = cls.get_stage()
         if stage is None:
             return True
         prim = stage.GetPrimAtPath(path)
@@ -87,10 +92,10 @@ class PartsManager:
             return True
         return imageable.ComputeVisibility() != UsdGeom.Tokens.invisible
 
-    @staticmethod
-    def set_visibility(path: str, visible: bool) -> None:
+    @classmethod
+    def set_visibility(cls, path: str, visible: bool) -> None:
         """대상 프림의 가시성을 설정."""
-        stage = PartsManager.get_stage()
+        stage = cls.get_stage()
         if stage is None:
             return
         prim = stage.GetPrimAtPath(path)

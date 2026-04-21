@@ -7,6 +7,7 @@ class MyExtension(omni.ext.IExt):
 
     def on_startup(self, ext_id):
         print("[parts_manager] startup")
+        PartsManager.initialize()
         self._ui = PartsManagerUI()
         self._ui.build_ui()
 

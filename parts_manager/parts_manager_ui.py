@@ -35,7 +35,6 @@ class PartsManagerUI:
                     ui.Label("Parts Manager", style={"font_size": 15})
                     ui.Spacer()
                     ui.Button("find", width=40, height=22, clicked_fn=self._on_refresh)
-                ui.Separator()
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
                     self._list_stack = ui.VStack(spacing=4)
