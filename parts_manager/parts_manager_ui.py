@@ -9,6 +9,12 @@ _SCROLL_STYLE = {
     "padding":          4,
 }
 
+_PART_FRAME_STYLE = {
+    "border_color":  0xFF555555,
+    "border_width":  1,
+    "border_radius": 4,
+}
+
 
 class PartsManagerUI:
 
@@ -25,15 +31,15 @@ class PartsManagerUI:
         self._window = ui.Window("Parts Manager", width=300, height=400)
 
         with self._window.frame:
-            with ui.VStack(spacing=4):
-                with ui.HStack(height=28):
+            with ui.VStack(spacing=2):
+                with ui.HStack(height=24):
                     ui.Label("Parts Manager", style={"font_size": 15})
                     ui.Spacer()
-                    ui.Button("↻", width=28, height=24, clicked_fn=self._on_refresh)
+                    ui.Button("find", width=40, height=22, clicked_fn=self._on_refresh)
                 ui.Separator()
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
-                    self._list_stack = ui.VStack(spacing=1)
+                    self._list_stack = ui.VStack(spacing=4)
                 self._refresh_list()
 
     def _on_refresh(self):
@@ -54,9 +60,17 @@ class PartsManagerUI:
                     self._render_node(node)
 
     def _render_node(self, node: PrimNode):
+        if node.is_part:
+            with ui.Frame(style=_PART_FRAME_STYLE):
+                with ui.VStack(spacing=0):
+                    self._render_node_content(node)
+        else:
+            self._render_node_content(node)
+
+    def _render_node_content(self, node: PrimNode):
         path = node.path
         is_visible = self._manager.get_visibility(path)
-        is_expanded = not self._collapsed.get(path, False)
+        is_expanded = not self._collapsed.get(path, True)
 
         row_height = 26 if node.is_part else 22
         row_style = {"background_color": 0xFF383838} if node.is_part else {}
@@ -91,7 +105,7 @@ class PartsManagerUI:
             ui.Label(node.name, style=label_style)
 
         if not node.is_leaf:
-            children_stack = ui.VStack(spacing=1)
+            children_stack = ui.VStack(spacing=0)
             children_stack.visible = is_expanded
             self._children_stacks[path] = children_stack
             with children_stack:
@@ -99,7 +113,7 @@ class PartsManagerUI:
                     self._render_node(child)
 
     def _on_expand_toggle(self, path: str):
-        self._collapsed[path] = not self._collapsed.get(path, False)
+        self._collapsed[path] = not self._collapsed.get(path, True)
         now_expanded = not self._collapsed[path]
 
         stack = self._children_stacks.get(path)

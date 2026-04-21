@@ -2,6 +2,7 @@ from pxr import Usd, Sdf, UsdGeom
 import omni.usd
 from dataclasses import dataclass, field
 
+__all__ = ["PartsManager", "PrimNode", "LOAD_PRIMS_PATH"]
 
 # load_prims 경로: 루트 아래 고정
 LOAD_PRIMS_PATH = "/World/load_prims"  # 실제 환경에 따라 /Root/load_prims 로 변경
