@@ -18,8 +18,7 @@ _PART_FRAME_STYLE = {
 
 class PartsManagerUI:
 
-    def __init__(self, manager: PartsManager):
-        self._manager = manager
+    def __init__(self):
         self._window = None
         self._tree: list = []
         self._collapsed: dict[str, bool] = {}
@@ -50,7 +49,7 @@ class PartsManagerUI:
         self._expand_buttons = {}
         self._vis_buttons = {}
         self._children_stacks = {}
-        self._tree = self._manager.get_prim_tree()
+        self._tree = PartsManager.get_prim_tree()
 
         with self._list_stack:
             if not self._tree:
@@ -69,7 +68,7 @@ class PartsManagerUI:
 
     def _render_node_content(self, node: PrimNode):
         path = node.path
-        is_visible = self._manager.get_visibility(path)
+        is_visible = PartsManager.get_visibility(path)
         is_expanded = not self._collapsed.get(path, True)
 
         row_height = 26 if node.is_part else 22
@@ -125,10 +124,10 @@ class PartsManagerUI:
             btn.text = "v" if now_expanded else ">"
 
     def _on_vis_toggle(self, path: str):
-        current = self._manager.get_visibility(path)
-        self._manager.set_visibility(path, not current)
+        current = PartsManager.get_visibility(path)
+        PartsManager.set_visibility(path, not current)
         for p, btn in self._vis_buttons.items():
-            vis = self._manager.get_visibility(p)
+            vis = PartsManager.get_visibility(p)
             btn.text = "O" if vis else "-"
             btn.style = {} if vis else {"color": 0xFF666666}
 
