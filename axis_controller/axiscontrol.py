@@ -17,16 +17,16 @@ class AxisControl:
 
     _initialized: bool = False
 
-    # ------------------------------------------------------------------ public API
+    # ------------------------------------------------------------------ 공개 API
 
     @classmethod
     def initialize(cls) -> bool:
         if not Orbit._cam_info:
-            print("[AxisControl] Orbit._cam_info is empty.")
+            print("[AxisControl] Orbit._cam_info가 비어 있습니다.")
             cls._initialized = False
             return False
         cls._initialized = True
-        print("[AxisControl] Initialized.")
+        print("[AxisControl] 초기화 완료.")
         return True
 
     @classmethod
@@ -46,26 +46,26 @@ class AxisControl:
     @classmethod
     def set_camera(cls, camera_prim: Usd.Prim, axis: str) -> None:
         if not cls._initialized:
-            print("[AxisControl] Not initialized. Call AxisControl.initialize() first.")
+            print("[AxisControl] 초기화되지 않았습니다. AxisControl.initialize()를 먼저 호출하세요.")
             return
 
         if axis not in AXIS_VECTORS:
-            print(f"[AxisControl] Invalid axis: '{axis}'. Valid: {list(AXIS_VECTORS.keys())}")
+            print(f"[AxisControl] 잘못된 축: '{axis}'. 유효값: {list(AXIS_VECTORS.keys())}")
             return
 
         if not camera_prim or not camera_prim.IsValid():
-            print("[AxisControl] Invalid camera prim.")
+            print("[AxisControl] 유효하지 않은 카메라 prim.")
             return
 
         target_prim = cls._get_target_for_camera(camera_prim)
         if target_prim is None or not target_prim.IsValid():
-            print(f"[AxisControl] No valid target for camera '{camera_prim.GetName()}'.")
+            print(f"[AxisControl] 카메라 '{camera_prim.GetName()}'에 유효한 타겟이 없습니다.")
             return
 
         cam_pos    = cls._get_world_translation(camera_prim)
         target_pos = cls._get_world_translation(target_prim)
 
-        # Prefer COI distance (orbit radius); fall back to current cam-target gap
+        # COI 거리(orbit 반경) 우선 사용; 없으면 현재 카메라-타겟 거리로 대체
         distance = cls._get_coi_distance(camera_prim)
         if distance is None or distance < 1e-6:
             distance = (cam_pos - target_pos).GetLength()
@@ -75,10 +75,10 @@ class AxisControl:
         eye    = target_pos + AXIS_VECTORS[axis] * distance
         matrix = cls._build_lookat_matrix(eye, target_pos, axis)
 
-        cls._apply_lookat(camera_prim, matrix)
+        cls._apply_lookat(camera_prim, matrix, axis)
         cls._set_coi(camera_prim, distance)
 
-    # ------------------------------------------------------------------ internals
+    # ------------------------------------------------------------------ 내부 메서드
 
     @classmethod
     def _get_stage(cls) -> Usd.Stage:
@@ -100,7 +100,7 @@ class AxisControl:
 
     @classmethod
     def _get_coi_distance(cls, camera_prim: Usd.Prim) -> "float | None":
-        # omni:kit:centerOfInterest is in camera-local space; its length = orbit radius
+        # omni:kit:centerOfInterest는 카메라 로컬 기준 관심점 벡터; 길이 = orbit 반경
         attr = camera_prim.GetAttribute("omni:kit:centerOfInterest")
         if not attr.IsValid():
             return None
@@ -111,15 +111,14 @@ class AxisControl:
 
     @classmethod
     def _set_coi(cls, camera_prim: Usd.Prim, distance: float) -> None:
-        # After repositioning the camera looks along -Z straight at the target,
-        # so the new COI in camera-local space is (0, 0, -distance).
+        # 이동 후 카메라는 -Z 방향으로 타겟을 정면으로 바라보므로 COI = (0, 0, -distance)
         attr = camera_prim.GetAttribute("omni:kit:centerOfInterest")
         if not attr.IsValid():
             return
         coi = attr.Get()
         if coi is None:
             return
-        # Preserve original precision (Vec3f vs Vec3d)
+        # 원본 정밀도 유지 (Vec3f vs Vec3d)
         if isinstance(coi, Gf.Vec3f):
             attr.Set(Gf.Vec3f(0.0, 0.0, float(-distance)))
         else:
@@ -129,10 +128,10 @@ class AxisControl:
     def _build_lookat_matrix(
         cls, eye: Gf.Vec3d, target: Gf.Vec3d, axis: str
     ) -> Gf.Matrix4d:
-        # Y-up for X/Z axes; Z-up when looking along Y (avoids gimbal singularity)
+        # X/Z 축은 Y-up; Y 방향 시점은 짐벌락 방지를 위해 Z-up
         world_up = Gf.Vec3d(0, 0, 1) if axis in ("y", "-y") else Gf.Vec3d(0, 1, 0)
 
-        # USD cameras look along local -Z; camera +Z points away from target
+        # USD 카메라는 로컬 -Z를 봄; +Z = 타겟 반대방향
         forward = (eye - target).GetNormalized()
 
         right = Gf.Cross(world_up, forward)
@@ -143,7 +142,7 @@ class AxisControl:
 
         up = Gf.Cross(forward, right).GetNormalized()
 
-        # Row-major layout for USD row-vector convention (p' = p * M)
+        # USD row-vector 규약 (p' = p * M) 에 맞춘 row-major 배치
         m = Gf.Matrix4d()
         m.SetRow(0, Gf.Vec4d(right[0],   right[1],   right[2],   0))
         m.SetRow(1, Gf.Vec4d(up[0],      up[1],      up[2],      0))
@@ -152,18 +151,26 @@ class AxisControl:
         return m
 
     @classmethod
-    def _apply_lookat(cls, camera_prim: Usd.Prim, matrix: Gf.Matrix4d) -> None:
+    def _apply_lookat(cls, camera_prim: Usd.Prim, matrix: Gf.Matrix4d, axis: str) -> None:
         time = Usd.TimeCode.Default()
 
-        # translation → double (xformOp:translate is double3)
-        # rotation/scale/pivot → float (xformOp:rotateXYZ / scale / pivot are float3)
-        translation = matrix.ExtractTranslation()          # Gf.Vec3d
-        euler_d     = matrix.ExtractRotation().Decompose(
-            Gf.Vec3d(1, 0, 0),
-            Gf.Vec3d(0, 1, 0),
-            Gf.Vec3d(0, 0, 1),
-        )
-        rotation = Gf.Vec3f(float(euler_d[0]), float(euler_d[1]), float(euler_d[2]))
+        # translate는 double3, rotateXYZ/scale/pivot은 float3
+        translation = matrix.ExtractTranslation()  # Gf.Vec3d
+
+        # +Y/-Y 축은 pitch=90° 짐벌락 → Decompose 결과가 틀리므로 직접 계산된 값 사용
+        # 검증: Rx(90)·Rz(180) = [(-1,0,0),(0,0,1),(0,1,0)] (+Y 행렬과 일치)
+        #       Rx(90)         = [(1,0,0),(0,0,1),(0,-1,0)] (-Y 행렬과 일치)
+        if axis == "y":
+            rotation = Gf.Vec3f(90.0, 0.0, 180.0)
+        elif axis == "-y":
+            rotation = Gf.Vec3f(90.0, 0.0, 0.0)
+        else:
+            euler_d  = matrix.ExtractRotation().Decompose(
+                Gf.Vec3d(1, 0, 0),
+                Gf.Vec3d(0, 1, 0),
+                Gf.Vec3d(0, 0, 1),
+            )
+            rotation = Gf.Vec3f(float(euler_d[0]), float(euler_d[1]), float(euler_d[2]))
 
         common = UsdGeom.XformCommonAPI(camera_prim)
         ok = common.SetXformVectors(
@@ -176,7 +183,7 @@ class AxisControl:
         )
 
         if not ok:
-            # Fallback: write a raw 4×4 transform op
+            # 폴백: 4×4 transform op 직접 기록
             xformable = UsdGeom.Xformable(camera_prim)
             xformable.ClearXformOpOrder()
             xformable.AddTransformOp().Set(matrix, time)
