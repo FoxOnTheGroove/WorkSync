@@ -10,7 +10,7 @@ class AxisControlUI:
         self._status_label = None
 
     def build_ui(self):
-        self._window = ui.Window("Axis Controller", width=340, height=300)
+        self._window = ui.Window("Axis Controller", width=340, height=500)
 
         with self._window.frame:
             with ui.VStack(spacing=4):
@@ -19,8 +19,6 @@ class AxisControlUI:
                     ui.Button("Initialize", clicked_fn=self._on_initialize, width=100)
                     ui.Button("Refresh",    clicked_fn=self._on_refresh,    width=80)
                     self._status_label = ui.Label("", style={"color": 0xFF888888})
-
-                ui.Separator()
 
                 with ui.ScrollingFrame(height=ui.Fraction(1)):
                     self._camera_stack = ui.VStack(spacing=6)
@@ -47,9 +45,9 @@ class AxisControlUI:
                 ui.Label("(no cameras)", style={"color": 0xFF888888})
                 return
 
-            for i, cam in enumerate(cameras):
-                target     = AxisControl.get_target_for_camera(cam)
-                cam_name   = cam.GetName()
+            for cam in cameras:
+                target      = AxisControl._get_target_for_camera(cam)
+                cam_name    = cam.GetName()
                 target_name = target.GetName() if target else "(no target)"
                 has_target  = target is not None
 
@@ -71,9 +69,6 @@ class AxisControlUI:
                                     AxisControl.set_camera(c, a)
                                 return _cb
                             ui.Button(label, clicked_fn=make_cb(), enabled=has_target, width=44)
-
-                if i < len(cameras) - 1:
-                    ui.Separator()
 
     def destroy(self):
         if self._window:
