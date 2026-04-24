@@ -75,7 +75,7 @@ class AxisControl:
         eye    = orbit_center + AXIS_VECTORS[axis] * distance
         matrix = cls._build_lookat_matrix(eye, orbit_center, axis)
 
-        cls._apply_lookat(camera_prim, matrix, axis)
+        cls._apply_lookat_smooth(camera_prim, matrix, axis, orbit_center)
         cls._set_coi(camera_prim, distance)
 
     # ------------------------------------------------------------------ 내부 메서드
@@ -198,3 +198,90 @@ class AxisControl:
             xformable = UsdGeom.Xformable(camera_prim)
             xformable.ClearXformOpOrder()
             xformable.AddTransformOp().Set(matrix, time)
+
+    @staticmethod
+    def _quat_slerp(q0: Gf.Quatd, q1: Gf.Quatd, t: float) -> Gf.Quatd:
+        dot = (q0.real * q1.real
+               + q0.imaginary[0] * q1.imaginary[0]
+               + q0.imaginary[1] * q1.imaginary[1]
+               + q0.imaginary[2] * q1.imaginary[2])
+        if dot < 0.0:                               # 최단 경로 보장
+            q1  = Gf.Quatd(-q1.real, Gf.Vec3d(-q1.imaginary[0],
+                                                -q1.imaginary[1],
+                                                -q1.imaginary[2]))
+            dot = -dot
+        dot = min(dot, 1.0)
+        if dot > 0.9995:                            # 거의 동일 → 선형 근사
+            r  = q0.real + t * (q1.real - q0.real)
+            im = Gf.Vec3d(q0.imaginary[0] + t * (q1.imaginary[0] - q0.imaginary[0]),
+                          q0.imaginary[1] + t * (q1.imaginary[1] - q0.imaginary[1]),
+                          q0.imaginary[2] + t * (q1.imaginary[2] - q0.imaginary[2]))
+            return Gf.Quatd(r, im).GetNormalized()
+        import math
+        theta_0 = math.acos(dot)
+        theta   = theta_0 * t
+        s0 = math.cos(theta) - dot * math.sin(theta) / math.sin(theta_0)
+        s1 = math.sin(theta) / math.sin(theta_0)
+        return Gf.Quatd(
+            s0 * q0.real + s1 * q1.real,
+            Gf.Vec3d(s0 * q0.imaginary[0] + s1 * q1.imaginary[0],
+                     s0 * q0.imaginary[1] + s1 * q1.imaginary[1],
+                     s0 * q0.imaginary[2] + s1 * q1.imaginary[2])
+        ).GetNormalized()
+
+    @classmethod
+    def _apply_lookat_smooth(
+        cls, camera_prim: Usd.Prim, matrix: Gf.Matrix4d, axis: str,
+        target_pos: Gf.Vec3d, duration: float = 0.5
+    ) -> None:
+        import asyncio
+        import math
+
+        async def _smooth_task():
+            import omni.kit.app
+            time_code    = Usd.TimeCode.Default()
+            xformable    = UsdGeom.Xformable(camera_prim)
+            original_ops = xformable.GetXformOpOrderAttr().Get()
+
+            start_xform = xformable.ComputeLocalToWorldTransform(time_code)
+            start_quat  = start_xform.ExtractRotationQuat()   # Gf.Quatd
+            target_quat = matrix.ExtractRotationQuat()        # Gf.Quatd
+
+            distance = (start_xform.ExtractTranslation() - target_pos).GetLength()
+            if distance < 1e-6:
+                distance = 100.0
+
+            steps = max(1, int(duration * 60))
+            xformable.ClearXformOpOrder()
+            transform_op = xformable.AddTransformOp()
+
+            for i in range(1, steps + 1):
+                t       = math.sin((i / steps) * math.pi / 2)    # ease-out
+                cur_quat = cls._quat_slerp(start_quat, target_quat, t)
+                cur_rot  = Gf.Rotation(cur_quat)
+
+                # 카메라 로컬 +Z = target 반대 방향; 위치는 회전에서 유도
+                local_z = cur_rot.TransformDir(Gf.Vec3d(0, 0, 1))
+                cur_pos = target_pos + local_z * distance
+                right   = cur_rot.TransformDir(Gf.Vec3d(1, 0, 0))
+                up      = cur_rot.TransformDir(Gf.Vec3d(0, 1, 0))
+
+                m = Gf.Matrix4d()
+                m.SetRow(0, Gf.Vec4d(right[0],   right[1],   right[2],   0))
+                m.SetRow(1, Gf.Vec4d(up[0],      up[1],      up[2],      0))
+                m.SetRow(2, Gf.Vec4d(local_z[0], local_z[1], local_z[2], 0))
+                m.SetRow(3, Gf.Vec4d(cur_pos[0], cur_pos[1], cur_pos[2], 1))
+
+                transform_op.Set(m, time_code)
+                await omni.kit.app.get_app().next_update_async()
+
+            try:
+                if original_ops is not None and len(original_ops) > 0:
+                    xformable.GetXformOpOrderAttr().Set(original_ops)
+                cls._apply_lookat(camera_prim, matrix, axis)
+            except Exception as e:
+                import traceback
+                print(f"[AxisControl] _smooth_task 에러: {e}")
+                traceback.print_exc()
+
+        asyncio.ensure_future(_smooth_task())
