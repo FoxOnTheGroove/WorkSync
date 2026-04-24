@@ -1,5 +1,6 @@
 from pxr import Usd, UsdGeom, Gf
 import omni.usd
+from morph.hytwin_orbit_extension import Orbit
 
 
 AXIS_VECTORS: dict[str, Gf.Vec3d] = {
@@ -18,19 +19,13 @@ class AxisControl:
 
     @classmethod
     def initialize(cls) -> bool:
-        try:
-            from morph.hytwin_orbit_extension import Orbit
-            if not Orbit._cam_info:
-                print("[AxisControl] Orbit._cam_info is empty.")
-                cls._initialized = False
-                return False
-            cls._initialized = True
-            print("[AxisControl] Initialized.")
-            return True
-        except Exception as e:
-            print(f"[AxisControl] initialize failed: {e}")
+        if not Orbit._cam_info:
+            print("[AxisControl] Orbit._cam_info is empty.")
             cls._initialized = False
             return False
+        cls._initialized = True
+        print("[AxisControl] Initialized.")
+        return True
 
     @classmethod
     def get_stage(cls) -> Usd.Stage:
@@ -40,15 +35,11 @@ class AxisControl:
     def get_cameras(cls) -> list[Usd.Prim]:
         if not cls._initialized:
             return []
-        try:
-            from morph.hytwin_orbit_extension import Orbit
-        except Exception:
-            return []
         stage = cls.get_stage()
         if not stage:
             return []
         result = []
-        for item in Orbit._cam_info.values():
+        for item in Orbit._cam_info:
             prim = stage.GetPrimAtPath(item["cam_path"])
             if prim.IsValid():
                 result.append(prim)
@@ -58,12 +49,8 @@ class AxisControl:
     def get_target_for_camera(cls, camera_prim: Usd.Prim) -> "Usd.Prim | None":
         if not cls._initialized:
             return None
-        try:
-            from morph.hytwin_orbit_extension import Orbit
-        except Exception:
-            return None
         cam_path = str(camera_prim.GetPath())
-        for item in Orbit._cam_info.values():
+        for item in Orbit._cam_info:
             if item["cam_path"] == cam_path:
                 return Orbit.find_target_prim(item["id"])
         return None
@@ -98,10 +85,7 @@ class AxisControl:
         coi = attr.Get()
         if coi is None:
             return
-        try:
-            attr.Set(type(coi)(0, 0, -distance))
-        except Exception as e:
-            print(f"[AxisControl] Failed to update COI: {e}")
+        attr.Set(type(coi)(0, 0, -distance))
 
     @classmethod
     def _build_lookat_matrix(
