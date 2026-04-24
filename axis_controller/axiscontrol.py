@@ -57,23 +57,23 @@ class AxisControl:
             print("[AxisControl] 유효하지 않은 카메라 prim.")
             return
 
-        target_prim = cls._get_target_for_camera(camera_prim)
-        if target_prim is None or not target_prim.IsValid():
-            print(f"[AxisControl] 카메라 '{camera_prim.GetName()}'에 유효한 타겟이 없습니다.")
-            return
+        # COI 로컬 → 월드 변환으로 orbit 중심과 거리 계산
+        orbit_center, distance = cls._get_coi_world_and_distance(camera_prim)
 
-        cam_pos    = cls._get_world_translation(camera_prim)
-        target_pos = cls._get_world_translation(target_prim)
+        if orbit_center is None:
+            # COI 미설정 시 타겟 prim 위치로 폴백
+            target_prim = cls._get_target_for_camera(camera_prim)
+            if target_prim is None or not target_prim.IsValid():
+                print(f"[AxisControl] 카메라 '{camera_prim.GetName()}'에 유효한 타겟이 없습니다.")
+                return
+            cam_pos     = cls._get_world_translation(camera_prim)
+            orbit_center = cls._get_world_translation(target_prim)
+            distance    = (cam_pos - orbit_center).GetLength()
+            if distance < 1e-6:
+                distance = 100.0
 
-        # COI 거리(orbit 반경) 우선 사용; 없으면 현재 카메라-타겟 거리로 대체
-        distance = cls._get_coi_distance(camera_prim)
-        if distance is None or distance < 1e-6:
-            distance = (cam_pos - target_pos).GetLength()
-        if distance < 1e-6:
-            distance = 100.0
-
-        eye    = target_pos + AXIS_VECTORS[axis] * distance
-        matrix = cls._build_lookat_matrix(eye, target_pos, axis)
+        eye    = orbit_center + AXIS_VECTORS[axis] * distance
+        matrix = cls._build_lookat_matrix(eye, orbit_center, axis)
 
         cls._apply_lookat(camera_prim, matrix, axis)
         cls._set_coi(camera_prim, distance)
@@ -99,19 +99,30 @@ class AxisControl:
         return world_xform.ExtractTranslation()
 
     @classmethod
-    def _get_coi_distance(cls, camera_prim: Usd.Prim) -> "float | None":
-        # omni:kit:centerOfInterest는 카메라 로컬 기준 관심점 벡터; 길이 = orbit 반경
+    def _get_coi_world_and_distance(
+        cls, camera_prim: Usd.Prim
+    ) -> "tuple[Gf.Vec3d, float] | tuple[None, None]":
+        # COI는 카메라 로컬 좌표계 기준 관심점 벡터 → 월드로 변환해야 실제 orbit 중심
         attr = camera_prim.GetAttribute("omni:kit:centerOfInterest")
         if not attr.IsValid():
-            return None
+            return None, None
         coi = attr.Get()
         if coi is None:
-            return None
-        return Gf.Vec3d(float(coi[0]), float(coi[1]), float(coi[2])).GetLength()
+            return None, None
+        coi_local = Gf.Vec3d(float(coi[0]), float(coi[1]), float(coi[2]))
+        distance = coi_local.GetLength()
+        if distance < 1e-6:
+            return None, None
+        # 카메라 로컬 → 월드 변환 (포인트 변환이므로 평행이동 포함)
+        cam_xform = UsdGeom.Xformable(camera_prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        coi_world = cam_xform.Transform(coi_local)
+        return coi_world, distance
 
     @classmethod
     def _set_coi(cls, camera_prim: Usd.Prim, distance: float) -> None:
-        # 이동 후 카메라는 -Z 방향으로 타겟을 정면으로 바라보므로 COI = (0, 0, -distance)
+        # 이동 후 카메라는 -Z 방향으로 orbit 중심을 정면으로 바라보므로 COI = (0, 0, -distance)
         attr = camera_prim.GetAttribute("omni:kit:centerOfInterest")
         if not attr.IsValid():
             return
@@ -131,7 +142,7 @@ class AxisControl:
         # X/Z 축은 Y-up; Y 방향 시점은 짐벌락 방지를 위해 Z-up
         world_up = Gf.Vec3d(0, 0, 1) if axis in ("y", "-y") else Gf.Vec3d(0, 1, 0)
 
-        # USD 카메라는 로컬 -Z를 봄; +Z = 타겟 반대방향
+        # USD 카메라는 로컬 -Z를 봄; +Z = orbit 중심 반대방향
         forward = (eye - target).GetNormalized()
 
         right = Gf.Cross(world_up, forward)
