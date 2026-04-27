@@ -4,6 +4,7 @@ import omni.ui.scene as sc
 import omni.ui as ui
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
 from pxr import UsdGeom, Gf, Usd
+from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.05
@@ -26,22 +27,26 @@ class ColorpickOverlay:
         return cls._instances[vpname]
 
     @classmethod
-    def on(cls, vpname: str, target_prim_path: str, prim_name: str, pos3d: tuple, **kwargs):
-        """컬러픽 발생 시 호출. 기존 마커/오버레이를 지우고 새 위치에 다시 그림."""
-        cls.get(vpname)._update(target_prim_path, prim_name, pos3d)
+    def on(cls, vp_name: str, pos3d: tuple, **kwargs):
+        """컬러픽 발생 시 호출. hit 여부에 따라 오버레이 갱신 또는 off."""
+        info = Colorpick.get_result_by_name(vp_name)
+        if not info["hit"]:
+            cls.off(vp_name)
+            return
+        cls.get(vp_name)._update(info["prim_path"], info["prim_name"], pos3d)
 
     @classmethod
-    def off(cls, vpname: str = None):
+    def off(cls, vp_name: str = None):
         """프림 미선택 등 오버레이를 숨겨야 할 때 호출 (추후 로직 확장 예정)."""
-        targets = [cls._instances[vpname]] if (vpname and vpname in cls._instances) else list(cls._instances.values())
+        targets = [cls._instances[vp_name]] if (vp_name and vp_name in cls._instances) else list(cls._instances.values())
         for inst in targets:
             inst._clear()
 
     @classmethod
-    def destroy(cls, vpname: str = None):
+    def destroy(cls, vp_name: str = None):
         """익스텐션 종료 시 호출. SceneView 참조 및 USD 마커 전체 해제."""
-        if vpname:
-            inst = cls._instances.pop(vpname, None)
+        if vp_name:
+            inst = cls._instances.pop(vp_name, None)
             if inst:
                 inst._destroy()
         else:
