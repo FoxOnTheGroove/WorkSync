@@ -48,6 +48,11 @@ class AxisControl:
         return list(cls._cameras)
 
     @classmethod
+    def set_camera_axis_all(cls, axis: str) -> None:
+        for cam in cls._cameras:
+            cls.set_camera_axis(cam, axis)
+
+    @classmethod
     def set_camera_axis(cls, camera_prim: Usd.Prim, axis: str) -> "tuple[str, str] | None":
         return cls.set_camera(camera_prim, axis)
 
