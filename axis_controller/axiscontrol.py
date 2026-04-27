@@ -48,25 +48,22 @@ class AxisControl:
         return list(cls._cameras)
 
     @classmethod
-    def set_camera_axis_all(cls, axis: str) -> None:
-        if not cls._initialized:
-            cls.initialize()
-        for cam in cls._cameras:
-            cls.set_camera_axis(cam, axis)
+    def set_camera_axis(cls, camera_prim: Usd.Prim, axis: str) -> "tuple[str, str] | None":
+        return cls.set_camera(camera_prim, axis)
 
     @classmethod
-    def set_camera_axis(cls, camera_prim: Usd.Prim, axis: str) -> None:
+    def set_camera(cls, camera_prim: Usd.Prim, axis: str) -> "tuple[str, str] | None":
         if not cls._initialized:
             if not cls.initialize():
-                return
+                return None
 
         if axis not in AXIS_VECTORS:
             print(f"[AxisControl] 잘못된 축: '{axis}'. 유효값: {list(AXIS_VECTORS.keys())}")
-            return
+            return None
 
         if not camera_prim or not camera_prim.IsValid():
             print("[AxisControl] 유효하지 않은 카메라 prim.")
-            return
+            return None
 
         # COI 로컬 → 월드 변환으로 orbit 중심과 거리 계산
         orbit_center, distance = cls._get_coi_world_and_distance(camera_prim)
@@ -76,10 +73,10 @@ class AxisControl:
             target_prim = cls._get_target_for_camera(camera_prim)
             if target_prim is None or not target_prim.IsValid():
                 print(f"[AxisControl] 카메라 '{camera_prim.GetName()}'에 유효한 타겟이 없습니다.")
-                return
-            cam_pos     = cls._get_world_translation(camera_prim)
+                return None
+            cam_pos      = cls._get_world_translation(camera_prim)
             orbit_center = cls._get_world_translation(target_prim)
-            distance    = (cam_pos - orbit_center).GetLength()
+            distance     = (cam_pos - orbit_center).GetLength()
             if distance < 1e-6:
                 distance = 100.0
 
@@ -88,6 +85,7 @@ class AxisControl:
 
         cls._apply_lookat_smooth(camera_prim, matrix, axis, orbit_center)
         cls._set_coi(camera_prim, distance)
+        return (camera_prim.GetName(), axis)
 
     # ------------------------------------------------------------------ 내부 메서드
 
