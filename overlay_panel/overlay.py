@@ -1,33 +1,18 @@
+import omni.kit.app
+import omni.usd
 import omni.ui.scene as sc
 import omni.ui as ui
+import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
+from pxr import UsdGeom, Gf, Usd
 
-LABEL_OFFSET_Y = 0.5
-MARKER_SIZE    = 10
-LINE_THICKNESS = 2
-LINE_COLOR     = 0xFFFFFFFF
-
-
-def _find_viewport_window(name: str):
-    """뷰포트 이름으로 ViewportWindow 반환. 없으면 None."""
-    try:
-        # Kit 106+ : get_viewport_window_instances() 사용
-        from omni.kit.viewport.utility import get_viewport_window_instances
-        for w in get_viewport_window_instances():
-            if getattr(w, "name", None) == name or getattr(w, "title", None) == name:
-                return w
-    except Exception:
-        pass
-
-    # 폴백: omni.ui Workspace로 이름 검색
-    win = ui.Workspace.get_window(name)
-    if win is not None:
-        return win
-
-    return None
+MARKER_PRIM_NAME = "colorpick_marker"
+MARKER_RADIUS    = 0.05
+LABEL_OFFSET_Y   = 0.5
+LINE_THICKNESS   = 2
+LINE_COLOR       = 0xFFFFFFFF
 
 
 class ColorpickOverlay:
-    # viewport_name -> ColorpickOverlay 인스턴스
     _instances: dict = {}
 
     # ------------------------------------------------------------------
@@ -35,25 +20,25 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def get(cls, viewport_name: str) -> "ColorpickOverlay":
-        if viewport_name not in cls._instances:
-            cls._instances[viewport_name] = cls(viewport_name)
-        return cls._instances[viewport_name]
+    def get(cls, vpname: str) -> "ColorpickOverlay":
+        if vpname not in cls._instances:
+            cls._instances[vpname] = cls(vpname)
+        return cls._instances[vpname]
 
     @classmethod
-    def on(cls, viewport_name: str, prim_name: str, pos3d: tuple, **kwargs):
-        cls.get(viewport_name)._update(prim_name, pos3d)
+    def on(cls, vpname: str, target_prim_path: str, prim_name: str, pos3d: tuple, **kwargs):
+        cls.get(vpname)._update(target_prim_path, prim_name, pos3d)
 
     @classmethod
-    def clear(cls, viewport_name: str = None):
-        targets = [cls._instances[viewport_name]] if viewport_name else list(cls._instances.values())
+    def clear(cls, vpname: str = None):
+        targets = [cls._instances[vpname]] if vpname else list(cls._instances.values())
         for inst in targets:
             inst._clear()
 
     @classmethod
-    def destroy(cls, viewport_name: str = None):
-        if viewport_name:
-            inst = cls._instances.pop(viewport_name, None)
+    def destroy(cls, vpname: str = None):
+        if vpname:
+            inst = cls._instances.pop(vpname, None)
             if inst:
                 inst._destroy()
         else:
@@ -65,60 +50,91 @@ class ColorpickOverlay:
     # 인스턴스
     # ------------------------------------------------------------------
 
-    def __init__(self, viewport_name: str):
-        self._viewport_name = viewport_name
-        self._scene_view    = None
-        self._vp_frame      = None
-        self._hit_pos       = None
-        self._prim_name     = None
-        self._setup(viewport_name)
+    def __init__(self, vpname: str):
+        self._vpname       = vpname
+        self._scene_view   = None
+        self._marker_path  = None
+        self._update_sub   = None
+        self._setup(vpname)
 
-    def _setup(self, viewport_name: str):
-        vp_window = _find_viewport_window(viewport_name)
-        if vp_window is None:
-            print(f"[ColorpickOverlay] viewport '{viewport_name}' not found")
-            return
+    def _setup(self, vpname: str):
+        try:
+            vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
+            self._scene_view = vph.scene_view
+        except Exception as e:
+            print(f"[ColorpickOverlay] failed to get scene_view for '{vpname}': {e}")
 
-        frame_key = f"worksync_colorpick_{viewport_name}"
+    # ------------------------------------------------------------------
 
-        # ViewportWindow 는 get_frame(), 일반 ui.Window 는 .frame
-        if hasattr(vp_window, "get_frame"):
-            self._vp_frame = vp_window.get_frame(frame_key)
-        else:
-            self._vp_frame = vp_window.frame
-
-        with self._vp_frame:
-            self._scene_view = sc.SceneView()
-
-    def _update(self, prim_name: str, pos3d: tuple):
+    def _update(self, target_prim_path: str, prim_name: str, pos3d: tuple):
         if self._scene_view is None:
-            print(f"[ColorpickOverlay] SceneView not ready for '{self._viewport_name}'")
+            print(f"[ColorpickOverlay] scene_view not ready for '{self._vpname}'")
             return
+
         self._prim_name = prim_name
-        self._hit_pos   = pos3d
-        self._rebuild_scene()
+        self._remove_marker()
+        self._create_marker(target_prim_path, pos3d)
 
-    def _clear(self):
-        self._hit_pos   = None
-        self._prim_name = None
-        self._rebuild_scene()
+        if self._update_sub is None:
+            self._update_sub = omni.kit.app.get_app().get_update_event_stream() \
+                .create_subscription_to_pop(self._on_update, name=f"colorpick_{self._vpname}")
 
-    def _rebuild_scene(self):
-        if self._scene_view is None:
+    def _create_marker(self, target_prim_path: str, pos3d: tuple):
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
             return
+
+        target = stage.GetPrimAtPath(target_prim_path)
+        if not target.IsValid():
+            return
+
+        # world → 타겟 로컬 변환
+        w2l = UsdGeom.Xformable(target).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        ).GetInverse()
+        local_pos = w2l.Transform(Gf.Vec3d(*pos3d))
+
+        marker_path = f"{target_prim_path}/{MARKER_PRIM_NAME}"
+        sphere = UsdGeom.Sphere.Define(stage, marker_path)
+        UsdGeom.XformCommonAPI(sphere).SetTranslate(local_pos)
+        sphere.GetRadiusAttr().Set(MARKER_RADIUS)
+        self._marker_path = marker_path
+
+    def _remove_marker(self):
+        if self._marker_path is None:
+            return
+        stage = omni.usd.get_context().get_stage()
+        if stage and stage.GetPrimAtPath(self._marker_path).IsValid():
+            stage.RemovePrim(self._marker_path)
+        self._marker_path = None
+
+    # ------------------------------------------------------------------
+
+    def _on_update(self, _event):
+        if self._marker_path is None:
+            return
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+
+        marker_prim = stage.GetPrimAtPath(self._marker_path)
+        if not marker_prim.IsValid():
+            return
+
+        world_xform = UsdGeom.Xformable(marker_prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        world_pos = tuple(world_xform.ExtractTranslation())
+        self._rebuild_scene(world_pos)
+
+    def _rebuild_scene(self, world_pos: tuple):
         self._scene_view.scene.clear()
-        if self._hit_pos is None:
-            return
 
-        x, y, z    = self._hit_pos
+        x, y, z    = world_pos
         lx, ly, lz = x, y + LABEL_OFFSET_Y, z
 
         with self._scene_view.scene:
-            sc.Points(
-                [[x, y, z]],
-                sizes=[MARKER_SIZE],
-                colors=[LINE_COLOR],
-            )
             sc.Line(
                 [x, y, z],
                 [lx, ly, lz],
@@ -133,6 +149,14 @@ class ColorpickOverlay:
                     alignment=ui.Alignment.CENTER_BOTTOM,
                 )
 
+    # ------------------------------------------------------------------
+
+    def _clear(self):
+        self._update_sub = None
+        self._remove_marker()
+        if self._scene_view:
+            self._scene_view.scene.clear()
+
     def _destroy(self):
+        self._clear()
         self._scene_view = None
-        self._vp_frame   = None
