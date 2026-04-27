@@ -16,6 +16,7 @@ AXIS_VECTORS: dict[str, Gf.Vec3d] = {
 class AxisControl:
 
     _initialized:  bool            = False
+    _cameras:      list            = []   # 초기화 시 캐시된 카메라 prim 목록
     _smooth_tasks: dict            = {}   # cam_path → asyncio.Task
     _original_ops: dict            = {}   # cam_path → 애니메이션 시작 전 XformOpOrder
 
@@ -26,30 +27,38 @@ class AxisControl:
         if not Orbit._cam_info:
             print("[AxisControl] Orbit._cam_info가 비어 있습니다.")
             cls._initialized = False
+            cls._cameras = []
             return False
+        stage = cls._get_stage()
+        if not stage:
+            print("[AxisControl] 스테이지를 가져올 수 없습니다.")
+            cls._initialized = False
+            cls._cameras = []
+            return False
+        cls._cameras = [
+            prim for item in Orbit._cam_info
+            if (prim := stage.GetPrimAtPath(item["cam_path"])).IsValid()
+        ]
         cls._initialized = True
-        print("[AxisControl] 초기화 완료.")
+        print(f"[AxisControl] 초기화 완료. 카메라 {len(cls._cameras)}개.")
         return True
 
     @classmethod
     def get_cameras(cls) -> list[Usd.Prim]:
+        return list(cls._cameras)
+
+    @classmethod
+    def set_camera_axis(cls, axis: str) -> None:
         if not cls._initialized:
-            return []
-        stage = cls._get_stage()
-        if not stage:
-            return []
-        result = []
-        for item in Orbit._cam_info:
-            prim = stage.GetPrimAtPath(item["cam_path"])
-            if prim.IsValid():
-                result.append(prim)
-        return result
+            cls.initialize()
+        for cam in cls._cameras:
+            cls.set_camera(cam, axis)
 
     @classmethod
     def set_camera(cls, camera_prim: Usd.Prim, axis: str) -> None:
         if not cls._initialized:
-            print("[AxisControl] 초기화되지 않았습니다. AxisControl.initialize()를 먼저 호출하세요.")
-            return
+            if not cls.initialize():
+                return
 
         if axis not in AXIS_VECTORS:
             print(f"[AxisControl] 잘못된 축: '{axis}'. 유효값: {list(AXIS_VECTORS.keys())}")
