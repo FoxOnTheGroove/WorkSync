@@ -66,7 +66,7 @@ class AxisControlUI:
                         ]:
                             def make_cb(c=cam, a=axis):
                                 def _cb():
-                                    AxisControl.set_camera(c, a)
+                                    AxisControl.set_camera_axis(c, a)
                                 return _cb
                             ui.Button(label, clicked_fn=make_cb(), enabled=has_target, width=44)
 

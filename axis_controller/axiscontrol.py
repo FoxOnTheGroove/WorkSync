@@ -48,14 +48,14 @@ class AxisControl:
         return list(cls._cameras)
 
     @classmethod
-    def set_camera_axis(cls, axis: str) -> None:
+    def set_camera_axis_all(cls, axis: str) -> None:
         if not cls._initialized:
             cls.initialize()
         for cam in cls._cameras:
-            cls.set_camera(cam, axis)
+            cls.set_camera_axis(cam, axis)
 
     @classmethod
-    def set_camera(cls, camera_prim: Usd.Prim, axis: str) -> None:
+    def set_camera_axis(cls, camera_prim: Usd.Prim, axis: str) -> None:
         if not cls._initialized:
             if not cls.initialize():
                 return
