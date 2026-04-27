@@ -15,7 +15,9 @@ AXIS_VECTORS: dict[str, Gf.Vec3d] = {
 
 class AxisControl:
 
-    _initialized: bool = False
+    _initialized:  bool            = False
+    _smooth_tasks: dict            = {}   # cam_path → asyncio.Task
+    _original_ops: dict            = {}   # cam_path → 애니메이션 시작 전 XformOpOrder
 
     # ------------------------------------------------------------------ 공개 API
 
@@ -237,26 +239,35 @@ class AxisControl:
         import asyncio
         import math
 
+        cam_key   = str(camera_prim.GetPath())
+        xformable = UsdGeom.Xformable(camera_prim)
+
+        # 취소 전 현재 위치 캡처 (중간 위치에서 재시작하기 위해)
+        current_xform = xformable.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+
+        prev = cls._smooth_tasks.get(cam_key)
+        if prev and not prev.done():
+            prev.cancel()
+        else:
+            # 애니메이션 중이 아닐 때만 원본 op order 저장
+            cls._original_ops[cam_key] = xformable.GetXformOpOrderAttr().Get()
+
         async def _smooth_task():
             import omni.kit.app
-            time_code    = Usd.TimeCode.Default()
-            xformable    = UsdGeom.Xformable(camera_prim)
-            original_ops = xformable.GetXformOpOrderAttr().Get()
+            time_code   = Usd.TimeCode.Default()
+            start_quat  = current_xform.ExtractRotationQuat()
+            target_quat = matrix.ExtractRotationQuat()
 
-            start_xform = xformable.ComputeLocalToWorldTransform(time_code)
-            start_quat  = start_xform.ExtractRotationQuat()   # Gf.Quatd
-            target_quat = matrix.ExtractRotationQuat()        # Gf.Quatd
-
-            distance = (start_xform.ExtractTranslation() - target_pos).GetLength()
+            distance = (current_xform.ExtractTranslation() - target_pos).GetLength()
             if distance < 1e-6:
                 distance = 100.0
 
-            steps = max(1, int(duration * 60))
+            steps = max(1, int(duration * 120))
             xformable.ClearXformOpOrder()
             transform_op = xformable.AddTransformOp()
 
             for i in range(1, steps + 1):
-                t       = math.sin((i / steps) * math.pi / 2)    # ease-out
+                t        = math.sin((i / steps) * math.pi / 2)    # ease-out
                 cur_quat = cls._quat_slerp(start_quat, target_quat, t)
                 cur_rot  = Gf.Rotation(cur_quat)
 
@@ -276,12 +287,15 @@ class AxisControl:
                 await omni.kit.app.get_app().next_update_async()
 
             try:
-                if original_ops is not None and len(original_ops) > 0:
-                    xformable.GetXformOpOrderAttr().Set(original_ops)
+                saved = cls._original_ops.get(cam_key)
+                if saved is not None and len(saved) > 0:
+                    xformable.GetXformOpOrderAttr().Set(saved)
                 cls._apply_lookat(camera_prim, matrix, axis)
+                cls._smooth_tasks.pop(cam_key, None)
+                cls._original_ops.pop(cam_key, None)
             except Exception as e:
                 import traceback
                 print(f"[AxisControl] _smooth_task 에러: {e}")
                 traceback.print_exc()
 
-        asyncio.ensure_future(_smooth_task())
+        cls._smooth_tasks[cam_key] = asyncio.ensure_future(_smooth_task())
