@@ -27,16 +27,19 @@ class ColorpickOverlay:
 
     @classmethod
     def on(cls, vpname: str, target_prim_path: str, prim_name: str, pos3d: tuple, **kwargs):
+        """컬러픽 발생 시 호출. 기존 마커/오버레이를 지우고 새 위치에 다시 그림."""
         cls.get(vpname)._update(target_prim_path, prim_name, pos3d)
 
     @classmethod
-    def clear(cls, vpname: str = None):
-        targets = [cls._instances[vpname]] if vpname else list(cls._instances.values())
+    def off(cls, vpname: str = None):
+        """프림 미선택 등 오버레이를 숨겨야 할 때 호출 (추후 로직 확장 예정)."""
+        targets = [cls._instances[vpname]] if (vpname and vpname in cls._instances) else list(cls._instances.values())
         for inst in targets:
             inst._clear()
 
     @classmethod
     def destroy(cls, vpname: str = None):
+        """익스텐션 종료 시 호출. SceneView 참조 및 USD 마커 전체 해제."""
         if vpname:
             inst = cls._instances.pop(vpname, None)
             if inst:
