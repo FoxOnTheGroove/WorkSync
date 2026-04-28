@@ -69,9 +69,10 @@ class ColorpickOverlay:
     def _setup(self, vpname: str):
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
-            self._scene_view = vph.scene_view
+            with vph.frame:
+                self._scene_view = sc.SceneView(gestures=[])
         except Exception as e:
-            print(f"[ColorpickOverlay] failed to get scene_view for '{vpname}': {e}")
+            print(f"[ColorpickOverlay] failed to setup for '{vpname}': {e}")
 
     # ------------------------------------------------------------------
 
