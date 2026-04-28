@@ -32,7 +32,6 @@ class ColorpickOverlay:
 
     @classmethod
     def on(cls, vp_name: str, pos3d: tuple, **kwargs):
-        """컬러픽 발생 시 호출. hit 여부에 따라 오버레이 갱신 또는 off."""
         info = Colorpick.get_result_by_name(vp_name)
         if not info["hit"]:
             cls.off(vp_name)
@@ -41,14 +40,12 @@ class ColorpickOverlay:
 
     @classmethod
     def off(cls, vp_name: str = None):
-        """프림 미선택 등 오버레이를 숨겨야 할 때 호출."""
         targets = [cls._instances[vp_name]] if (vp_name and vp_name in cls._instances) else list(cls._instances.values())
         for inst in targets:
             inst._clear()
 
     @classmethod
     def destroy(cls, vp_name: str = None):
-        """익스텐션 종료 시 호출."""
         if vp_name:
             inst = cls._instances.pop(vp_name, None)
             if inst:
@@ -65,18 +62,20 @@ class ColorpickOverlay:
     def __init__(self, vpname: str):
         self._vpname          = vpname
         self._scene_view      = None
+        self._viewport_api    = None
         self._marker_path     = None
         self._update_sub      = None
         self._last_world_pos  = None
-        self._last_camera_view = None
+        self._last_cam_key    = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
-            self._scene_view = vph.scene_view
+            self._scene_view   = vph.scene_view
+            self._viewport_api = vph.get_viewport().viewport_api
         except Exception as e:
-            print(f"[ColorpickOverlay] failed to get scene_view for '{vpname}': {e}")
+            print(f"[ColorpickOverlay] setup failed for '{vpname}': {e}")
 
     # ------------------------------------------------------------------
 
@@ -124,6 +123,20 @@ class ColorpickOverlay:
 
     # ------------------------------------------------------------------
 
+    def _get_camera_xform(self, stage) -> "Gf.Matrix4d | None":
+        if self._viewport_api is None:
+            return None
+        try:
+            cam_path = self._viewport_api.get_active_camera()
+            cam_prim = stage.GetPrimAtPath(cam_path)
+            if not cam_prim.IsValid():
+                return None
+            return UsdGeom.Xformable(cam_prim).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()
+            )
+        except Exception:
+            return None
+
     def _on_update(self, _event):
         if self._marker_path is None:
             return
@@ -136,44 +149,40 @@ class ColorpickOverlay:
         if not marker_prim.IsValid():
             return
 
-        world_xform = UsdGeom.Xformable(marker_prim).ComputeLocalToWorldTransform(
-            Usd.TimeCode.Default()
+        world_pos = tuple(
+            UsdGeom.Xformable(marker_prim)
+            .ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            .ExtractTranslation()
         )
-        world_pos = tuple(world_xform.ExtractTranslation())
 
-        # 빌보드 갱신을 위해 카메라 뷰 매트릭스도 변경 감지
-        camera_view = None
-        try:
-            camera_view = tuple(self._scene_view.camera_model.view)
-        except Exception:
-            pass
+        cam_xform = self._get_camera_xform(stage)
+        # 회전 변화 감지용 경량 키: 카메라 X축(right)의 월드 방향
+        if cam_xform:
+            rot = cam_xform.ExtractRotationMatrix()
+            cam_key = (rot[0][0], rot[1][0], rot[2][0])
+        else:
+            cam_key = None
 
-        if world_pos == self._last_world_pos and camera_view == self._last_camera_view:
+        if world_pos == self._last_world_pos and cam_key == self._last_cam_key:
             return
 
-        self._last_world_pos   = world_pos
-        self._last_camera_view = camera_view
-        self._rebuild_scene(world_pos, camera_view)
+        self._last_world_pos = world_pos
+        self._last_cam_key   = cam_key
+        self._rebuild_scene(world_pos, cam_xform)
 
-    def _rebuild_scene(self, world_pos: tuple, camera_view: tuple = None):
+    def _rebuild_scene(self, world_pos: tuple, cam_xform=None):
         self._scene_view.scene.clear()
 
         x, y, z    = world_pos
         lx, ly, lz = x, y + LABEL_OFFSET_Y, z
 
-        # 카메라 right/up 벡터로 빌보드 매트릭스 구성 (뷰 매트릭스 row 0, 1)
-        if camera_view:
-            rx, ry, rz = camera_view[0], camera_view[1], camera_view[2]
-            ux, uy, uz = camera_view[4], camera_view[5], camera_view[6]
-            fx, fy, fz = camera_view[8], camera_view[9], camera_view[10]
-            billboard = sc.Matrix44(
-                rx, ry, rz, 0,
-                ux, uy, uz, 0,
-                fx, fy, fz, 0,
-                lx, ly, lz, 1,
-            )
+        # 빌보드 매트릭스: 카메라 rotation + 레이블 위치
+        if cam_xform:
+            rot = cam_xform.ExtractRotationMatrix()   # GfMatrix3d (카메라 로컬→월드)
+            billboard = Gf.Matrix4d(rot, Gf.Vec3d(lx, ly, lz))
         else:
-            billboard = sc.Matrix44.get_translation_matrix(lx, ly, lz)
+            billboard = Gf.Matrix4d(1.0)
+            billboard.SetTranslateOnly(Gf.Vec3d(lx, ly, lz))
 
         with self._scene_view.scene:
             sc.Line(
@@ -182,7 +191,7 @@ class ColorpickOverlay:
                 color=LINE_COLOR,
                 thickness=LINE_THICKNESS,
             )
-            with sc.Transform(transform=billboard):
+            with sc.Transform(transform=sc.Matrix44(billboard)):
                 sc.Rectangle(
                     width=PANEL_WIDTH,
                     height=PANEL_HEIGHT,
@@ -197,13 +206,14 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def _clear(self):
-        self._update_sub      = None
-        self._last_world_pos  = None
-        self._last_camera_view = None
+        self._update_sub     = None
+        self._last_world_pos = None
+        self._last_cam_key   = None
         self._remove_marker()
         if self._scene_view:
             self._scene_view.scene.clear()
 
     def _destroy(self):
         self._clear()
-        self._scene_view = None
+        self._scene_view   = None
+        self._viewport_api = None
