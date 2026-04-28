@@ -3,7 +3,7 @@ import omni.usd
 import omni.ui.scene as sc
 import omni.ui as ui
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
-from pxr import UsdGeom, Gf, Usd
+from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
 from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
@@ -110,8 +110,19 @@ class ColorpickOverlay:
         sphere = UsdGeom.Sphere.Define(stage, marker_path)
         UsdGeom.XformCommonAPI(sphere).SetTranslate(local_pos)
         sphere.GetRadiusAttr().Set(MARKER_RADIUS)
-        sphere.GetDisplayColorAttr().Set([(1.0, 0.0, 0.0)])
+        self._apply_red_material(stage, sphere.GetPrim())
         self._marker_path = marker_path
+
+    def _apply_red_material(self, stage, prim):
+        mat_path = str(prim.GetPath()) + "_mat"
+        mat = UsdShade.Material.Define(stage, mat_path)
+        shader = UsdShade.Shader.Define(stage, mat_path + "/shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor",  Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1, 0, 0))
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.8, 0, 0))
+        shader.CreateInput("roughness",     Sdf.ValueTypeNames.Float).Set(0.5)
+        mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        UsdShade.MaterialBindingAPI(prim).Bind(mat)
 
     def _remove_marker(self):
         if self._marker_path is None:
@@ -178,11 +189,14 @@ class ColorpickOverlay:
 
         # 빌보드 매트릭스: 카메라 rotation + 레이블 위치
         if cam_xform:
-            rot = cam_xform.ExtractRotationMatrix()   # GfMatrix3d (카메라 로컬→월드)
-            billboard = Gf.Matrix4d(rot, Gf.Vec3d(lx, ly, lz))
+            rot = cam_xform.ExtractRotationMatrix()   # GfMatrix3d
+            gf_mat = Gf.Matrix4d(rot, Gf.Vec3d(lx, ly, lz))
         else:
-            billboard = Gf.Matrix4d(1.0)
-            billboard.SetTranslateOnly(Gf.Vec3d(lx, ly, lz))
+            gf_mat = Gf.Matrix4d(1.0)
+            gf_mat.SetTranslateOnly(Gf.Vec3d(lx, ly, lz))
+
+        # sc.Matrix44 은 flat 16개 float 리스트를 받음
+        flat = [gf_mat[r][c] for r in range(4) for c in range(4)]
 
         with self._scene_view.scene:
             sc.Line(
@@ -191,7 +205,7 @@ class ColorpickOverlay:
                 color=LINE_COLOR,
                 thickness=LINE_THICKNESS,
             )
-            with sc.Transform(transform=sc.Matrix44(billboard)):
+            with sc.Transform(transform=sc.Matrix44(flat)):
                 sc.Rectangle(
                     width=PANEL_WIDTH,
                     height=PANEL_HEIGHT,
