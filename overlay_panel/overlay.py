@@ -57,16 +57,10 @@ class ColorpickOverlay:
                 cls._instances[identifier]._deactivate_all()
 
     @classmethod
-    def set_visible(cls, identifier, visible: bool):
-        """선·패널만 visible 토글. 마커 스피어는 유지.
-        key (int) → 해당 오버레이.  vpname (str) → 해당 뷰포트 전체."""
-        if isinstance(identifier, int):
-            vpname = cls._key_to_vp.get(identifier)
-            if vpname and vpname in cls._instances:
-                cls._instances[vpname]._set_visible(identifier, visible)
-        elif isinstance(identifier, str):
-            if identifier in cls._instances:
-                cls._instances[identifier]._set_visible_all(visible)
+    def set_visible(cls, vp_name: str, visible: bool):
+        """선·패널만 visible 토글. 마커 유지. 뷰포트 단위."""
+        if vp_name in cls._instances:
+            cls._instances[vp_name]._set_visible_all(visible)
 
     @classmethod
     def set_visible_all(cls, visible: bool):
@@ -89,14 +83,6 @@ class ColorpickOverlay:
     @classmethod
     def panel_off_all(cls, vp_name: str):
         cls.off(vp_name)
-
-    @classmethod
-    def visible_off(cls, vp_name: str):
-        cls.set_visible(vp_name, False)
-
-    @classmethod
-    def visible_off_all(cls):
-        cls.set_visible_all(False)
 
     @classmethod
     def destroy(cls, vp_name: str = None):
