@@ -10,14 +10,14 @@ from .colorpick import Colorpick
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
-PANEL_W          = 192          # 240 × 0.8
-PANEL_H          = 64           # 80 × 0.8
+PANEL_W          = 160          # W:H = 2:1
+PANEL_H          = 80           # W:H = 2:1
 PANEL_BG         = 0xFFFFFFFF   # 불투명 흰색 ABGR
-SWATCH_W         = 56           # 70 × 0.8
-DOT_SIZE         = 13           # 16 × 0.8
-LABEL_SIZE       = 11           # 14 × 0.8
+SWATCH_W         = 60
+DOT_SIZE         = 13
+LABEL_SIZE       = 13
 PANEL_PAD        = 6            # 패널 내부 여백
-ITEM_GAP         = 4            # 항목 간 세로 간격
+ITEM_GAP         = 5            # 항목 간 세로 간격
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 MAX_OVERLAYS     = 5
@@ -166,11 +166,12 @@ class ColorpickOverlay:
         # ── 2D 패널: vph.frame ─────────────────────────────────────
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
         with self._frame:
-            with ui.ZStack(content_clipping=False):
+            with ui.ZStack(content_clipping=False, opaque_for_mouse_events=False):
                 for i in range(MAX_OVERLAYS):
                     with ui.Placer(offset_x=0, offset_y=0) as placer:
                         with ui.ZStack(
-                            width=PANEL_W, height=PANEL_H, visible=False
+                            width=PANEL_W, height=PANEL_H,
+                            visible=False, opaque_for_mouse_events=False,
                         ) as panel:
                             ui.Rectangle(style={
                                 "background_color": PANEL_BG,
