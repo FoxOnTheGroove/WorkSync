@@ -69,6 +69,36 @@ class ColorpickOverlay:
                 cls._instances[identifier]._set_visible_all(visible)
 
     @classmethod
+    def set_visible_all(cls, visible: bool):
+        """모든 뷰포트의 선·패널 visible 토글."""
+        for inst in cls._instances.values():
+            inst._set_visible_all(visible)
+
+    # ------------------------------------------------------------------
+    # 외부 호출용 convenience API
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def panel_on(cls, vp_name: str, pos3d: tuple, **kwargs) -> int | None:
+        return cls.on(vp_name, pos3d, **kwargs)
+
+    @classmethod
+    def panel_off(cls, key: int):
+        cls.off(key)
+
+    @classmethod
+    def panel_off_all(cls, vp_name: str):
+        cls.off(vp_name)
+
+    @classmethod
+    def visible_off(cls, vp_name: str):
+        cls.set_visible(vp_name, False)
+
+    @classmethod
+    def visible_off_all(cls):
+        cls.set_visible_all(False)
+
+    @classmethod
     def destroy(cls, vp_name: str = None):
         if vp_name:
             inst = cls._instances.pop(vp_name, None)
