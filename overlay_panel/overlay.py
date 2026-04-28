@@ -7,11 +7,11 @@ from pxr import UsdGeom, Gf, Usd
 from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
-MARKER_RADIUS    = 0.05
-LABEL_OFFSET_Y   = 0.5
+MARKER_RADIUS    = 1.0
+LABEL_OFFSET_Y   = 5.0
 LABEL_SIZE       = 18
-PANEL_WIDTH      = 0.8
-PANEL_HEIGHT     = 0.2
+PANEL_WIDTH      = 10.0
+PANEL_HEIGHT     = 3.0
 PANEL_COLOR      = 0xFF808080
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
@@ -48,7 +48,7 @@ class ColorpickOverlay:
 
     @classmethod
     def destroy(cls, vp_name: str = None):
-        """익스텐션 종료 시 호출. SceneView 참조 및 USD 마커 전체 해제."""
+        """익스텐션 종료 시 호출."""
         if vp_name:
             inst = cls._instances.pop(vp_name, None)
             if inst:
@@ -63,11 +63,12 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def __init__(self, vpname: str):
-        self._vpname         = vpname
-        self._scene_view     = None
-        self._marker_path    = None
-        self._update_sub     = None
-        self._last_world_pos = None
+        self._vpname          = vpname
+        self._scene_view      = None
+        self._marker_path     = None
+        self._update_sub      = None
+        self._last_world_pos  = None
+        self._last_camera_view = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
@@ -139,16 +140,40 @@ class ColorpickOverlay:
             Usd.TimeCode.Default()
         )
         world_pos = tuple(world_xform.ExtractTranslation())
-        if world_pos == self._last_world_pos:
-            return
-        self._last_world_pos = world_pos
-        self._rebuild_scene(world_pos)
 
-    def _rebuild_scene(self, world_pos: tuple):
+        # 빌보드 갱신을 위해 카메라 뷰 매트릭스도 변경 감지
+        camera_view = None
+        try:
+            camera_view = tuple(self._scene_view.camera_model.view)
+        except Exception:
+            pass
+
+        if world_pos == self._last_world_pos and camera_view == self._last_camera_view:
+            return
+
+        self._last_world_pos   = world_pos
+        self._last_camera_view = camera_view
+        self._rebuild_scene(world_pos, camera_view)
+
+    def _rebuild_scene(self, world_pos: tuple, camera_view: tuple = None):
         self._scene_view.scene.clear()
 
         x, y, z    = world_pos
         lx, ly, lz = x, y + LABEL_OFFSET_Y, z
+
+        # 카메라 right/up 벡터로 빌보드 매트릭스 구성 (뷰 매트릭스 row 0, 1)
+        if camera_view:
+            rx, ry, rz = camera_view[0], camera_view[1], camera_view[2]
+            ux, uy, uz = camera_view[4], camera_view[5], camera_view[6]
+            fx, fy, fz = camera_view[8], camera_view[9], camera_view[10]
+            billboard = sc.Matrix44(
+                rx, ry, rz, 0,
+                ux, uy, uz, 0,
+                fx, fy, fz, 0,
+                lx, ly, lz, 1,
+            )
+        else:
+            billboard = sc.Matrix44.get_translation_matrix(lx, ly, lz)
 
         with self._scene_view.scene:
             sc.Line(
@@ -157,9 +182,7 @@ class ColorpickOverlay:
                 color=LINE_COLOR,
                 thickness=LINE_THICKNESS,
             )
-            with sc.Transform(
-                transform=sc.Matrix44.get_translation_matrix(lx, ly, lz)
-            ):
+            with sc.Transform(transform=billboard):
                 sc.Rectangle(
                     width=PANEL_WIDTH,
                     height=PANEL_HEIGHT,
@@ -174,8 +197,9 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def _clear(self):
-        self._update_sub     = None
-        self._last_world_pos = None
+        self._update_sub      = None
+        self._last_world_pos  = None
+        self._last_camera_view = None
         self._remove_marker()
         if self._scene_view:
             self._scene_view.scene.clear()
