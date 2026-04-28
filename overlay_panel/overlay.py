@@ -11,8 +11,8 @@ MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
 LABEL_SIZE       = 18
-LABEL_BG_W       = 140          # pixels
-LABEL_BG_H       = 26           # pixels
+LABEL_BG_W       = 180          # pixels
+LABEL_BG_H       = 36           # pixels
 LABEL_BG_COLOR   = 0xFFEBCE87  # sky blue ABGR (0xAABBGGRR)
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
@@ -83,8 +83,9 @@ class ColorpickOverlay:
         self._viewport_api = None
         self._slots: list[dict] = []
         self._active: OrderedDict[int, int] = OrderedDict()
-        self._update_sub   = None
-        self._prev_cam_mat = None   # 1프레임 지연으로 RTX 렌더와 동기화
+        self._update_sub    = None
+        self._cam_mat_prev  = None  # N-1 프레임
+        self._cam_mat_prev2 = None  # N-2 프레임 (RTX 2프레임 레이턴시 대응)
         self._setup(vpname)
 
     def _setup(self, vpname: str):
@@ -144,11 +145,12 @@ class ColorpickOverlay:
         cur_mat = self._get_billboard_mat(stage)
         if cur_mat is None:
             return
-        # 이전 프레임 행렬 적용 → RTX 렌더 결과와 1프레임 동기화
-        apply_mat = self._prev_cam_mat if self._prev_cam_mat is not None else cur_mat
+        # 2프레임 전 행렬 적용 → RTX 2프레임 레이턴시와 동기화
+        apply_mat = self._cam_mat_prev2 or self._cam_mat_prev or cur_mat
         for slot_idx in self._active.values():
             self._slots[slot_idx]["bg_tf"].transform = apply_mat
-        self._prev_cam_mat = cur_mat
+        self._cam_mat_prev2 = self._cam_mat_prev
+        self._cam_mat_prev  = cur_mat
 
     def _get_billboard_mat(self, stage) -> "sc.Matrix44 | None":
         """카메라 월드 트랜스폼에서 회전만 추출해 sc.Matrix44로 반환."""
@@ -258,7 +260,8 @@ class ColorpickOverlay:
 
     def _destroy(self):
         self._deactivate_all()
-        self._update_sub   = None
-        self._prev_cam_mat = None
+        self._update_sub    = None
+        self._cam_mat_prev  = None
+        self._cam_mat_prev2 = None
         self._scene_view   = None
         self._slots.clear()
