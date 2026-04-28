@@ -9,6 +9,10 @@ from .colorpick import Colorpick
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.05
 LABEL_OFFSET_Y   = 0.5
+LABEL_SIZE       = 18
+PANEL_WIDTH      = 0.8
+PANEL_HEIGHT     = 0.2
+PANEL_COLOR      = 0xFF808080
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 
@@ -37,7 +41,7 @@ class ColorpickOverlay:
 
     @classmethod
     def off(cls, vp_name: str = None):
-        """프림 미선택 등 오버레이를 숨겨야 할 때 호출 (추후 로직 확장 예정)."""
+        """프림 미선택 등 오버레이를 숨겨야 할 때 호출."""
         targets = [cls._instances[vp_name]] if (vp_name and vp_name in cls._instances) else list(cls._instances.values())
         for inst in targets:
             inst._clear()
@@ -59,20 +63,19 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def __init__(self, vpname: str):
-        self._vpname          = vpname
-        self._scene_view      = None
-        self._marker_path     = None
-        self._update_sub      = None
-        self._last_world_pos  = None
+        self._vpname         = vpname
+        self._scene_view     = None
+        self._marker_path    = None
+        self._update_sub     = None
+        self._last_world_pos = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
-            with vph.frame:
-                self._scene_view = sc.SceneView(gestures=[])
+            self._scene_view = vph.scene_view
         except Exception as e:
-            print(f"[ColorpickOverlay] failed to setup for '{vpname}': {e}")
+            print(f"[ColorpickOverlay] failed to get scene_view for '{vpname}': {e}")
 
     # ------------------------------------------------------------------
 
@@ -98,7 +101,6 @@ class ColorpickOverlay:
         if not target.IsValid():
             return
 
-        # world → 타겟 로컬 변환
         w2l = UsdGeom.Xformable(target).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()
         ).GetInverse()
@@ -108,6 +110,7 @@ class ColorpickOverlay:
         sphere = UsdGeom.Sphere.Define(stage, marker_path)
         UsdGeom.XformCommonAPI(sphere).SetTranslate(local_pos)
         sphere.GetRadiusAttr().Set(MARKER_RADIUS)
+        sphere.GetDisplayColorAttr().Set([(1.0, 0.0, 0.0)])
         self._marker_path = marker_path
 
     def _remove_marker(self):
@@ -157,9 +160,15 @@ class ColorpickOverlay:
             with sc.Transform(
                 transform=sc.Matrix44.get_translation_matrix(lx, ly, lz)
             ):
+                sc.Rectangle(
+                    width=PANEL_WIDTH,
+                    height=PANEL_HEIGHT,
+                    color=PANEL_COLOR,
+                )
                 sc.Label(
                     self._prim_name,
-                    alignment=ui.Alignment.CENTER_BOTTOM,
+                    size=LABEL_SIZE,
+                    alignment=ui.Alignment.CENTER,
                 )
 
     # ------------------------------------------------------------------
