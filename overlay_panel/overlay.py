@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import omni.kit.app
 import omni.usd
 import omni.ui.scene as sc
 import omni.ui as ui
@@ -77,26 +78,31 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def __init__(self, vpname: str):
-        self._vpname     = vpname
-        self._scene_view = None
-        # slots[i] = {"root": sc.Transform, "label": sc.Label, "marker_path": str|None}
+        self._vpname       = vpname
+        self._scene_view   = None
+        self._viewport_api = None
         self._slots: list[dict] = []
-        # key -> slot_idx  (OrderedDict → 삽입순 = FIFO)
         self._active: OrderedDict[int, int] = OrderedDict()
+        self._update_sub   = None
+        self._prev_cam_mat = None   # 1프레임 지연으로 RTX 렌더와 동기화
         self._setup(vpname)
 
     def _setup(self, vpname: str):
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
-            self._scene_view = vph.scene_view
+            self._scene_view   = vph.scene_view
+            self._viewport_api = vph.viewport_api
             self._create_slots()
+            self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
+                self._on_update, name=f"colorpick_overlay_{vpname}"
+            )
         except Exception as e:
             print(f"[ColorpickOverlay] setup failed for '{vpname}': {e}")
 
     def _create_slots(self):
         """MAX_OVERLAYS 개의 씬 아이템 세트를 미리 생성 (모두 숨김)."""
         for _ in range(MAX_OVERLAYS):
-            slot = {"root": None, "label": None, "marker_path": None}
+            slot = {"root": None, "label": None, "bg_tf": None, "marker_path": None}
             with self._scene_view.scene:
                 with sc.Transform(
                     transform=sc.Matrix44.get_translation_matrix(0, 0, 0),
@@ -112,8 +118,13 @@ class ColorpickOverlay:
                     with sc.Transform(
                         transform=sc.Matrix44.get_translation_matrix(0, LABEL_OFFSET_Y, 0)
                     ):
-                        with sc.Transform(scale_to=sc.Space.SCREEN):
-                            sc.Rectangle(LABEL_BG_W, LABEL_BG_H, color=LABEL_BG_COLOR)
+                        # bg_tf: 매 프레임 카메라 회전역행렬로 갱신 → 빌보드
+                        with sc.Transform(
+                            transform=sc.Matrix44.get_translation_matrix(0, 0, 0)
+                        ) as bg_tf:
+                            slot["bg_tf"] = bg_tf
+                            with sc.Transform(scale_to=sc.Space.SCREEN):
+                                sc.Rectangle(LABEL_BG_W, LABEL_BG_H, color=LABEL_BG_COLOR)
                         slot["label"] = sc.Label(
                             "",
                             size=LABEL_SIZE,
@@ -123,13 +134,54 @@ class ColorpickOverlay:
 
     # ------------------------------------------------------------------
 
+    def _on_update(self, event):
+        """프레임마다 bg_tf 회전만 갱신. scene.clear() 없음 → 제스처 안전."""
+        if not self._active:
+            return
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            return
+        cur_mat = self._get_billboard_mat(stage)
+        if cur_mat is None:
+            return
+        # 이전 프레임 행렬 적용 → RTX 렌더 결과와 1프레임 동기화
+        apply_mat = self._prev_cam_mat if self._prev_cam_mat is not None else cur_mat
+        for slot_idx in self._active.values():
+            self._slots[slot_idx]["bg_tf"].transform = apply_mat
+        self._prev_cam_mat = cur_mat
+
+    def _get_billboard_mat(self, stage) -> "sc.Matrix44 | None":
+        """카메라 월드 트랜스폼에서 회전만 추출해 sc.Matrix44로 반환."""
+        try:
+            cam_path = self._viewport_api.get_active_camera()
+            cam_prim = stage.GetPrimAtPath(str(cam_path))
+            if not cam_prim.IsValid():
+                return None
+            xf = UsdGeom.Xformable(cam_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+
+            def _norm(row):
+                l = (xf[row][0]**2 + xf[row][1]**2 + xf[row][2]**2) ** 0.5
+                return [xf[row][c] / l for c in range(3)] if l > 1e-9 else [xf[row][c] for c in range(3)]
+
+            r, u, f = _norm(0), _norm(1), _norm(2)
+            flat = [
+                r[0], r[1], r[2], 0,
+                u[0], u[1], u[2], 0,
+                f[0], f[1], f[2], 0,
+                0,    0,    0,    1,
+            ]
+            return sc.Matrix44(*flat)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
+
     def _add(self, prim_path: str, display_text: str, pos3d: tuple) -> int:
         """슬롯에 오버레이 추가. 풀이 꽉 차면 가장 오래된 것을 FIFO 방출."""
         if len(self._active) >= MAX_OVERLAYS:
             oldest_key = next(iter(self._active))
             self._deactivate(oldest_key)
 
-        # 비어 있는 슬롯 인덱스 선택
         used = set(self._active.values())
         slot_idx = next(i for i in range(MAX_OVERLAYS) if i not in used)
 
@@ -206,5 +258,7 @@ class ColorpickOverlay:
 
     def _destroy(self):
         self._deactivate_all()
-        self._scene_view = None
+        self._update_sub   = None
+        self._prev_cam_mat = None
+        self._scene_view   = None
         self._slots.clear()
