@@ -13,7 +13,7 @@ LABEL_OFFSET_Y   = 5.0
 PANEL_W          = 160          # W:H = 2:1
 PANEL_H          = 80           # W:H = 2:1
 PANEL_BG         = 0xFFFFFFFF   # 불투명 흰색 ABGR
-SWATCH_W         = 60
+SWATCH_COL_W     = PANEL_H      # 사와치 열 너비 = 패널 높이 → margin 뺀 실제 사와치가 정사각형
 DOT_SIZE         = 13
 LABEL_SIZE       = 13
 PANEL_PAD        = 6            # 패널 내부 여백
@@ -164,29 +164,34 @@ class ColorpickOverlay:
             line_roots.append(line_root)
 
         # ── 2D 패널: vph.frame ─────────────────────────────────────
+        # 외부 ZStack을 1×1로 최소화 → hit area 없어서 뷰포트 제스처 통과
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
         with self._frame:
-            with ui.ZStack(content_clipping=False, opaque_for_mouse_events=False):
+            with ui.ZStack(width=1, height=1, content_clipping=False):
                 for i in range(MAX_OVERLAYS):
                     with ui.Placer(offset_x=0, offset_y=0) as placer:
                         with ui.ZStack(
-                            width=PANEL_W, height=PANEL_H,
-                            visible=False, opaque_for_mouse_events=False,
+                            width=PANEL_W, height=PANEL_H, visible=False,
                         ) as panel:
                             ui.Rectangle(style={
                                 "background_color": PANEL_BG,
                                 "border_radius": 4,
                             })
                             with ui.HStack():
-                                swatch = ui.Rectangle(
-                                    width=SWATCH_W,
-                                    style={
-                                        "background_color": 0xFF808080,
-                                        "border_radius": 4,
-                                        "margin": PANEL_PAD,
-                                    },
-                                )
-                                ui.Spacer(width=PANEL_PAD)
+                                # 사와치 열: 너비=PANEL_H, 상하좌우 PANEL_PAD 여백 → 정사각형
+                                with ui.VStack(width=SWATCH_COL_W):
+                                    ui.Spacer(height=PANEL_PAD)
+                                    with ui.HStack():
+                                        ui.Spacer(width=PANEL_PAD)
+                                        swatch = ui.Rectangle(
+                                            style={
+                                                "background_color": 0xFF808080,
+                                                "border_radius": 4,
+                                            },
+                                        )
+                                        ui.Spacer(width=PANEL_PAD)
+                                    ui.Spacer(height=PANEL_PAD)
+                                # 텍스트 열
                                 with ui.VStack(spacing=ITEM_GAP):
                                     ui.Spacer(height=PANEL_PAD)
                                     with ui.HStack(height=DOT_SIZE, spacing=4):
