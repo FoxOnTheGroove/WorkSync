@@ -36,7 +36,7 @@ class ColorpickOverlay:
         if not info["hit"]:
             cls.off(vp_name)
             return
-        cls.get(vp_name)._update(info["prim_path"], info["prim_name"], pos3d)
+        cls.get(vp_name)._update(info["prim_path"], info["texel_color"], pos3d)
 
     @classmethod
     def off(cls, vp_name: str = None):
@@ -65,8 +65,6 @@ class ColorpickOverlay:
         self._viewport_api    = None
         self._marker_path     = None
         self._update_sub      = None
-        self._last_world_pos  = None
-        self._last_cam_key    = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
@@ -165,20 +163,7 @@ class ColorpickOverlay:
             .ComputeLocalToWorldTransform(Usd.TimeCode.Default())
             .ExtractTranslation()
         )
-
         cam_xform = self._get_camera_xform(stage)
-        # 회전 변화 감지용 경량 키: 카메라 X축(right)의 월드 방향
-        if cam_xform:
-            rot = cam_xform.ExtractRotationMatrix()
-            cam_key = (rot[0][0], rot[1][0], rot[2][0])
-        else:
-            cam_key = None
-
-        if world_pos == self._last_world_pos and cam_key == self._last_cam_key:
-            return
-
-        self._last_world_pos = world_pos
-        self._last_cam_key   = cam_key
         self._rebuild_scene(world_pos, cam_xform)
 
     def _rebuild_scene(self, world_pos: tuple, cam_xform=None):
@@ -205,7 +190,7 @@ class ColorpickOverlay:
                 color=LINE_COLOR,
                 thickness=LINE_THICKNESS,
             )
-            with sc.Transform(transform=sc.Matrix44(flat)):
+            with sc.Transform(transform=sc.Matrix44(*flat)):
                 sc.Rectangle(
                     width=PANEL_WIDTH,
                     height=PANEL_HEIGHT,
@@ -220,9 +205,7 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def _clear(self):
-        self._update_sub     = None
-        self._last_world_pos = None
-        self._last_cam_key   = None
+        self._update_sub = None
         self._remove_marker()
         if self._scene_view:
             self._scene_view.scene.clear()
