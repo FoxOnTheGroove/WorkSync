@@ -1,8 +1,4 @@
 from collections import OrderedDict
-import os
-import struct
-import tempfile
-import zlib
 import omni.usd
 import omni.ui.scene as sc
 import omni.ui as ui
@@ -14,45 +10,24 @@ MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
 LABEL_SIZE       = 18
-LABEL_BG_W       = 140    # pixels
-LABEL_BG_H       = 26     # pixels
+LABEL_BG_W       = 140          # pixels
+LABEL_BG_H       = 26           # pixels
+LABEL_BG_COLOR   = 0xFFEBCE87  # sky blue ABGR (0xAABBGGRR)
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 MAX_OVERLAYS     = 5
-
-
-def _make_solid_png(r: int, g: int, b: int) -> bytes:
-    """1×1 solid-color RGB PNG (no external deps)."""
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        c = tag + data
-        return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xFFFFFFFF)
-
-    ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
-    idat = chunk(b'IDAT', zlib.compress(bytes([0, r, g, b])))
-    iend = chunk(b'IEND', b'')
-    return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
 
 
 class ColorpickOverlay:
     _instances: dict  = {}   # vpname  -> ColorpickOverlay
     _key_to_vp: dict  = {}   # key     -> vpname
     _next_key: int    = 0
-    _bg_image_path: str = None  # 1×1 sky-blue PNG, shared across all instances
 
     @classmethod
     def _gen_key(cls) -> int:
         k = cls._next_key
         cls._next_key += 1
         return k
-
-    @classmethod
-    def _ensure_bg_image(cls):
-        if cls._bg_image_path is None:
-            png = _make_solid_png(0x87, 0xCE, 0xEB)  # sky blue
-            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            tmp.write(png)
-            tmp.close()
-            cls._bg_image_path = tmp.name
 
     # ------------------------------------------------------------------
     # classmethod API
@@ -90,13 +65,6 @@ class ColorpickOverlay:
             for inst in list(cls._instances.values()):
                 inst._destroy()
             cls._instances.clear()
-        if not cls._instances:
-            if cls._bg_image_path:
-                try:
-                    os.unlink(cls._bg_image_path)
-                except OSError:
-                    pass
-                cls._bg_image_path = None
 
     @classmethod
     def _get_or_create(cls, vpname: str) -> "ColorpickOverlay":
@@ -119,7 +87,6 @@ class ColorpickOverlay:
 
     def _setup(self, vpname: str):
         try:
-            ColorpickOverlay._ensure_bg_image()
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
             self._scene_view = vph.scene_view
             self._create_slots()
@@ -145,11 +112,8 @@ class ColorpickOverlay:
                     with sc.Transform(
                         transform=sc.Matrix44.get_translation_matrix(0, LABEL_OFFSET_Y, 0)
                     ):
-                        sc.Image(
-                            ColorpickOverlay._bg_image_path,
-                            width=LABEL_BG_W,
-                            height=LABEL_BG_H,
-                        )
+                        with sc.Transform(scale_to=sc.Space.SCREEN):
+                            sc.Rectangle(LABEL_BG_W, LABEL_BG_H, color=LABEL_BG_COLOR)
                         slot["label"] = sc.Label(
                             "",
                             size=LABEL_SIZE,
