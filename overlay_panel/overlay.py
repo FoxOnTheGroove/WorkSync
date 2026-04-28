@@ -10,13 +10,23 @@ from .colorpick import Colorpick
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
-LABEL_SIZE       = 18
-LABEL_BG_W       = 180          # pixels
-LABEL_BG_H       = 36           # pixels
-LABEL_BG_COLOR   = 0xFFEBCE87  # sky blue ABGR (0xAABBGGRR)
+PANEL_W          = 240
+PANEL_H          = 80
+PANEL_BG         = 0xCC303030   # 반투명 다크 ABGR
+SWATCH_W         = 70
+DOT_SIZE         = 16
+LABEL_SIZE       = 14
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 MAX_OVERLAYS     = 5
+
+
+def _to_temp(rgb) -> str:
+    return "111"
+
+
+def _to_pressure(rgb) -> str:
+    return "111"
 
 
 class ColorpickOverlay:
@@ -40,10 +50,13 @@ class ColorpickOverlay:
         info = Colorpick.get_result_by_name(vp_name)
         if not info["hit"]:
             return None
-        c = info["texel_color"]
-        display_text = f"{c[0]}, {c[1]}, {c[2]}"
+        c        = info["texel_color"]
+        hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
+        temp_str = f"온도 {_to_temp(c)}"
+        pres_str = f"압력 {_to_pressure(c)}"
+        ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]  # ABGR
         inst = cls._get_or_create(vp_name)
-        return inst._add(info["prim_path"], display_text, pos3d)
+        return inst._add(info["prim_path"], hex_str, temp_str, pres_str, ui_color, pos3d)
 
     @classmethod
     def off(cls, identifier):
@@ -109,11 +122,10 @@ class ColorpickOverlay:
         self._vpname       = vpname
         self._scene_view   = None
         self._viewport_api = None
+        self._frame        = None
         self._slots: list[dict] = []
         self._active: OrderedDict[int, int] = OrderedDict()
-        self._update_sub    = None
-        self._cam_mat_prev  = None  # N-1 프레임
-        self._cam_mat_prev2 = None  # N-2 프레임 (RTX 2프레임 레이턴시 대응)
+        self._update_sub   = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
@@ -121,6 +133,7 @@ class ColorpickOverlay:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
             self._scene_view   = vph.scene_view
             self._viewport_api = vph.viewport_api
+            self._frame        = vph.frame
             self._create_slots()
             self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
                 self._on_update, name=f"colorpick_overlay_{vpname}"
@@ -129,97 +142,143 @@ class ColorpickOverlay:
             print(f"[ColorpickOverlay] setup failed for '{vpname}': {e}")
 
     def _create_slots(self):
-        """MAX_OVERLAYS 개의 씬 아이템 세트를 미리 생성 (모두 숨김)."""
+        """MAX_OVERLAYS 개의 슬롯 생성.
+        3D: sc.Line  /  2D: ui.Rectangle + ui.Label 패널 (vph.frame)
+        """
+        # ── 3D 씬뷰: sc.Line ───────────────────────────────────────
+        line_roots = []
         for _ in range(MAX_OVERLAYS):
-            slot = {"root": None, "label": None, "bg_tf": None, "marker_path": None}
             with self._scene_view.scene:
                 with sc.Transform(
                     transform=sc.Matrix44.get_translation_matrix(0, 0, 0),
                     visible=False,
-                ) as root:
-                    slot["root"] = root
+                ) as line_root:
                     sc.Line(
                         [0, 0, 0],
                         [0, LABEL_OFFSET_Y, 0],
                         color=LINE_COLOR,
                         thickness=LINE_THICKNESS,
                     )
-                    with sc.Transform(
-                        transform=sc.Matrix44.get_translation_matrix(0, LABEL_OFFSET_Y, 0)
-                    ):
-                        # bg_tf: 매 프레임 카메라 회전역행렬로 갱신 → 빌보드
-                        with sc.Transform(
-                            transform=sc.Matrix44.get_translation_matrix(0, 0, 0)
-                        ) as bg_tf:
-                            slot["bg_tf"] = bg_tf
-                            with sc.Transform(scale_to=sc.Space.SCREEN):
-                                sc.Rectangle(LABEL_BG_W, LABEL_BG_H, color=LABEL_BG_COLOR)
-                        slot["label"] = sc.Label(
-                            "",
-                            size=LABEL_SIZE,
-                            alignment=ui.Alignment.CENTER,
-                        )
-            self._slots.append(slot)
+            line_roots.append(line_root)
+
+        # ── 2D 패널: vph.frame ─────────────────────────────────────
+        with self._frame:
+            with ui.ZStack(content_clipping=False):
+                for i in range(MAX_OVERLAYS):
+                    with ui.Placer(offset_x=0, offset_y=0) as placer:
+                        with ui.ZStack(
+                            width=PANEL_W, height=PANEL_H, visible=False
+                        ) as panel:
+                            ui.Rectangle(style={"background_color": PANEL_BG})
+                            with ui.HStack():
+                                swatch = ui.Rectangle(
+                                    width=SWATCH_W,
+                                    style={"background_color": 0xFF808080},
+                                )
+                                ui.Spacer(width=8)
+                                with ui.VStack():
+                                    with ui.HStack(height=PANEL_H // 3):
+                                        dot = ui.Rectangle(
+                                            width=DOT_SIZE,
+                                            style={"background_color": 0xFF808080},
+                                        )
+                                        ui.Spacer(width=4)
+                                        hex_lbl = ui.Label(
+                                            "#000000",
+                                            style={
+                                                "color": 0xFFFFFFFF,
+                                                "font_size": LABEL_SIZE,
+                                            },
+                                        )
+                                    temp_lbl = ui.Label(
+                                        "온도 -",
+                                        style={
+                                            "color": 0xFFFFFFFF,
+                                            "font_size": LABEL_SIZE,
+                                        },
+                                    )
+                                    pres_lbl = ui.Label(
+                                        "압력 -",
+                                        style={
+                                            "color": 0xFFFFFFFF,
+                                            "font_size": LABEL_SIZE,
+                                        },
+                                    )
+
+                    self._slots.append({
+                        "line_root":   line_roots[i],
+                        "bg_placer":   placer,
+                        "panel":       panel,
+                        "swatch":      swatch,
+                        "color_dot":   dot,
+                        "hex_label":   hex_lbl,
+                        "temp_label":  temp_lbl,
+                        "press_label": pres_lbl,
+                        "world_pos":   None,
+                        "marker_path": None,
+                    })
 
     # ------------------------------------------------------------------
 
     def _on_update(self, event):
-        """프레임마다 bg_tf 회전만 갱신. scene.clear() 없음 → 제스처 안전."""
+        """패널 위치를 3D→2D 투영으로 매 프레임 갱신."""
         if not self._active:
             return
         stage = omni.usd.get_context().get_stage()
         if not stage:
             return
-        cur_mat = self._get_billboard_mat(stage)
-        if cur_mat is None:
-            return
-        # 2프레임 전 행렬 적용 → RTX 2프레임 레이턴시와 동기화
-        apply_mat = self._cam_mat_prev2 or self._cam_mat_prev or cur_mat
         for slot_idx in self._active.values():
-            self._slots[slot_idx]["bg_tf"].transform = apply_mat
-        self._cam_mat_prev2 = self._cam_mat_prev
-        self._cam_mat_prev  = cur_mat
+            slot = self._slots[slot_idx]
+            if slot["world_pos"] is None:
+                continue
+            sp = self._world_to_screen(slot["world_pos"], stage)
+            if sp:
+                slot["bg_placer"].offset_x = sp[0] - PANEL_W / 2
+                slot["bg_placer"].offset_y = sp[1] - PANEL_H / 2
 
-    def _get_billboard_mat(self, stage) -> "sc.Matrix44 | None":
-        """카메라 월드 트랜스폼에서 회전만 추출해 sc.Matrix44로 반환."""
+    def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
+        """world 좌표 → 화면 픽셀 (x, y). 카메라 뒤면 None."""
         try:
-            cam_path = self._viewport_api.get_active_camera()
-            cam_prim = stage.GetPrimAtPath(str(cam_path))
+            cam_path  = self._viewport_api.get_active_camera()
+            cam_prim  = stage.GetPrimAtPath(str(cam_path))
             if not cam_prim.IsValid():
                 return None
-            xf = UsdGeom.Xformable(cam_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-
-            def _norm(row):
-                l = (xf[row][0]**2 + xf[row][1]**2 + xf[row][2]**2) ** 0.5
-                return [xf[row][c] / l for c in range(3)] if l > 1e-9 else [xf[row][c] for c in range(3)]
-
-            r, u, f = _norm(0), _norm(1), _norm(2)
-            flat = [
-                r[0], r[1], r[2], 0,
-                u[0], u[1], u[2], 0,
-                f[0], f[1], f[2], 0,
-                0,    0,    0,    1,
-            ]
-            return sc.Matrix44(*flat)
+            cam_gf  = UsdGeom.Camera(cam_prim).GetCamera(Usd.TimeCode.Default())
+            frustum = cam_gf.frustum
+            view    = frustum.ComputeViewMatrix()
+            proj    = frustum.ComputeProjectionMatrix()
+            cam_space = view.Transform(Gf.Vec3d(*world_pos))
+            if cam_space[2] >= 0:   # 카메라 뒤
+                return None
+            ndc = proj.Transform(cam_space)
+            w, h = self._viewport_api.resolution
+            return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
         except Exception:
             return None
 
     # ------------------------------------------------------------------
 
-    def _add(self, prim_path: str, display_text: str, pos3d: tuple) -> int:
-        """슬롯에 오버레이 추가. 풀이 꽉 차면 가장 오래된 것을 FIFO 방출."""
+    def _add(self, prim_path: str, hex_str: str, temp_str: str,
+             pres_str: str, ui_color: int, pos3d: tuple) -> int:
         if len(self._active) >= MAX_OVERLAYS:
             oldest_key = next(iter(self._active))
             self._deactivate(oldest_key)
 
-        used = set(self._active.values())
+        used     = set(self._active.values())
         slot_idx = next(i for i in range(MAX_OVERLAYS) if i not in used)
+        slot     = self._slots[slot_idx]
 
-        slot = self._slots[slot_idx]
         x, y, z = pos3d
-        slot["root"].transform = sc.Matrix44.get_translation_matrix(x, y, z)
-        slot["label"].text     = display_text
-        slot["root"].visible   = True
+        slot["world_pos"]           = (x, y + LABEL_OFFSET_Y, z)
+        slot["line_root"].transform = sc.Matrix44.get_translation_matrix(x, y, z)
+        slot["line_root"].visible   = True
+        slot["panel"].visible       = True
+
+        slot["swatch"].style     = {"background_color": ui_color}
+        slot["color_dot"].style  = {"background_color": ui_color}
+        slot["hex_label"].text   = hex_str
+        slot["temp_label"].text  = temp_str
+        slot["press_label"].text = pres_str
 
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
@@ -233,7 +292,9 @@ class ColorpickOverlay:
         slot_idx = self._active.pop(key, None)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["root"].visible = False
+            slot["line_root"].visible = False
+            slot["panel"].visible     = False
+            slot["world_pos"]         = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
 
@@ -244,11 +305,15 @@ class ColorpickOverlay:
     def _set_visible(self, key: int, visible: bool):
         slot_idx = self._active.get(key)
         if slot_idx is not None:
-            self._slots[slot_idx]["root"].visible = visible
+            slot = self._slots[slot_idx]
+            slot["line_root"].visible = visible
+            slot["panel"].visible     = visible
 
     def _set_visible_all(self, visible: bool):
-        for key in self._active:
-            self._set_visible(key, visible)
+        for slot_idx in self._active.values():
+            slot = self._slots[slot_idx]
+            slot["line_root"].visible = visible
+            slot["panel"].visible     = visible
 
     # ------------------------------------------------------------------
 
@@ -259,15 +324,13 @@ class ColorpickOverlay:
         target = stage.GetPrimAtPath(prim_path)
         if not target.IsValid():
             return
-
         w2l = UsdGeom.Xformable(target).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()
         ).GetInverse()
-        local_pos = w2l.Transform(Gf.Vec3d(*pos3d))
-
+        local_pos   = w2l.Transform(Gf.Vec3d(*pos3d))
         slot_idx    = self._slots.index(slot)
         marker_path = f"{prim_path}/{MARKER_PRIM_NAME}_{slot_idx}"
-        sphere = UsdGeom.Sphere.Define(stage, marker_path)
+        sphere      = UsdGeom.Sphere.Define(stage, marker_path)
         UsdGeom.XformCommonAPI(sphere).SetTranslate(local_pos)
         sphere.GetRadiusAttr().Set(MARKER_RADIUS)
         self._apply_red_material(stage, sphere.GetPrim())
@@ -297,8 +360,6 @@ class ColorpickOverlay:
 
     def _destroy(self):
         self._deactivate_all()
-        self._update_sub    = None
-        self._cam_mat_prev  = None
-        self._cam_mat_prev2 = None
-        self._scene_view   = None
+        self._update_sub = None
+        self._scene_view = None
         self._slots.clear()
