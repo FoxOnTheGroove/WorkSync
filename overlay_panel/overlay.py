@@ -10,12 +10,14 @@ from .colorpick import Colorpick
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
-PANEL_W          = 240
-PANEL_H          = 80
-PANEL_BG         = 0xCC303030   # 반투명 다크 ABGR
-SWATCH_W         = 70
-DOT_SIZE         = 16
-LABEL_SIZE       = 14
+PANEL_W          = 192          # 240 × 0.8
+PANEL_H          = 64           # 80 × 0.8
+PANEL_BG         = 0xFFFFFFFF   # 불투명 흰색 ABGR
+SWATCH_W         = 56           # 70 × 0.8
+DOT_SIZE         = 13           # 16 × 0.8
+LABEL_SIZE       = 11           # 14 × 0.8
+PANEL_PAD        = 6            # 패널 내부 여백
+ITEM_GAP         = 4            # 항목 간 세로 간격
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 MAX_OVERLAYS     = 5
@@ -162,6 +164,7 @@ class ColorpickOverlay:
             line_roots.append(line_root)
 
         # ── 2D 패널: vph.frame ─────────────────────────────────────
+        _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
         with self._frame:
             with ui.ZStack(content_clipping=False):
                 for i in range(MAX_OVERLAYS):
@@ -169,41 +172,44 @@ class ColorpickOverlay:
                         with ui.ZStack(
                             width=PANEL_W, height=PANEL_H, visible=False
                         ) as panel:
-                            ui.Rectangle(style={"background_color": PANEL_BG})
+                            ui.Rectangle(style={
+                                "background_color": PANEL_BG,
+                                "border_radius": 4,
+                            })
                             with ui.HStack():
                                 swatch = ui.Rectangle(
                                     width=SWATCH_W,
-                                    style={"background_color": 0xFF808080},
+                                    style={
+                                        "background_color": 0xFF808080,
+                                        "border_radius": 4,
+                                        "margin": PANEL_PAD,
+                                    },
                                 )
-                                ui.Spacer(width=8)
-                                with ui.VStack():
-                                    with ui.HStack(height=PANEL_H // 3):
+                                ui.Spacer(width=PANEL_PAD)
+                                with ui.VStack(spacing=ITEM_GAP):
+                                    ui.Spacer(height=PANEL_PAD)
+                                    with ui.HStack(height=DOT_SIZE, spacing=4):
                                         dot = ui.Rectangle(
                                             width=DOT_SIZE,
-                                            style={"background_color": 0xFF808080},
+                                            style={
+                                                "background_color": 0xFF808080,
+                                                "border_radius": 2,
+                                            },
                                         )
-                                        ui.Spacer(width=4)
                                         hex_lbl = ui.Label(
                                             "#000000",
-                                            style={
-                                                "color": 0xFFFFFFFF,
-                                                "font_size": LABEL_SIZE,
-                                            },
+                                            style=_lbl_style,
                                         )
                                     temp_lbl = ui.Label(
                                         "온도 -",
-                                        style={
-                                            "color": 0xFFFFFFFF,
-                                            "font_size": LABEL_SIZE,
-                                        },
+                                        style=_lbl_style,
                                     )
                                     pres_lbl = ui.Label(
                                         "압력 -",
-                                        style={
-                                            "color": 0xFFFFFFFF,
-                                            "font_size": LABEL_SIZE,
-                                        },
+                                        style=_lbl_style,
                                     )
+                                    ui.Spacer(height=PANEL_PAD)
+                                ui.Spacer(width=PANEL_PAD)
 
                     self._slots.append({
                         "line_root":   line_roots[i],
