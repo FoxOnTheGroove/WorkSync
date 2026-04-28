@@ -7,9 +7,11 @@ from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
 from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
-MARKER_RADIUS    = 1.0
+MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
 LABEL_SIZE       = 18
+LABEL_BG_SIZE    = 120          # sc.Points pixel size (screen-aligned bg circle)
+LABEL_BG_COLOR   = 0xFF87CEEB  # sky blue (ARGB)
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 MAX_OVERLAYS     = 5
@@ -109,10 +111,12 @@ class ColorpickOverlay:
                     with sc.Transform(
                         transform=sc.Matrix44.get_translation_matrix(0, LABEL_OFFSET_Y, 0)
                     ):
+                        sc.Points([[0, 0, 0]], sizes=[LABEL_BG_SIZE], colors=[LABEL_BG_COLOR])
                         slot["label"] = sc.Label(
                             "",
                             size=LABEL_SIZE,
                             alignment=ui.Alignment.CENTER,
+                            fill_color=LABEL_BG_COLOR,
                         )
             self._slots.append(slot)
 
