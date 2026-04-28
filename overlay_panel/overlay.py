@@ -36,7 +36,9 @@ class ColorpickOverlay:
         if not info["hit"]:
             cls.off(vp_name)
             return
-        cls.get(vp_name)._update(info["prim_path"], info["texel_color"], pos3d)
+        c = info["texel_color"]
+        display_text = f"{c[0]}, {c[1]}, {c[2]}"
+        cls.get(vp_name)._update(info["prim_path"], display_text, pos3d)
 
     @classmethod
     def off(cls, vp_name: str = None):
@@ -65,6 +67,7 @@ class ColorpickOverlay:
         self._viewport_api    = None
         self._marker_path     = None
         self._update_sub      = None
+        self._prev_cam_xform  = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
@@ -164,7 +167,8 @@ class ColorpickOverlay:
             .ExtractTranslation()
         )
         cam_xform = self._get_camera_xform(stage)
-        self._rebuild_scene(world_pos, cam_xform)
+        self._rebuild_scene(world_pos, self._prev_cam_xform or cam_xform)
+        self._prev_cam_xform = cam_xform
 
     def _rebuild_scene(self, world_pos: tuple, cam_xform=None):
         self._scene_view.scene.clear()
@@ -205,7 +209,8 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def _clear(self):
-        self._update_sub = None
+        self._update_sub     = None
+        self._prev_cam_xform = None
         self._remove_marker()
         if self._scene_view:
             self._scene_view.scene.clear()
