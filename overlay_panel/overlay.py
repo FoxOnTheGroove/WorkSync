@@ -59,10 +59,11 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def __init__(self, vpname: str):
-        self._vpname       = vpname
-        self._scene_view   = None
-        self._marker_path  = None
-        self._update_sub   = None
+        self._vpname          = vpname
+        self._scene_view      = None
+        self._marker_path     = None
+        self._update_sub      = None
+        self._last_world_pos  = None
         self._setup(vpname)
 
     def _setup(self, vpname: str):
@@ -134,6 +135,9 @@ class ColorpickOverlay:
             Usd.TimeCode.Default()
         )
         world_pos = tuple(world_xform.ExtractTranslation())
+        if world_pos == self._last_world_pos:
+            return
+        self._last_world_pos = world_pos
         self._rebuild_scene(world_pos)
 
     def _rebuild_scene(self, world_pos: tuple):
@@ -160,7 +164,8 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def _clear(self):
-        self._update_sub = None
+        self._update_sub     = None
+        self._last_world_pos = None
         self._remove_marker()
         if self._scene_view:
             self._scene_view.scene.clear()
