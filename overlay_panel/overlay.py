@@ -10,8 +10,7 @@ MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 LABEL_OFFSET_Y   = 5.0
 LABEL_SIZE       = 18
-LABEL_BG_WIDTH   = 2.5          # half-width in world units (rectangle bg)
-LABEL_BG_THICK   = 28          # line thickness in pixels (rectangle height)
+LABEL_BG_CHARS   = "████████████████"  # billboard rect via full-block label
 LABEL_BG_COLOR   = 0xFFEBCE87  # sky blue in ABGR (0xAABBGGRR)
 LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
@@ -112,11 +111,11 @@ class ColorpickOverlay:
                     with sc.Transform(
                         transform=sc.Matrix44.get_translation_matrix(0, LABEL_OFFSET_Y, 0)
                     ):
-                        sc.Line(
-                            [-LABEL_BG_WIDTH, 0, 0],
-                            [LABEL_BG_WIDTH, 0, 0],
+                        sc.Label(
+                            LABEL_BG_CHARS,
+                            size=LABEL_SIZE,
+                            alignment=ui.Alignment.CENTER,
                             color=LABEL_BG_COLOR,
-                            thickness=LABEL_BG_THICK,
                         )
                         slot["label"] = sc.Label(
                             "",
