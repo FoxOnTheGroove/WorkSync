@@ -178,7 +178,11 @@ class PartsManager:
     @classmethod
     def _is_excluded(cls, prim: Usd.Prim) -> bool:
         type_name = prim.GetTypeName()
-        return type_name.endswith("Light") or type_name in cls._EXCLUDED_TYPES
+        if type_name.endswith("Light") or type_name in cls._EXCLUDED_TYPES:
+            return True
+        if type_name == "Xform" and not prim.GetChildren():
+            return True
+        return False
 
     @classmethod
     def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index, parent_key: str = "") -> PrimNode:
