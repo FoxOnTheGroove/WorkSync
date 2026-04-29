@@ -57,9 +57,12 @@ def init_scene():
     plane.CreateFaceVertexCountsAttr([4])
     plane.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
     plane.CreateDoubleSidedAttr(True)
-    UsdGeom.PrimvarsAPI(plane).CreatePrimvar(
-        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.varying
-    ).Set([(0, 0), (1, 0), (1, 1), (0, 1)])
+    plane.GetPrim().CreateAttribute(
+        "primvars:st", Sdf.ValueTypeNames.TexCoord2fArray
+    ).Set([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
+    plane.GetPrim().CreateAttribute(
+        "primvars:st:interpolation", Sdf.ValueTypeNames.Token
+    ).Set("vertex")
 
     xform = UsdGeom.Xformable(plane)
     xform.AddTranslateOp().Set(Gf.Vec3d(0, 0, -800))
