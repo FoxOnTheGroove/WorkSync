@@ -53,7 +53,9 @@ class PartsManagerUI:
         self._expand_buttons = {}
         self._vis_buttons = {}
         self._children_stacks = {}
-        self._tree = PartsManager.get_prim_tree()
+        PartsManager.make_tree()
+        vp_ids = list(PartsManager._viewport_key_map.keys())
+        self._tree = [n for vp_id in vp_ids if (n := PartsManager.get_prim_tree_by_id(vp_id)) is not None]
 
         with self._list_stack:
             if not self._tree:
@@ -72,7 +74,6 @@ class PartsManagerUI:
 
     def _render_node_content(self, node: PrimNode):
         key = node.index_key
-        is_visible = PartsManager.get_visibility(key)
         is_expanded = not self._collapsed.get(key, True)
 
         row_height = 26 if node.is_part else 22
@@ -92,9 +93,9 @@ class PartsManagerUI:
             else:
                 ui.Spacer(width=20)
 
-            vis_style = {} if is_visible else {"color": 0xFF666666}
+            vis_style = {} if node.is_visible else {"color": 0xFF666666}
             btn_vis = ui.Button(
-                "O" if is_visible else "-",
+                "O" if node.is_visible else "-",
                 width=24,
                 style=vis_style,
                 clicked_fn=lambda k=key: self._on_vis_toggle(k),
@@ -128,13 +129,16 @@ class PartsManagerUI:
             btn.text = "v" if now_expanded else ">"
 
     def _on_vis_toggle(self, key: str):
-        new_vis = not PartsManager.get_visibility(key)
-        PartsManager.set_visibility(key, new_vis)
+        node = PartsManager._node_map.get(key)
+        if node is None:
+            return
+        PartsManager.set_visibility(key, not node.is_visible)
 
         for k, btn in self._vis_buttons.items():
-            vis = PartsManager.get_visibility(k)
-            btn.text = "O" if vis else "-"
-            btn.style = {} if vis else {"color": 0xFF666666}
+            n = PartsManager._node_map.get(k)
+            if n:
+                btn.text = "O" if n.is_visible else "-"
+                btn.style = {} if n.is_visible else {"color": 0xFF666666}
 
     def destroy(self):
         if self._window:

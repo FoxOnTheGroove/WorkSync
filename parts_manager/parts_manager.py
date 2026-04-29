@@ -19,6 +19,7 @@ class PrimNode:
     children: list
     is_leaf: bool
     index_key: str  # 구조 기반 위치 키 (예: "vid", "vid_2", "vid_0_1")
+    is_visible: bool = True
 
 
 class PartsManager:
@@ -43,16 +44,17 @@ class PartsManager:
             carb.events.type_from_string("hytwin_orbit_extension:gesture:drag:start"),
             cls.set_active_viewport,
         )
+        cls.make_tree()
 
     @classmethod
-    def get_prim_tree(cls) -> list:
-        """활성 뷰포트의 타겟 프림들로 트리를 구성. 타겟 없는 뷰포트는 skip."""
+    def make_tree(cls) -> None:
+        """모든 뷰포트 프림 트리를 빌드해 _node_map, _viewport_key_map 초기화."""
         stage = cls._get_stage()
         if stage is None:
-            return []
+            return
         prim_config = get_loader_instance()._loaded_prim_config
-        tree = []
         cls._viewport_key_map = {}
+        roots = []
         for vph in hytwin_vp_wg.ViewportWidgetHost().get_instances():
             camera_path = vph.viewport.viewport_api.camera_path
             cam_prim = stage.GetPrimAtPath(camera_path)
@@ -70,11 +72,23 @@ class PartsManager:
                 continue
             vid = str(vph.viewport.viewport_api.id)
             node = cls._build_subtree(prim, depth=0, sibling_index=vid, parent_key="")
-            tree.append(node)
+            roots.append(node)
             cls._viewport_key_map[vid] = node.index_key
         cls._node_map = {}
-        cls._build_node_map(tree)
-        return tree
+        cls._build_node_map(roots)
+
+    @classmethod
+    def get_prim_tree(cls) -> "PrimNode | None":
+        """_active_viewport_id 기준 최상위 PrimNode 반환."""
+        return cls.get_prim_tree_by_id(cls._active_viewport_id)
+
+    @classmethod
+    def get_prim_tree_by_id(cls, vp_id) -> "PrimNode | None":
+        """viewport_id에 대응하는 최상위 PrimNode 반환. 없으면 None."""
+        key = cls._viewport_key_map.get(str(vp_id)) if vp_id is not None else None
+        if key is None:
+            return None
+        return cls._node_map.get(key)
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
@@ -92,6 +106,7 @@ class PartsManager:
             node = cls._node_map.get(key)
             if node:
                 cls._apply_visibility(node.path, visible)
+                node.is_visible = visible
 
     @classmethod
     def set_sync(cls, enabled: bool) -> None:
@@ -136,19 +151,21 @@ class PartsManager:
     @classmethod
     def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index, parent_key: str = "") -> PrimNode:
         key = f"{parent_key}_{sibling_index}" if parent_key else str(sibling_index)
+        path = str(prim.GetPath())
         children = [
             cls._build_subtree(child, depth + 1, i, key)
             for i, child in enumerate(prim.GetChildren())
         ]
         return PrimNode(
             prim=prim,
-            path=str(prim.GetPath()),
+            path=path,
             name=prim.GetName(),
             depth=depth,
             is_part=(depth == 0),
             children=children,
             is_leaf=(len(children) == 0),
             index_key=key,
+            is_visible=cls._compute_visibility(path),
         )
 
     @classmethod
