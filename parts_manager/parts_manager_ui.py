@@ -1,5 +1,5 @@
 import omni.ui as ui
-from .parts_manager import PartsManager, PrimNode
+from .parts_manager import PartsManager, PrimNodeInfo
 
 _SCROLL_STYLE = {
     "background_color": 0xFF1E1E1E,
@@ -63,20 +63,20 @@ class PartsManagerUI:
                 for node in self._tree:
                     self._render_node(node)
 
-    def _render_node(self, node: PrimNode):
-        if node.is_part:
+    def _render_node(self, node: PrimNodeInfo):
+        if node.depth == 0:
             with ui.Frame(style=_PART_FRAME_STYLE):
                 with ui.VStack(spacing=0):
                     self._render_node_content(node)
         else:
             self._render_node_content(node)
 
-    def _render_node_content(self, node: PrimNode):
+    def _render_node_content(self, node: PrimNodeInfo):
         key = node.index_key
         is_expanded = not self._collapsed.get(key, True)
 
-        row_height = 26 if node.is_part else 22
-        row_style = {"background_color": 0xFF383838} if node.is_part else {}
+        row_height = 26 if node.depth == 0 else 22
+        row_style = {"background_color": 0xFF383838} if node.depth == 0 else {}
 
         with ui.HStack(height=row_height, style=row_style):
             if node.depth > 0:
@@ -101,7 +101,7 @@ class PartsManagerUI:
             )
             self._vis_buttons[key] = btn_vis
 
-            if node.is_part:
+            if node.depth == 0:
                 label_style = {"font_size": 14, "color": 0xFFDDDDDD}
             else:
                 label_style = {"font_size": 13, "color": 0xFFAAAAAA}
