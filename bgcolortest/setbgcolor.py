@@ -52,7 +52,22 @@ def init_scene():
     print("[gradient_bg] init_scene done.")
 
 
-def update_gradient(color_start, color_end, angle_deg, intensity_scale=3000.0):
+def update_plane_size(half_size):
+    stage  = omni.usd.get_context().get_stage()
+    plane  = UsdGeom.Mesh(stage.GetPrimAtPath(PLANE_PATH))
+    shader = UsdShade.Shader(stage.GetPrimAtPath(SHADER_PATH))
+    if not plane.GetPrim().IsValid() or not shader.GetPrim().IsValid():
+        print("[gradient_bg] Plane or Shader not found. Run Init first.")
+        return
+    h = float(half_size)
+    plane.GetPointsAttr().Set([
+        Gf.Vec3f(-h, 0, -h), Gf.Vec3f(h, 0, -h),
+        Gf.Vec3f( h, 0,  h), Gf.Vec3f(-h, 0,  h),
+    ])
+    shader.CreateInput("plane_half_size", Sdf.ValueTypeNames.Float).Set(h)
+
+
+def update_gradient(color_start, color_end, angle_deg, intensity_scale=400.0):
     stage = omni.usd.get_context().get_stage()
     prim  = stage.GetPrimAtPath(SHADER_PATH)
     if not prim.IsValid():

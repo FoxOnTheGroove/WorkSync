@@ -36,7 +36,7 @@ class GradientBGWindow(ui.Window):
                 with ui.HStack(height=24):
                     ui.Label("Intensity", width=90)
                     self._intensity_m = ui.FloatDrag(min=100.0, max=50000.0, step=100.0).model
-                    self._intensity_m.set_value(3000.0)
+                    self._intensity_m.set_value(400.0)
 
         self._subs += self._subscribe_color(self._cw_start)
         self._subs += self._subscribe_color(self._cw_end)
