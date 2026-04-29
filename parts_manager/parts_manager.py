@@ -16,6 +16,7 @@ class PrimNode:
     is_part: bool
     children: list
     is_leaf: bool
+    index_key: str  # 구조 기반 위치 키 (예: "0", "0_2", "1_0_1")
 
 
 class PartsManager:
@@ -75,11 +76,18 @@ class PartsManager:
         if not load_prims_prim.IsValid():
             print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
             return []
-        return [cls._build_subtree(child, depth=0) for child in load_prims_prim.GetChildren()]
+        return [
+            cls._build_subtree(child, depth=0, sibling_index=i, parent_key="")
+            for i, child in enumerate(load_prims_prim.GetChildren())
+        ]
 
     @classmethod
-    def _build_subtree(cls, prim: Usd.Prim, depth: int) -> PrimNode:
-        children = [cls._build_subtree(child, depth + 1) for child in prim.GetChildren()]
+    def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index: int, parent_key: str = "") -> PrimNode:
+        key = f"{parent_key}_{sibling_index}" if parent_key else str(sibling_index)
+        children = [
+            cls._build_subtree(child, depth + 1, i, key)
+            for i, child in enumerate(prim.GetChildren())
+        ]
         return PrimNode(
             prim=prim,
             path=str(prim.GetPath()),
@@ -88,6 +96,7 @@ class PartsManager:
             is_part=(depth == 0),
             children=children,
             is_leaf=(len(children) == 0),
+            index_key=key,
         )
 
     @classmethod
