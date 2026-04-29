@@ -81,17 +81,20 @@ class PartsManager:
         cls._build_node_map(all_roots)
 
     @classmethod
-    def get_prim_tree(cls) -> list:
-        """_active_viewport_id 기준 해당 뷰포트의 노드 페이로드 리스트 반환."""
+    def get_prim_tree(cls) -> "dict | None":
+        """_active_viewport_id 기준 최상위 프림의 자식 노드 페이로드 반환."""
         return cls.get_prim_tree_by_id(cls._active_viewport_id)
 
     @classmethod
-    def get_prim_tree_by_id(cls, vp_id) -> list:
-        """viewport_id에 대응하는 노드 페이로드 리스트 반환. 없으면 []."""
+    def get_prim_tree_by_id(cls, vp_id) -> "dict | None":
+        """viewport_id 최상위 프림의 자식 노드 페이로드 반환. 없으면 None."""
         if vp_id is None:
-            return []
+            return None
         nodes = cls._trees.get(str(vp_id), [])
-        return [cls._to_payload(n) for n in nodes]
+        if not nodes or not nodes[0].children:
+            return None
+        child = nodes[0].children[0]
+        return cls._to_payload(child, depth_offset=child.depth)
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
@@ -148,14 +151,14 @@ class PartsManager:
     # ── 내부 ─────────────────────────────────────────────────────────────────
 
     @classmethod
-    def _to_payload(cls, node: "PrimNode") -> dict:
+    def _to_payload(cls, node: "PrimNode", depth_offset: int = 0) -> dict:
         return {
             "name": node.name,
             "index_key": node.index_key,
-            "depth": node.depth,
+            "depth": node.depth - depth_offset,
             "is_visible": node.is_visible,
             "is_leaf": node.is_leaf,
-            "children": [cls._to_payload(c) for c in node.children],
+            "children": [cls._to_payload(c, depth_offset) for c in node.children],
         }
 
     @classmethod

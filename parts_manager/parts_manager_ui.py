@@ -57,11 +57,10 @@ class PartsManagerUI:
         self._tree = PartsManager.get_prim_tree()
 
         with self._list_stack:
-            if not self._tree:
+            if self._tree is None:
                 ui.Label("(no prims found)", style={"color": 0xFF888888})
             else:
-                for node in self._tree:
-                    self._render_node(node)
+                self._render_node(self._tree)
 
     def _render_node(self, node: dict):
         if node["depth"] == 0:
