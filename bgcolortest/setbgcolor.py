@@ -71,7 +71,7 @@ def init_scene():
 
     # MDL 파일 저장
     with open(MDL_FILE, "w", encoding="utf-8") as f:
-        f.write(MDL_CODE)
+        f.write(MDL_CODE.lstrip())
     print(f"[gradient_bg] MDL written to: {MDL_FILE}")
     print(f"[gradient_bg] MDL file exists: {os.path.exists(MDL_FILE)}")
 
