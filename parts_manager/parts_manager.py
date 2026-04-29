@@ -6,18 +6,7 @@ from dataclasses import dataclass
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
 from morph.hytwin_usd_loader_extension import get_instance as get_loader_instance
 
-__all__ = ["PartsManager", "PrimNode", "PrimNodeInfo"]
-
-
-@dataclass
-class PrimNodeInfo:
-    """외부 공개용 노드 정보. USD 내부 객체 미포함."""
-    name: str
-    index_key: str
-    depth: int
-    is_visible: bool
-    is_leaf: bool
-    children: list  # list[PrimNodeInfo]
+__all__ = ["PartsManager", "PrimNode"]
 
 
 @dataclass
@@ -92,17 +81,17 @@ class PartsManager:
         cls._build_node_map(all_roots)
 
     @classmethod
-    def get_prim_tree(cls) -> "list[PrimNodeInfo]":
-        """_active_viewport_id 기준 해당 뷰포트의 PrimNodeInfo 리스트 반환."""
+    def get_prim_tree(cls) -> list:
+        """_active_viewport_id 기준 해당 뷰포트의 노드 페이로드 리스트 반환."""
         return cls.get_prim_tree_by_id(cls._active_viewport_id)
 
     @classmethod
-    def get_prim_tree_by_id(cls, vp_id) -> "list[PrimNodeInfo]":
-        """viewport_id에 대응하는 PrimNodeInfo 리스트 반환. 없으면 []."""
+    def get_prim_tree_by_id(cls, vp_id) -> list:
+        """viewport_id에 대응하는 노드 페이로드 리스트 반환. 없으면 []."""
         if vp_id is None:
             return []
         nodes = cls._trees.get(str(vp_id), [])
-        return [cls._to_info(n) for n in nodes]
+        return [cls._to_payload(n) for n in nodes]
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
@@ -159,15 +148,15 @@ class PartsManager:
     # ── 내부 ─────────────────────────────────────────────────────────────────
 
     @classmethod
-    def _to_info(cls, node: "PrimNode") -> PrimNodeInfo:
-        return PrimNodeInfo(
-            name=node.name,
-            index_key=node.index_key,
-            depth=node.depth,
-            is_visible=node.is_visible,
-            is_leaf=node.is_leaf,
-            children=[cls._to_info(c) for c in node.children],
-        )
+    def _to_payload(cls, node: "PrimNode") -> dict:
+        return {
+            "name": node.name,
+            "index_key": node.index_key,
+            "depth": node.depth,
+            "is_visible": node.is_visible,
+            "is_leaf": node.is_leaf,
+            "children": [cls._to_payload(c) for c in node.children],
+        }
 
     @classmethod
     def _get_stage(cls) -> Usd.Stage:

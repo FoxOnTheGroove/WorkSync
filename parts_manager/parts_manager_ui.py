@@ -1,5 +1,5 @@
 import omni.ui as ui
-from .parts_manager import PartsManager, PrimNodeInfo
+from .parts_manager import PartsManager
 
 _SCROLL_STYLE = {
     "background_color": 0xFF1E1E1E,
@@ -63,26 +63,26 @@ class PartsManagerUI:
                 for node in self._tree:
                     self._render_node(node)
 
-    def _render_node(self, node: PrimNodeInfo):
-        if node.depth == 0:
+    def _render_node(self, node: dict):
+        if node["depth"] == 0:
             with ui.Frame(style=_PART_FRAME_STYLE):
                 with ui.VStack(spacing=0):
                     self._render_node_content(node)
         else:
             self._render_node_content(node)
 
-    def _render_node_content(self, node: PrimNodeInfo):
-        key = node.index_key
+    def _render_node_content(self, node: dict):
+        key = node["index_key"]
         is_expanded = not self._collapsed.get(key, True)
 
-        row_height = 26 if node.depth == 0 else 22
-        row_style = {"background_color": 0xFF383838} if node.depth == 0 else {}
+        row_height = 26 if node["depth"] == 0 else 22
+        row_style = {"background_color": 0xFF383838} if node["depth"] == 0 else {}
 
         with ui.HStack(height=row_height, style=row_style):
-            if node.depth > 0:
-                ui.Spacer(width=node.depth * 16)
+            if node["depth"] > 0:
+                ui.Spacer(width=node["depth"] * 16)
 
-            if not node.is_leaf:
+            if not node["is_leaf"]:
                 btn_expand = ui.Button(
                     "v" if is_expanded else ">",
                     width=20,
@@ -92,27 +92,27 @@ class PartsManagerUI:
             else:
                 ui.Spacer(width=20)
 
-            vis_style = {} if node.is_visible else {"color": 0xFF666666}
+            vis_style = {} if node["is_visible"] else {"color": 0xFF666666}
             btn_vis = ui.Button(
-                "O" if node.is_visible else "-",
+                "O" if node["is_visible"] else "-",
                 width=24,
                 style=vis_style,
                 clicked_fn=lambda k=key: self._on_vis_toggle(k),
             )
             self._vis_buttons[key] = btn_vis
 
-            if node.depth == 0:
+            if node["depth"] == 0:
                 label_style = {"font_size": 14, "color": 0xFFDDDDDD}
             else:
                 label_style = {"font_size": 13, "color": 0xFFAAAAAA}
-            ui.Label(node.name, style=label_style)
+            ui.Label(node["name"], style=label_style)
 
-        if not node.is_leaf:
+        if not node["is_leaf"]:
             children_stack = ui.VStack(spacing=0)
             children_stack.visible = is_expanded
             self._children_stacks[key] = children_stack
             with children_stack:
-                for child in node.children:
+                for child in node["children"]:
                     self._render_node(child)
 
     def _on_expand_toggle(self, key: str):
