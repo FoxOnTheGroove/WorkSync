@@ -150,13 +150,21 @@ class PartsManager:
     def _get_stage(cls) -> Usd.Stage:
         return omni.usd.get_context().get_stage()
 
+    _EXCLUDED_TYPES = {"Material", "Shader", "NodeGraph", "GeomSubset"}
+
+    @classmethod
+    def _is_excluded(cls, prim: Usd.Prim) -> bool:
+        type_name = prim.GetTypeName()
+        return type_name.endswith("Light") or type_name in cls._EXCLUDED_TYPES
+
     @classmethod
     def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index, parent_key: str = "") -> PrimNode:
         key = f"{parent_key}_{sibling_index}" if parent_key else str(sibling_index)
         path = str(prim.GetPath())
+        eligible = [c for c in prim.GetChildren() if not cls._is_excluded(c)]
         children = [
             cls._build_subtree(child, depth + 1, i, key)
-            for i, child in enumerate(prim.GetChildren())
+            for i, child in enumerate(eligible)
         ]
         return PrimNode(
             prim=prim,
