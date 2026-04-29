@@ -25,6 +25,9 @@ class PartsManagerUI:
         self._expand_buttons: dict[str, ui.Button] = {}
         self._vis_buttons: dict[str, ui.Button] = {}
         self._children_stacks: dict[str, ui.VStack] = {}
+        self._nodes_by_path: dict[str, PrimNode] = {}
+        self._nodes_by_index_key: dict[str, PrimNode] = {}
+        self._sync_cb: ui.CheckBox = None
 
     def build_ui(self):
         self._window = ui.Window("Parts Manager", width=300, height=400)
@@ -35,6 +38,8 @@ class PartsManagerUI:
                     ui.Label("Parts Manager", style={"font_size": 15})
                     ui.Spacer()
                     ui.Button("find", width=40, height=22, clicked_fn=self._on_refresh)
+                    ui.Label("sync", width=32, style={"font_size": 12, "color": 0xFFAAAAAA})
+                    self._sync_cb = ui.CheckBox(width=20)
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
                     self._list_stack = ui.VStack(spacing=4)
@@ -48,7 +53,10 @@ class PartsManagerUI:
         self._expand_buttons = {}
         self._vis_buttons = {}
         self._children_stacks = {}
+        self._nodes_by_path = {}
+        self._nodes_by_index_key = {}
         self._tree = PartsManager.get_prim_tree()
+        self._collect_nodes(self._tree)
 
         with self._list_stack:
             if not self._tree:
@@ -56,6 +64,13 @@ class PartsManagerUI:
             else:
                 for node in self._tree:
                     self._render_node(node)
+
+    def _collect_nodes(self, nodes: list):
+        for node in nodes:
+            self._nodes_by_path[node.path] = node
+            self._nodes_by_index_key[node.index_key] = node
+            if not node.is_leaf:
+                self._collect_nodes(node.children)
 
     def _render_node(self, node: PrimNode):
         if node.is_part:
@@ -123,8 +138,29 @@ class PartsManagerUI:
             btn.text = "v" if now_expanded else ">"
 
     def _on_vis_toggle(self, path: str):
-        current = PartsManager.get_visibility(path)
-        PartsManager.set_visibility(path, not current)
+        node = self._nodes_by_path.get(path)
+        new_vis = not PartsManager.get_visibility(path)
+
+        targets = [path]
+
+        if node and self._sync_cb and self._sync_cb.model.get_value_as_bool():
+            if node.depth == 0:
+                # 파츠 레벨: 모든 파츠에 동일 적용
+                for part in self._tree:
+                    if part.path != path:
+                        targets.append(part.path)
+            else:
+                # 상대 키: 파츠 인덱스(첫 세그먼트) 이후의 구조 위치
+                rel_key = "_".join(node.index_key.split("_")[1:])
+                for part in self._tree:
+                    target_key = f"{part.index_key}_{rel_key}"
+                    target_node = self._nodes_by_index_key.get(target_key)
+                    if target_node and target_node.path != path:
+                        targets.append(target_node.path)
+
+        for p in targets:
+            PartsManager.set_visibility(p, new_vis)
+
         for p, btn in self._vis_buttons.items():
             vis = PartsManager.get_visibility(p)
             btn.text = "O" if vis else "-"
