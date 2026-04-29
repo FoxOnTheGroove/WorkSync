@@ -164,71 +164,71 @@ class ColorpickOverlay:
             line_roots.append(line_root)
 
         # ── 2D 패널: vph.frame ─────────────────────────────────────
-        # 외부 ZStack을 1×1로 최소화 → hit area 없어서 뷰포트 제스처 통과
+        # 크기 없는 ZStack → hit area 0 → 뷰포트 제스처 통과
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
         with self._frame:
-            with ui.ZStack(width=1, height=1, content_clipping=False):
-                for i in range(MAX_OVERLAYS):
-                    with ui.Placer(offset_x=0, offset_y=0) as placer:
-                        with ui.ZStack(
-                            width=PANEL_W, height=PANEL_H, visible=False,
-                        ) as panel:
-                            ui.Rectangle(style={
-                                "background_color": PANEL_BG,
-                                "border_radius": 4,
-                            })
-                            with ui.HStack():
-                                # 사와치 열: 너비=PANEL_H, 상하좌우 PANEL_PAD 여백 → 정사각형
-                                with ui.VStack(width=SWATCH_COL_W):
-                                    ui.Spacer(height=PANEL_PAD)
-                                    with ui.HStack():
-                                        ui.Spacer(width=PANEL_PAD)
-                                        swatch = ui.Rectangle(
-                                            style={
-                                                "background_color": 0xFF808080,
-                                                "border_radius": 4,
-                                            },
-                                        )
-                                        ui.Spacer(width=PANEL_PAD)
-                                    ui.Spacer(height=PANEL_PAD)
-                                # 텍스트 열
-                                with ui.VStack(spacing=ITEM_GAP):
-                                    ui.Spacer(height=PANEL_PAD)
-                                    with ui.HStack(height=DOT_SIZE, spacing=4):
-                                        dot = ui.Rectangle(
-                                            width=DOT_SIZE,
-                                            style={
-                                                "background_color": 0xFF808080,
-                                                "border_radius": 2,
-                                            },
-                                        )
-                                        hex_lbl = ui.Label(
-                                            "#000000",
-                                            style=_lbl_style,
-                                        )
-                                    temp_lbl = ui.Label(
-                                        "온도 -",
+            overlay = ui.ZStack()
+        for i in range(MAX_OVERLAYS):
+            with overlay:
+                with ui.Placer(offset_x=0, offset_y=0) as placer:
+                    with ui.ZStack(
+                        width=PANEL_W, height=PANEL_H, visible=False,
+                    ) as panel:
+                        ui.Rectangle(style={
+                            "background_color": PANEL_BG,
+                            "border_radius": 4,
+                        })
+                        with ui.HStack():
+                            # 사와치 열: 너비=PANEL_H, 상하좌우 PANEL_PAD 여백 → 정사각형
+                            with ui.VStack(width=SWATCH_COL_W):
+                                ui.Spacer(height=PANEL_PAD)
+                                with ui.HStack():
+                                    ui.Spacer(width=PANEL_PAD)
+                                    swatch = ui.Rectangle(
+                                        style={
+                                            "background_color": 0xFF808080,
+                                            "border_radius": 4,
+                                        },
+                                    )
+                                    ui.Spacer(width=PANEL_PAD)
+                                ui.Spacer(height=PANEL_PAD)
+                            # 텍스트 열
+                            with ui.VStack(spacing=ITEM_GAP):
+                                ui.Spacer(height=PANEL_PAD)
+                                with ui.HStack(height=DOT_SIZE, spacing=4):
+                                    dot = ui.Rectangle(
+                                        width=DOT_SIZE,
+                                        style={
+                                            "background_color": 0xFF808080,
+                                            "border_radius": 2,
+                                        },
+                                    )
+                                    hex_lbl = ui.Label(
+                                        "#000000",
                                         style=_lbl_style,
                                     )
-                                    pres_lbl = ui.Label(
-                                        "압력 -",
-                                        style=_lbl_style,
-                                    )
-                                    ui.Spacer(height=PANEL_PAD)
-                                ui.Spacer(width=PANEL_PAD)
-
-                    self._slots.append({
-                        "line_root":   line_roots[i],
-                        "bg_placer":   placer,
-                        "panel":       panel,
-                        "swatch":      swatch,
-                        "color_dot":   dot,
-                        "hex_label":   hex_lbl,
-                        "temp_label":  temp_lbl,
-                        "press_label": pres_lbl,
-                        "world_pos":   None,
-                        "marker_path": None,
-                    })
+                                temp_lbl = ui.Label(
+                                    "온도 -",
+                                    style=_lbl_style,
+                                )
+                                pres_lbl = ui.Label(
+                                    "압력 -",
+                                    style=_lbl_style,
+                                )
+                                ui.Spacer(height=PANEL_PAD)
+                            ui.Spacer(width=PANEL_PAD)
+            self._slots.append({
+                "line_root":   line_roots[i],
+                "bg_placer":   placer,
+                "panel":       panel,
+                "swatch":      swatch,
+                "color_dot":   dot,
+                "hex_label":   hex_lbl,
+                "temp_label":  temp_lbl,
+                "press_label": pres_lbl,
+                "world_pos":   None,
+                "marker_path": None,
+            })
 
     # ------------------------------------------------------------------
 
