@@ -27,12 +27,6 @@ class PartsManager:
     # ── 공개 API ─────────────────────────────────────────────────────────────
 
     @classmethod
-    def initialize(cls) -> None:
-        """확장 시작 시 호출. 추후 _instance 등 클래스 레벨 상태 초기화에 사용."""
-        cls._sync_enabled = False
-        cls._node_map = {}
-
-    @classmethod
     def get_prim_tree(cls) -> list:
         """load_prims 아래 전체 계층을 PrimNode 트리로 반환하고 내부 캐시를 갱신."""
         stage = cls._get_stage()
@@ -68,9 +62,11 @@ class PartsManager:
                 cls._apply_visibility(node.path, visible)
 
     @classmethod
-    def set_sync(cls, enabled: bool) -> None:
-        """sync 활성화 여부를 설정."""
+    def set_sync(cls, enabled: bool, reference_key: str = None) -> None:
+        """sync 활성화 여부 설정. enabled=True이고 reference_key 제공 시 즉시 동기화."""
         cls._sync_enabled = enabled
+        if enabled and reference_key is not None:
+            cls._immediate_sync(reference_key)
 
     # ── 보조 API ─────────────────────────────────────────────────────────────
 
@@ -133,6 +129,32 @@ class PartsManager:
             is_leaf=(len(children) == 0),
             index_key=key,
         )
+
+    @classmethod
+    def _immediate_sync(cls, reference_key: str) -> None:
+        """reference_key 기준으로 동일 구조 위치 전체에 즉시 가시성 동기화.
+        파츠 레벨(depth=0)이면 해당 파츠 전체 노드를 기준으로 적용."""
+        ref_node = cls._node_map.get(reference_key)
+        if ref_node is None:
+            return
+
+        if ref_node.depth == 0:
+            prefix = reference_key + "_"
+            subtree_keys = [reference_key] + [k for k in cls._node_map if k.startswith(prefix)]
+        else:
+            subtree_keys = [reference_key]
+
+        for key in subtree_keys:
+            node = cls._node_map.get(key)
+            if node is None:
+                continue
+            vis = cls._compute_visibility(node.path)
+            for target_key in cls._resolve_targets(key):
+                if target_key == key:
+                    continue
+                target_node = cls._node_map.get(target_key)
+                if target_node:
+                    cls._apply_visibility(target_node.path, vis)
 
     @classmethod
     def _build_node_map(cls, nodes: list) -> None:
