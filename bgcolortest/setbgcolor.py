@@ -1,5 +1,6 @@
 import os
 import omni.usd
+import omni.kit.commands
 from pxr import UsdGeom, UsdShade, Sdf, Gf
 
 MDL_CODE = """
@@ -47,7 +48,7 @@ def init_scene():
     camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
     UsdGeom.Xformable(camera).AddTranslateOp().Set(Gf.Vec3d(0, 0, 300))
 
-    # Plane: camera child, translate(0,0,-800), rotX(90), scale(5)
+    # Plane: camera child, translate(0,0,-800), rotX(90)
     plane = UsdGeom.Mesh.Define(stage, PLANE_PATH)
     plane.CreatePointsAttr([
         Gf.Vec3f(-1000, 0, -1000),
@@ -69,27 +70,25 @@ def init_scene():
     xform.AddTranslateOp().Set(Gf.Vec3d(0, 0, -800))
     xform.AddRotateXOp().Set(90.0)
 
-    # MDL 파일을 extension 폴더에 저장
+    # MDL 파일 저장
     with open(MDL_FILE, "w", encoding="utf-8") as f:
         f.write(MDL_CODE)
+    print(f"[gradient_bg] MDL written to: {MDL_FILE}")
+    print(f"[gradient_bg] MDL file exists: {os.path.exists(MDL_FILE)}")
 
-    # Material 생성
-    material = UsdShade.Material.Define(stage, MATERIAL_PATH)
-    shader   = UsdShade.Shader.Define(stage, SHADER_PATH)
-    shader.GetImplementationSourceAttr().Set("sourceAsset")
-    shader.GetPrim().CreateAttribute(
-        "info:mdl:sourceAsset", Sdf.ValueTypeNames.Asset
-    ).Set(Sdf.AssetPath(MDL_FILE))
-    shader.GetPrim().CreateAttribute(
-        "info:mdl:sourceAsset:subIdentifier", Sdf.ValueTypeNames.Token
-    ).Set("GradientBackground")
+    # Omniverse 커맨드로 MDL 머티리얼 생성
+    result = omni.kit.commands.execute(
+        "CreateMdlMaterialPrim",
+        mtl_url=MDL_FILE,
+        mtl_name="GradientBackground",
+        mtl_path=MATERIAL_PATH,
+        select_new_prim=False,
+    )
+    print(f"[gradient_bg] CreateMdlMaterialPrim result: {result}")
 
-    out = shader.CreateOutput("out", Sdf.ValueTypeNames.Token)
-    material.CreateSurfaceOutput("mdl:surface").ConnectToSource(out)
-    material.CreateDisplacementOutput("mdl:displacement").ConnectToSource(out)
-    material.CreateVolumeOutput("mdl:volume").ConnectToSource(out)
-
-    UsdShade.MaterialBindingAPI(plane).Bind(material)
+    # 플레인에 머티리얼 바인드
+    material = UsdShade.Material(stage.GetPrimAtPath(MATERIAL_PATH))
+    UsdShade.MaterialBindingAPI(plane.GetPrim()).Bind(material)
     print("[gradient_bg] init_scene done.")
 
 
