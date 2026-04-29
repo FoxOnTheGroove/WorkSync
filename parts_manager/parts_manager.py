@@ -25,6 +25,7 @@ class PrimNode:
 class PartsManager:
 
     _sync_enabled: bool = False
+    _trees: dict = {}              # viewport_id(str) -> list[PrimNode]
     _node_map: dict = {}           # index_key -> PrimNode
     _viewport_key_map: dict = {}   # viewport_id(str) -> index_key(str)
     _active_viewport_id = None
@@ -53,8 +54,9 @@ class PartsManager:
         if stage is None:
             return
         prim_config = get_loader_instance()._loaded_prim_config
+        cls._trees = {}
         cls._viewport_key_map = {}
-        roots = []
+        all_roots = []
         for vph in hytwin_vp_wg.ViewportWidgetHost().get_instances():
             camera_path = vph.viewport.viewport_api.camera_path
             cam_prim = stage.GetPrimAtPath(camera_path)
@@ -72,24 +74,23 @@ class PartsManager:
                 continue
             vid = str(vph.viewport.viewport_api.id)
             node = cls._build_subtree(prim, depth=0, sibling_index=vid, parent_key="")
-            roots.append(node)
+            cls._trees[vid] = [node]
             cls._viewport_key_map[vid] = node.index_key
+            all_roots.append(node)
         cls._node_map = {}
-        cls._build_node_map(roots)
+        cls._build_node_map(all_roots)
 
     @classmethod
     def get_prim_tree(cls) -> list:
-        """_active_viewport_id 기준 최상위 PrimNode를 리스트로 반환."""
-        node = cls.get_prim_tree_by_id(cls._active_viewport_id)
-        return [node] if node is not None else []
+        """_active_viewport_id 기준 해당 뷰포트의 PrimNode 리스트 반환."""
+        return cls.get_prim_tree_by_id(cls._active_viewport_id)
 
     @classmethod
-    def get_prim_tree_by_id(cls, vp_id) -> "PrimNode | None":
-        """viewport_id에 대응하는 최상위 PrimNode 반환. 없으면 None."""
-        key = cls._viewport_key_map.get(str(vp_id)) if vp_id is not None else None
-        if key is None:
-            return None
-        return cls._node_map.get(key)
+    def get_prim_tree_by_id(cls, vp_id) -> list:
+        """viewport_id에 대응하는 PrimNode 리스트 반환. 없으면 []."""
+        if vp_id is None:
+            return []
+        return cls._trees.get(str(vp_id), [])
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
