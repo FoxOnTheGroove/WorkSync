@@ -54,8 +54,7 @@ class PartsManagerUI:
         self._vis_buttons = {}
         self._children_stacks = {}
         PartsManager.make_tree()
-        vp_ids = list(PartsManager._viewport_key_map.keys())
-        self._tree = [n for vp_id in vp_ids if (n := PartsManager.get_prim_tree_by_id(vp_id)) is not None]
+        self._tree = PartsManager.get_prim_tree()
 
         with self._list_stack:
             if not self._tree:

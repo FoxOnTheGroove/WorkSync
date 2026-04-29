@@ -78,9 +78,10 @@ class PartsManager:
         cls._build_node_map(roots)
 
     @classmethod
-    def get_prim_tree(cls) -> "PrimNode | None":
-        """_active_viewport_id 기준 최상위 PrimNode 반환."""
-        return cls.get_prim_tree_by_id(cls._active_viewport_id)
+    def get_prim_tree(cls) -> list:
+        """_active_viewport_id 기준 최상위 PrimNode를 리스트로 반환."""
+        node = cls.get_prim_tree_by_id(cls._active_viewport_id)
+        return [node] if node is not None else []
 
     @classmethod
     def get_prim_tree_by_id(cls, vp_id) -> "PrimNode | None":
@@ -117,7 +118,7 @@ class PartsManager:
 
     @classmethod
     def set_active_viewport(cls, event: carb.events.IEvent) -> None:
-        cls._active_viewport_id = event.payload.get("viewport_api_id")
+        cls._active_viewport_id = event.payload["viewport_api_id"]
 
     # ── 보조 API ─────────────────────────────────────────────────────────────
 
