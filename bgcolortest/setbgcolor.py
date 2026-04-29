@@ -33,14 +33,15 @@ SHADER_PATH   = "/World/Looks/GradientBG/Shader"
 CAMERA_PATH   = "/World/Camera"
 PLANE_PATH    = "/World/Camera/GradientPlane"
 CUBE_PATH     = "/World/Cube"
-MDL_FILE      = os.path.join(os.path.dirname(__file__), "gradient_background.mdl")
+MDL_FILE      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gradient_background.mdl").replace("\\", "/")
 
 
 def init_scene():
     stage = omni.usd.get_context().get_stage()
 
     # Cube at (0, 0, 0)
-    UsdGeom.Cube.Define(stage, CUBE_PATH)
+    cube = UsdGeom.Cube.Define(stage, CUBE_PATH)
+    cube.CreateSizeAttr(50.0)
 
     # Camera at (0, 0, 300)
     camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
@@ -67,7 +68,6 @@ def init_scene():
     xform = UsdGeom.Xformable(plane)
     xform.AddTranslateOp().Set(Gf.Vec3d(0, 0, -800))
     xform.AddRotateXOp().Set(90.0)
-    xform.AddScaleOp().Set(Gf.Vec3f(5, 5, 5))
 
     # MDL 파일을 extension 폴더에 저장
     with open(MDL_FILE, "w", encoding="utf-8") as f:
