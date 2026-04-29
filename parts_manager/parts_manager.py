@@ -1,5 +1,7 @@
 from pxr import Usd, UsdGeom
 import omni.usd
+import omni.kit.app
+import carb.events
 from dataclasses import dataclass
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
 from morph.hytwin_usd_loader_extension import get_instance as get_loader_instance
@@ -25,8 +27,22 @@ class PartsManager:
     _node_map: dict = {}           # index_key -> PrimNode
     _viewport_key_map: dict = {}   # viewport_id(str) -> index_key(str)
     _active_viewport_id = None
+    _on_orbit_event_click = None
+    _on_orbit_event_drag_start = None
 
     # ── 공개 API ─────────────────────────────────────────────────────────────
+
+    @classmethod
+    def initialize(cls) -> None:
+        bus = omni.kit.app.get_app().get_message_bus_event_stream()
+        cls._on_orbit_event_click = bus.create_subscription_to_pop_by_type(
+            carb.events.type_from_string("hytwin_orbit_extension:gesture:click"),
+            cls.set_active_viewport,
+        )
+        cls._on_orbit_event_drag_start = bus.create_subscription_to_pop_by_type(
+            carb.events.type_from_string("hytwin_orbit_extension:gesture:drag:start"),
+            cls.set_active_viewport,
+        )
 
     @classmethod
     def get_prim_tree(cls) -> list:
@@ -85,9 +101,8 @@ class PartsManager:
             cls._immediate_sync()
 
     @classmethod
-    def set_active_viewport(cls, viewport_id) -> None:
-        """마지막으로 선택된 뷰포트 ID를 설정."""
-        cls._active_viewport_id = viewport_id
+    def set_active_viewport(cls, event: carb.events.IEvent) -> None:
+        cls._active_viewport_id = event.payload.get("viewport_api_id")
 
     # ── 보조 API ─────────────────────────────────────────────────────────────
 
