@@ -22,7 +22,8 @@ class PrimNode:
 class PartsManager:
 
     _sync_enabled: bool = False
-    _node_map: dict = {}  # index_key -> PrimNode (get_prim_tree 호출 시 갱신)
+    _node_map: dict = {}           # index_key -> PrimNode (get_prim_tree 호출 시 갱신)
+    _active_viewport_id = None     # 마지막으로 선택된 뷰포트 ID
 
     # ── 공개 API ─────────────────────────────────────────────────────────────
 
@@ -62,13 +63,24 @@ class PartsManager:
                 cls._apply_visibility(node.path, visible)
 
     @classmethod
-    def set_sync(cls, enabled: bool, reference_key: str = None) -> None:
-        """sync 활성화 여부 설정. enabled=True이고 reference_key 제공 시 즉시 동기화."""
+    def set_sync(cls, enabled: bool) -> None:
+        """sync 활성화 여부 설정. True 시 _active_viewport_id 기준으로 즉시 동기화."""
         cls._sync_enabled = enabled
-        if enabled and reference_key is not None:
-            cls._immediate_sync(reference_key)
+        if enabled:
+            cls._immediate_sync()
+
+    @classmethod
+    def set_active_viewport(cls, viewport_id) -> None:
+        """마지막으로 선택된 뷰포트 ID를 설정."""
+        cls._active_viewport_id = viewport_id
 
     # ── 보조 API ─────────────────────────────────────────────────────────────
+
+    @classmethod
+    def get_part_by_viewport(cls, viewport_id) -> "PrimNode | None":
+        """뷰포트 ID에 대응하는 최상위 파츠 PrimNode를 반환."""
+        key = cls._resolve_key_from_viewport(viewport_id)
+        return cls._node_map.get(key)
 
     @classmethod
     def get_load_prim_names(cls) -> list[str]:
@@ -131,18 +143,18 @@ class PartsManager:
         )
 
     @classmethod
-    def _immediate_sync(cls, reference_key: str) -> None:
-        """reference_key 기준으로 동일 구조 위치 전체에 즉시 가시성 동기화.
-        파츠 레벨(depth=0)이면 해당 파츠 전체 노드를 기준으로 적용."""
+    def _immediate_sync(cls) -> None:
+        """_active_viewport_id 기준 타겟 프림을 찾아 파츠 전체를 즉시 동기화."""
+        reference_key = cls._resolve_key_from_viewport(cls._active_viewport_id)
+        if reference_key is None:
+            return
+
         ref_node = cls._node_map.get(reference_key)
         if ref_node is None:
             return
 
-        if ref_node.depth == 0:
-            prefix = reference_key + "_"
-            subtree_keys = [reference_key] + [k for k in cls._node_map if k.startswith(prefix)]
-        else:
-            subtree_keys = [reference_key]
+        prefix = reference_key + "_"
+        subtree_keys = [reference_key] + [k for k in cls._node_map if k.startswith(prefix)]
 
         for key in subtree_keys:
             node = cls._node_map.get(key)
@@ -155,6 +167,46 @@ class PartsManager:
                 target_node = cls._node_map.get(target_key)
                 if target_node:
                     cls._apply_visibility(target_node.path, vis)
+
+    @classmethod
+    def _resolve_key_from_viewport(cls, viewport_id) -> "str | None":
+        """viewport_id → 카메라 경로 → 타겟 프림 → 최상위 파츠 index_key 역방향 조회."""
+        if viewport_id is None:
+            return None
+        try:
+            import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
+            from morph.hytwin_usd_loader_extension import get_instance
+        except ImportError:
+            print("[PartsManager] hytwin viewport/loader extension not available.")
+            return None
+
+        vp_handle = next(
+            (vph for vph in hytwin_vp_wg.get_instances()
+             if str(vph.viewport.viewport_api.id) == str(viewport_id)),
+            None,
+        )
+        if vp_handle is None:
+            return None
+
+        camera_path = vp_handle.viewport.viewport_api.camera_path
+        try:
+            prim_config = get_instance()._loaded_prim_config
+            prim_name = prim_config(camera_path)
+        except Exception:
+            return None
+
+        stage = cls._get_stage()
+        if stage is None:
+            return None
+        prim = stage.GetPrimAtPath(prim_name)
+        if not prim.IsValid():
+            return None
+
+        prim_path = str(prim.GetPath())
+        for key, node in cls._node_map.items():
+            if node.depth == 0 and node.path == prim_path:
+                return key
+        return None
 
     @classmethod
     def _build_node_map(cls, nodes: list) -> None:

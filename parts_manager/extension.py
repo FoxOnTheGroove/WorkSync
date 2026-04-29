@@ -5,6 +5,8 @@ from .parts_manager_ui import PartsManagerUI
 
 class MyExtension(omni.ext.IExt):
 
+    active_viewport_id = None  # 외부에서 갱신 후 PartsManager.set_active_viewport() 호출
+
     def on_startup(self, ext_id):
         print("[parts_manager] startup")
         self._ui = PartsManagerUI()
