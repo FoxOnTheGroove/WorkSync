@@ -258,7 +258,8 @@ class PartsManager:
         imageable = UsdGeom.Imageable(prim)
         if not imageable:
             return True
-        return imageable.ComputeVisibility() != UsdGeom.Tokens.invisible
+        vis_attr = imageable.GetVisibilityAttr()
+        return vis_attr.Get() != UsdGeom.Tokens.invisible if vis_attr else True
 
     @classmethod
     def _apply_visibility(cls, path: str, visible: bool) -> None:
