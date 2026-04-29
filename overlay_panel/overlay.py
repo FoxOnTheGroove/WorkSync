@@ -134,7 +134,7 @@ class ColorpickOverlay:
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
             self._scene_view   = vph.scene_view
-            self._viewport_api = vph.viewport_api
+            self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
             self._create_slots()
             self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
