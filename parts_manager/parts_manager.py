@@ -207,12 +207,9 @@ class PartsManager:
 
     @classmethod
     def _immediate_sync(cls) -> None:
-        """_active_viewport_id 기준 타겟 프림을 찾아 파츠 전체를 즉시 동기화."""
+        """_active_viewport_id 기준 파츠 전체를 즉시 동기화."""
         reference_key = cls._resolve_key_from_viewport(cls._active_viewport_id)
         if reference_key is None:
-            return
-        ref_node = cls._node_map.get(reference_key)
-        if ref_node is None:
             return
         prefix = reference_key + "_"
         subtree_keys = [reference_key] + [k for k in cls._node_map if k.startswith(prefix)]
@@ -220,13 +217,13 @@ class PartsManager:
             node = cls._node_map.get(key)
             if node is None:
                 continue
-            vis = cls._compute_visibility(node.path)
             for target_key in cls._resolve_targets(key):
                 if target_key == key:
                     continue
                 target_node = cls._node_map.get(target_key)
                 if target_node:
-                    cls._apply_visibility(target_node.path, vis)
+                    cls._apply_visibility(target_node.path, node.is_visible)
+                    target_node.is_visible = node.is_visible
 
     @classmethod
     def _resolve_key_from_viewport(cls, viewport_id) -> "str | None":
@@ -276,7 +273,7 @@ class PartsManager:
         imageable = UsdGeom.Imageable(prim)
         if not imageable:
             return
-        if visible:
-            imageable.MakeVisible()
-        else:
-            imageable.MakeInvisible()
+        # MakeVisible/MakeInvisible은 조상까지 순회 수정하므로 직접 attr 설정
+        imageable.GetVisibilityAttr().Set(
+            UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
+        )
