@@ -38,17 +38,19 @@ class GradientBGWindow(ui.Window):
                     self._intensity_m = ui.FloatDrag(min=100.0, max=50000.0, step=100.0).model
                     self._intensity_m.set_value(400.0)
 
-        self._subs += self._subscribe_color(self._cw_start)
-        self._subs += self._subscribe_color(self._cw_end)
-        self._subs.append(self._angle_m.add_value_changed_fn(lambda _: self._on_params_changed()))
-        self._subs.append(self._intensity_m.add_value_changed_fn(lambda _: self._on_params_changed()))
+        self._subs += self._subscribe_color(self._cw_start, self._on_start_changed)
+        self._subs += self._subscribe_color(self._cw_end,   self._on_end_changed)
+        self._subs.append(self._angle_m.add_value_changed_fn(
+            lambda _: setbgcolor.set_angle(self._angle_m.get_value_as_float())))
+        self._subs.append(self._intensity_m.add_value_changed_fn(
+            lambda _: setbgcolor.set_intensity(self._intensity_m.get_value_as_float())))
 
-    def _subscribe_color(self, cw):
+    def _subscribe_color(self, cw, callback):
         subs  = []
         model = cw.model
         for child in model.get_item_children():
             item_m = model.get_item_value_model(child)
-            subs.append(item_m.add_value_changed_fn(lambda _: self._on_params_changed()))
+            subs.append(item_m.add_value_changed_fn(lambda _: callback()))
         return subs
 
     def _get_color(self, cw):
@@ -59,15 +61,11 @@ class GradientBGWindow(ui.Window):
     def _on_init(self):
         setbgcolor.init_scene()
 
-    def _on_params_changed(self):
-        if self._cw_start is None:
-            return
-        setbgcolor.update_gradient(
-            color_start=self._get_color(self._cw_start),
-            color_end=self._get_color(self._cw_end),
-            angle_deg=self._angle_m.get_value_as_float(),
-            intensity_scale=self._intensity_m.get_value_as_float(),
-        )
+    def _on_start_changed(self):
+        setbgcolor.set_color_start(*self._get_color(self._cw_start))
+
+    def _on_end_changed(self):
+        setbgcolor.set_color_end(*self._get_color(self._cw_end))
 
     def destroy(self):
         self._subs.clear()
