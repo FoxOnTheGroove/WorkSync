@@ -1,6 +1,4 @@
-import os
 import omni.usd
-import omni.kit.commands
 from pxr import UsdGeom, UsdShade, Sdf, Gf
 
 MDL_CODE = """mdl 1.4;
@@ -14,8 +12,8 @@ export material GradientBackground(
     uniform float angle_deg       = 90.0,
     uniform float intensity_scale = 3000.0
 ) = let {
-    float3 tc  = state::texture_coordinate(0);
-    float2 uv  = float2(tc.x, tc.y);
+    float3 p   = state::transform_point(state::coordinate_internal, state::coordinate_object, state::position());
+    float2 uv  = float2(p.x / 2000.0 + 0.5, p.z / 2000.0 + 0.5);
     float  rad = angle_deg * (3.14159265 / 180.0);
     float2 dir = float2(math::cos(rad), math::sin(rad));
     float  t   = math::clamp(math::dot(uv - float2(0.5, 0.5), dir) + 0.5, 0.0, 1.0);
@@ -33,7 +31,6 @@ SHADER_PATH   = "/World/Looks/GradientBG/Shader"
 CAMERA_PATH   = "/World/Camera"
 PLANE_PATH    = "/World/Camera/GradientPlane"
 CUBE_PATH     = "/World/Cube"
-MDL_FILE      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gradient_background.mdl").replace("\\", "/")
 
 
 def init_scene():
@@ -47,7 +44,7 @@ def init_scene():
     camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
     UsdGeom.Xformable(camera).AddTranslateOp().Set(Gf.Vec3d(0, 0, 300))
 
-    # Plane: camera child, translate(0,0,-800), rotX(90)
+    # Plane: camera child, translate(0,0,-800), rotX(-90)
     plane = UsdGeom.Mesh.Define(stage, PLANE_PATH)
     plane.CreatePointsAttr([
         Gf.Vec3f(-1000, 0, -1000),
@@ -58,43 +55,27 @@ def init_scene():
     plane.CreateFaceVertexCountsAttr([4])
     plane.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
     plane.CreateDoubleSidedAttr(True)
-    plane.GetPrim().CreateAttribute(
-        "primvars:st", Sdf.ValueTypeNames.TexCoord2fArray
-    ).Set([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
-    plane.GetPrim().CreateAttribute(
-        "primvars:st:interpolation", Sdf.ValueTypeNames.Token
-    ).Set("vertex")
 
     xform = UsdGeom.Xformable(plane)
     xform.AddTranslateOp().Set(Gf.Vec3d(0, 0, -800))
-    xform.AddRotateXOp().Set(90.0)
+    xform.AddRotateXOp().Set(-90.0)
 
-    # MDL 파일 저장
-    with open(MDL_FILE, "w", encoding="utf-8") as f:
-        f.write(MDL_CODE.lstrip())
-    print(f"[gradient_bg] MDL written to: {MDL_FILE}")
-    print(f"[gradient_bg] MDL file exists: {os.path.exists(MDL_FILE)}")
+    # MDL을 파일 없이 sourceCode로 셰이더에 직접 내장
+    material = UsdShade.Material.Define(stage, MATERIAL_PATH)
+    shader   = UsdShade.Shader.Define(stage, SHADER_PATH)
+    shader.GetImplementationSourceAttr().Set("sourceCode")
+    shader.GetPrim().CreateAttribute(
+        "info:mdl:sourceCode", Sdf.ValueTypeNames.String
+    ).Set(MDL_CODE.lstrip())
+    shader.GetPrim().CreateAttribute(
+        "info:mdl:sourceAsset:subIdentifier", Sdf.ValueTypeNames.Token
+    ).Set("GradientBackground")
 
-    # Omniverse 커맨드로 MDL 머티리얼 생성
-    result = omni.kit.commands.execute(
-        "CreateMdlMaterialPrim",
-        mtl_url=MDL_FILE,
-        mtl_name="GradientBackground",
-        mtl_path=MATERIAL_PATH,
-        select_new_prim=False,
-    )
-    print(f"[gradient_bg] CreateMdlMaterialPrim result: {result}")
+    out = shader.CreateOutput("out", Sdf.ValueTypeNames.Token)
+    material.CreateSurfaceOutput("mdl:surface").ConnectToSource(out)
+    material.CreateDisplacementOutput("mdl:displacement").ConnectToSource(out)
+    material.CreateVolumeOutput("mdl:volume").ConnectToSource(out)
 
-    # 실제 생성된 경로 확인
-    material_prim = stage.GetPrimAtPath(MATERIAL_PATH)
-    print(f"[gradient_bg] Material at {MATERIAL_PATH} valid: {material_prim.IsValid()}")
-    looks_prim = stage.GetPrimAtPath("/World/Looks")
-    if looks_prim.IsValid():
-        for child in looks_prim.GetChildren():
-            print(f"[gradient_bg]   /World/Looks child: {child.GetPath()} [{child.GetTypeName()}]")
-
-    # 플레인에 머티리얼 바인드
-    material = UsdShade.Material(stage.GetPrimAtPath(MATERIAL_PATH))
     UsdShade.MaterialBindingAPI(plane.GetPrim()).Bind(material)
     print("[gradient_bg] init_scene done.")
 
