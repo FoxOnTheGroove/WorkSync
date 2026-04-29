@@ -21,19 +21,63 @@ class PrimNode:
 
 class PartsManager:
 
+    _sync_enabled: bool = False
+    _node_map: dict = {}  # index_key -> PrimNode (get_prim_tree 호출 시 갱신)
+
+    # ── 공개 API ─────────────────────────────────────────────────────────────
+
     @classmethod
     def initialize(cls) -> None:
         """확장 시작 시 호출. 추후 _instance 등 클래스 레벨 상태 초기화에 사용."""
-        pass
+        cls._sync_enabled = False
+        cls._node_map = {}
 
     @classmethod
-    def get_stage(cls) -> Usd.Stage:
-        return omni.usd.get_context().get_stage()
+    def get_prim_tree(cls) -> list:
+        """load_prims 아래 전체 계층을 PrimNode 트리로 반환하고 내부 캐시를 갱신."""
+        stage = cls._get_stage()
+        if stage is None:
+            return []
+        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
+        if not load_prims_prim.IsValid():
+            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
+            return []
+        tree = [
+            cls._build_subtree(child, depth=0, sibling_index=i, parent_key="")
+            for i, child in enumerate(load_prims_prim.GetChildren())
+        ]
+        cls._node_map = {}
+        cls._build_node_map(tree)
+        return tree
+
+    @classmethod
+    def get_visibility(cls, index_key: str) -> bool:
+        """index_key 위치 프림의 가시성을 반환. 상속 반영."""
+        node = cls._node_map.get(index_key)
+        if node is None:
+            return True
+        return cls._compute_visibility(node.path)
+
+    @classmethod
+    def set_visibility(cls, index_key: str, visible: bool) -> None:
+        """index_key 위치 프림의 가시성을 설정. sync ON 시 동일 구조 위치 전체에 적용."""
+        targets = cls._resolve_targets(index_key) if cls._sync_enabled else [index_key]
+        for key in targets:
+            node = cls._node_map.get(key)
+            if node:
+                cls._apply_visibility(node.path, visible)
+
+    @classmethod
+    def set_sync(cls, enabled: bool) -> None:
+        """sync 활성화 여부를 설정."""
+        cls._sync_enabled = enabled
+
+    # ── 보조 API ─────────────────────────────────────────────────────────────
 
     @classmethod
     def get_load_prim_names(cls) -> list[str]:
         """load_prims 아래 직계 자식 프림의 이름 목록을 반환."""
-        stage = cls.get_stage()
+        stage = cls._get_stage()
         if stage is None:
             return []
         load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
@@ -45,7 +89,7 @@ class PartsManager:
     @classmethod
     def get_load_prims(cls) -> list:
         """load_prims 아래 직계 자식 프림 객체 목록을 반환."""
-        stage = cls.get_stage()
+        stage = cls._get_stage()
         if stage is None:
             return []
         load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
@@ -57,7 +101,7 @@ class PartsManager:
     @classmethod
     def get_load_prim_paths(cls) -> list[str]:
         """load_prims 아래 직계 자식 프림의 전체 SdfPath(문자열) 목록을 반환."""
-        stage = cls.get_stage()
+        stage = cls._get_stage()
         if stage is None:
             return []
         load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
@@ -66,20 +110,11 @@ class PartsManager:
             return []
         return [str(child.GetPath()) for child in load_prims_prim.GetChildren()]
 
+    # ── 내부 ─────────────────────────────────────────────────────────────────
+
     @classmethod
-    def get_prim_tree(cls) -> list:
-        """load_prims 아래 전체 계층을 PrimNode 트리로 반환."""
-        stage = cls.get_stage()
-        if stage is None:
-            return []
-        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
-        if not load_prims_prim.IsValid():
-            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
-            return []
-        return [
-            cls._build_subtree(child, depth=0, sibling_index=i, parent_key="")
-            for i, child in enumerate(load_prims_prim.GetChildren())
-        ]
+    def _get_stage(cls) -> Usd.Stage:
+        return omni.usd.get_context().get_stage()
 
     @classmethod
     def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index: int, parent_key: str = "") -> PrimNode:
@@ -100,9 +135,25 @@ class PartsManager:
         )
 
     @classmethod
-    def get_visibility(cls, path: str) -> bool:
-        """ComputeVisibility()로 상속을 반영한 실제 가시성을 반환."""
-        stage = cls.get_stage()
+    def _build_node_map(cls, nodes: list) -> None:
+        for node in nodes:
+            cls._node_map[node.index_key] = node
+            if not node.is_leaf:
+                cls._build_node_map(node.children)
+
+    @classmethod
+    def _resolve_targets(cls, index_key: str) -> list[str]:
+        """sync 대상 index_key 목록 반환. 파츠 레벨이면 전체 파츠, 하위면 상대 위치로 매핑."""
+        segments = index_key.split("_")
+        part_keys = [k for k in cls._node_map if "_" not in k]
+        if len(segments) == 1:
+            return part_keys
+        rel_key = "_".join(segments[1:])
+        return [f"{p}_{rel_key}" for p in part_keys if f"{p}_{rel_key}" in cls._node_map]
+
+    @classmethod
+    def _compute_visibility(cls, path: str) -> bool:
+        stage = cls._get_stage()
         if stage is None:
             return True
         prim = stage.GetPrimAtPath(path)
@@ -114,9 +165,8 @@ class PartsManager:
         return imageable.ComputeVisibility() != UsdGeom.Tokens.invisible
 
     @classmethod
-    def set_visibility(cls, path: str, visible: bool) -> None:
-        """대상 프림의 가시성을 설정."""
-        stage = cls.get_stage()
+    def _apply_visibility(cls, path: str, visible: bool) -> None:
+        stage = cls._get_stage()
         if stage is None:
             return
         prim = stage.GetPrimAtPath(path)

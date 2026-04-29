@@ -21,13 +21,10 @@ class PartsManagerUI:
     def __init__(self):
         self._window = None
         self._tree: list = []
-        self._collapsed: dict[str, bool] = {}
-        self._expand_buttons: dict[str, ui.Button] = {}
-        self._vis_buttons: dict[str, ui.Button] = {}
-        self._children_stacks: dict[str, ui.VStack] = {}
-        self._nodes_by_path: dict[str, PrimNode] = {}
-        self._nodes_by_index_key: dict[str, PrimNode] = {}
-        self._sync_cb: ui.CheckBox = None
+        self._collapsed: dict[str, bool] = {}        # index_key -> bool
+        self._expand_buttons: dict[str, ui.Button] = {}  # index_key -> Button
+        self._vis_buttons: dict[str, ui.Button] = {}     # index_key -> Button
+        self._children_stacks: dict[str, ui.VStack] = {} # index_key -> VStack
 
     def build_ui(self):
         self._window = ui.Window("Parts Manager", width=300, height=400)
@@ -39,7 +36,10 @@ class PartsManagerUI:
                     ui.Spacer()
                     ui.Button("find", width=40, height=22, clicked_fn=self._on_refresh)
                     ui.Label("sync", width=32, style={"font_size": 12, "color": 0xFFAAAAAA})
-                    self._sync_cb = ui.CheckBox(width=20)
+                    cb = ui.CheckBox(width=20)
+                    cb.model.add_value_changed_fn(
+                        lambda m: PartsManager.set_sync(m.get_value_as_bool())
+                    )
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
                     self._list_stack = ui.VStack(spacing=4)
@@ -53,10 +53,7 @@ class PartsManagerUI:
         self._expand_buttons = {}
         self._vis_buttons = {}
         self._children_stacks = {}
-        self._nodes_by_path = {}
-        self._nodes_by_index_key = {}
         self._tree = PartsManager.get_prim_tree()
-        self._collect_nodes(self._tree)
 
         with self._list_stack:
             if not self._tree:
@@ -64,13 +61,6 @@ class PartsManagerUI:
             else:
                 for node in self._tree:
                     self._render_node(node)
-
-    def _collect_nodes(self, nodes: list):
-        for node in nodes:
-            self._nodes_by_path[node.path] = node
-            self._nodes_by_index_key[node.index_key] = node
-            if not node.is_leaf:
-                self._collect_nodes(node.children)
 
     def _render_node(self, node: PrimNode):
         if node.is_part:
@@ -81,9 +71,9 @@ class PartsManagerUI:
             self._render_node_content(node)
 
     def _render_node_content(self, node: PrimNode):
-        path = node.path
-        is_visible = PartsManager.get_visibility(path)
-        is_expanded = not self._collapsed.get(path, True)
+        key = node.index_key
+        is_visible = PartsManager.get_visibility(key)
+        is_expanded = not self._collapsed.get(key, True)
 
         row_height = 26 if node.is_part else 22
         row_style = {"background_color": 0xFF383838} if node.is_part else {}
@@ -96,9 +86,9 @@ class PartsManagerUI:
                 btn_expand = ui.Button(
                     "v" if is_expanded else ">",
                     width=20,
-                    clicked_fn=lambda p=path: self._on_expand_toggle(p),
+                    clicked_fn=lambda k=key: self._on_expand_toggle(k),
                 )
-                self._expand_buttons[path] = btn_expand
+                self._expand_buttons[key] = btn_expand
             else:
                 ui.Spacer(width=20)
 
@@ -107,9 +97,9 @@ class PartsManagerUI:
                 "O" if is_visible else "-",
                 width=24,
                 style=vis_style,
-                clicked_fn=lambda p=path: self._on_vis_toggle(p),
+                clicked_fn=lambda k=key: self._on_vis_toggle(k),
             )
-            self._vis_buttons[path] = btn_vis
+            self._vis_buttons[key] = btn_vis
 
             if node.is_part:
                 label_style = {"font_size": 14, "color": 0xFFDDDDDD}
@@ -120,49 +110,29 @@ class PartsManagerUI:
         if not node.is_leaf:
             children_stack = ui.VStack(spacing=0)
             children_stack.visible = is_expanded
-            self._children_stacks[path] = children_stack
+            self._children_stacks[key] = children_stack
             with children_stack:
                 for child in node.children:
                     self._render_node(child)
 
-    def _on_expand_toggle(self, path: str):
-        self._collapsed[path] = not self._collapsed.get(path, True)
-        now_expanded = not self._collapsed[path]
+    def _on_expand_toggle(self, key: str):
+        self._collapsed[key] = not self._collapsed.get(key, True)
+        now_expanded = not self._collapsed[key]
 
-        stack = self._children_stacks.get(path)
+        stack = self._children_stacks.get(key)
         if stack:
             stack.visible = now_expanded
 
-        btn = self._expand_buttons.get(path)
+        btn = self._expand_buttons.get(key)
         if btn:
             btn.text = "v" if now_expanded else ">"
 
-    def _on_vis_toggle(self, path: str):
-        node = self._nodes_by_path.get(path)
-        new_vis = not PartsManager.get_visibility(path)
+    def _on_vis_toggle(self, key: str):
+        new_vis = not PartsManager.get_visibility(key)
+        PartsManager.set_visibility(key, new_vis)
 
-        targets = [path]
-
-        if node and self._sync_cb and self._sync_cb.model.get_value_as_bool():
-            if node.depth == 0:
-                # 파츠 레벨: 모든 파츠에 동일 적용
-                for part in self._tree:
-                    if part.path != path:
-                        targets.append(part.path)
-            else:
-                # 상대 키: 파츠 인덱스(첫 세그먼트) 이후의 구조 위치
-                rel_key = "_".join(node.index_key.split("_")[1:])
-                for part in self._tree:
-                    target_key = f"{part.index_key}_{rel_key}"
-                    target_node = self._nodes_by_index_key.get(target_key)
-                    if target_node and target_node.path != path:
-                        targets.append(target_node.path)
-
-        for p in targets:
-            PartsManager.set_visibility(p, new_vis)
-
-        for p, btn in self._vis_buttons.items():
-            vis = PartsManager.get_visibility(p)
+        for k, btn in self._vis_buttons.items():
+            vis = PartsManager.get_visibility(k)
             btn.text = "O" if vis else "-"
             btn.style = {} if vis else {"color": 0xFF666666}
 
