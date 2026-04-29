@@ -1,10 +1,10 @@
-from pxr import Usd, Sdf, UsdGeom
+from pxr import Usd, UsdGeom
 import omni.usd
 from dataclasses import dataclass
+import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
+from morph.hytwin_usd_loader_extension import get_instance as get_loader_instance
 
-__all__ = ["PartsManager", "PrimNode", "LOAD_PRIMS_PATH"]
-
-LOAD_PRIMS_PATH = "/World/load_prims"  # 실제 환경에 따라 /Root/load_prims 로 변경
+__all__ = ["PartsManager", "PrimNode"]
 
 
 @dataclass
@@ -22,25 +22,37 @@ class PrimNode:
 class PartsManager:
 
     _sync_enabled: bool = False
-    _node_map: dict = {}           # index_key -> PrimNode (get_prim_tree 호출 시 갱신)
-    _active_viewport_id = None     # 마지막으로 선택된 뷰포트 ID
+    _node_map: dict = {}           # index_key -> PrimNode
+    _viewport_key_map: dict = {}   # viewport_id(str) -> index_key(str)
+    _active_viewport_id = None
 
     # ── 공개 API ─────────────────────────────────────────────────────────────
 
     @classmethod
     def get_prim_tree(cls) -> list:
-        """load_prims 아래 전체 계층을 PrimNode 트리로 반환하고 내부 캐시를 갱신."""
+        """활성 뷰포트의 타겟 프림들로 트리를 구성. 타겟 없는 뷰포트는 skip."""
         stage = cls._get_stage()
         if stage is None:
             return []
-        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
-        if not load_prims_prim.IsValid():
-            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
-            return []
-        tree = [
-            cls._build_subtree(child, depth=0, sibling_index=i, parent_key="")
-            for i, child in enumerate(load_prims_prim.GetChildren())
-        ]
+        prim_config = get_loader_instance()._loaded_prim_config
+        tree = []
+        cls._viewport_key_map = {}
+        for vph in hytwin_vp_wg.get_instances():
+            camera_path = vph.viewport.viewport_api.camera_path
+            try:
+                prim_name = prim_config(camera_path)
+            except Exception:
+                continue
+            if not prim_name:
+                continue
+            prim = stage.GetPrimAtPath(prim_name)
+            if not prim.IsValid():
+                continue
+            vid = str(vph.viewport.viewport_api.id)
+            idx = len(tree)
+            node = cls._build_subtree(prim, depth=0, sibling_index=idx, parent_key="")
+            tree.append(node)
+            cls._viewport_key_map[vid] = node.index_key
         cls._node_map = {}
         cls._build_node_map(tree)
         return tree
@@ -84,39 +96,18 @@ class PartsManager:
 
     @classmethod
     def get_load_prim_names(cls) -> list[str]:
-        """load_prims 아래 직계 자식 프림의 이름 목록을 반환."""
-        stage = cls._get_stage()
-        if stage is None:
-            return []
-        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
-        if not load_prims_prim.IsValid():
-            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
-            return []
-        return [child.GetName() for child in load_prims_prim.GetChildren()]
+        """로드된 최상위 파츠 이름 목록을 반환."""
+        return [n.name for n in cls._node_map.values() if n.depth == 0]
 
     @classmethod
     def get_load_prims(cls) -> list:
-        """load_prims 아래 직계 자식 프림 객체 목록을 반환."""
-        stage = cls._get_stage()
-        if stage is None:
-            return []
-        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
-        if not load_prims_prim.IsValid():
-            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
-            return []
-        return list(load_prims_prim.GetChildren())
+        """로드된 최상위 파츠 프림 객체 목록을 반환."""
+        return [n.prim for n in cls._node_map.values() if n.depth == 0]
 
     @classmethod
     def get_load_prim_paths(cls) -> list[str]:
-        """load_prims 아래 직계 자식 프림의 전체 SdfPath(문자열) 목록을 반환."""
-        stage = cls._get_stage()
-        if stage is None:
-            return []
-        load_prims_prim = stage.GetPrimAtPath(LOAD_PRIMS_PATH)
-        if not load_prims_prim.IsValid():
-            print(f"[PartsManager] '{LOAD_PRIMS_PATH}' not found in stage.")
-            return []
-        return [str(child.GetPath()) for child in load_prims_prim.GetChildren()]
+        """로드된 최상위 파츠 SdfPath(문자열) 목록을 반환."""
+        return [n.path for n in cls._node_map.values() if n.depth == 0]
 
     # ── 내부 ─────────────────────────────────────────────────────────────────
 
@@ -148,14 +139,11 @@ class PartsManager:
         reference_key = cls._resolve_key_from_viewport(cls._active_viewport_id)
         if reference_key is None:
             return
-
         ref_node = cls._node_map.get(reference_key)
         if ref_node is None:
             return
-
         prefix = reference_key + "_"
         subtree_keys = [reference_key] + [k for k in cls._node_map if k.startswith(prefix)]
-
         for key in subtree_keys:
             node = cls._node_map.get(key)
             if node is None:
@@ -170,43 +158,7 @@ class PartsManager:
 
     @classmethod
     def _resolve_key_from_viewport(cls, viewport_id) -> "str | None":
-        """viewport_id → 카메라 경로 → 타겟 프림 → 최상위 파츠 index_key 역방향 조회."""
-        if viewport_id is None:
-            return None
-        try:
-            import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
-            from morph.hytwin_usd_loader_extension import get_instance
-        except ImportError:
-            print("[PartsManager] hytwin viewport/loader extension not available.")
-            return None
-
-        vp_handle = next(
-            (vph for vph in hytwin_vp_wg.get_instances()
-             if str(vph.viewport.viewport_api.id) == str(viewport_id)),
-            None,
-        )
-        if vp_handle is None:
-            return None
-
-        camera_path = vp_handle.viewport.viewport_api.camera_path
-        try:
-            prim_config = get_instance()._loaded_prim_config
-            prim_name = prim_config(camera_path)
-        except Exception:
-            return None
-
-        stage = cls._get_stage()
-        if stage is None:
-            return None
-        prim = stage.GetPrimAtPath(prim_name)
-        if not prim.IsValid():
-            return None
-
-        prim_path = str(prim.GetPath())
-        for key, node in cls._node_map.items():
-            if node.depth == 0 and node.path == prim_path:
-                return key
-        return None
+        return cls._viewport_key_map.get(str(viewport_id)) if viewport_id is not None else None
 
     @classmethod
     def _build_node_map(cls, nodes: list) -> None:
