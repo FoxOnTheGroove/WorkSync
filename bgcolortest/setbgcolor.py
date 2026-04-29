@@ -67,15 +67,42 @@ def update_plane_size(half_size):
     shader.CreateInput("plane_half_size", Sdf.ValueTypeNames.Float).Set(h)
 
 
-def update_gradient(color_start, color_end, angle_deg, intensity_scale=400.0):
-    stage = omni.usd.get_context().get_stage()
-    prim  = stage.GetPrimAtPath(SHADER_PATH)
+def _get_shader():
+    prim = omni.usd.get_context().get_stage().GetPrimAtPath(SHADER_PATH)
     if not prim.IsValid():
         print("[gradient_bg] Shader not found. Run Init first.")
-        return
+        return None
+    return UsdShade.Shader(prim)
 
-    shader = UsdShade.Shader(prim)
-    shader.CreateInput("color_start",     Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color_start))
-    shader.CreateInput("color_end",       Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color_end))
-    shader.CreateInput("angle_deg",       Sdf.ValueTypeNames.Float).Set(float(angle_deg))
-    shader.CreateInput("intensity_scale", Sdf.ValueTypeNames.Float).Set(float(intensity_scale))
+
+def set_color_start(r, g, b):
+    shader = _get_shader()
+    if shader:
+        shader.CreateInput("color_start", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(r, g, b))
+
+
+def set_color_end(r, g, b):
+    shader = _get_shader()
+    if shader:
+        shader.CreateInput("color_end", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(r, g, b))
+
+
+def set_angle(angle_deg):
+    shader = _get_shader()
+    if shader:
+        shader.CreateInput("angle_deg", Sdf.ValueTypeNames.Float).Set(float(angle_deg))
+
+
+def set_intensity(scale):
+    shader = _get_shader()
+    if shader:
+        shader.CreateInput("intensity_scale", Sdf.ValueTypeNames.Float).Set(float(scale))
+
+
+def update_gradient(color_start, color_end, angle_deg, intensity_scale=400.0):
+    shader = _get_shader()
+    if shader:
+        shader.CreateInput("color_start",     Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color_start))
+        shader.CreateInput("color_end",       Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color_end))
+        shader.CreateInput("angle_deg",       Sdf.ValueTypeNames.Float).Set(float(angle_deg))
+        shader.CreateInput("intensity_scale", Sdf.ValueTypeNames.Float).Set(float(intensity_scale))
