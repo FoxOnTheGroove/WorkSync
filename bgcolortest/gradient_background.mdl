@@ -10,7 +10,7 @@ export material GradientBackground(
     uniform float intensity_scale = 3000.0
 ) = let {
     float3 p   = state::transform_point(state::coordinate_internal, state::coordinate_object, state::position());
-    float2 uv  = float2(p.x / 2000.0 + 0.5, p.z / 2000.0 + 0.5);
+    float2 uv  = float2(p.x / 600.0 + 0.5, p.z / 600.0 + 0.5);
     float  rad = angle_deg * (3.14159265 / 180.0);
     float2 dir = float2(math::cos(rad), math::sin(rad));
     float  t   = math::clamp(math::dot(uv - float2(0.5, 0.5), dir) + 0.5, 0.0, 1.0);

@@ -25,10 +25,10 @@ def init_scene():
     # Plane: camera child, translate(0,0,-800), rotX(-90)
     plane = UsdGeom.Mesh.Define(stage, PLANE_PATH)
     plane.CreatePointsAttr([
-        Gf.Vec3f(-1000, 0, -1000),
-        Gf.Vec3f( 1000, 0, -1000),
-        Gf.Vec3f( 1000, 0,  1000),
-        Gf.Vec3f(-1000, 0,  1000),
+        Gf.Vec3f(-300, 0, -300),
+        Gf.Vec3f( 300, 0, -300),
+        Gf.Vec3f( 300, 0,  300),
+        Gf.Vec3f(-300, 0,  300),
     ])
     plane.CreateFaceVertexCountsAttr([4])
     plane.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
