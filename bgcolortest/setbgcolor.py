@@ -57,7 +57,7 @@ def init_scene():
     plane.CreateFaceVertexCountsAttr([4])
     plane.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
     plane.CreateDoubleSidedAttr(True)
-    plane.CreatePrimvar(
+    UsdGeom.PrimvarsAPI(plane).CreatePrimvar(
         "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.varying
     ).Set([(0, 0), (1, 0), (1, 1), (0, 1)])
 
