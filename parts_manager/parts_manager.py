@@ -16,7 +16,7 @@ class PrimNode:
     is_part: bool
     children: list
     is_leaf: bool
-    index_key: str  # 구조 기반 위치 키 (예: "0", "0_2", "1_0_1")
+    index_key: str  # 구조 기반 위치 키 (예: "vid", "vid_2", "vid_0_1")
 
 
 class PartsManager:
@@ -37,11 +37,15 @@ class PartsManager:
         prim_config = get_loader_instance()._loaded_prim_config
         tree = []
         cls._viewport_key_map = {}
-        for vph in hytwin_vp_wg.get_instances():
+        for vph in hytwin_vp_wg.ViewportWidgetHost().get_instances():
             camera_path = vph.viewport.viewport_api.camera_path
+            cam_prim = stage.GetPrimAtPath(camera_path)
+            if not cam_prim.IsValid():
+                continue
+            cam_name = cam_prim.GetName()
             try:
-                prim_name = prim_config(camera_path)
-            except Exception:
+                prim_name = prim_config[cam_name]
+            except (KeyError, TypeError):
                 continue
             if not prim_name:
                 continue
@@ -49,8 +53,7 @@ class PartsManager:
             if not prim.IsValid():
                 continue
             vid = str(vph.viewport.viewport_api.id)
-            idx = len(tree)
-            node = cls._build_subtree(prim, depth=0, sibling_index=idx, parent_key="")
+            node = cls._build_subtree(prim, depth=0, sibling_index=vid, parent_key="")
             tree.append(node)
             cls._viewport_key_map[vid] = node.index_key
         cls._node_map = {}
@@ -116,7 +119,7 @@ class PartsManager:
         return omni.usd.get_context().get_stage()
 
     @classmethod
-    def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index: int, parent_key: str = "") -> PrimNode:
+    def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index, parent_key: str = "") -> PrimNode:
         key = f"{parent_key}_{sibling_index}" if parent_key else str(sibling_index)
         children = [
             cls._build_subtree(child, depth + 1, i, key)
@@ -170,12 +173,14 @@ class PartsManager:
     @classmethod
     def _resolve_targets(cls, index_key: str) -> list[str]:
         """sync 대상 index_key 목록 반환. 파츠 레벨이면 전체 파츠, 하위면 상대 위치로 매핑."""
-        segments = index_key.split("_")
-        part_keys = [k for k in cls._node_map if "_" not in k]
-        if len(segments) == 1:
+        part_keys = list(cls._viewport_key_map.values())
+        if index_key in part_keys:
             return part_keys
-        rel_key = "_".join(segments[1:])
-        return [f"{p}_{rel_key}" for p in part_keys if f"{p}_{rel_key}" in cls._node_map]
+        for pk in part_keys:
+            if index_key.startswith(pk + "_"):
+                rel_key = index_key[len(pk) + 1:]
+                return [f"{p}_{rel_key}" for p in part_keys if f"{p}_{rel_key}" in cls._node_map]
+        return [index_key]
 
     @classmethod
     def _compute_visibility(cls, path: str) -> bool:
