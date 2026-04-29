@@ -3,8 +3,7 @@ import omni.usd
 import omni.kit.commands
 from pxr import UsdGeom, UsdShade, Sdf, Gf
 
-MDL_CODE = """
-mdl 1.4;
+MDL_CODE = """mdl 1.4;
 import ::math::*;
 import ::state::*;
 import ::df::*;
@@ -85,6 +84,14 @@ def init_scene():
         select_new_prim=False,
     )
     print(f"[gradient_bg] CreateMdlMaterialPrim result: {result}")
+
+    # 실제 생성된 경로 확인
+    material_prim = stage.GetPrimAtPath(MATERIAL_PATH)
+    print(f"[gradient_bg] Material at {MATERIAL_PATH} valid: {material_prim.IsValid()}")
+    looks_prim = stage.GetPrimAtPath("/World/Looks")
+    if looks_prim.IsValid():
+        for child in looks_prim.GetChildren():
+            print(f"[gradient_bg]   /World/Looks child: {child.GetPath()} [{child.GetTypeName()}]")
 
     # 플레인에 머티리얼 바인드
     material = UsdShade.Material(stage.GetPrimAtPath(MATERIAL_PATH))
