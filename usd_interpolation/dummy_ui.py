@@ -158,82 +158,82 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
     return ok_count > 0
 
 
+NUM_FILES = 5
+
+
 class UsdInterpolationUI:
 
     def __init__(self):
         self._window: ui.Window | None = None
         self._status_label: ui.Label | None = None
-        self._field_a: ui.StringField | None = None
-        self._field_b: ui.StringField | None = None
         self._slider: ui.FloatSlider | None = None
         self._t_label: ui.Label | None = None
 
-        self._map_a: dict | None = None
-        self._map_b: dict | None = None
+        self._fields: list[ui.StringField] = []
+        self._maps: list[dict | None] = [None] * NUM_FILES
 
     def build_ui(self):
-        self._window = ui.Window("USD UV Interpolator", width=480, height=240)
+        self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
         with self._window.frame:
-            with ui.VStack(spacing=8, style={"margin": 8}):
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("File A:", width=50)
-                    self._field_a = ui.StringField()
-                    self._field_a.model.set_value("/path/to/a.usd")
-                    ui.Button("Load A", width=60, clicked_fn=self._on_load_a)
-
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("File B:", width=50)
-                    self._field_b = ui.StringField()
-                    self._field_b.model.set_value("/path/to/b.usd")
-                    ui.Button("Load B", width=60, clicked_fn=self._on_load_b)
+            with ui.VStack(spacing=6, style={"margin": 8}):
+                for i in range(NUM_FILES):
+                    with ui.HStack(height=24, spacing=4):
+                        ui.Label(f"File {i}:", width=50)
+                        field = ui.StringField()
+                        field.model.set_value(f"/path/to/file{i}.usd")
+                        self._fields.append(field)
+                        idx = i  # capture
+                        ui.Button("Load", width=50,
+                                  clicked_fn=lambda _idx=idx: self._on_load(_idx))
 
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
                 with ui.HStack(height=24, spacing=8):
                     self._t_label = ui.Label("t: 0.00", width=60)
-                    self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.01)
+                    self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     self._slider.enabled = False
                     self._slider.model.add_value_changed_fn(self._on_slider_changed)
 
-    def _on_load_a(self):
-        path = self._field_a.model.get_value_as_string().strip()
-        omni.usd.get_context().open_stage(path)
-        self._map_a = load_st_map(path)
-        if self._map_a is None:
-            self._set_status("ERROR: Failed to load File A")
+    def _on_load(self, idx: int):
+        path = self._fields[idx].model.get_value_as_string().strip()
+        if idx == 0:
+            omni.usd.get_context().open_stage(path)
+        st_map = load_st_map(path)
+        if st_map is None:
+            self._set_status(f"ERROR: Failed to load File {idx}")
             return
-        self._set_status(f"A loaded into stage: {len(self._map_a)} mesh(es)")
-        self._try_enable_slider()
-
-    def _on_load_b(self):
-        path = self._field_b.model.get_value_as_string().strip()
-        self._map_b = load_st_map(path)
-        if self._map_b is None:
-            self._set_status("ERROR: Failed to load File B")
-            return
-        self._set_status(f"B loaded: {len(self._map_b)} mesh(es)")
+        self._maps[idx] = st_map
+        loaded = [i for i, m in enumerate(self._maps) if m is not None]
+        self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded}")
         self._try_enable_slider()
 
     def _try_enable_slider(self):
-        if self._map_a is None or self._map_b is None:
-            return
-        common = set(self._map_a) & set(self._map_b)
-        if not common:
-            self._set_status("ERROR: No matching prim paths between A and B")
-            self._slider.enabled = False
-            return
-        self._set_status(f"Ready — {len(common)} mesh(es) in common")
-        self._slider.enabled = True
+        # 연속된 두 파일이 하나라도 있으면 활성화
+        for i in range(NUM_FILES - 1):
+            if self._maps[i] is not None and self._maps[i + 1] is not None:
+                self._slider.enabled = True
+                return
+        self._slider.enabled = False
 
     def _on_slider_changed(self, model):
         t = model.get_value_as_float()
         if self._t_label:
-            self._t_label.text = f"t: {t:.2f}"
-        if self._map_a is None or self._map_b is None:
+            self._t_label.text = f"t: {t:.3f}"
+
+        # t(0~1) → 4구간 중 해당 구간과 구간 내 local_t 계산
+        seg = min(int(t * (NUM_FILES - 1)), NUM_FILES - 2)
+        local_t = t * (NUM_FILES - 1) - seg
+
+        map_a = self._maps[seg]
+        map_b = self._maps[seg + 1]
+
+        if map_a is None or map_b is None:
+            self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
             return
-        ok = apply_lerped_st_all(self._map_a, self._map_b, t)
+
+        ok = apply_lerped_st_all(map_a, map_b, local_t)
         if not ok:
-            self._set_status("ERROR: Failed to apply to editor stage. Check console.")
+            self._set_status("ERROR: Failed to apply. Check console.")
 
     def _set_status(self, text: str):
         if self._status_label:
@@ -243,3 +243,4 @@ class UsdInterpolationUI:
         if self._window:
             self._window.destroy()
             self._window = None
+
