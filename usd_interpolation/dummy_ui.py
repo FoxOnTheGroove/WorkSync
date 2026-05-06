@@ -95,13 +95,14 @@ def get_all_mesh_data(usd_file_path: str) -> list[dict]:
     return results
 
 
-def load_st_array(usd_file_path: str) -> tuple[str, Vt.Vec2fArray] | None:
-    """파일에서 첫 번째 Mesh의 prim_path와 st VtArray를 반환."""
+def load_st_map(usd_file_path: str) -> dict[str, Vt.Vec2fArray] | None:
+    """파일 내 모든 Mesh의 {prim_path: st VtArray} 반환."""
     stage = Usd.Stage.Open(usd_file_path)
     if not stage:
         print(f"[usd_interpolation] ERROR: Failed to open: {usd_file_path}")
         return None
 
+    result = {}
     for prim in stage.Traverse():
         if not prim.IsA(UsdGeom.Mesh):
             continue
@@ -110,37 +111,51 @@ def load_st_array(usd_file_path: str) -> tuple[str, Vt.Vec2fArray] | None:
             continue
         st_raw = _get_attr(st_pv.GetAttr())
         if st_raw is not None:
+            result[str(prim.GetPath())] = st_raw
             print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
-            return str(prim.GetPath()), st_raw
 
-    print(f"[usd_interpolation] ERROR: No mesh with st found in {usd_file_path}")
-    return None
+    if not result:
+        print(f"[usd_interpolation] ERROR: No mesh with st found in {usd_file_path}")
+        return None
+
+    print(f"[usd_interpolation] Loaded {len(result)} mesh(es) from {usd_file_path}")
+    return result
 
 
-def apply_lerped_st(st_a: Vt.Vec2fArray, st_b: Vt.Vec2fArray, t: float, prim_path: str) -> bool:
-    """numpy로 st를 보간해 에디터 스테이지의 메시 primvar에 적용."""
+def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
+    """공통 prim_path에 대해 st를 보간해 에디터 스테이지 전체에 적용."""
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
         return False
 
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim.IsValid():
-        print(f"[usd_interpolation] ERROR: Prim not found in editor stage: {prim_path}")
-        return False
+    ok_count = 0
+    for prim_path, st_a in map_a.items():
+        st_b = map_b.get(prim_path)
+        if st_b is None:
+            print(f"[usd_interpolation] SKIP {prim_path}: not found in File B")
+            continue
+        if len(st_a) != len(st_b):
+            print(f"[usd_interpolation] SKIP {prim_path}: length mismatch {len(st_a)} vs {len(st_b)}")
+            continue
 
-    a_np = np.array(st_a, dtype=np.float32)  # (N, 2)
-    b_np = np.array(st_b, dtype=np.float32)
-    lerped = a_np + t * (b_np - a_np)
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            print(f"[usd_interpolation] SKIP {prim_path}: not found in editor stage")
+            continue
 
-    result = Vt.Vec2fArray.FromNumpy(lerped)
-    st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-    if not st_pv or not st_pv.GetAttr().IsValid():
-        print(f"[usd_interpolation] ERROR: No st primvar on {prim_path}")
-        return False
+        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+        if not st_pv or not st_pv.GetAttr().IsValid():
+            print(f"[usd_interpolation] SKIP {prim_path}: no st primvar in stage")
+            continue
 
-    st_pv.Set(result)
-    return True
+        a_np = np.array(st_a, dtype=np.float32)
+        b_np = np.array(st_b, dtype=np.float32)
+        st_pv.Set(Vt.Vec2fArray.FromNumpy(a_np + t * (b_np - a_np)))
+        ok_count += 1
+
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {ok_count} mesh(es)")
+    return ok_count > 0
 
 
 class UsdInterpolationUI:
@@ -153,9 +168,8 @@ class UsdInterpolationUI:
         self._slider: ui.FloatSlider | None = None
         self._t_label: ui.Label | None = None
 
-        self._st_a: Vt.Vec2fArray | None = None
-        self._st_b: Vt.Vec2fArray | None = None
-        self._prim_path: str | None = None
+        self._map_a: dict | None = None
+        self._map_b: dict | None = None
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=480, height=240)
@@ -183,43 +197,41 @@ class UsdInterpolationUI:
 
     def _on_load_a(self):
         path = self._field_a.model.get_value_as_string().strip()
-        # 에디터 스테이지에 File A를 직접 오픈
         omni.usd.get_context().open_stage(path)
-        result = load_st_array(path)
-        if result is None:
+        self._map_a = load_st_map(path)
+        if self._map_a is None:
             self._set_status("ERROR: Failed to load File A")
             return
-        self._prim_path, self._st_a = result
-        self._set_status(f"A loaded into stage: {len(self._st_a)} values  |  prim: {self._prim_path}")
+        self._set_status(f"A loaded into stage: {len(self._map_a)} mesh(es)")
         self._try_enable_slider()
 
     def _on_load_b(self):
         path = self._field_b.model.get_value_as_string().strip()
-        result = load_st_array(path)
-        if result is None:
+        self._map_b = load_st_map(path)
+        if self._map_b is None:
             self._set_status("ERROR: Failed to load File B")
             return
-        _, self._st_b = result
-        self._set_status(f"B loaded: {len(self._st_b)} values")
+        self._set_status(f"B loaded: {len(self._map_b)} mesh(es)")
         self._try_enable_slider()
 
     def _try_enable_slider(self):
-        if self._st_a is None or self._st_b is None:
+        if self._map_a is None or self._map_b is None:
             return
-        if len(self._st_a) != len(self._st_b):
-            self._set_status(f"ERROR: Length mismatch — A={len(self._st_a)}, B={len(self._st_b)}")
+        common = set(self._map_a) & set(self._map_b)
+        if not common:
+            self._set_status("ERROR: No matching prim paths between A and B")
             self._slider.enabled = False
             return
-        self._set_status(f"Ready — {len(self._st_a)} values  |  prim: {self._prim_path}")
+        self._set_status(f"Ready — {len(common)} mesh(es) in common")
         self._slider.enabled = True
 
     def _on_slider_changed(self, model):
         t = model.get_value_as_float()
         if self._t_label:
             self._t_label.text = f"t: {t:.2f}"
-        if self._st_a is None or self._st_b is None or self._prim_path is None:
+        if self._map_a is None or self._map_b is None:
             return
-        ok = apply_lerped_st(self._st_a, self._st_b, t, self._prim_path)
+        ok = apply_lerped_st_all(self._map_a, self._map_b, t)
         if not ok:
             self._set_status("ERROR: Failed to apply to editor stage. Check console.")
 
