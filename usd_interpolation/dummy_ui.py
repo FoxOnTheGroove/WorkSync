@@ -1,7 +1,7 @@
 import numpy as np
 from collections import Counter
 
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
@@ -130,33 +130,29 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
         print("[usd_interpolation] ERROR: No editor stage found")
         return False
 
-    ok_count = 0
+    # lerp 결과 사전 계산
+    writes = []
     for prim_path, st_a in map_a.items():
         st_b = map_b.get(prim_path)
-        if st_b is None:
-            print(f"[usd_interpolation] SKIP {prim_path}: not found in File B")
+        if st_b is None or len(st_a) != len(st_b):
             continue
-        if len(st_a) != len(st_b):
-            print(f"[usd_interpolation] SKIP {prim_path}: length mismatch {len(st_a)} vs {len(st_b)}")
-            continue
-
         prim = stage.GetPrimAtPath(prim_path)
         if not prim.IsValid():
-            print(f"[usd_interpolation] SKIP {prim_path}: not found in editor stage")
             continue
-
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
-            print(f"[usd_interpolation] SKIP {prim_path}: no st primvar in stage")
             continue
-
         a_np = np.array(st_a, dtype=np.float32)
         b_np = np.array(st_b, dtype=np.float32)
-        st_pv.Set(Vt.Vec2fArray.FromNumpy(a_np + t * (b_np - a_np)))
-        ok_count += 1
+        writes.append((st_pv, Vt.Vec2fArray.FromNumpy(a_np + t * (b_np - a_np))))
 
-    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {ok_count} mesh(es)")
-    return ok_count > 0
+    # 모든 메시 write를 하나의 change block으로 묶어 뷰포트 갱신을 1회로 제한
+    with Sdf.ChangeBlock():
+        for st_pv, result in writes:
+            st_pv.Set(result)
+
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
+    return len(writes) > 0
 
 
 NUM_FILES = 5
@@ -238,6 +234,8 @@ class UsdInterpolationUI:
 
         seg = min(int(t * (NUM_FILES - 1)), NUM_FILES - 2)
         local_t = t * (NUM_FILES - 1) - seg
+
+        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | w[{seg}]={1-local_t:.4f} w[{seg+1}]={local_t:.4f}")
 
         map_a = self._maps[seg]
         map_b = self._maps[seg + 1]
