@@ -1,3 +1,4 @@
+import asyncio
 import numpy as np
 from collections import Counter
 
@@ -172,6 +173,9 @@ class UsdInterpolationUI:
         self._pending_t: float = 0.0
         self._dirty: bool = False
         self._last_write_time: float = 0.0
+        self._play_task: asyncio.Task | None = None
+        self._btn_play: ui.Button | None = None
+        self._btn_reverse: ui.Button | None = None
         self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
             self._on_update, name="usd_interpolation_update"
         )
@@ -198,6 +202,12 @@ class UsdInterpolationUI:
                     self._slider.enabled = False
                     self._slider.model.add_value_changed_fn(self._on_slider_changed)
 
+                with ui.HStack(height=24, spacing=8):
+                    self._btn_play = ui.Button("Play ▶", width=80,
+                                               clicked_fn=self._on_play_clicked)
+                    self._btn_reverse = ui.Button("Reverse ◀", width=90,
+                                                  clicked_fn=self._on_reverse_clicked)
+
     def _on_load(self, idx: int):
         path = self._fields[idx].model.get_value_as_string().strip()
         if idx == 0:
@@ -218,6 +228,55 @@ class UsdInterpolationUI:
                 self._slider.enabled = True
                 return
         self._slider.enabled = False
+
+    def _on_play_clicked(self):
+        if self._play_task and not self._play_task.done():
+            self._stop_play()
+        else:
+            self._play_task = asyncio.ensure_future(self._animate(forward=True))
+
+    def _on_reverse_clicked(self):
+        if self._play_task and not self._play_task.done():
+            self._stop_play()
+        else:
+            self._play_task = asyncio.ensure_future(self._animate(forward=False))
+
+    def _stop_play(self):
+        if self._play_task:
+            self._play_task.cancel()
+            self._play_task = None
+        if self._btn_play:
+            self._btn_play.text = "Play ▶"
+        if self._btn_reverse:
+            self._btn_reverse.text = "Reverse ◀"
+
+    async def _animate(self, forward: bool):
+        DURATION = 2.5
+        if self._btn_play:
+            self._btn_play.text = "Stop ■" if forward else "Play ▶"
+        if self._btn_reverse:
+            self._btn_reverse.text = "Reverse ◀" if forward else "Stop ■"
+
+        start_t = self._pending_t
+        target = 1.0 if forward else 0.0
+        travel = abs(target - start_t)
+        elapsed = 0.0
+        dt_scale = travel / DURATION if travel > 0.0 else 0.0
+
+        try:
+            while True:
+                await omni.kit.app.get_app().next_update_async()
+                elapsed += 1.0 / 60.0
+                frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
+                new_t = start_t + (frac if forward else -frac)
+                new_t = max(0.0, min(1.0, new_t))
+                self._slider.model.set_value(new_t)
+                if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
+                    break
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._stop_play()
 
     def _on_slider_changed(self, model):
         t = model.get_value_as_float()
@@ -260,6 +319,7 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
+        self._stop_play()
         self._update_sub = None
         if self._window:
             self._window.destroy()
