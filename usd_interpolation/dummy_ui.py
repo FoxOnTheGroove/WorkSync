@@ -155,17 +155,12 @@ class UsdInterpolationUI:
         unique_idx = len(ic)
         valid = data["valid_count"]
 
-        check_lines = "\n".join(
-            f"  [{'OK' if v else 'FAIL'}] {k}" for k, v in data["checks"].items()
-        )
         idx_lines = "\n".join(f"  [{i:3d}]: {c}" for i, c in sorted(ic.items()))
 
         text = (
             f"Mesh: {data['prim_path']}\n"
             f"Interp: {data['interpolation']}  |  ST: {data['st_count']}  |  Valid: {valid}\n"
-            f"\n[Validation {'ALL OK' if data['all_ok'] else 'HAS FAILURES'}]\n"
-            f"{check_lines}\n"
-            f"\n{unique_idx} unique index(es) in {valid} entries (256-pixel mapping)\n"
+            f"\n{valid} values  →  {unique_idx} unique index(es) (256-pixel mapping)\n"
             f"\n{idx_lines}"
         )
 
