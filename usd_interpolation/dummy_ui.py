@@ -1,6 +1,8 @@
+import numpy as np
 from collections import Counter
 
-from pxr import Usd, UsdGeom
+from pxr import Usd, UsdGeom, Vt
+import omni.usd
 import omni.ui as ui
 
 
@@ -67,11 +69,11 @@ def _analyze_mesh(mesh_prim) -> dict | None:
         index_counter[max(0, min(255, int(v[0] * 256)))] += 1
 
     return {
-        "prim_path":     str(mesh_prim.GetPath()),
-        "interpolation": interp,
-        "valid_count":   valid_count,
-        "all_ok":        all(checks.values()),
-        "unique_values": len(unique_set),
+        "prim_path":      str(mesh_prim.GetPath()),
+        "interpolation":  interp,
+        "valid_count":    valid_count,
+        "all_ok":         all(checks.values()),
+        "unique_values":  len(unique_set),
         "unique_indices": len(index_counter),
     }
 
@@ -93,64 +95,135 @@ def get_all_mesh_data(usd_file_path: str) -> list[dict]:
     return results
 
 
+def load_st_array(usd_file_path: str) -> tuple[str, Vt.Vec2fArray] | None:
+    """파일에서 첫 번째 Mesh의 prim_path와 st VtArray를 반환."""
+    stage = Usd.Stage.Open(usd_file_path)
+    if not stage:
+        print(f"[usd_interpolation] ERROR: Failed to open: {usd_file_path}")
+        return None
+
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdGeom.Mesh):
+            continue
+        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+        if not st_pv or not st_pv.GetAttr().IsValid():
+            continue
+        st_raw = _get_attr(st_pv.GetAttr())
+        if st_raw is not None:
+            print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
+            return str(prim.GetPath()), st_raw
+
+    print(f"[usd_interpolation] ERROR: No mesh with st found in {usd_file_path}")
+    return None
+
+
+def apply_lerped_st(st_a: Vt.Vec2fArray, st_b: Vt.Vec2fArray, t: float, prim_path: str) -> bool:
+    """numpy로 st를 보간해 에디터 스테이지의 메시 primvar에 적용."""
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        print("[usd_interpolation] ERROR: No editor stage found")
+        return False
+
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        print(f"[usd_interpolation] ERROR: Prim not found in editor stage: {prim_path}")
+        return False
+
+    a_np = np.array(st_a, dtype=np.float32)  # (N, 2)
+    b_np = np.array(st_b, dtype=np.float32)
+    lerped = a_np + t * (b_np - a_np)
+
+    result = Vt.Vec2fArray.FromNumpy(lerped)
+    st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+    if not st_pv or not st_pv.GetAttr().IsValid():
+        print(f"[usd_interpolation] ERROR: No st primvar on {prim_path}")
+        return False
+
+    st_pv.Set(result)
+    return True
+
+
 class UsdInterpolationUI:
 
     def __init__(self):
         self._window: ui.Window | None = None
-        self._result_label: ui.Label | None = None
-        self._path_field: ui.StringField | None = None
-        self._last_file: str = ""
-        self._last_text: str = ""
+        self._status_label: ui.Label | None = None
+        self._field_a: ui.StringField | None = None
+        self._field_b: ui.StringField | None = None
+        self._slider: ui.FloatSlider | None = None
+        self._t_label: ui.Label | None = None
+
+        self._st_a: Vt.Vec2fArray | None = None
+        self._st_b: Vt.Vec2fArray | None = None
+        self._prim_path: str | None = None
 
     def build_ui(self):
-        self._window = ui.Window("USD UV Extractor", width=480, height=360)
+        self._window = ui.Window("USD UV Interpolator", width=480, height=240)
         with self._window.frame:
             with ui.VStack(spacing=8, style={"margin": 8}):
-                ui.Label("USD File Path:", height=20)
-                self._path_field = ui.StringField(height=24)
-                self._path_field.model.set_value("/path/to/model.usd")
-                ui.Button("Extract primvars:st", height=32, clicked_fn=self._on_extract)
-                ui.Label("Result:", height=20)
-                with ui.ScrollingFrame():
-                    self._result_label = ui.Label(
-                        "Not extracted yet.",
-                        word_wrap=True,
-                        height=0,
-                    )
+                with ui.HStack(height=24, spacing=4):
+                    ui.Label("File A:", width=50)
+                    self._field_a = ui.StringField()
+                    self._field_a.model.set_value("/path/to/a.usd")
+                    ui.Button("Load A", width=60, clicked_fn=self._on_load_a)
 
-    def _on_extract(self):
-        file_path = self._path_field.model.get_value_as_string().strip()
-        if not file_path:
-            self._set_result("[Error] Please enter a USD file path.")
+                with ui.HStack(height=24, spacing=4):
+                    ui.Label("File B:", width=50)
+                    self._field_b = ui.StringField()
+                    self._field_b.model.set_value("/path/to/b.usd")
+                    ui.Button("Load B", width=60, clicked_fn=self._on_load_b)
+
+                self._status_label = ui.Label("Status: Not loaded", height=20)
+
+                with ui.HStack(height=24, spacing=8):
+                    self._t_label = ui.Label("t: 0.00", width=60)
+                    self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.01)
+                    self._slider.enabled = False
+                    self._slider.model.add_value_changed_fn(self._on_slider_changed)
+
+    def _on_load_a(self):
+        path = self._field_a.model.get_value_as_string().strip()
+        result = load_st_array(path)
+        if result is None:
+            self._set_status("ERROR: Failed to load File A")
             return
+        self._prim_path, self._st_a = result
+        self._set_status(f"A loaded: {len(self._st_a)} values  |  prim: {self._prim_path}")
+        self._try_enable_slider()
 
-        if file_path == self._last_file and self._last_text:
-            self._set_result(self._last_text)
+    def _on_load_b(self):
+        path = self._field_b.model.get_value_as_string().strip()
+        result = load_st_array(path)
+        if result is None:
+            self._set_status("ERROR: Failed to load File B")
             return
+        _, self._st_b = result
+        self._set_status(f"B loaded: {len(self._st_b)} values")
+        self._try_enable_slider()
 
-        results = get_all_mesh_data(file_path)
-        if not results:
-            self._set_result("[Error] No mesh with st primvar found. Check console log.")
+    def _try_enable_slider(self):
+        if self._st_a is None or self._st_b is None:
             return
+        if len(self._st_a) != len(self._st_b):
+            self._set_status(f"ERROR: Length mismatch — A={len(self._st_a)}, B={len(self._st_b)}")
+            self._slider.enabled = False
+            return
+        self._set_status(f"Ready — {len(self._st_a)} values  |  prim: {self._prim_path}")
+        self._slider.enabled = True
 
-        blocks = []
-        for d in results:
-            blocks.append(
-                f"Mesh: {d['prim_path']}  [{d['interpolation']}]  {'OK' if d['all_ok'] else 'FAIL'}\n"
-                f"  Unique values : {d['unique_values']}\n"
-                f"  Unique indices: {d['unique_indices']} (256-pixel)\n"
-                f"  Total length  : {d['valid_count']}"
-            )
-        text = "\n\n".join(blocks)
+    def _on_slider_changed(self, model):
+        t = model.get_value_as_float()
+        if self._t_label:
+            self._t_label.text = f"t: {t:.2f}"
+        if self._st_a is None or self._st_b is None or self._prim_path is None:
+            return
+        ok = apply_lerped_st(self._st_a, self._st_b, t, self._prim_path)
+        if not ok:
+            self._set_status("ERROR: Failed to apply to editor stage. Check console.")
 
-        self._last_file = file_path
-        self._last_text = text
-        self._set_result(text)
-        print(f"[usd_interpolation] Done. {len(results)} mesh(es) displayed.")
-
-    def _set_result(self, text: str):
-        if self._result_label:
-            self._result_label.text = text
+    def _set_status(self, text: str):
+        if self._status_label:
+            self._status_label.text = f"Status: {text}"
 
     def destroy(self):
         if self._window:
