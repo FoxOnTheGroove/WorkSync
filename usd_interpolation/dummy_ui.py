@@ -95,8 +95,13 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     else:
         valid_count = st_len
 
-    # u값(첫 번째 컴포넌트)을 0~255 인덱스로 매핑 — VtArray 한 번만 순회
-    index_counter = Counter(max(0, min(255, int(v[0] * 256))) for v in st_raw[:valid_count])
+    # 한 번 순회로 unique 값 집합 + 256 인덱스 카운터 동시 계산
+    unique_set = set()
+    index_counter: Counter = Counter()
+    for v in st_raw[:valid_count]:
+        t = (v[0], v[1])
+        unique_set.add(t)
+        index_counter[max(0, min(255, int(v[0] * 256)))] += 1
 
     return {
         "prim_path":     str(mesh_prim.GetPath()),
@@ -105,7 +110,8 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
         "valid_count":   valid_count,
         "all_ok":        all_ok,
         "checks":        checks,
-        "index_counter": index_counter,
+        "unique_values":  len(unique_set),
+        "index_counter":  index_counter,
     }
 
 
@@ -159,8 +165,10 @@ class UsdInterpolationUI:
 
         text = (
             f"Mesh: {data['prim_path']}\n"
-            f"Interp: {data['interpolation']}  |  ST: {data['st_count']}  |  Valid: {valid}\n"
-            f"\n{valid} values  →  {unique_idx} unique index(es) (256-pixel mapping)\n"
+            f"Interp: {data['interpolation']}\n"
+            f"\nUnique values : {data['unique_values']}"
+            f"\nUnique indices: {unique_idx} (256-pixel mapping)"
+            f"\nTotal length  : {valid}\n"
             f"\n{idx_lines}"
         )
 
