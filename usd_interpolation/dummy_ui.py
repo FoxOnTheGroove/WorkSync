@@ -145,7 +145,8 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
             continue
         a_np = np.array(st_a, dtype=np.float32).reshape(-1, 2)
         b_np = np.array(st_b, dtype=np.float32).reshape(-1, 2)
-        lerped = np.ascontiguousarray(a_np + t * (b_np - a_np))
+        t32  = np.float32(t)
+        lerped = np.ascontiguousarray(a_np + t32 * (b_np - a_np))
         writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
 
     with Sdf.ChangeBlock():
@@ -203,6 +204,8 @@ class UsdInterpolationUI:
                                                clicked_fn=self._on_play_clicked)
                     self._btn_reverse = ui.Button("Reverse ◀", width=90,
                                                   clicked_fn=self._on_reverse_clicked)
+                    ui.Button("Refresh", width=70,
+                              clicked_fn=self._on_refresh_clicked)
 
     def _on_load(self, idx: int):
         path = self._fields[idx].model.get_value_as_string().strip()
@@ -224,6 +227,9 @@ class UsdInterpolationUI:
                 self._slider.enabled = True
                 return
         self._slider.enabled = False
+
+    def _on_refresh_clicked(self):
+        self._refresh(self._pending_t)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
