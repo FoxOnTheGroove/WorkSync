@@ -111,9 +111,7 @@ def load_st_map(usd_file_path: str) -> dict[str, Vt.Vec2fArray] | None:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
-        st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
-        if st_raw is None:
-            st_raw = _get_attr(st_pv.GetAttr())
+        st_raw = _get_attr(st_pv.GetAttr())
         if st_raw is not None:
             result[str(prim.GetPath())] = st_raw
             print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
@@ -152,7 +150,6 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
 
     with Sdf.ChangeBlock():
         for st_pv, result in writes:
-            st_pv.SetIndices(Vt.IntArray(list(range(len(result)))))
             st_pv.Set(result)
 
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
