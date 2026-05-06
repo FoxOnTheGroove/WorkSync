@@ -152,7 +152,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
 
     with Sdf.ChangeBlock():
         for st_pv, result in writes:
-            st_pv.SetIndices(Vt.IntArray(np.arange(len(result), dtype=np.int32)))
+            st_pv.SetIndices(Vt.IntArray(list(range(len(result)))))
             st_pv.Set(result)
 
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
