@@ -59,8 +59,19 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
 
     if interp == UsdGeom.Tokens.faceVarying:
         fvc = _get_attr(mesh.GetFaceVertexCountsAttr())
-        print(f"[usd_interpolation] faceVertexCounts: {fvc}")
-        expected = int(sum(fvc)) if fvc is not None else None
+        fvi = _get_attr(mesh.GetFaceVertexIndicesAttr())
+        points = _get_attr(mesh.GetPointsAttr())
+        fvc_len = len(fvc) if fvc is not None else None
+        fvi_len = len(fvi) if fvi is not None else None
+        pt_len  = len(points) if points is not None else None
+        fvc_sum = int(sum(fvc)) if fvc is not None else None
+        print(f"[usd_interpolation] face count         : {fvc_len}")
+        print(f"[usd_interpolation] faceVertexCounts[:8]: {list(fvc[:8]) if fvc is not None else None}")
+        print(f"[usd_interpolation] sum(faceVertexCounts): {fvc_sum}")
+        print(f"[usd_interpolation] faceVertexIndices len: {fvi_len}")
+        print(f"[usd_interpolation] points (vertex) count: {pt_len}")
+        print(f"[usd_interpolation] st count              : {st_count}")
+        expected = fvc_sum
     elif interp == UsdGeom.Tokens.vertex:
         points = _get_attr(mesh.GetPointsAttr())
         print(f"[usd_interpolation] points count: {len(points) if points is not None else None}")
