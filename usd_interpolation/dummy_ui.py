@@ -183,12 +183,14 @@ class UsdInterpolationUI:
 
     def _on_load_a(self):
         path = self._field_a.model.get_value_as_string().strip()
+        # 에디터 스테이지에 File A를 직접 오픈
+        omni.usd.get_context().open_stage(path)
         result = load_st_array(path)
         if result is None:
             self._set_status("ERROR: Failed to load File A")
             return
         self._prim_path, self._st_a = result
-        self._set_status(f"A loaded: {len(self._st_a)} values  |  prim: {self._prim_path}")
+        self._set_status(f"A loaded into stage: {len(self._st_a)} values  |  prim: {self._prim_path}")
         self._try_enable_slider()
 
     def _on_load_b(self):
