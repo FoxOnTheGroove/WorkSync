@@ -1,3 +1,5 @@
+from collections import Counter
+
 from pxr import Usd, UsdGeom
 import omni.ui as ui
 
@@ -33,12 +35,17 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     if not st.IsValid():
         return None
 
+    raw_values = list(st.Get() or [])
+    # GfVec2f는 해시 불가 → tuple로 변환해 Counter에 사용
+    counter = Counter(tuple(v) for v in raw_values)
+
     return {
         "prim_path": str(mesh_prim.GetPath()),
-        "values": list(st.Get() or []),
+        "values": raw_values,
         "indices": list(st.GetIndices() or []),
         "interpolation": st.GetInterpolation(),
         "flattened": list(st.ComputeFlattened() or []),
+        "counter": counter,          # {(u, v): count, ...}
     }
 
 
@@ -84,20 +91,24 @@ class UsdInterpolationUI:
             self._set_result(f"[오류] '{file_path}' 에서 primvars:st 를 찾지 못했습니다.")
             return
 
-        count = len(data["flattened"])
-        idx_info = f"인덱스 {len(data['indices'])}개" if data["indices"] else "인덱스 없음"
-        preview = str(data["flattened"][:8])[:-1] + (", ...]" if count > 8 else "]")
+        counter = data["counter"]
+        total_len = len(data["values"])
+        unique_count = len(counter)
+
+        count_lines = "\n".join(
+            f"  {uv} → {cnt}번 등장"
+            for uv, cnt in sorted(counter.items())
+        )
 
         text = (
             f"Mesh Prim     : {data['prim_path']}\n"
             f"Interpolation : {data['interpolation']}\n"
-            f"UV 값 수 (raw): {len(data['values'])}\n"
-            f"인덱스 정보   : {idx_info}\n"
-            f"Flattened UV  : {count}개\n"
-            f"미리보기      : {preview}"
+            f"\n[등장 횟수]\n"
+            f"{count_lines}\n"
+            f"\n총 {unique_count}개의 값이 {total_len}의 길이에서 등장"
         )
         self._set_result(text)
-        print(f"[usd_interpolation] {file_path} → {data}")
+        print(f"[usd_interpolation] {file_path} → counter={dict(counter)}, total={total_len}, unique={unique_count}")
 
     def _set_result(self, text: str):
         if self._result_label:
