@@ -47,15 +47,31 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
         print("[usd_interpolation] ERROR: st.Get() returned None — no values found")
         return None
 
-    print(f"[usd_interpolation] st.Get() returned {len(raw_values)} values")
+    st_count = len(raw_values)
+    print(f"[usd_interpolation] st.Get() returned {st_count} values")
 
-    # VtArray를 list 변환 없이 한 번만 순회해 Counter 구성
-    counter = Counter(tuple(v) for v in raw_values)
+    mesh = UsdGeom.Mesh(mesh_prim)
+    points = mesh.GetPointsAttr().Get(Usd.TimeCode.Default())
+    vertex_count = len(points) if points is not None else None
+    print(f"[usd_interpolation] Vertex count (points): {vertex_count}")
+
+    if vertex_count is None:
+        print("[usd_interpolation] WARNING: Could not read points attribute")
+        valid = False
+    else:
+        valid = st_count >= vertex_count
+        print(f"[usd_interpolation] st count {st_count} >= vertex count {vertex_count}: {valid}")
+
+    # 버텍스 수만큼만 순회
+    limit = vertex_count if (valid and vertex_count is not None) else st_count
+    counter = Counter(tuple(v) for v in raw_values[:limit])
 
     return {
         "prim_path": str(mesh_prim.GetPath()),
         "interpolation": st.GetInterpolation(),
-        "total": len(raw_values),
+        "st_count": st_count,
+        "vertex_count": vertex_count,
+        "valid": valid,
         "counter": counter,
     }
 
@@ -104,16 +120,19 @@ class UsdInterpolationUI:
 
         counter = data["counter"]
         unique = len(counter)
-        total = data["total"]
+        vc = data["vertex_count"]
+        sc = data["st_count"]
+        valid_str = "OK" if data["valid"] else "MISMATCH"
 
         freq_lines = "\n".join(f"  {uv}: {cnt}" for uv, cnt in counter.items())
         text = (
             f"Mesh: {data['prim_path']}  |  Interp: {data['interpolation']}\n"
-            f"{unique} unique value(s) in {total} entries\n"
+            f"Vertices: {vc}  |  ST values: {sc}  |  {valid_str}\n"
+            f"{unique} unique value(s) in {vc if data['valid'] else sc} checked entries\n"
             f"\n{freq_lines}"
         )
         self._set_result(text)
-        print(f"[usd_interpolation] unique={unique}, total={total}")
+        print(f"[usd_interpolation] unique={unique}, vertex_count={vc}, st_count={sc}, valid={data['valid']}")
 
     def _set_result(self, text: str):
         if self._result_label:
