@@ -171,6 +171,7 @@ class UsdInterpolationUI:
 
         self._pending_t: float = 0.0
         self._dirty: bool = False
+        self._last_write_time: float = 0.0
         self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
             self._on_update, name="usd_interpolation_update"
         )
@@ -229,11 +230,17 @@ class UsdInterpolationUI:
     def _on_update(self, _event):
         if not self._dirty:
             return
+        import time
+        now = time.monotonic()
+        if now - self._last_write_time < 0.014:
+            return
         self._dirty = False
+        self._last_write_time = now
         t = self._pending_t
 
-        seg = min(int(t * (NUM_FILES - 1)), NUM_FILES - 2)
-        local_t = t * (NUM_FILES - 1) - seg
+        raw = t * NUM_FILES
+        seg = min(int(raw), NUM_FILES - 2)
+        local_t = min(raw - seg, 1.0)
 
         print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | w[{seg}]={1-local_t:.4f} w[{seg+1}]={local_t:.4f}")
 
