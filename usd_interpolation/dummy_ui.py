@@ -5,19 +5,9 @@ import omni.ui as ui
 
 
 def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
-    """
-    로컬 USD 파일을 열고 첫 번째 Mesh 프림의 primvars:st 데이터를 반환.
-
-    Returns dict:
-        - prim_path    : 찾은 메시 프림의 경로
-        - values       : GfVec2f 배열 원본
-        - indices      : 인덱스 배열 (없으면 빈 리스트)
-        - interpolation: faceVarying / vertex / uniform / constant
-        - flattened    : 인덱스가 풀린 UV 배열 (face-vertex 순서)
-    또는 None (파일 열기 실패 / Mesh 없음 / st primvar 없음)
-    """
     stage = Usd.Stage.Open(usd_file_path)
     if not stage:
+        print(f"[usd_interpolation] ERROR: Failed to open stage: {usd_file_path}")
         return None
 
     mesh_prim = None
@@ -27,16 +17,40 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
             break
 
     if mesh_prim is None:
+        print(f"[usd_interpolation] ERROR: No Mesh prim found in {usd_file_path}")
         return None
 
+    print(f"[usd_interpolation] Found mesh prim: {mesh_prim.GetPath()}")
+
     primvars_api = UsdGeom.PrimvarsAPI(mesh_prim)
+
+    all_primvars = primvars_api.GetPrimvars()
+    print(f"[usd_interpolation] Available primvars: {[pv.GetPrimvarName() for pv in all_primvars]}")
+
     st = primvars_api.GetPrimvar("st")
 
     if not st or not st.GetAttr().IsValid():
+        print("[usd_interpolation] ERROR: 'st' primvar not found or invalid")
         return None
 
-    raw_values = list(st.Get() or [])
-    # GfVec2f는 해시 불가 → tuple로 변환해 Counter에 사용
+    print(f"[usd_interpolation] st type: {st.GetTypeName()}, interpolation: {st.GetInterpolation()}")
+
+    # Default time 우선, 없으면 첫 번째 time sample로 fallback
+    raw_values = st.Get(Usd.TimeCode.Default())
+    if raw_values is None:
+        time_samples = st.GetAttr().GetTimeSamples()
+        print(f"[usd_interpolation] No default value. Time samples: {time_samples}")
+        if time_samples:
+            raw_values = st.Get(time_samples[0])
+
+    if raw_values is None:
+        print("[usd_interpolation] ERROR: st.Get() returned None — no values found")
+        return None
+
+    print(f"[usd_interpolation] st.Get() returned {len(raw_values)} values")
+
+    raw_values = list(raw_values)
+    # GfVec2f는 해시 불가 → tuple 변환 후 Counter 사용
     counter = Counter(tuple(v) for v in raw_values)
 
     return {
@@ -45,7 +59,7 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
         "indices": list(st.GetIndices() or []),
         "interpolation": st.GetInterpolation(),
         "flattened": list(st.ComputeFlattened() or []),
-        "counter": counter,          # {(u, v): count, ...}
+        "counter": counter,
     }
 
 
@@ -75,7 +89,7 @@ class UsdInterpolationUI:
                 ui.Separator()
                 ui.Label("Result:", height=20)
                 self._result_label = ui.Label(
-                    "아직 추출하지 않았습니다.",
+                    "Not extracted yet.",
                     word_wrap=True,
                     height=0,
                 )
@@ -83,12 +97,12 @@ class UsdInterpolationUI:
     def _on_extract(self):
         file_path = self._path_field.model.get_value_as_string().strip()
         if not file_path:
-            self._set_result("파일 경로를 입력해주세요.")
+            self._set_result("[Error] Please enter a USD file path.")
             return
 
         data = get_mesh_st_primvar(file_path)
         if data is None:
-            self._set_result(f"[오류] '{file_path}' 에서 primvars:st 를 찾지 못했습니다.")
+            self._set_result(f"[Error] primvars:st not found in '{file_path}'. Check the console log for details.")
             return
 
         counter = data["counter"]
@@ -96,19 +110,19 @@ class UsdInterpolationUI:
         unique_count = len(counter)
 
         count_lines = "\n".join(
-            f"  {uv} → {cnt}번 등장"
+            f"  {uv} : {cnt} time(s)"
             for uv, cnt in sorted(counter.items())
         )
 
         text = (
             f"Mesh Prim     : {data['prim_path']}\n"
             f"Interpolation : {data['interpolation']}\n"
-            f"\n[등장 횟수]\n"
+            f"\n[Value Frequency]\n"
             f"{count_lines}\n"
-            f"\n총 {unique_count}개의 값이 {total_len}의 길이에서 등장"
+            f"\n{unique_count} unique value(s) found across {total_len} entries"
         )
         self._set_result(text)
-        print(f"[usd_interpolation] {file_path} → counter={dict(counter)}, total={total_len}, unique={unique_count}")
+        print(f"[usd_interpolation] counter={dict(counter)}, total={total_len}, unique={unique_count}")
 
     def _set_result(self, text: str):
         if self._result_label:
