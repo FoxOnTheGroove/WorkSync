@@ -14,6 +14,12 @@ def _get_attr(attr) -> object:
     return val
 
 
+def _check(label: str, result: bool) -> bool:
+    status = "OK" if result else "FAIL"
+    print(f"[usd_interpolation]   [{status}] {label}")
+    return result
+
+
 def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     stage = Usd.Stage.Open(usd_file_path)
     if not stage:
@@ -30,72 +36,89 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
         print(f"[usd_interpolation] ERROR: No Mesh prim found in {usd_file_path}")
         return None
 
-    print(f"[usd_interpolation] Found mesh prim: {mesh_prim.GetPath()}")
-
+    mesh = UsdGeom.Mesh(mesh_prim)
     primvars_api = UsdGeom.PrimvarsAPI(mesh_prim)
 
-    all_primvars = primvars_api.GetPrimvars()
-    print(f"[usd_interpolation] Available primvars: {[pv.GetPrimvarName() for pv in all_primvars]}")
+    fvc    = _get_attr(mesh.GetFaceVertexCountsAttr())
+    fvi    = _get_attr(mesh.GetFaceVertexIndicesAttr())
+    points = _get_attr(mesh.GetPointsAttr())
+    st_pv  = primvars_api.GetPrimvar("st")
 
-    st = primvars_api.GetPrimvar("st")
-
-    if not st or not st.GetAttr().IsValid():
-        print("[usd_interpolation] ERROR: 'st' primvar not found or invalid")
+    if not st_pv or not st_pv.GetAttr().IsValid():
+        print("[usd_interpolation] ERROR: 'st' primvar not found")
         return None
 
-    print(f"[usd_interpolation] st type: {st.GetTypeName()}, interpolation: {st.GetInterpolation()}")
-
-    # Default time 우선, 없으면 첫 번째 time sample로 fallback
-    raw_values = _get_attr(st.GetAttr())
-    if raw_values is None:
-        print("[usd_interpolation] ERROR: st.Get() returned None — no values found")
+    st_raw = _get_attr(st_pv.GetAttr())
+    if st_raw is None:
+        print("[usd_interpolation] ERROR: st.Get() returned None")
         return None
 
-    st_count = len(raw_values)
-    interp = st.GetInterpolation()
-    print(f"[usd_interpolation] st.Get() returned {st_count} values, interpolation: {interp}")
+    fvc_len = len(fvc)    if fvc    is not None else None
+    fvi_len = len(fvi)    if fvi    is not None else None
+    pt_len  = len(points) if points is not None else None
+    st_len  = len(st_raw)
+    fvc_sum = int(sum(fvc)) if fvc is not None else None
+    interp  = st_pv.GetInterpolation()
 
-    mesh = UsdGeom.Mesh(mesh_prim)
+    print(f"[usd_interpolation] ── Raw counts ──────────────────────")
+    print(f"[usd_interpolation]   faces            (fvc len) : {fvc_len}")
+    print(f"[usd_interpolation]   sum(fvc)                   : {fvc_sum}")
+    print(f"[usd_interpolation]   faceVertexIndices (fvi len): {fvi_len}")
+    print(f"[usd_interpolation]   points (vertices)          : {pt_len}")
+    print(f"[usd_interpolation]   st values                  : {st_len}")
+    print(f"[usd_interpolation]   st interpolation           : {interp}")
+    print(f"[usd_interpolation]   fvc sample [:8]            : {list(fvc[:8]) if fvc is not None else None}")
+    print(f"[usd_interpolation] ── Cross-validation ────────────────")
 
+    checks = {}
+    checks["sum(fvc) == fvi_len"] = _check(
+        f"sum(fvc) {fvc_sum} == fvi_len {fvi_len}",
+        fvc_sum is not None and fvi_len is not None and fvc_sum == fvi_len,
+    )
+    checks["all fvc >= 3"] = _check(
+        "all faceVertexCounts >= 3 (valid polygons)",
+        fvc is not None and all(c >= 3 for c in fvc),
+    )
+    checks["max(fvi) < pt_len"] = _check(
+        f"max(fvi) {max(fvi) if fvi is not None else '?'} < pt_len {pt_len}",
+        fvi is not None and pt_len is not None and int(max(fvi)) < pt_len,
+    )
     if interp == UsdGeom.Tokens.faceVarying:
-        fvc = _get_attr(mesh.GetFaceVertexCountsAttr())
-        fvi = _get_attr(mesh.GetFaceVertexIndicesAttr())
-        points = _get_attr(mesh.GetPointsAttr())
-        fvc_len = len(fvc) if fvc is not None else None
-        fvi_len = len(fvi) if fvi is not None else None
-        pt_len  = len(points) if points is not None else None
-        fvc_sum = int(sum(fvc)) if fvc is not None else None
-        print(f"[usd_interpolation] face count         : {fvc_len}")
-        print(f"[usd_interpolation] faceVertexCounts[:8]: {list(fvc[:8]) if fvc is not None else None}")
-        print(f"[usd_interpolation] sum(faceVertexCounts): {fvc_sum}")
-        print(f"[usd_interpolation] faceVertexIndices len: {fvi_len}")
-        print(f"[usd_interpolation] points (vertex) count: {pt_len}")
-        print(f"[usd_interpolation] st count              : {st_count}")
-        expected = fvc_sum
+        checks["st_len == sum(fvc)"] = _check(
+            f"st_len {st_len} == sum(fvc) {fvc_sum}",
+            fvc_sum is not None and st_len == fvc_sum,
+        )
     elif interp == UsdGeom.Tokens.vertex:
-        points = _get_attr(mesh.GetPointsAttr())
-        print(f"[usd_interpolation] points count: {len(points) if points is not None else None}")
-        expected = len(points) if points is not None else None
-    elif interp == UsdGeom.Tokens.uniform:
-        fvc = _get_attr(mesh.GetFaceVertexCountsAttr())
-        print(f"[usd_interpolation] faceVertexCounts: {fvc}")
-        expected = len(fvc) if fvc is not None else None
-    else:  # constant
-        expected = 1
+        checks["st_len == pt_len"] = _check(
+            f"st_len {st_len} == pt_len {pt_len}",
+            pt_len is not None and st_len == pt_len,
+        )
 
-    print(f"[usd_interpolation] Expected st count for '{interp}': {expected}")
-    print(f"[usd_interpolation] Actual st count: {st_count} → {'OK' if expected and st_count == expected else 'MISMATCH'}")
+    all_ok = all(checks.values())
+    print(f"[usd_interpolation] ── Result: {'ALL OK' if all_ok else 'HAS FAILURES'} ──")
 
-    valid_count = min(st_count, expected) if expected is not None else st_count
-    counter = Counter(tuple(v) for v in raw_values[:valid_count])
+    # 유효 범위: faceVarying은 sum(fvc), vertex는 pt_len, 나머지는 st_len 그대로
+    if interp == UsdGeom.Tokens.faceVarying:
+        valid_count = fvc_sum if fvc_sum is not None else st_len
+    elif interp == UsdGeom.Tokens.vertex:
+        valid_count = pt_len if pt_len is not None else st_len
+    else:
+        valid_count = st_len
+
+    valid_count = min(st_len, valid_count)
+    counter = Counter(tuple(v) for v in st_raw[:valid_count])
 
     return {
-        "prim_path": str(mesh_prim.GetPath()),
+        "prim_path":   str(mesh_prim.GetPath()),
         "interpolation": interp,
-        "st_count": st_count,
-        "expected": expected,
+        "st_count":    st_len,
+        "fvc_sum":     fvc_sum,
+        "fvi_len":     fvi_len,
+        "pt_len":      pt_len,
         "valid_count": valid_count,
-        "counter": counter,
+        "all_ok":      all_ok,
+        "checks":      checks,
+        "counter":     counter,
     }
 
 
@@ -142,21 +165,22 @@ class UsdInterpolationUI:
             return
 
         counter = data["counter"]
-        unique = len(counter)
-        sc = data["st_count"]
-        exp = data["expected"]
-        vc = data["valid_count"]
-        status = "OK" if exp and sc == exp else f"MISMATCH (expected {exp})"
-
+        unique  = len(counter)
+        check_lines = "\n".join(
+            f"  [{'OK' if v else 'FAIL'}] {k}" for k, v in data["checks"].items()
+        )
         freq_lines = "\n".join(f"  {uv}: {cnt}" for uv, cnt in counter.items())
         text = (
             f"Mesh: {data['prim_path']}  |  Interp: {data['interpolation']}\n"
-            f"ST raw: {sc}  |  Expected: {exp}  |  {status}\n"
-            f"{unique} unique value(s) in {vc} valid entries\n"
+            f"ST: {data['st_count']}  fvc_sum: {data['fvc_sum']}  "
+            f"fvi: {data['fvi_len']}  pts: {data['pt_len']}\n"
+            f"\n[Validation {'ALL OK' if data['all_ok'] else 'HAS FAILURES'}]\n"
+            f"{check_lines}\n"
+            f"\n{unique} unique value(s) in {data['valid_count']} valid entries\n"
             f"\n{freq_lines}"
         )
         self._set_result(text)
-        print(f"[usd_interpolation] unique={unique}, valid_count={vc}, st_count={sc}, expected={exp}")
+        print(f"[usd_interpolation] all_ok={data['all_ok']}, unique={unique}, valid={data['valid_count']}")
 
     def _set_result(self, text: str):
         if self._result_label:
