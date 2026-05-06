@@ -173,6 +173,7 @@ class UsdInterpolationUI:
         self._pending_t: float = 0.0
         self._dirty: bool = False
         self._last_write_time: float = 0.0
+        self._last_seg: int = -1
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
@@ -286,6 +287,18 @@ class UsdInterpolationUI:
         self._pending_t = t
         self._dirty = True
 
+    def _refresh(self, t: float) -> bool:
+        """주어진 t에 대한 UV를 정확히 계산해 스테이지에 적용한다."""
+        raw = t * (NUM_FILES - 1)
+        seg = min(int(raw), NUM_FILES - 2)
+        local_t = min(raw - seg, 1.0)
+        map_a = self._maps[seg]
+        map_b = self._maps[seg + 1]
+        if map_a is None or map_b is None:
+            self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
+            return False
+        return apply_lerped_st_all(map_a, map_b, local_t)
+
     def _on_update(self, _event):
         if not self._dirty:
             return
@@ -303,14 +316,15 @@ class UsdInterpolationUI:
 
         print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | w[{seg}]={1-local_t:.4f} w[{seg+1}]={local_t:.4f}")
 
-        map_a = self._maps[seg]
-        map_b = self._maps[seg + 1]
-
-        if map_a is None or map_b is None:
-            self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
+        # 세그먼트 경계를 넘는 순간: 해당 keyframe의 정확한 값을 먼저 적용하고 이 프레임은 종료.
+        # 다음 프레임에서 실제 t로 보간이 이어진다.
+        if seg != self._last_seg and self._last_seg >= 0:
+            self._last_seg = seg
+            self._refresh(seg / (NUM_FILES - 1))
             return
 
-        ok = apply_lerped_st_all(map_a, map_b, local_t)
+        self._last_seg = seg
+        ok = self._refresh(t)
         if not ok:
             self._set_status("ERROR: Failed to apply. Check console.")
 
