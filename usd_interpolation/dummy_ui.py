@@ -49,16 +49,13 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
 
     print(f"[usd_interpolation] st.Get() returned {len(raw_values)} values")
 
-    raw_values = list(raw_values)
-    # GfVec2f는 해시 불가 → tuple 변환 후 Counter 사용
+    # VtArray를 list 변환 없이 한 번만 순회해 Counter 구성
     counter = Counter(tuple(v) for v in raw_values)
 
     return {
         "prim_path": str(mesh_prim.GetPath()),
-        "values": raw_values,
-        "indices": list(st.GetIndices() or []),
         "interpolation": st.GetInterpolation(),
-        "flattened": list(st.ComputeFlattened() or []),
+        "total": len(raw_values),
         "counter": counter,
     }
 
@@ -106,23 +103,17 @@ class UsdInterpolationUI:
             return
 
         counter = data["counter"]
-        total_len = len(data["values"])
-        unique_count = len(counter)
+        unique = len(counter)
+        total = data["total"]
 
-        count_lines = "\n".join(
-            f"  {uv} : {cnt} time(s)"
-            for uv, cnt in sorted(counter.items())
-        )
-
+        freq_lines = "\n".join(f"  {uv}: {cnt}" for uv, cnt in counter.items())
         text = (
-            f"Mesh Prim     : {data['prim_path']}\n"
-            f"Interpolation : {data['interpolation']}\n"
-            f"\n[Value Frequency]\n"
-            f"{count_lines}\n"
-            f"\n{unique_count} unique value(s) found across {total_len} entries"
+            f"Mesh: {data['prim_path']}  |  Interp: {data['interpolation']}\n"
+            f"{unique} unique value(s) in {total} entries\n"
+            f"\n{freq_lines}"
         )
         self._set_result(text)
-        print(f"[usd_interpolation] counter={dict(counter)}, total={total_len}, unique={unique_count}")
+        print(f"[usd_interpolation] unique={unique}, total={total}")
 
     def _set_result(self, text: str):
         if self._result_label:
