@@ -4,6 +4,16 @@ from pxr import Usd, UsdGeom
 import omni.ui as ui
 
 
+def _get_attr(attr) -> object:
+    """Get attribute value, falling back to first time sample if default is None."""
+    val = attr.Get(Usd.TimeCode.Default())
+    if val is None:
+        samples = attr.GetTimeSamples()
+        if samples:
+            val = attr.Get(samples[0])
+    return val
+
+
 def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     stage = Usd.Stage.Open(usd_file_path)
     if not stage:
@@ -36,13 +46,7 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     print(f"[usd_interpolation] st type: {st.GetTypeName()}, interpolation: {st.GetInterpolation()}")
 
     # Default time 우선, 없으면 첫 번째 time sample로 fallback
-    raw_values = st.Get(Usd.TimeCode.Default())
-    if raw_values is None:
-        time_samples = st.GetAttr().GetTimeSamples()
-        print(f"[usd_interpolation] No default value. Time samples: {time_samples}")
-        if time_samples:
-            raw_values = st.Get(time_samples[0])
-
+    raw_values = _get_attr(st.GetAttr())
     if raw_values is None:
         print("[usd_interpolation] ERROR: st.Get() returned None — no values found")
         return None
@@ -52,16 +56,18 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     print(f"[usd_interpolation] st.Get() returned {st_count} values, interpolation: {interp}")
 
     mesh = UsdGeom.Mesh(mesh_prim)
-    tc = Usd.TimeCode.Default()
 
     if interp == UsdGeom.Tokens.faceVarying:
-        fvc = mesh.GetFaceVertexCountsAttr().Get(tc)
+        fvc = _get_attr(mesh.GetFaceVertexCountsAttr())
+        print(f"[usd_interpolation] faceVertexCounts: {fvc}")
         expected = int(sum(fvc)) if fvc is not None else None
     elif interp == UsdGeom.Tokens.vertex:
-        points = mesh.GetPointsAttr().Get(tc)
+        points = _get_attr(mesh.GetPointsAttr())
+        print(f"[usd_interpolation] points count: {len(points) if points is not None else None}")
         expected = len(points) if points is not None else None
     elif interp == UsdGeom.Tokens.uniform:
-        fvc = mesh.GetFaceVertexCountsAttr().Get(tc)
+        fvc = _get_attr(mesh.GetFaceVertexCountsAttr())
+        print(f"[usd_interpolation] faceVertexCounts: {fvc}")
         expected = len(fvc) if fvc is not None else None
     else:  # constant
         expected = 1
