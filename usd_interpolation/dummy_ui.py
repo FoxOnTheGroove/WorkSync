@@ -238,7 +238,7 @@ class UsdInterpolationUI:
         self._last_write_time = now
         t = self._pending_t
 
-        raw = t * NUM_FILES
+        raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
 
