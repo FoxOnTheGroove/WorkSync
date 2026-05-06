@@ -2,6 +2,7 @@ import numpy as np
 from collections import Counter
 
 from pxr import Usd, UsdGeom, Vt
+import omni.kit.app
 import omni.usd
 import omni.ui as ui
 
@@ -172,6 +173,12 @@ class UsdInterpolationUI:
         self._fields: list[ui.StringField] = []
         self._maps: list[dict | None] = [None] * NUM_FILES
 
+        self._pending_t: float = 0.0
+        self._dirty: bool = False
+        self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
+            self._on_update, name="usd_interpolation_update"
+        )
+
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
         with self._window.frame:
@@ -219,8 +226,16 @@ class UsdInterpolationUI:
         t = model.get_value_as_float()
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
+        # 값만 저장, 실제 write는 다음 프레임에 한 번만
+        self._pending_t = t
+        self._dirty = True
 
-        # t(0~1) → 4구간 중 해당 구간과 구간 내 local_t 계산
+    def _on_update(self, _event):
+        if not self._dirty:
+            return
+        self._dirty = False
+        t = self._pending_t
+
         seg = min(int(t * (NUM_FILES - 1)), NUM_FILES - 2)
         local_t = t * (NUM_FILES - 1) - seg
 
@@ -240,6 +255,7 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
+        self._update_sub = None
         if self._window:
             self._window.destroy()
             self._window = None
