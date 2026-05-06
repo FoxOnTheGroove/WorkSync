@@ -32,7 +32,7 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
     primvars_api = UsdGeom.PrimvarsAPI(mesh_prim)
     st = primvars_api.GetPrimvar("st")
 
-    if not st.IsValid():
+    if not st or not st.GetAttr().IsValid():
         return None
 
     raw_values = list(st.Get() or [])
