@@ -111,7 +111,9 @@ def load_st_map(usd_file_path: str) -> dict[str, Vt.Vec2fArray] | None:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
-        st_raw = _get_attr(st_pv.GetAttr())
+        st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
+        if st_raw is None:
+            st_raw = _get_attr(st_pv.GetAttr())
         if st_raw is not None:
             result[str(prim.GetPath())] = st_raw
             print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
@@ -143,13 +145,14 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
-        a_np = np.array(st_a, dtype=np.float32)
-        b_np = np.array(st_b, dtype=np.float32)
-        writes.append((st_pv, Vt.Vec2fArray.FromNumpy(a_np + t * (b_np - a_np))))
+        a_np = np.array(st_a, dtype=np.float32).reshape(-1, 2)
+        b_np = np.array(st_b, dtype=np.float32).reshape(-1, 2)
+        lerped = np.ascontiguousarray(a_np + t * (b_np - a_np))
+        writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
 
-    # 모든 메시 write를 하나의 change block으로 묶어 뷰포트 갱신을 1회로 제한
     with Sdf.ChangeBlock():
         for st_pv, result in writes:
+            st_pv.SetIndices(Vt.IntArray(np.arange(len(result), dtype=np.int32)))
             st_pv.Set(result)
 
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
@@ -171,15 +174,10 @@ class UsdInterpolationUI:
         self._maps: list[dict | None] = [None] * NUM_FILES
 
         self._pending_t: float = 0.0
-        self._dirty: bool = False
-        self._last_write_time: float = 0.0
-        self._last_seg: int = -1
+        self._pending_write: bool = False
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
-        self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
-            self._on_update, name="usd_interpolation_update"
-        )
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
@@ -283,15 +281,24 @@ class UsdInterpolationUI:
         t = model.get_value_as_float()
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        # 값만 저장, 실제 write는 다음 프레임에 한 번만
         self._pending_t = t
-        self._dirty = True
+        if not self._pending_write:
+            self._pending_write = True
+            asyncio.ensure_future(self._write_next_frame())
+
+    async def _write_next_frame(self):
+        await omni.kit.app.get_app().next_update_async()
+        self._pending_write = False
+        ok = self._refresh(self._pending_t)
+        if not ok:
+            self._set_status("ERROR: Failed to apply. Check console.")
 
     def _refresh(self, t: float) -> bool:
-        """주어진 t에 대한 UV를 정확히 계산해 스테이지에 적용한다."""
+        """주어진 t에 대한 UV를 계산해 스테이지에 적용한다."""
         raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
+        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | w[{seg}]={1-local_t:.4f} w[{seg+1}]={local_t:.4f}")
         map_a = self._maps[seg]
         map_b = self._maps[seg + 1]
         if map_a is None or map_b is None:
@@ -299,42 +306,12 @@ class UsdInterpolationUI:
             return False
         return apply_lerped_st_all(map_a, map_b, local_t)
 
-    def _on_update(self, _event):
-        if not self._dirty:
-            return
-        import time
-        now = time.monotonic()
-        if now - self._last_write_time < 0.014:
-            return
-        self._dirty = False
-        self._last_write_time = now
-        t = self._pending_t
-
-        raw = t * (NUM_FILES - 1)
-        seg = min(int(raw), NUM_FILES - 2)
-        local_t = min(raw - seg, 1.0)
-
-        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | w[{seg}]={1-local_t:.4f} w[{seg+1}]={local_t:.4f}")
-
-        # 세그먼트 경계를 넘는 순간: 해당 keyframe의 정확한 값을 먼저 적용하고 이 프레임은 종료.
-        # 다음 프레임에서 실제 t로 보간이 이어진다.
-        if seg != self._last_seg and self._last_seg >= 0:
-            self._last_seg = seg
-            self._refresh(seg / (NUM_FILES - 1))
-            return
-
-        self._last_seg = seg
-        ok = self._refresh(t)
-        if not ok:
-            self._set_status("ERROR: Failed to apply. Check console.")
-
     def _set_status(self, text: str):
         if self._status_label:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
         self._stop_play()
-        self._update_sub = None
         if self._window:
             self._window.destroy()
             self._window = None
