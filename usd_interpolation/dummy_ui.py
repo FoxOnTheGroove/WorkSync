@@ -48,30 +48,36 @@ def get_mesh_st_primvar(usd_file_path: str) -> dict | None:
         return None
 
     st_count = len(raw_values)
-    print(f"[usd_interpolation] st.Get() returned {st_count} values")
+    interp = st.GetInterpolation()
+    print(f"[usd_interpolation] st.Get() returned {st_count} values, interpolation: {interp}")
 
     mesh = UsdGeom.Mesh(mesh_prim)
-    points = mesh.GetPointsAttr().Get(Usd.TimeCode.Default())
-    vertex_count = len(points) if points is not None else None
-    print(f"[usd_interpolation] Vertex count (points): {vertex_count}")
+    tc = Usd.TimeCode.Default()
 
-    if vertex_count is None:
-        print("[usd_interpolation] WARNING: Could not read points attribute")
-        valid = False
-    else:
-        valid = st_count >= vertex_count
-        print(f"[usd_interpolation] st count {st_count} >= vertex count {vertex_count}: {valid}")
+    if interp == UsdGeom.Tokens.faceVarying:
+        fvc = mesh.GetFaceVertexCountsAttr().Get(tc)
+        expected = int(sum(fvc)) if fvc is not None else None
+    elif interp == UsdGeom.Tokens.vertex:
+        points = mesh.GetPointsAttr().Get(tc)
+        expected = len(points) if points is not None else None
+    elif interp == UsdGeom.Tokens.uniform:
+        fvc = mesh.GetFaceVertexCountsAttr().Get(tc)
+        expected = len(fvc) if fvc is not None else None
+    else:  # constant
+        expected = 1
 
-    # 버텍스 수만큼만 순회
-    limit = vertex_count if (valid and vertex_count is not None) else st_count
-    counter = Counter(tuple(v) for v in raw_values[:limit])
+    print(f"[usd_interpolation] Expected st count for '{interp}': {expected}")
+    print(f"[usd_interpolation] Actual st count: {st_count} → {'OK' if expected and st_count == expected else 'MISMATCH'}")
+
+    valid_count = min(st_count, expected) if expected is not None else st_count
+    counter = Counter(tuple(v) for v in raw_values[:valid_count])
 
     return {
         "prim_path": str(mesh_prim.GetPath()),
-        "interpolation": st.GetInterpolation(),
+        "interpolation": interp,
         "st_count": st_count,
-        "vertex_count": vertex_count,
-        "valid": valid,
+        "expected": expected,
+        "valid_count": valid_count,
         "counter": counter,
     }
 
@@ -120,19 +126,20 @@ class UsdInterpolationUI:
 
         counter = data["counter"]
         unique = len(counter)
-        vc = data["vertex_count"]
         sc = data["st_count"]
-        valid_str = "OK" if data["valid"] else "MISMATCH"
+        exp = data["expected"]
+        vc = data["valid_count"]
+        status = "OK" if exp and sc == exp else f"MISMATCH (expected {exp})"
 
         freq_lines = "\n".join(f"  {uv}: {cnt}" for uv, cnt in counter.items())
         text = (
             f"Mesh: {data['prim_path']}  |  Interp: {data['interpolation']}\n"
-            f"Vertices: {vc}  |  ST values: {sc}  |  {valid_str}\n"
-            f"{unique} unique value(s) in {vc if data['valid'] else sc} checked entries\n"
+            f"ST raw: {sc}  |  Expected: {exp}  |  {status}\n"
+            f"{unique} unique value(s) in {vc} valid entries\n"
             f"\n{freq_lines}"
         )
         self._set_result(text)
-        print(f"[usd_interpolation] unique={unique}, vertex_count={vc}, st_count={sc}, valid={data['valid']}")
+        print(f"[usd_interpolation] unique={unique}, valid_count={vc}, st_count={sc}, expected={exp}")
 
     def _set_result(self, text: str):
         if self._result_label:
