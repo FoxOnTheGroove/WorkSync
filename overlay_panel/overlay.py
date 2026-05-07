@@ -3,7 +3,7 @@ import omni.kit.app
 import omni.usd
 import omni.ui as ui
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
-from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd, CameraUtil
+from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
 from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
@@ -16,25 +16,21 @@ DOT_SIZE         = 13
 LABEL_SIZE       = 13
 PANEL_PAD        = 6
 ITEM_GAP         = 5
-PANEL_OFFSET_X   = 12          # 빨간 점 → 패널 우하단 오프셋 (픽셀)
+PANEL_OFFSET_X   = 12
 PANEL_OFFSET_Y   = 12
-RING_SIZE        = 10          # 동심원 지름 (픽셀)
-RING_THICK       = 2           # 동심원 테두리 두께
 MAX_OVERLAYS     = 5
 
 _WIN_FLAGS = (
-    ui.WINDOW_FLAGS_NO_TITLE_BAR             |
-    ui.WINDOW_FLAGS_NO_SCROLLBAR             |
-    ui.WINDOW_FLAGS_NO_RESIZE                |
-    ui.WINDOW_FLAGS_NO_CLOSE                 |
-    ui.WINDOW_FLAGS_NO_COLLAPSE              |
-    ui.WINDOW_FLAGS_NO_MOVE                  |
+    ui.WINDOW_FLAGS_NO_TITLE_BAR          |
+    ui.WINDOW_FLAGS_NO_SCROLLBAR          |
+    ui.WINDOW_FLAGS_NO_RESIZE             |
+    ui.WINDOW_FLAGS_NO_CLOSE              |
+    ui.WINDOW_FLAGS_NO_COLLAPSE           |
+    ui.WINDOW_FLAGS_NO_MOVE               |
     ui.WINDOW_FLAGS_NO_DOCKING            |
     ui.WINDOW_FLAGS_NO_BACKGROUND         |
     ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING
 )
-
-_RING_FLAGS = _WIN_FLAGS
 
 
 def _to_temp(rgb) -> str:
@@ -155,7 +151,6 @@ class ColorpickOverlay:
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
 
         for i in range(MAX_OVERLAYS):
-            # ── 패널 윈도우 ───────────────────────────────────────
             win = ui.Window(
                 f"_cpoverlay_{self._vpname}_{i}",
                 flags=_WIN_FLAGS,
@@ -210,28 +205,8 @@ class ColorpickOverlay:
                             ui.Spacer(height=PANEL_PAD)
                         ui.Spacer(width=PANEL_PAD)
 
-            # ── 동심원 윈도우 ─────────────────────────────────────
-            ring_win = ui.Window(
-                f"_cpring_{self._vpname}_{i}",
-                flags=_RING_FLAGS,
-                width=RING_SIZE, height=RING_SIZE,
-                visible=False,
-            )
-            ring_win.frame.style = {"background_color": 0x00000000}
-            ring_win.frame.opaque_for_mouse_events = False
-            ring_win.padding_x = 0
-            ring_win.padding_y = 0
-            with ring_win.frame:
-                ui.Rectangle(style={
-                    "background_color": 0x00000000,
-                    "border_color":     0xFF000000,
-                    "border_width":     RING_THICK,
-                    "border_radius":    999,
-                })
-
             self._slots.append({
                 "window":      win,
-                "ring_win":    ring_win,
                 "swatch":      swatch,
                 "color_dot":   dot,
                 "hex_label":   hex_lbl,
@@ -273,25 +248,22 @@ class ColorpickOverlay:
                 raw_y = py + PANEL_OFFSET_Y
                 slot["window"].position_x = max(ox, min(ox + dw - PANEL_W, raw_x))
                 slot["window"].position_y = max(oy, min(oy + dh - PANEL_H, raw_y))
-                slot["ring_win"].position_x = px - RING_SIZE / 2
-                slot["ring_win"].position_y = py - RING_SIZE / 2
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
         try:
-            cam_path = self._viewport_api.get_active_camera()
-            cam_prim = stage.GetPrimAtPath(str(cam_path))
+            cam_path  = self._viewport_api.get_active_camera()
+            cam_prim  = stage.GetPrimAtPath(str(cam_path))
             if not cam_prim.IsValid():
                 return None
-            cam_gf = UsdGeom.Camera(cam_prim).GetCamera(Usd.TimeCode.Default())
-            w, h   = self._viewport_api.resolution
-            CameraUtil.ConformWindow(cam_gf, CameraUtil.MatchVertically, w / h)
-            frustum   = cam_gf.frustum
-            view      = frustum.ComputeViewMatrix()
-            proj      = frustum.ComputeProjectionMatrix()
+            cam_gf  = UsdGeom.Camera(cam_prim).GetCamera(Usd.TimeCode.Default())
+            frustum = cam_gf.frustum
+            view    = frustum.ComputeViewMatrix()
+            proj    = frustum.ComputeProjectionMatrix()
             cam_space = view.Transform(Gf.Vec3d(*world_pos))
             if cam_space[2] >= 0:
                 return None
             ndc = proj.Transform(cam_space)
+            w, h = self._viewport_api.resolution
             return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
         except Exception:
             return None
@@ -310,7 +282,6 @@ class ColorpickOverlay:
 
         slot["world_pos"]      = pos3d
         slot["window"].visible = True
-        slot["ring_win"].visible = True
 
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
@@ -330,9 +301,8 @@ class ColorpickOverlay:
         slot_idx = self._active.pop(key, None)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["window"].visible   = False
-            slot["ring_win"].visible = False
-            slot["world_pos"]        = None
+            slot["window"].visible = False
+            slot["world_pos"]      = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
 
@@ -343,15 +313,11 @@ class ColorpickOverlay:
     def _set_visible(self, key: int, visible: bool):
         slot_idx = self._active.get(key)
         if slot_idx is not None:
-            slot = self._slots[slot_idx]
-            slot["window"].visible   = visible
-            slot["ring_win"].visible = visible
+            slot["window"].visible = visible
 
     def _set_visible_all(self, visible: bool):
         for slot_idx in self._active.values():
-            slot = self._slots[slot_idx]
-            slot["window"].visible   = visible
-            slot["ring_win"].visible = visible
+            self._slots[slot_idx]["window"].visible = visible
 
     # ------------------------------------------------------------------
 
@@ -402,8 +368,5 @@ class ColorpickOverlay:
             win = slot.get("window")
             if win:
                 win.destroy()
-            ring = slot.get("ring_win")
-            if ring:
-                ring.destroy()
         self._update_sub = None
         self._slots.clear()
