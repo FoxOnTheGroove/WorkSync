@@ -251,6 +251,21 @@ class ColorpickOverlay:
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
         try:
+            w, h = self._viewport_api.resolution
+            view = self._viewport_api.view_matrix
+            proj = self._viewport_api.projection_matrix
+            cam_space = view.Transform(Gf.Vec3d(*world_pos))
+            if cam_space[2] >= 0:
+                return None
+            ndc = proj.Transform(cam_space)
+            return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
+        except AttributeError:
+            return self._world_to_screen_fallback(world_pos, stage)
+        except Exception:
+            return None
+
+    def _world_to_screen_fallback(self, world_pos: tuple, stage) -> "tuple | None":
+        try:
             cam_path  = self._viewport_api.get_active_camera()
             cam_prim  = stage.GetPrimAtPath(str(cam_path))
             if not cam_prim.IsValid():
