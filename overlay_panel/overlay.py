@@ -18,19 +18,21 @@ PANEL_PAD        = 6
 ITEM_GAP         = 5
 PANEL_OFFSET_X   = 12          # 빨간 점 → 패널 우하단 오프셋 (픽셀)
 PANEL_OFFSET_Y   = 12
-RING_SIZE        = 24          # 동심원 지름 (픽셀)
+RING_SIZE        = 10          # 동심원 지름 (픽셀)
 RING_THICK       = 2           # 동심원 테두리 두께
 MAX_OVERLAYS     = 5
 
 _WIN_FLAGS = (
-    ui.WINDOW_FLAGS_NO_TITLE_BAR |
-    ui.WINDOW_FLAGS_NO_SCROLLBAR |
-    ui.WINDOW_FLAGS_NO_RESIZE    |
-    ui.WINDOW_FLAGS_NO_CLOSE     |
-    ui.WINDOW_FLAGS_NO_COLLAPSE  |
-    ui.WINDOW_FLAGS_NO_MOVE      |
-    ui.WINDOW_FLAGS_NO_DOCKING   |
-    ui.WINDOW_FLAGS_NO_BACKGROUND
+    ui.WINDOW_FLAGS_NO_TITLE_BAR             |
+    ui.WINDOW_FLAGS_NO_SCROLLBAR             |
+    ui.WINDOW_FLAGS_NO_RESIZE                |
+    ui.WINDOW_FLAGS_NO_CLOSE                 |
+    ui.WINDOW_FLAGS_NO_COLLAPSE              |
+    ui.WINDOW_FLAGS_NO_MOVE                  |
+    ui.WINDOW_FLAGS_NO_DOCKING               |
+    ui.WINDOW_FLAGS_NO_BACKGROUND            |
+    ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING    |
+    ui.WINDOW_FLAGS_NO_BRING_TO_DISPLAY_FRONT
 )
 
 _RING_FLAGS = _WIN_FLAGS
@@ -162,6 +164,7 @@ class ColorpickOverlay:
                 visible=False,
             )
             win.frame.style = {"background_color": 0x00000000}
+            win.frame.opaque_for_mouse_events = False
             win.padding_x = 0
             win.padding_y = 0
             with win.frame:
@@ -216,6 +219,7 @@ class ColorpickOverlay:
                 visible=False,
             )
             ring_win.frame.style = {"background_color": 0x00000000}
+            ring_win.frame.opaque_for_mouse_events = False
             ring_win.padding_x = 0
             ring_win.padding_y = 0
             with ring_win.frame:
@@ -282,7 +286,8 @@ class ColorpickOverlay:
             if cam_space[2] >= 0:
                 return None
             ndc = proj.Transform(cam_space)
-            w, h = self._viewport_api.resolution
+            w = self._frame.computed_width
+            h = self._frame.computed_height
             return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
         except Exception:
             return None
