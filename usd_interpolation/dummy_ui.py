@@ -42,11 +42,11 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
-def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
+def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
-        return False
+        return []
 
     writes = []
     for prim_path, st_a in map_a.items():
@@ -63,23 +63,66 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
         if len(st_a) != len(st_b):
             print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
             chosen = st_a if t < 0.5 else st_b
-            writes.append((st_pv, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
+            writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
             continue
         t32    = np.float32(t)
         lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
-        writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
+        writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
 
     if not writes:
-        return False
+        return []
 
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
-            for st_pv, result in writes:
+            for st_pv, _, result in writes:
                 st_pv.GetAttr().Set(result)
 
+    written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
-    return True
+    return written_prims
+
+
+class _ResyncScheduler:
+    """Kit update event stream으로 SetActive(F→T)를 별개의 두 Kit tick에서 실행."""
+
+    def __init__(self, stage, prims: list):
+        self._stage = stage
+        self._prims = [p for p in prims if p.IsValid()]
+        self._deactivated: list = []
+        self._phase = 0
+        self._sub = omni.kit.app.get_app().get_update_event_stream() \
+            .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
+
+    def cancel(self):
+        self._sub = None
+        if self._deactivated:
+            session = self._stage.GetSessionLayer()
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._deactivated:
+                        if p.IsValid():
+                            p.SetActive(True)
+            self._deactivated = []
+
+    def _on_tick(self, _event):
+        session = self._stage.GetSessionLayer()
+        if self._phase == 0:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._prims:
+                        if p.IsValid():
+                            p.SetActive(False)
+                            self._deactivated.append(p)
+            self._phase = 1
+        else:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._deactivated:
+                        if p.IsValid():
+                            p.SetActive(True)
+            self._deactivated = []
+            self._sub = None
 
 
 NUM_FILES = 5
@@ -97,6 +140,7 @@ class UsdInterpolationUI:
         self._maps: list[dict | None] = [None] * NUM_FILES
 
         self._pending_t: float = 0.0
+        self._resync: _ResyncScheduler | None = None
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
@@ -151,8 +195,17 @@ class UsdInterpolationUI:
                 return
         self._slider.enabled = False
 
+    def _start_resync(self, prims: list):
+        if self._resync:
+            self._resync.cancel()
+        stage = omni.usd.get_context().get_stage()
+        if stage and prims:
+            self._resync = _ResyncScheduler(stage, prims)
+
     def _on_refresh_clicked(self):
-        self._refresh(self._pending_t)
+        written = self._refresh(self._pending_t)
+        if written:
+            self._start_resync(written)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -213,9 +266,11 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        self._refresh(t)
+        written = self._refresh(t)
+        if written:
+            self._start_resync(written)
 
-    def _refresh(self, t: float) -> bool:
+    def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
@@ -224,7 +279,7 @@ class UsdInterpolationUI:
         map_b = self._maps[seg + 1]
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
-            return False
+            return []
         return apply_lerped_st_all(map_a, map_b, local_t)
 
     def _set_status(self, text: str):
@@ -233,6 +288,9 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
+        if self._resync:
+            self._resync.cancel()
+            self._resync = None
         if self._window:
             self._window.destroy()
             self._window = None
