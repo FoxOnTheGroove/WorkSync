@@ -1,7 +1,6 @@
 from collections import OrderedDict
 import omni.kit.app
 import omni.usd
-import omni.ui.scene as sc
 import omni.ui as ui
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
 from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
@@ -9,17 +8,18 @@ from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
-LABEL_OFFSET_Y   = 5.0
-PANEL_W          = 160          # W:H = 2:1
-PANEL_H          = 80           # W:H = 2:1
-PANEL_BG         = 0xFFFFFFFF   # 불투명 흰색 ABGR
-SWATCH_COL_W     = PANEL_H      # 사와치 열 너비 = 패널 높이 → margin 뺀 실제 사와치가 정사각형
+PANEL_W          = 160
+PANEL_H          = 80
+PANEL_BG         = 0xFFFFFFFF
+SWATCH_COL_W     = PANEL_H
 DOT_SIZE         = 13
 LABEL_SIZE       = 13
-PANEL_PAD        = 6            # 패널 내부 여백
-ITEM_GAP         = 5            # 항목 간 세로 간격
-LINE_THICKNESS   = 2
-LINE_COLOR       = 0xFFFFFFFF
+PANEL_PAD        = 6
+ITEM_GAP         = 5
+PANEL_OFFSET_X   = 12          # 빨간 점 → 패널 우하단 오프셋 (픽셀)
+PANEL_OFFSET_Y   = 12
+RING_SIZE        = 24          # 동심원 지름 (픽셀)
+RING_THICK       = 2           # 동심원 테두리 두께
 MAX_OVERLAYS     = 5
 
 _WIN_FLAGS = (
@@ -33,6 +33,8 @@ _WIN_FLAGS = (
     ui.WINDOW_FLAGS_NO_BACKGROUND
 )
 
+_RING_FLAGS = _WIN_FLAGS | ui.WINDOW_FLAGS_NO_INPUTS
+
 
 def _to_temp(rgb) -> str:
     return "111"
@@ -43,8 +45,8 @@ def _to_pressure(rgb) -> str:
 
 
 class ColorpickOverlay:
-    _instances: dict  = {}   # vpname  -> ColorpickOverlay
-    _key_to_vp: dict  = {}   # key     -> vpname
+    _instances: dict  = {}
+    _key_to_vp: dict  = {}
     _next_key: int    = 0
 
     @classmethod
@@ -59,7 +61,6 @@ class ColorpickOverlay:
 
     @classmethod
     def on(cls, vp_name: str, pos3d: tuple, **kwargs) -> int | None:
-        """히트가 있으면 오버레이를 추가하고 key 반환. 히트 없으면 None."""
         info = Colorpick.get_result_by_name(vp_name)
         if not info["hit"]:
             return None
@@ -67,13 +68,12 @@ class ColorpickOverlay:
         hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
         temp_str = f"온도 {_to_temp(c)}"
         pres_str = f"압력 {_to_pressure(c)}"
-        ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]  # ABGR
+        ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_name)
         return inst._add(info["prim_path"], hex_str, temp_str, pres_str, ui_color, pos3d)
 
     @classmethod
     def off(cls, identifier):
-        """key (int) → 해당 오버레이만 끔.  vpname (str) → 해당 뷰포트 전체 끔."""
         if isinstance(identifier, int):
             vpname = cls._key_to_vp.get(identifier)
             if vpname and vpname in cls._instances:
@@ -84,18 +84,16 @@ class ColorpickOverlay:
 
     @classmethod
     def set_visible(cls, vp_name: str, visible: bool):
-        """선·패널만 visible 토글. 마커 유지. 뷰포트 단위."""
         if vp_name in cls._instances:
             cls._instances[vp_name]._set_visible_all(visible)
 
     @classmethod
     def set_visible_all(cls, visible: bool):
-        """모든 뷰포트의 선·패널 visible 토글."""
         for inst in cls._instances.values():
             inst._set_visible_all(visible)
 
     # ------------------------------------------------------------------
-    # 외부 호출용 convenience API
+    # convenience API
     # ------------------------------------------------------------------
 
     @classmethod
@@ -128,12 +126,11 @@ class ColorpickOverlay:
         return cls._instances[vpname]
 
     # ------------------------------------------------------------------
-    # 인스턴스  (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
+    # 인스턴스 (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
     def __init__(self, vpname: str):
         self._vpname       = vpname
-        self._scene_view   = None
         self._viewport_api = None
         self._frame        = None
         self._slots: list[dict] = []
@@ -144,7 +141,6 @@ class ColorpickOverlay:
     def _setup(self, vpname: str):
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
-            self._scene_view   = vph.scene_view
             self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
             self._create_slots()
@@ -155,34 +151,19 @@ class ColorpickOverlay:
             print(f"[ColorpickOverlay] setup failed for '{vpname}': {e}")
 
     def _create_slots(self):
-        """MAX_OVERLAYS 개의 슬롯 생성.
-        3D: sc.Line  /  2D: ui.Window (frame 미사용 — 제스처 보호)
-        """
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
 
         for i in range(MAX_OVERLAYS):
-            slot: dict = {}
-
-            # ── 3D 씬뷰: sc.Line ──────────────────────────────────
-            with self._scene_view.scene:
-                with sc.Transform(
-                    transform=sc.Matrix44.get_translation_matrix(0, 0, 0),
-                    visible=False,
-                ) as line_root:
-                    sc.Line(
-                        [0, 0, 0],
-                        [0, LABEL_OFFSET_Y, 0],
-                        color=LINE_COLOR,
-                        thickness=LINE_THICKNESS,
-                    )
-
-            # ── 2D 패널: 독립 ui.Window ───────────────────────────
+            # ── 패널 윈도우 ───────────────────────────────────────
             win = ui.Window(
                 f"_cpoverlay_{self._vpname}_{i}",
                 flags=_WIN_FLAGS,
                 width=PANEL_W, height=PANEL_H,
                 visible=False,
             )
+            win.frame.style = {"background_color": 0x00000000}
+            win.padding_x = 0
+            win.padding_y = 0
             with win.frame:
                 with ui.ZStack():
                     ui.Rectangle(style={
@@ -227,9 +208,27 @@ class ColorpickOverlay:
                             ui.Spacer(height=PANEL_PAD)
                         ui.Spacer(width=PANEL_PAD)
 
+            # ── 동심원 윈도우 ─────────────────────────────────────
+            ring_win = ui.Window(
+                f"_cpring_{self._vpname}_{i}",
+                flags=_RING_FLAGS,
+                width=RING_SIZE, height=RING_SIZE,
+                visible=False,
+            )
+            ring_win.frame.style = {"background_color": 0x00000000}
+            ring_win.padding_x = 0
+            ring_win.padding_y = 0
+            with ring_win.frame:
+                ui.Rectangle(style={
+                    "background_color": 0x00000000,
+                    "border_color":     0xFF000000,
+                    "border_width":     RING_THICK,
+                    "border_radius":    RING_SIZE / 2,
+                })
+
             self._slots.append({
-                "line_root":   line_root,
                 "window":      win,
+                "ring_win":    ring_win,
                 "swatch":      swatch,
                 "color_dot":   dot,
                 "hex_label":   hex_lbl,
@@ -248,24 +247,28 @@ class ColorpickOverlay:
             return 0.0, 0.0
 
     def _on_update(self, event):
-        """패널 위치를 3D→2D 투영으로 매 프레임 갱신."""
         if not self._active:
             return
         stage = omni.usd.get_context().get_stage()
         if not stage:
             return
         ox, oy = self._viewport_offset()
+        vp_w   = self._frame.computed_width
+        vp_h   = self._frame.computed_height
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             if slot["world_pos"] is None:
                 continue
             sp = self._world_to_screen(slot["world_pos"], stage)
             if sp:
-                slot["window"].position_x = ox + sp[0] - PANEL_W / 2
-                slot["window"].position_y = oy + sp[1] - PANEL_H / 2
+                raw_x = ox + sp[0] + PANEL_OFFSET_X
+                raw_y = oy + sp[1] + PANEL_OFFSET_Y
+                slot["window"].position_x = max(ox, min(ox + vp_w - PANEL_W, raw_x))
+                slot["window"].position_y = max(oy, min(oy + vp_h - PANEL_H, raw_y))
+                slot["ring_win"].position_x = ox + sp[0] - RING_SIZE / 2
+                slot["ring_win"].position_y = oy + sp[1] - RING_SIZE / 2
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
-        """world 좌표 → 화면 픽셀 (x, y). 카메라 뒤면 None."""
         try:
             cam_path  = self._viewport_api.get_active_camera()
             cam_prim  = stage.GetPrimAtPath(str(cam_path))
@@ -276,7 +279,7 @@ class ColorpickOverlay:
             view    = frustum.ComputeViewMatrix()
             proj    = frustum.ComputeProjectionMatrix()
             cam_space = view.Transform(Gf.Vec3d(*world_pos))
-            if cam_space[2] >= 0:   # 카메라 뒤
+            if cam_space[2] >= 0:
                 return None
             ndc = proj.Transform(cam_space)
             w, h = self._viewport_api.resolution
@@ -296,11 +299,9 @@ class ColorpickOverlay:
         slot_idx = next(i for i in range(MAX_OVERLAYS) if i not in used)
         slot     = self._slots[slot_idx]
 
-        x, y, z = pos3d
-        slot["world_pos"]           = (x, y + LABEL_OFFSET_Y, z)
-        slot["line_root"].transform = sc.Matrix44.get_translation_matrix(x, y, z)
-        slot["line_root"].visible   = True
-        slot["window"].visible      = True
+        slot["world_pos"]      = pos3d
+        slot["window"].visible = True
+        slot["ring_win"].visible = True
 
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
@@ -320,9 +321,9 @@ class ColorpickOverlay:
         slot_idx = self._active.pop(key, None)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["line_root"].visible = False
-            slot["window"].visible    = False
-            slot["world_pos"]         = None
+            slot["window"].visible   = False
+            slot["ring_win"].visible = False
+            slot["world_pos"]        = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
 
@@ -334,14 +335,14 @@ class ColorpickOverlay:
         slot_idx = self._active.get(key)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["line_root"].visible = visible
-            slot["window"].visible    = visible
+            slot["window"].visible   = visible
+            slot["ring_win"].visible = visible
 
     def _set_visible_all(self, visible: bool):
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
-            slot["line_root"].visible = visible
-            slot["window"].visible    = visible
+            slot["window"].visible   = visible
+            slot["ring_win"].visible = visible
 
     # ------------------------------------------------------------------
 
@@ -392,6 +393,8 @@ class ColorpickOverlay:
             win = slot.get("window")
             if win:
                 win.destroy()
+            ring = slot.get("ring_win")
+            if ring:
+                ring.destroy()
         self._update_sub = None
-        self._scene_view = None
         self._slots.clear()
