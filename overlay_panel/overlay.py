@@ -256,22 +256,32 @@ class ColorpickOverlay:
         if not stage:
             return
         ox, oy = self._viewport_offset()
-        vp_w   = self._frame.computed_width
-        vp_h   = self._frame.computed_height
+        rw, rh = self._viewport_api.resolution
+        dw = self._frame.computed_width  or rw
+        dh = self._frame.computed_height or rh
+        sx = dw / rw if rw > 0 else 1.0
+        sy = dh / rh if rh > 0 else 1.0
+        if not getattr(self, "_dbg_printed", False):
+            print(f"[CPOverlay] ox={ox:.0f} oy={oy:.0f}  render={rw}x{rh}  display={dw:.0f}x{dh:.0f}  scale={sx:.3f},{sy:.3f}")
+            self._dbg_printed = True
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             if slot["world_pos"] is None:
                 continue
             sp = self._world_to_screen(slot["world_pos"], stage)
             if sp:
-                raw_x = ox + sp[0] + PANEL_OFFSET_X
-                raw_y = oy + sp[1] + PANEL_OFFSET_Y
-                slot["window"].position_x = max(ox, min(ox + vp_w - PANEL_W, raw_x))
-                slot["window"].position_y = max(oy, min(oy + vp_h - PANEL_H, raw_y))
-                slot["ring_win"].position_x = ox + sp[0] - RING_SIZE / 2
-                slot["ring_win"].position_y = oy + sp[1] - RING_SIZE / 2
+                # sp는 render-resolution 기준 → display 좌표로 스케일
+                px = ox + sp[0] * sx
+                py = oy + sp[1] * sy
+                raw_x = px + PANEL_OFFSET_X
+                raw_y = py + PANEL_OFFSET_Y
+                slot["window"].position_x = max(ox, min(ox + dw - PANEL_W, raw_x))
+                slot["window"].position_y = max(oy, min(oy + dh - PANEL_H, raw_y))
+                slot["ring_win"].position_x = px - RING_SIZE / 2
+                slot["ring_win"].position_y = py - RING_SIZE / 2
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
+        """render-resolution 기준 픽셀 좌표 반환."""
         try:
             cam_path  = self._viewport_api.get_active_camera()
             cam_prim  = stage.GetPrimAtPath(str(cam_path))
@@ -285,8 +295,7 @@ class ColorpickOverlay:
             if cam_space[2] >= 0:
                 return None
             ndc = proj.Transform(cam_space)
-            w = self._frame.computed_width
-            h = self._frame.computed_height
+            w, h = self._viewport_api.resolution
             return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
         except Exception:
             return None
