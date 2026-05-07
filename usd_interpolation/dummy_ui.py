@@ -1,6 +1,5 @@
 import asyncio
 import numpy as np
-from collections import Counter
 
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
@@ -17,88 +16,7 @@ def _get_attr(attr) -> object:
     return val
 
 
-def _check(label: str, result: bool) -> bool:
-    print(f"[usd_interpolation]   [{'OK' if result else 'FAIL'}] {label}")
-    return result
-
-
-def _analyze_mesh(mesh_prim) -> dict | None:
-    mesh = UsdGeom.Mesh(mesh_prim)
-    primvars_api = UsdGeom.PrimvarsAPI(mesh_prim)
-
-    fvc    = _get_attr(mesh.GetFaceVertexCountsAttr())
-    fvi    = _get_attr(mesh.GetFaceVertexIndicesAttr())
-    points = _get_attr(mesh.GetPointsAttr())
-    st_pv  = primvars_api.GetPrimvar("st")
-
-    if not st_pv or not st_pv.GetAttr().IsValid():
-        print(f"[usd_interpolation] SKIP {mesh_prim.GetPath()}: no 'st' primvar")
-        return None
-
-    st_raw = _get_attr(st_pv.GetAttr())
-    if st_raw is None:
-        print(f"[usd_interpolation] SKIP {mesh_prim.GetPath()}: st.Get() returned None")
-        return None
-
-    fvc_sum = int(sum(fvc)) if fvc is not None else None
-    fvi_len = len(fvi)      if fvi is not None else None
-    pt_len  = len(points)   if points is not None else None
-    st_len  = len(st_raw)
-    interp  = st_pv.GetInterpolation()
-
-    print(f"[usd_interpolation] {mesh_prim.GetPath()} faces={len(fvc) if fvc else None} sum(fvc)={fvc_sum} fvi={fvi_len} pts={pt_len} st={st_len} interp={interp}")
-
-    checks = {}
-    checks["sum(fvc)==fvi_len"] = _check(f"sum(fvc) {fvc_sum} == fvi_len {fvi_len}", fvc_sum is not None and fvi_len is not None and fvc_sum == fvi_len)
-    checks["all fvc>=3"]        = _check("all fvc >= 3", fvc is not None and all(c >= 3 for c in fvc))
-    checks["max(fvi)<pt_len"]   = _check(f"max(fvi) {int(max(fvi)) if fvi is not None else '?'} < pt_len {pt_len}", fvi is not None and pt_len is not None and int(max(fvi)) < pt_len)
-    if interp == UsdGeom.Tokens.faceVarying:
-        checks["st==sum(fvc)"] = _check(f"st {st_len} == sum(fvc) {fvc_sum}", fvc_sum is not None and st_len == fvc_sum)
-    elif interp == UsdGeom.Tokens.vertex:
-        checks["st==pt_len"]   = _check(f"st {st_len} == pt_len {pt_len}", pt_len is not None and st_len == pt_len)
-
-    if interp == UsdGeom.Tokens.faceVarying:
-        valid_count = min(st_len, fvc_sum) if fvc_sum is not None else st_len
-    elif interp == UsdGeom.Tokens.vertex:
-        valid_count = min(st_len, pt_len) if pt_len is not None else st_len
-    else:
-        valid_count = st_len
-
-    unique_set = set()
-    index_counter: Counter = Counter()
-    for v in st_raw[:valid_count]:
-        unique_set.add((v[0], v[1]))
-        index_counter[max(0, min(255, int(v[0] * 256)))] += 1
-
-    return {
-        "prim_path":      str(mesh_prim.GetPath()),
-        "interpolation":  interp,
-        "valid_count":    valid_count,
-        "all_ok":         all(checks.values()),
-        "unique_values":  len(unique_set),
-        "unique_indices": len(index_counter),
-    }
-
-
-def get_all_mesh_data(usd_file_path: str) -> list[dict]:
-    stage = Usd.Stage.Open(usd_file_path)
-    if not stage:
-        print(f"[usd_interpolation] ERROR: Failed to open stage: {usd_file_path}")
-        return []
-
-    results = []
-    for prim in stage.Traverse():
-        if prim.IsA(UsdGeom.Mesh):
-            data = _analyze_mesh(prim)
-            if data is not None:
-                results.append(data)
-
-    print(f"[usd_interpolation] Found {len(results)} mesh(es) with st primvar")
-    return results
-
-
 def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
-    """파일 내 모든 Mesh의 {prim_path: st numpy array} 반환."""
     stage = Usd.Stage.Open(usd_file_path)
     if not stage:
         print(f"[usd_interpolation] ERROR: Failed to open: {usd_file_path}")
@@ -124,12 +42,11 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
-def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
-    """공통 prim_path에 대해 st를 보간해 에디터 스테이지에 적용. 수정된 Prim 리스트 반환."""
+def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
-        return []
+        return False
 
     writes = []
     for prim_path, st_a in map_a.items():
@@ -146,24 +63,23 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if len(st_a) != len(st_b):
             print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
             chosen = st_a if t < 0.5 else st_b
-            writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
+            writes.append((st_pv, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
             continue
         t32    = np.float32(t)
         lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
-        writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
+        writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
 
     if not writes:
-        return []
+        return False
 
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
-            for st_pv, _, result in writes:
+            for st_pv, result in writes:
                 st_pv.GetAttr().Set(result)
 
-    written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
-    return written_prims
+    return True
 
 
 NUM_FILES = 5
@@ -236,9 +152,7 @@ class UsdInterpolationUI:
         self._slider.enabled = False
 
     def _on_refresh_clicked(self):
-        written = self._refresh(self._pending_t)
-        if written:
-            self._sync_resync(written)
+        self._refresh(self._pending_t)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -299,46 +213,18 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        written = self._refresh(t)
-        if written:
-            self._sync_resync(written)
+        self._refresh(t)
 
-    def _sync_resync(self, prims: list):
-        """SetActive(False) → app.update() → SetActive(True) → app.update() 동기 실행."""
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            return
-        session_layer = stage.GetSessionLayer()
-        valid = [p for p in prims if p.IsValid()]
-        if not valid:
-            return
-        app = omni.kit.app.get_app()
-
-        with Usd.EditContext(stage, session_layer):
-            with Sdf.ChangeBlock():
-                for p in valid:
-                    p.SetActive(False)
-        app.update()
-
-        with Usd.EditContext(stage, session_layer):
-            with Sdf.ChangeBlock():
-                for p in valid:
-                    p.SetActive(True)
-        app.update()
-
-        print(f"[usd_interpolation] Sync resync done: {len(valid)} prim(s)")
-
-    def _refresh(self, t: float) -> list:
-        """주어진 t에 대한 UV를 계산해 스테이지에 적용한다."""
+    def _refresh(self, t: float) -> bool:
         raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
-        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | w[{seg}]={1-local_t:.4f} w[{seg+1}]={local_t:.4f}")
+        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | local_t={local_t:.4f}")
         map_a = self._maps[seg]
         map_b = self._maps[seg + 1]
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
-            return []
+            return False
         return apply_lerped_st_all(map_a, map_b, local_t)
 
     def _set_status(self, text: str):
