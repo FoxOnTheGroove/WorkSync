@@ -33,7 +33,7 @@ _WIN_FLAGS = (
     ui.WINDOW_FLAGS_NO_BACKGROUND
 )
 
-_RING_FLAGS = _WIN_FLAGS | ui.WINDOW_FLAGS_NO_INPUTS
+_RING_FLAGS = _WIN_FLAGS
 
 
 def _to_temp(rgb) -> str:
