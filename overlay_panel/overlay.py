@@ -163,10 +163,9 @@ class ColorpickOverlay:
                     )
             line_roots.append(line_root)
 
-        # ── 2D 패널: vph.frame ─────────────────────────────────────
-        # 크기 없는 ZStack → hit area 0 → 뷰포트 제스처 통과
+        # ── 2D 패널: scene_view 자식으로 배치 (frame 형제 → 제스처 블로킹 회피)
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
-        with self._frame:
+        with self._scene_view:
             overlay = ui.ZStack()
         for i in range(MAX_OVERLAYS):
             with overlay:
