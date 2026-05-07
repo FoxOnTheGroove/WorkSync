@@ -154,14 +154,20 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
         writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
 
     session_layer = stage.GetSessionLayer()
-    print(f"[usd_interpolation] edit_target={stage.GetEditTarget().GetLayer().identifier!r}  session={session_layer.identifier!r}")
 
-    affected_prims = []
+    # ChangeBlock A: 빈 배열로 primvar 크기를 0으로 만듦.
+    # 0→N 크기 변화는 Hydra가 UV 버퍼를 강제로 재할당하는 구조적 변화로 인식.
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for st_pv, _ in writes:
+                st_pv.GetAttr().Set(Vt.Vec2fArray())
+
+    # ChangeBlock B: 실제 lerped 값 적용.
+    # 두 ChangeBlock 사이에 await 없으므로 렌더는 B 이후 한 번만 발생 (flicker 없음).
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, result in writes:
                 st_pv.GetAttr().Set(result)
-                affected_prims.append(st_pv.GetAttr().GetPrim())
 
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
     return len(writes) > 0
