@@ -1,13 +1,18 @@
 from collections import OrderedDict
+import math
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
+import omni.ui.scene as sc
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
 from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
 from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
+RING_RADIUS_3D   = 0.6
+RING_SEGMENTS    = 24
+RING_COLOR_3D    = [0, 0, 0, 1]
 PANEL_W          = 160
 PANEL_H          = 80
 PANEL_BG         = 0xFFFFFFFF
@@ -130,6 +135,7 @@ class ColorpickOverlay:
         self._vpname       = vpname
         self._viewport_api = None
         self._frame        = None
+        self._scene_view   = None
         self._slots: list[dict] = []
         self._active: OrderedDict[int, int] = OrderedDict()
         self._update_sub   = None
@@ -140,6 +146,7 @@ class ColorpickOverlay:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
             self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
+            self._scene_view   = vph.scene_view
             self._create_slots()
             self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
                 self._on_update, name=f"colorpick_overlay_{vpname}"
@@ -205,6 +212,24 @@ class ColorpickOverlay:
                             ui.Spacer(height=PANEL_PAD)
                         ui.Spacer(width=PANEL_PAD)
 
+            ring_root = None
+            if self._scene_view is not None:
+                _pts = [
+                    [
+                        RING_RADIUS_3D * math.cos(2 * math.pi * j / RING_SEGMENTS),
+                        RING_RADIUS_3D * math.sin(2 * math.pi * j / RING_SEGMENTS),
+                        0.0,
+                    ]
+                    for j in range(RING_SEGMENTS + 1)
+                ]
+                with self._scene_view.scene:
+                    with sc.Transform(
+                        transform=sc.Matrix44.get_translation_matrix(0, 0, 0),
+                        visible=False,
+                    ) as ring_root:
+                        for j in range(RING_SEGMENTS):
+                            sc.Line(_pts[j], _pts[j + 1], color=RING_COLOR_3D, thickness=1.5)
+
             self._slots.append({
                 "window":      win,
                 "swatch":      swatch,
@@ -214,6 +239,7 @@ class ColorpickOverlay:
                 "press_label": pres_lbl,
                 "world_pos":   None,
                 "marker_path": None,
+                "ring_root":   ring_root,
             })
 
     # ------------------------------------------------------------------
@@ -304,6 +330,11 @@ class ColorpickOverlay:
         slot["temp_label"].text  = temp_str
         slot["press_label"].text = pres_str
 
+        if slot["ring_root"] is not None:
+            x, y, z = pos3d
+            slot["ring_root"].transform = sc.Matrix44.get_translation_matrix(x, y, z)
+            slot["ring_root"].visible   = True
+
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
 
@@ -319,6 +350,8 @@ class ColorpickOverlay:
             slot["window"].visible = False
             slot["world_pos"]      = None
             self._remove_slot_marker(slot)
+            if slot["ring_root"] is not None:
+                slot["ring_root"].visible = False
         ColorpickOverlay._key_to_vp.pop(key, None)
 
     def _deactivate_all(self):
@@ -328,11 +361,17 @@ class ColorpickOverlay:
     def _set_visible(self, key: int, visible: bool):
         slot_idx = self._active.get(key)
         if slot_idx is not None:
+            slot = self._slots[slot_idx]
             slot["window"].visible = visible
+            if slot["ring_root"] is not None:
+                slot["ring_root"].visible = visible
 
     def _set_visible_all(self, visible: bool):
         for slot_idx in self._active.values():
-            self._slots[slot_idx]["window"].visible = visible
+            slot = self._slots[slot_idx]
+            slot["window"].visible = visible
+            if slot["ring_root"] is not None:
+                slot["ring_root"].visible = visible
 
     # ------------------------------------------------------------------
 
