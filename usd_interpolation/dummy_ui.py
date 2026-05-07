@@ -111,12 +111,10 @@ def load_st_map(usd_file_path: str) -> dict[str, Vt.Vec2fArray] | None:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
-        st_flat = st_pv.ComputeFlattened(Usd.TimeCode.Default())
-        if st_flat is None or len(st_flat) == 0:
-            st_flat = _get_attr(st_pv.GetAttr())
-        if st_flat is not None:
-            result[str(prim.GetPath())] = np.array(st_flat, dtype=np.float32).reshape(-1, 2)
-            print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_flat)}")
+        st_raw = _get_attr(st_pv.GetAttr())
+        if st_raw is not None:
+            result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
+            print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
 
     if not result:
         print(f"[usd_interpolation] ERROR: No mesh with st found in {usd_file_path}")
@@ -137,8 +135,8 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
     writes = []
     for prim_path, st_a in map_a.items():
         st_b = map_b.get(prim_path)
-        if st_b is None or len(st_a) != len(st_b):
-            print(f"[usd_interpolation] SKIP {prim_path}: len_a={len(st_a)} len_b={len(st_b) if st_b is not None else 'None'}")
+        if st_b is None:
+            print(f"[usd_interpolation] SKIP {prim_path}: not in map_b")
             continue
         prim = stage.GetPrimAtPath(prim_path)
         if not prim.IsValid():
@@ -146,16 +144,17 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
+        if len(st_a) != len(st_b):
+            print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
+            chosen = st_a if t < 0.5 else st_b
+            writes.append((st_pv, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
+            continue
         t32    = np.float32(t)
         lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
         writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
 
     with Sdf.ChangeBlock():
         for st_pv, result in writes:
-            idx_attr_name = st_pv.GetAttr().GetName() + ":indices"
-            idx_attr = st_pv.GetAttr().GetPrim().GetAttribute(idx_attr_name)
-            if idx_attr and idx_attr.IsValid():
-                idx_attr.Clear()
             st_pv.GetAttr().Set(result)
 
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
