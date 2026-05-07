@@ -22,6 +22,17 @@ LINE_THICKNESS   = 2
 LINE_COLOR       = 0xFFFFFFFF
 MAX_OVERLAYS     = 5
 
+_WIN_FLAGS = (
+    ui.WINDOW_FLAGS_NO_TITLE_BAR |
+    ui.WINDOW_FLAGS_NO_SCROLLBAR |
+    ui.WINDOW_FLAGS_NO_RESIZE    |
+    ui.WINDOW_FLAGS_NO_CLOSE     |
+    ui.WINDOW_FLAGS_NO_COLLAPSE  |
+    ui.WINDOW_FLAGS_NO_MOVE      |
+    ui.WINDOW_FLAGS_NO_DOCKING   |
+    ui.WINDOW_FLAGS_NO_BACKGROUND
+)
+
 
 def _to_temp(rgb) -> str:
     return "111"
@@ -145,13 +156,11 @@ class ColorpickOverlay:
 
     def _create_slots(self):
         """MAX_OVERLAYS 개의 슬롯 생성.
-        3D: sc.Line  /  2D: ui 패널 (vph.frame)
+        3D: sc.Line  /  2D: ui.Window (frame 미사용 — 제스처 보호)
         """
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
-        with self._frame:
-            overlay = ui.ZStack()
 
-        for _ in range(MAX_OVERLAYS):
+        for i in range(MAX_OVERLAYS):
             slot: dict = {}
 
             # ── 3D 씬뷰: sc.Line ──────────────────────────────────
@@ -167,58 +176,60 @@ class ColorpickOverlay:
                         thickness=LINE_THICKNESS,
                     )
 
-            # ── 2D 패널: vph.frame overlay ────────────────────────
-            with overlay:
-                with ui.Placer(offset_x=0, offset_y=0) as placer:
-                    with ui.ZStack(
-                        width=PANEL_W, height=PANEL_H, visible=False,
-                    ) as panel:
-                        ui.Rectangle(style={
-                            "background_color": PANEL_BG,
-                            "border_radius": 4,
-                        })
-                        with ui.HStack():
-                            with ui.VStack(width=SWATCH_COL_W):
-                                ui.Spacer(height=PANEL_PAD)
-                                with ui.HStack():
-                                    ui.Spacer(width=PANEL_PAD)
-                                    swatch = ui.Rectangle(
-                                        style={
-                                            "background_color": 0xFF808080,
-                                            "border_radius": 4,
-                                        },
-                                    )
-                                    ui.Spacer(width=PANEL_PAD)
-                                ui.Spacer(height=PANEL_PAD)
-                            with ui.VStack(spacing=ITEM_GAP):
-                                ui.Spacer(height=PANEL_PAD)
-                                with ui.HStack(height=DOT_SIZE, spacing=4):
-                                    dot = ui.Rectangle(
-                                        width=DOT_SIZE,
-                                        style={
-                                            "background_color": 0xFF808080,
-                                            "border_radius": 2,
-                                        },
-                                    )
-                                    hex_lbl = ui.Label(
-                                        "#000000",
-                                        style=_lbl_style,
-                                    )
-                                temp_lbl = ui.Label(
-                                    "온도 -",
+            # ── 2D 패널: 독립 ui.Window ───────────────────────────
+            win = ui.Window(
+                f"_cpoverlay_{self._vpname}_{i}",
+                flags=_WIN_FLAGS,
+                width=PANEL_W, height=PANEL_H,
+                visible=False,
+            )
+            with win.frame:
+                with ui.ZStack():
+                    ui.Rectangle(style={
+                        "background_color": PANEL_BG,
+                        "border_radius": 4,
+                    })
+                    with ui.HStack():
+                        with ui.VStack(width=SWATCH_COL_W):
+                            ui.Spacer(height=PANEL_PAD)
+                            with ui.HStack():
+                                ui.Spacer(width=PANEL_PAD)
+                                swatch = ui.Rectangle(
+                                    style={
+                                        "background_color": 0xFF808080,
+                                        "border_radius": 4,
+                                    },
+                                )
+                                ui.Spacer(width=PANEL_PAD)
+                            ui.Spacer(height=PANEL_PAD)
+                        with ui.VStack(spacing=ITEM_GAP):
+                            ui.Spacer(height=PANEL_PAD)
+                            with ui.HStack(height=DOT_SIZE, spacing=4):
+                                dot = ui.Rectangle(
+                                    width=DOT_SIZE,
+                                    style={
+                                        "background_color": 0xFF808080,
+                                        "border_radius": 2,
+                                    },
+                                )
+                                hex_lbl = ui.Label(
+                                    "#000000",
                                     style=_lbl_style,
                                 )
-                                pres_lbl = ui.Label(
-                                    "압력 -",
-                                    style=_lbl_style,
-                                )
-                                ui.Spacer(height=PANEL_PAD)
-                            ui.Spacer(width=PANEL_PAD)
+                            temp_lbl = ui.Label(
+                                "온도 -",
+                                style=_lbl_style,
+                            )
+                            pres_lbl = ui.Label(
+                                "압력 -",
+                                style=_lbl_style,
+                            )
+                            ui.Spacer(height=PANEL_PAD)
+                        ui.Spacer(width=PANEL_PAD)
 
             self._slots.append({
                 "line_root":   line_root,
-                "bg_placer":   placer,
-                "panel":       panel,
+                "window":      win,
                 "swatch":      swatch,
                 "color_dot":   dot,
                 "hex_label":   hex_lbl,
@@ -230,6 +241,12 @@ class ColorpickOverlay:
 
     # ------------------------------------------------------------------
 
+    def _viewport_offset(self) -> tuple:
+        try:
+            return self._frame.screen_position_x, self._frame.screen_position_y
+        except Exception:
+            return 0.0, 0.0
+
     def _on_update(self, event):
         """패널 위치를 3D→2D 투영으로 매 프레임 갱신."""
         if not self._active:
@@ -237,14 +254,15 @@ class ColorpickOverlay:
         stage = omni.usd.get_context().get_stage()
         if not stage:
             return
+        ox, oy = self._viewport_offset()
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             if slot["world_pos"] is None:
                 continue
             sp = self._world_to_screen(slot["world_pos"], stage)
             if sp:
-                slot["bg_placer"].offset_x = sp[0] - PANEL_W / 2
-                slot["bg_placer"].offset_y = sp[1] - PANEL_H / 2
+                slot["window"].position_x = ox + sp[0] - PANEL_W / 2
+                slot["window"].position_y = oy + sp[1] - PANEL_H / 2
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
         """world 좌표 → 화면 픽셀 (x, y). 카메라 뒤면 None."""
@@ -282,7 +300,7 @@ class ColorpickOverlay:
         slot["world_pos"]           = (x, y + LABEL_OFFSET_Y, z)
         slot["line_root"].transform = sc.Matrix44.get_translation_matrix(x, y, z)
         slot["line_root"].visible   = True
-        slot["panel"].visible       = True
+        slot["window"].visible      = True
 
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
@@ -303,7 +321,7 @@ class ColorpickOverlay:
         if slot_idx is not None:
             slot = self._slots[slot_idx]
             slot["line_root"].visible = False
-            slot["panel"].visible     = False
+            slot["window"].visible    = False
             slot["world_pos"]         = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
@@ -317,13 +335,13 @@ class ColorpickOverlay:
         if slot_idx is not None:
             slot = self._slots[slot_idx]
             slot["line_root"].visible = visible
-            slot["panel"].visible     = visible
+            slot["window"].visible    = visible
 
     def _set_visible_all(self, visible: bool):
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             slot["line_root"].visible = visible
-            slot["panel"].visible     = visible
+            slot["window"].visible    = visible
 
     # ------------------------------------------------------------------
 
@@ -370,6 +388,10 @@ class ColorpickOverlay:
 
     def _destroy(self):
         self._deactivate_all()
+        for slot in self._slots:
+            win = slot.get("window")
+            if win:
+                win.destroy()
         self._update_sub = None
         self._scene_view = None
         self._slots.clear()
