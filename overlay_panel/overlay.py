@@ -29,10 +29,9 @@ _WIN_FLAGS = (
     ui.WINDOW_FLAGS_NO_CLOSE                 |
     ui.WINDOW_FLAGS_NO_COLLAPSE              |
     ui.WINDOW_FLAGS_NO_MOVE                  |
-    ui.WINDOW_FLAGS_NO_DOCKING               |
-    ui.WINDOW_FLAGS_NO_BACKGROUND            |
-    ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING    |
-    ui.WINDOW_FLAGS_NO_BRING_TO_DISPLAY_FRONT
+    ui.WINDOW_FLAGS_NO_DOCKING            |
+    ui.WINDOW_FLAGS_NO_BACKGROUND         |
+    ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING
 )
 
 _RING_FLAGS = _WIN_FLAGS
@@ -227,7 +226,7 @@ class ColorpickOverlay:
                     "background_color": 0x00000000,
                     "border_color":     0xFF000000,
                     "border_width":     RING_THICK,
-                    "border_radius":    RING_SIZE / 2,
+                    "border_radius":    999,
                 })
 
             self._slots.append({
