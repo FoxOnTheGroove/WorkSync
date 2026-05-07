@@ -3,7 +3,7 @@ import omni.kit.app
 import omni.usd
 import omni.ui as ui
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
-from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
+from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd, CameraUtil
 from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
@@ -261,16 +261,12 @@ class ColorpickOverlay:
         dh = self._frame.computed_height or rh
         sx = dw / rw if rw > 0 else 1.0
         sy = dh / rh if rh > 0 else 1.0
-        if not getattr(self, "_dbg_printed", False):
-            print(f"[CPOverlay] ox={ox:.0f} oy={oy:.0f}  render={rw}x{rh}  display={dw:.0f}x{dh:.0f}  scale={sx:.3f},{sy:.3f}")
-            self._dbg_printed = True
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             if slot["world_pos"] is None:
                 continue
             sp = self._world_to_screen(slot["world_pos"], stage)
             if sp:
-                # sp는 render-resolution 기준 → display 좌표로 스케일
                 px = ox + sp[0] * sx
                 py = oy + sp[1] * sy
                 raw_x = px + PANEL_OFFSET_X
@@ -281,21 +277,21 @@ class ColorpickOverlay:
                 slot["ring_win"].position_y = py - RING_SIZE / 2
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
-        """render-resolution 기준 픽셀 좌표 반환."""
         try:
-            cam_path  = self._viewport_api.get_active_camera()
-            cam_prim  = stage.GetPrimAtPath(str(cam_path))
+            cam_path = self._viewport_api.get_active_camera()
+            cam_prim = stage.GetPrimAtPath(str(cam_path))
             if not cam_prim.IsValid():
                 return None
-            cam_gf  = UsdGeom.Camera(cam_prim).GetCamera(Usd.TimeCode.Default())
-            frustum = cam_gf.frustum
-            view    = frustum.ComputeViewMatrix()
-            proj    = frustum.ComputeProjectionMatrix()
+            cam_gf = UsdGeom.Camera(cam_prim).GetCamera(Usd.TimeCode.Default())
+            w, h   = self._viewport_api.resolution
+            CameraUtil.ConformWindow(cam_gf, CameraUtil.MatchVertically, w / h)
+            frustum   = cam_gf.frustum
+            view      = frustum.ComputeViewMatrix()
+            proj      = frustum.ComputeProjectionMatrix()
             cam_space = view.Transform(Gf.Vec3d(*world_pos))
             if cam_space[2] >= 0:
                 return None
             ndc = proj.Transform(cam_space)
-            w, h = self._viewport_api.resolution
             return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
         except Exception:
             return None
