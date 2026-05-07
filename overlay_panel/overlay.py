@@ -145,11 +145,16 @@ class ColorpickOverlay:
 
     def _create_slots(self):
         """MAX_OVERLAYS 개의 슬롯 생성.
-        3D: sc.Line  /  2D: ui.Rectangle + ui.Label 패널 (vph.frame)
+        3D: sc.Line  /  2D: ui 패널 (vph.frame)
         """
-        # ── 3D 씬뷰: sc.Line ───────────────────────────────────────
-        line_roots = []
+        _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
+        with self._frame:
+            overlay = ui.ZStack()
+
         for _ in range(MAX_OVERLAYS):
+            slot: dict = {}
+
+            # ── 3D 씬뷰: sc.Line ──────────────────────────────────
             with self._scene_view.scene:
                 with sc.Transform(
                     transform=sc.Matrix44.get_translation_matrix(0, 0, 0),
@@ -161,13 +166,8 @@ class ColorpickOverlay:
                         color=LINE_COLOR,
                         thickness=LINE_THICKNESS,
                     )
-            line_roots.append(line_root)
 
-        # ── 2D 패널: scene_view 자식으로 배치 (frame 형제 → 제스처 블로킹 회피)
-        _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
-        with self._scene_view:
-            overlay = ui.ZStack()
-        for i in range(MAX_OVERLAYS):
+            # ── 2D 패널: vph.frame overlay ────────────────────────
             with overlay:
                 with ui.Placer(offset_x=0, offset_y=0) as placer:
                     with ui.ZStack(
@@ -178,7 +178,6 @@ class ColorpickOverlay:
                             "border_radius": 4,
                         })
                         with ui.HStack():
-                            # 사와치 열: 너비=PANEL_H, 상하좌우 PANEL_PAD 여백 → 정사각형
                             with ui.VStack(width=SWATCH_COL_W):
                                 ui.Spacer(height=PANEL_PAD)
                                 with ui.HStack():
@@ -191,7 +190,6 @@ class ColorpickOverlay:
                                     )
                                     ui.Spacer(width=PANEL_PAD)
                                 ui.Spacer(height=PANEL_PAD)
-                            # 텍스트 열
                             with ui.VStack(spacing=ITEM_GAP):
                                 ui.Spacer(height=PANEL_PAD)
                                 with ui.HStack(height=DOT_SIZE, spacing=4):
@@ -216,8 +214,9 @@ class ColorpickOverlay:
                                 )
                                 ui.Spacer(height=PANEL_PAD)
                             ui.Spacer(width=PANEL_PAD)
+
             self._slots.append({
-                "line_root":   line_roots[i],
+                "line_root":   line_root,
                 "bg_placer":   placer,
                 "panel":       panel,
                 "swatch":      swatch,
