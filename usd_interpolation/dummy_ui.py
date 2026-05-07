@@ -153,9 +153,18 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> bool:
         lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
         writes.append((st_pv, Vt.Vec2fArray.FromNumpy(lerped)))
 
+    affected_prims = []
     with Sdf.ChangeBlock():
         for st_pv, result in writes:
             st_pv.GetAttr().Set(result)
+            affected_prims.append(st_pv.GetAttr().GetPrim())
+
+    # changedInfoOnly 알림만으로는 Hydra UV 캐시가 갱신되지 않는 경우가 있음.
+    # SetActive 토글은 resync 알림을 발생시켜 Hydra가 prim을 완전히 재로드하게 함.
+    # ChangeBlock 밖에서 순서대로 호출해야 각각 독립 notice가 발생함.
+    for prim in affected_prims:
+        prim.SetActive(False)
+        prim.SetActive(True)
 
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
     return len(writes) > 0
