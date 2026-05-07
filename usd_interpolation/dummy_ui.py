@@ -97,8 +97,8 @@ def get_all_mesh_data(usd_file_path: str) -> list[dict]:
     return results
 
 
-def load_st_map(usd_file_path: str) -> dict[str, Vt.Vec2fArray] | None:
-    """파일 내 모든 Mesh의 {prim_path: st VtArray} 반환."""
+def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
+    """파일 내 모든 Mesh의 {prim_path: st numpy array} 반환."""
     stage = Usd.Stage.Open(usd_file_path)
     if not stage:
         print(f"[usd_interpolation] ERROR: Failed to open: {usd_file_path}")
@@ -181,10 +181,7 @@ class UsdInterpolationUI:
         self._maps: list[dict | None] = [None] * NUM_FILES
 
         self._pending_t: float = 0.0
-        self._pending_write: bool = False
         self._play_task: asyncio.Task | None = None
-        self._resync_task: asyncio.Task | None = None
-        self._is_animating: bool = False
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
 
@@ -198,7 +195,7 @@ class UsdInterpolationUI:
                         field = ui.StringField()
                         field.model.set_value(f"/path/to/file{i}.usd")
                         self._fields.append(field)
-                        idx = i  # capture
+                        idx = i
                         ui.Button("Load", width=50,
                                   clicked_fn=lambda _idx=idx: self._on_load(_idx))
 
@@ -241,9 +238,7 @@ class UsdInterpolationUI:
     def _on_refresh_clicked(self):
         written = self._refresh(self._pending_t)
         if written:
-            self._schedule_resync(written)
-        elif not written and written is not None:
-            pass  # _refresh already set status
+            self._sync_resync(written)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -268,7 +263,6 @@ class UsdInterpolationUI:
 
     async def _animate(self, forward: bool):
         DURATION = 2.5
-        self._is_animating = True
         if self._btn_play:
             self._btn_play.text = "Stop ■" if forward else "Play ▶"
         if self._btn_reverse:
@@ -287,13 +281,17 @@ class UsdInterpolationUI:
                 frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
-                self._slider.model.set_value(new_t)
+
+                self._pending_t = new_t
+                if self._t_label:
+                    self._t_label.text = f"t: {new_t:.3f}"
+                self._refresh(new_t)
+
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
             return
         finally:
-            self._is_animating = False
             self._stop_play()
 
     def _on_slider_changed(self, model):
@@ -301,20 +299,34 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        if not self._pending_write:
-            self._pending_write = True
-            asyncio.ensure_future(self._write_next_frame())
+        written = self._refresh(t)
+        if written:
+            self._sync_resync(written)
 
-    async def _write_next_frame(self):
-        await omni.kit.app.get_app().next_update_async()
-        self._pending_write = False
-        written = self._refresh(self._pending_t)
-        if written is None or len(written) == 0:
-            if written is None:
-                self._set_status("ERROR: Failed to apply. Check console.")
+    def _sync_resync(self, prims: list):
+        """SetActive(False) → app.update() → SetActive(True) → app.update() 동기 실행."""
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
             return
-        if not self._is_animating:
-            self._schedule_resync(written)
+        session_layer = stage.GetSessionLayer()
+        valid = [p for p in prims if p.IsValid()]
+        if not valid:
+            return
+        app = omni.kit.app.get_app()
+
+        with Usd.EditContext(stage, session_layer):
+            with Sdf.ChangeBlock():
+                for p in valid:
+                    p.SetActive(False)
+        app.update()
+
+        with Usd.EditContext(stage, session_layer):
+            with Sdf.ChangeBlock():
+                for p in valid:
+                    p.SetActive(True)
+        app.update()
+
+        print(f"[usd_interpolation] Sync resync done: {len(valid)} prim(s)")
 
     def _refresh(self, t: float) -> list:
         """주어진 t에 대한 UV를 계산해 스테이지에 적용한다."""
@@ -329,96 +341,12 @@ class UsdInterpolationUI:
             return []
         return apply_lerped_st_all(map_a, map_b, local_t)
 
-    def _schedule_resync(self, prims: list):
-        """이전 resync task를 취소하고 새 resync를 예약한다."""
-        if self._resync_task and not self._resync_task.done():
-            self._resync_task.cancel()
-        self._resync_task = asyncio.ensure_future(self._do_resync(prims))
-
-    async def _do_resync(self, prims: list):
-        """옵션 A(omni.kit.commands)를 먼저 시도, 실패 시 옵션 B(3-tick async)로 폴백."""
-        if self._try_hydra_resync_a(prims):
-            return
-        await self._async_resync_b(prims)
-
-    def _try_hydra_resync_a(self, prims: list) -> bool:
-        """omni.kit.commands로 deactivate/activate를 시도. 성공 시 True 반환."""
-        try:
-            import omni.kit.commands
-            import omni.kit.undo
-
-            prim_paths = [str(p.GetPath()) for p in prims if p.IsValid()]
-            if not prim_paths:
-                return False
-
-            with omni.kit.undo.disabled():
-                for path in prim_paths:
-                    omni.kit.commands.execute("ActivatePrim",
-                                              prim_path=path, active=False)
-                for path in prim_paths:
-                    omni.kit.commands.execute("ActivatePrim",
-                                              prim_path=path, active=True)
-
-            print(f"[usd_interpolation] Resync A: activated {len(prim_paths)} prim(s) via commands")
-            return True
-        except Exception as e:
-            print(f"[usd_interpolation] Resync A failed ({e}), falling back to B")
-            return False
-
-    async def _async_resync_b(self, prims: list):
-        """3-tick async resync: SetActive(False) → SetActive(True) を別フレームで実行."""
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            return
-
-        session_layer = stage.GetSessionLayer()
-        valid_prims = [p for p in prims if p.IsValid()]
-        if not valid_prims:
-            return
-
-        deactivated = []
-        try:
-            # tick N+1: deactivate
-            await omni.kit.app.get_app().next_update_async()
-            with Usd.EditContext(stage, session_layer):
-                with Sdf.ChangeBlock():
-                    for p in valid_prims:
-                        if p.IsValid():
-                            p.SetActive(False)
-                            deactivated.append(p)
-
-            # tick N+2: reactivate
-            await omni.kit.app.get_app().next_update_async()
-            with Usd.EditContext(stage, session_layer):
-                with Sdf.ChangeBlock():
-                    for p in deactivated:
-                        if p.IsValid():
-                            p.SetActive(True)
-
-            print(f"[usd_interpolation] Resync B: resynced {len(deactivated)} prim(s) via 3-tick")
-
-        except asyncio.CancelledError:
-            # 취소됐더라도 deactivate된 prim은 반드시 복구
-            if deactivated:
-                try:
-                    with Usd.EditContext(stage, session_layer):
-                        with Sdf.ChangeBlock():
-                            for p in deactivated:
-                                if p.IsValid() and not p.IsActive():
-                                    p.SetActive(True)
-                except Exception:
-                    pass
-            raise
-
     def _set_status(self, text: str):
         if self._status_label:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
         self._stop_play()
-        if self._resync_task and not self._resync_task.done():
-            self._resync_task.cancel()
-            self._resync_task = None
         if self._window:
             self._window.destroy()
             self._window = None
