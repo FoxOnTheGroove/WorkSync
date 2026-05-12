@@ -6,6 +6,27 @@ import omni.kit.app
 import omni.usd
 import omni.ui as ui
 
+_POINTS_FLIP: bool = False
+_POINTS_BASE: dict = {}
+_POINTS_EPS: dict = {}
+
+
+def _ensure_points_cached(prim) -> bool:
+    key = str(prim.GetPath())
+    if key in _POINTS_BASE:
+        return True
+    pts_attr = prim.GetAttribute("points")
+    if not pts_attr or not pts_attr.IsValid():
+        return False
+    pts = pts_attr.Get()
+    if pts is None or len(pts) == 0:
+        return False
+    _POINTS_BASE[key] = pts
+    arr = np.array(pts, dtype=np.float32)
+    arr[0][2] += 1e-7
+    _POINTS_EPS[key] = Vt.Vec3fArray.FromNumpy(np.ascontiguousarray(arr))
+    return True
+
 
 def _get_attr(attr) -> object:
     val = attr.Get(Usd.TimeCode.Default())
@@ -87,11 +108,21 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
+    global _POINTS_FLIP
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, result in writes:
                 st_pv.GetAttr().Set(result)
+
+    _POINTS_FLIP = not _POINTS_FLIP
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for _, prim, _ in writes:
+                if _ensure_points_cached(prim):
+                    key = str(prim.GetPath())
+                    pts = _POINTS_EPS[key] if _POINTS_FLIP else _POINTS_BASE[key]
+                    prim.GetAttribute("points").Set(pts)
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
