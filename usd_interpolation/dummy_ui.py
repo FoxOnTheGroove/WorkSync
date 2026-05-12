@@ -111,17 +111,17 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Fabric이 켜진 환경에서 pxr attr.Set()은 USD→Fabric 동기화 경로를 거치면서
-    # Hydra dirty tracking이 stale UV를 남기는 문제가 있다.
-    # usdrt로 Fabric에 직접 써서 이 경로를 우회한다.
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
+        print(f"[usdrt] prim={prim.GetPath()} valid={usdrt_prim.IsValid()}")
         if not usdrt_prim.IsValid():
             continue
         usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
+        print(f"[usdrt] attr={usdrt_attr!r} truthy={bool(usdrt_attr)}")
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
+            print(f"[usdrt] Set called len={len(uv_data)}")
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
