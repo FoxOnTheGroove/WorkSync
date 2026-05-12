@@ -6,8 +6,6 @@ import omni.kit.app
 import omni.usd
 import omni.ui as ui
 
-_anon_layer: "Sdf.Layer | None" = None
-
 
 def _get_attr(attr) -> object:
     val = attr.Get(Usd.TimeCode.Default())
@@ -89,29 +87,14 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Anonymous sublayer swap: write UV to a fresh Sdf layer and insert it as
-    # the strongest session sublayer. Sublayer structure change is a non-changedInfoOnly
-    # event — Hydra must re-evaluate affected prims and re-upload GPU buffers.
-    global _anon_layer
-    new_layer = Sdf.Layer.CreateAnonymous(".usda")
-    for _, prim, lerped in writes:
-        prim_path = prim.GetPath()
-        Sdf.CreatePrimInLayer(new_layer, prim_path)
-        prim_spec = new_layer.GetPrimAtPath(prim_path)
-        attr_spec = Sdf.AttributeSpec(prim_spec, "primvars:st",
-                                      Sdf.ValueTypeNames.Float2Array)
-        attr_spec.default = lerped
-
-    session = stage.GetSessionLayer()
-    sublayers = list(session.subLayerPaths)
-    if _anon_layer is not None and _anon_layer.identifier in sublayers:
-        sublayers.remove(_anon_layer.identifier)
-    sublayers.insert(0, new_layer.identifier)
-    session.subLayerPaths = sublayers
-    _anon_layer = new_layer
+    session_layer = stage.GetSessionLayer()
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for st_pv, _, result in writes:
+                st_pv.GetAttr().Set(result)
 
     written_prims = [p for _, p, _ in writes]
-    print(f"[usd_interpolation] Sublayer-swap t={t:.2f} to {len(writes)} mesh(es)")
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
     return written_prims
 
 
@@ -133,8 +116,7 @@ class _ResyncScheduler:
         self._sub = omni.kit.app.get_app().get_update_event_stream() \
             .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
 
-    def cancel(self):
-        self._cancelled = True
+    def cancel(self):        self._cancelled = True
         self._sub = None
         session = self._stage.GetSessionLayer()
         with Usd.EditContext(self._stage, session):
@@ -233,11 +215,9 @@ class UsdInterpolationUI:
                               clicked_fn=self._on_refresh_clicked)
 
     def _on_load(self, idx: int):
-        global _anon_layer
         path = self._fields[idx].model.get_value_as_string().strip()
         if idx == 0:
             omni.usd.get_context().open_stage(path)
-            _anon_layer = None
         st_map = load_st_map(path)
         if st_map is None:
             self._set_status(f"ERROR: Failed to load File {idx}")
