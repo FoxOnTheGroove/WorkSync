@@ -81,7 +81,10 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
             writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
             continue
         t32    = np.float32(t)
-        lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
+        lerped = st_a.copy()
+        half   = len(st_a) // 2
+        lerped[half:] = st_a[half:] + t32 * (st_b[half:] - st_a[half:])
+        lerped = np.ascontiguousarray(lerped)
         writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
 
     if not writes:
@@ -116,7 +119,8 @@ class _ResyncScheduler:
         self._sub = omni.kit.app.get_app().get_update_event_stream() \
             .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
 
-    def cancel(self):        self._cancelled = True
+    def cancel(self):
+        self._cancelled = True
         self._sub = None
         session = self._stage.GetSessionLayer()
         with Usd.EditContext(self._stage, session):
