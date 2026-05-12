@@ -87,6 +87,7 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 def _setup_segment(stage, map_a: dict, map_b: dict):
     """Write primvars:st_a and st_b for all prims in this segment, create blend materials."""
     session_layer = stage.GetSessionLayer()
+    # Write primvars in one ChangeBlock
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for prim_path, st_a in map_a.items():
@@ -109,9 +110,13 @@ def _setup_segment(stage, map_a: dict, map_b: dict):
                     if indices is not None:
                         pv.SetIndices(indices)
 
-                if prim_path not in _BLEND_SHADERS:
-                    tex = _get_mesh_texture(stage, prim_path)
-                    _create_blend_material(stage, session_layer, prim_path, prim, tex)
+    # Create blend materials outside ChangeBlock to avoid nested Define conflicts
+    for prim_path in map_a:
+        if prim_path not in _BLEND_SHADERS:
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                tex = _get_mesh_texture(stage, prim_path)
+                _create_blend_material(stage, session_layer, prim_path, prim, tex)
 
 
 def apply_blend_t(map_a: dict, t: float) -> list:
