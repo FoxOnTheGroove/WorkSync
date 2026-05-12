@@ -148,6 +148,7 @@ class _ResyncScheduler:
 
 
 NUM_FILES = 5
+BAKE_STEPS = 50  # UV states per segment; total time codes = (NUM_FILES-1) * BAKE_STEPS
 
 
 class UsdInterpolationUI:
@@ -167,6 +168,8 @@ class UsdInterpolationUI:
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
+        self._btn_bake: ui.Button | None = None
+        self._use_time_samples: bool = False
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
@@ -197,6 +200,9 @@ class UsdInterpolationUI:
                                                   clicked_fn=self._on_reverse_clicked)
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
+                    self._btn_bake = ui.Button("Bake", width=60,
+                                               clicked_fn=self._on_bake_clicked)
+                    self._btn_bake.enabled = False
 
     def _on_load(self, idx: int):
         path = self._fields[idx].model.get_value_as_string().strip()
@@ -215,8 +221,12 @@ class UsdInterpolationUI:
         for i in range(NUM_FILES - 1):
             if self._maps[i] is not None and self._maps[i + 1] is not None:
                 self._slider.enabled = True
+                if self._btn_bake:
+                    self._btn_bake.enabled = True
                 return
         self._slider.enabled = False
+        if self._btn_bake:
+            self._btn_bake.enabled = False
 
     def _start_resync(self, prims: list):
         if self._resync:
@@ -224,6 +234,45 @@ class UsdInterpolationUI:
         stage = omni.usd.get_context().get_stage()
         if stage and prims:
             self._resync = _ResyncScheduler(stage, prims)
+
+    def _on_bake_clicked(self):
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            self._set_status("ERROR: No stage")
+            return
+        session_layer = stage.GetSessionLayer()
+        count = 0
+        with Usd.EditContext(stage, session_layer):
+            with Sdf.ChangeBlock():
+                for seg in range(NUM_FILES - 1):
+                    map_a = self._maps[seg]
+                    map_b = self._maps[seg + 1]
+                    if map_a is None or map_b is None:
+                        continue
+                    for step in range(BAKE_STEPS + 1):
+                        local_t = step / BAKE_STEPS
+                        t32 = np.float32(local_t)
+                        time_code = seg * BAKE_STEPS + step
+                        for prim_path, st_a in map_a.items():
+                            st_b = map_b.get(prim_path)
+                            if st_b is None or len(st_a) != len(st_b):
+                                continue
+                            prim = stage.GetPrimAtPath(prim_path)
+                            if not prim.IsValid():
+                                continue
+                            st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+                            if not st_pv or not st_pv.GetAttr().IsValid():
+                                continue
+                            lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
+                            st_pv.GetAttr().Set(
+                                Vt.Vec2fArray.FromNumpy(lerped),
+                                Usd.TimeCode(time_code)
+                            )
+                            count += 1
+        self._use_time_samples = True
+        total_codes = (NUM_FILES - 1) * (BAKE_STEPS + 1)
+        self._set_status(f"Baked {count} UV entries / {total_codes} time codes")
+        print(f"[usd_interpolation] Bake complete: {count} entries, {total_codes} time codes")
 
     def _on_refresh_clicked(self):
         written = self._refresh(self._pending_t)
@@ -289,9 +338,18 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        written = self._refresh(t)
-        if written and not self._is_animating:
-            self._start_resync(written)
+        if self._use_time_samples:
+            raw = t * (NUM_FILES - 1)
+            seg = min(int(raw), NUM_FILES - 2)
+            local_t = min(raw - seg, 1.0)
+            time_code = seg * BAKE_STEPS + round(local_t * BAKE_STEPS)
+            stage = omni.usd.get_context().get_stage()
+            if stage:
+                stage.SetCurrentTime(time_code)
+        else:
+            written = self._refresh(t)
+            if written and not self._is_animating:
+                self._start_resync(written)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
