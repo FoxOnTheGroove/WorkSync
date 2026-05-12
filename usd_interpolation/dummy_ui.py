@@ -29,7 +29,12 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
-        st_raw = _get_attr(st_pv.GetAttr())
+        tc = Usd.TimeCode.Default()
+        st_raw = st_pv.ComputeFlattened(tc)
+        if st_raw is None:
+            samples = st_pv.GetTimeSamples()
+            if samples:
+                st_raw = st_pv.ComputeFlattened(samples[0])
         if st_raw is not None:
             result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
             print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
@@ -43,21 +48,6 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
-    # [분석] GetAttr().Set() vs st_pv.Set():
-    # 인덱스드 primvar에서 compact 배열 크기가 바뀌면 indices가 out-of-range가 될 수 있으나,
-    # 우리는 len(st_a)==len(st_b) 체크 후에만 lerp하므로 크기 변경은 없다.
-    # changedInfoOnly 문제(Hydra GPU 버퍼 미갱신)는 어느 쪽 API를 써도 동일하게 발생.
-    #
-    # [분석] 메시 지오메트리 영향 여부:
-    # primvars:st 쓰기는 UV 좌표만 바꾼다. points/faceVertexCounts/faceVertexIndices는
-    # 별개 attribute이므로 st Set() 호출만으로는 절대 영향받지 않는다.
-    # 깨져 보이는 현상은 지오메트리 손상이 아니라 Hydra GPU UV 버퍼가 stale 상태인 것.
-    #
-    # [분석] [u, 0.5] 구조:
-    # st_a[i]=(u_i,0.5), st_b[i]=(u_i',0.5) 이면
-    # lerped[i]=(u_i+t*(u_i'-u_i), 0.5+t*0.0)=(lerped_u, 0.5)
-    # V=0.5는 수학적으로 보존. 단, st_b의 V가 0.5가 아니면 drift 발생.
-
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
@@ -81,9 +71,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
             writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
             continue
         t32    = np.float32(t)
-        lerped = st_a.copy()
-        half   = len(st_a) // 2
-        lerped[half:] = st_a[half:] + t32 * (st_b[half:] - st_a[half:])
+        lerped = (st_a + t32 * (st_b - st_a))
         lerped = np.ascontiguousarray(lerped)
         writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
 
@@ -93,8 +81,11 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
-            for st_pv, _, result in writes:
-                st_pv.GetAttr().Set(result)
+            for st_pv, _, uv_data in writes:
+                st_pv.GetAttr().Set(uv_data)
+                indices_attr = st_pv.GetIndicesAttr()
+                if indices_attr and indices_attr.IsValid():
+                    indices_attr.Set(Vt.IntArray(list(range(len(uv_data)))))
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
