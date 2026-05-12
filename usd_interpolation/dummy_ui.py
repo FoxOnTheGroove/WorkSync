@@ -3,7 +3,6 @@ import numpy as np
 
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
-import omni.timeline
 import omni.usd
 import omni.ui as ui
 
@@ -100,11 +99,17 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
 
 
 class _ResyncScheduler:
-    """Kit update event stream으로 SetActive(F→T)를 별개의 두 Kit tick에서 실행."""
+    """Kit update event stream으로 SetActive(F→T)를 3개의 별개 tick에서 실행.
+
+    Phase 0: MakeInvisible만 (SetActive 없음) — Hydra가 mesh를 invisible로 렌더
+    Phase 1: SetActive(False) — 이미 invisible이라 blank frame 없음
+    Phase 2: SetActive(True) + MakeVisible — Hydra UV 버퍼 갱신 후 mesh 재표시
+    """
 
     def __init__(self, stage, prims: list):
         self._stage = stage
         self._prims = [p for p in prims if p.IsValid()]
+        self._invisible_prims: list = []
         self._deactivated: list = []
         self._phase = 0
         self._cancelled: bool = False
@@ -112,20 +117,23 @@ class _ResyncScheduler:
             .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
 
     def cancel(self):
-        self._cancelled = True  # _on_tick 이 큐에 남아있어도 실행 차단
+        self._cancelled = True
         self._sub = None
-        if self._deactivated:
-            session = self._stage.GetSessionLayer()
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._deactivated:
-                        if p.IsValid():
-                            p.SetActive(True)
-                            UsdGeom.Imageable(p).MakeVisible()
-            self._deactivated = []
+        session = self._stage.GetSessionLayer()
+        with Usd.EditContext(self._stage, session):
+            with Sdf.ChangeBlock():
+                for p in self._deactivated:
+                    if p.IsValid():
+                        p.SetActive(True)
+                        UsdGeom.Imageable(p).MakeVisible()
+                for p in self._invisible_prims:
+                    if p.IsValid():
+                        UsdGeom.Imageable(p).MakeVisible()
+        self._deactivated = []
+        self._invisible_prims = []
 
     def _on_tick(self, _event):
-        if self._cancelled:  # cancel() 후 Kit이 이미 큐에 올린 stale 콜백 방어
+        if self._cancelled:
             return
         session = self._stage.GetSessionLayer()
         if self._phase == 0:
@@ -134,9 +142,17 @@ class _ResyncScheduler:
                     for p in self._prims:
                         if p.IsValid():
                             UsdGeom.Imageable(p).MakeInvisible()
+                            self._invisible_prims.append(p)
+            self._phase = 1
+        elif self._phase == 1:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._invisible_prims:
+                        if p.IsValid():
                             p.SetActive(False)
                             self._deactivated.append(p)
-            self._phase = 1
+            self._invisible_prims = []
+            self._phase = 2
         else:
             with Usd.EditContext(self._stage, session):
                 with Sdf.ChangeBlock():
@@ -149,7 +165,6 @@ class _ResyncScheduler:
 
 
 NUM_FILES = 5
-BAKE_STEPS = 50  # UV states per segment; total time codes = (NUM_FILES-1) * BAKE_STEPS
 
 
 class UsdInterpolationUI:
@@ -169,8 +184,11 @@ class UsdInterpolationUI:
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
-        self._btn_bake: ui.Button | None = None
-        self._use_time_samples: bool = False
+
+        self._resync_countdown: int = 0
+        self._resync_prims: list = []
+        self._update_sub = omni.kit.app.get_app().get_update_event_stream() \
+            .create_subscription_to_pop(self._on_update_tick, name="usd_interp_debounce")
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
@@ -201,9 +219,6 @@ class UsdInterpolationUI:
                                                   clicked_fn=self._on_reverse_clicked)
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
-                    self._btn_bake = ui.Button("Bake", width=60,
-                                               clicked_fn=self._on_bake_clicked)
-                    self._btn_bake.enabled = False
 
     def _on_load(self, idx: int):
         path = self._fields[idx].model.get_value_as_string().strip()
@@ -222,12 +237,8 @@ class UsdInterpolationUI:
         for i in range(NUM_FILES - 1):
             if self._maps[i] is not None and self._maps[i + 1] is not None:
                 self._slider.enabled = True
-                if self._btn_bake:
-                    self._btn_bake.enabled = True
                 return
         self._slider.enabled = False
-        if self._btn_bake:
-            self._btn_bake.enabled = False
 
     def _start_resync(self, prims: list):
         if self._resync:
@@ -236,44 +247,12 @@ class UsdInterpolationUI:
         if stage and prims:
             self._resync = _ResyncScheduler(stage, prims)
 
-    def _on_bake_clicked(self):
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            self._set_status("ERROR: No stage")
-            return
-        session_layer = stage.GetSessionLayer()
-        count = 0
-        with Usd.EditContext(stage, session_layer):
-            with Sdf.ChangeBlock():
-                for seg in range(NUM_FILES - 1):
-                    map_a = self._maps[seg]
-                    map_b = self._maps[seg + 1]
-                    if map_a is None or map_b is None:
-                        continue
-                    for step in range(BAKE_STEPS + 1):
-                        local_t = step / BAKE_STEPS
-                        t32 = np.float32(local_t)
-                        time_code = seg * BAKE_STEPS + step
-                        for prim_path, st_a in map_a.items():
-                            st_b = map_b.get(prim_path)
-                            if st_b is None or len(st_a) != len(st_b):
-                                continue
-                            prim = stage.GetPrimAtPath(prim_path)
-                            if not prim.IsValid():
-                                continue
-                            st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-                            if not st_pv or not st_pv.GetAttr().IsValid():
-                                continue
-                            lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
-                            st_pv.GetAttr().Set(
-                                Vt.Vec2fArray.FromNumpy(lerped),
-                                Usd.TimeCode(time_code)
-                            )
-                            count += 1
-        self._use_time_samples = True
-        total_codes = (NUM_FILES - 1) * (BAKE_STEPS + 1)
-        self._set_status(f"Baked {count} UV entries / {total_codes} time codes")
-        print(f"[usd_interpolation] Bake complete: {count} entries, {total_codes} time codes")
+    def _on_update_tick(self, _event):
+        if self._resync_countdown > 0:
+            self._resync_countdown -= 1
+            if self._resync_countdown == 0 and self._resync_prims:
+                self._start_resync(self._resync_prims)
+                self._resync_prims = []
 
     def _on_refresh_clicked(self):
         written = self._refresh(self._pending_t)
@@ -339,19 +318,10 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        if self._use_time_samples:
-            raw = t * (NUM_FILES - 1)
-            seg = min(int(raw), NUM_FILES - 2)
-            local_t = min(raw - seg, 1.0)
-            time_code = seg * BAKE_STEPS + round(local_t * BAKE_STEPS)
-            stage = omni.usd.get_context().get_stage()
-            if stage:
-                fps = stage.GetTimeCodesPerSecond()
-                omni.timeline.get_timeline_interface().set_current_time(time_code / fps)
-        else:
-            written = self._refresh(t)
-            if written and not self._is_animating:
-                self._start_resync(written)
+        written = self._refresh(t)
+        if written and not self._is_animating:
+            self._resync_prims = written
+            self._resync_countdown = 6  # ~100ms at 60fps — 빠른 드래그 시 debounce
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
@@ -371,6 +341,7 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
+        self._update_sub = None
         if self._resync:
             self._resync.cancel()
             self._resync = None
