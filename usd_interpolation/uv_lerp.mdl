@@ -1,0 +1,25 @@
+mdl 1.7;
+
+import ::anno::*;
+import ::scene::*;
+import ::tex::*;
+import ::math::*;
+import ::df::*;
+
+export material uv_lerp_mat(
+    uniform texture_2d diffuse_texture = texture_2d("", ::tex::gamma_srgb),
+    float t = 0.0f [[
+        anno::display_name("Blend T"),
+        anno::soft_range(0.0f, 1.0f)
+    ]]
+)
+= let {
+    float2 uv_a = scene::data_lookup_float2("st_a", float2(0.5f, 0.5f));
+    float2 uv_b = scene::data_lookup_float2("st_b", float2(0.5f, 0.5f));
+    float2 uv   = math::lerp(uv_a, uv_b, t);
+    color  c    = tex::lookup_color(diffuse_texture, uv);
+} in material(
+    surface: material_surface(
+        scattering: df::diffuse_reflection_bsdf(tint: c)
+    )
+);

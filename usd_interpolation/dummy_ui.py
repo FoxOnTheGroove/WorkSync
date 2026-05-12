@@ -29,7 +29,12 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
-        st_raw = _get_attr(st_pv.GetAttr())
+        tc = Usd.TimeCode.Default()
+        st_raw = st_pv.ComputeFlattened(tc)
+        if st_raw is None:
+            samples = st_pv.GetTimeSamples()
+            if samples:
+                st_raw = st_pv.ComputeFlattened(samples[0])
         if st_raw is not None:
             result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
             print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
@@ -40,6 +45,39 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 
     print(f"[usd_interpolation] Loaded {len(result)} mesh(es) from {usd_file_path}")
     return result
+
+
+def validate_mesh_compatibility(maps: list, stage) -> None:
+    """로드된 모든 map의 UV 배열 길이와 stage faceVertex 수를 비교 출력."""
+    all_paths: set = set()
+    for m in maps:
+        if m is not None:
+            all_paths.update(m.keys())
+    if not all_paths:
+        return
+
+    for prim_path in sorted(all_paths):
+        prim = stage.GetPrimAtPath(prim_path)
+        stage_fvc = None
+        if prim.IsValid() and prim.IsA(UsdGeom.Mesh):
+            fvc = UsdGeom.Mesh(prim).GetFaceVertexCountsAttr().Get()
+            if fvc:
+                stage_fvc = int(sum(fvc))
+
+        uv_lengths = []
+        parts = [f"stage_fvc={stage_fvc}"]
+        for i, m in enumerate(maps):
+            if m is not None and prim_path in m:
+                n = len(m[prim_path])
+                uv_lengths.append(n)
+                parts.append(f"map{i}={n}")
+            else:
+                parts.append(f"map{i}=-")
+
+        all_same = len(set(uv_lengths)) <= 1
+        match_stage = stage_fvc is None or all(n == stage_fvc for n in uv_lengths)
+        tag = "OK" if (all_same and match_stage) else "MISMATCH"
+        print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
@@ -65,7 +103,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
             chosen = st_a if t < 0.5 else st_b
             writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
             continue
-        t32    = np.float32(t)
+        t32 = np.float32(t)
         lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
         writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
 
@@ -73,56 +111,32 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         return []
 
     session_layer = stage.GetSessionLayer()
+
+    # CB1: Remove primvars:st spec from session layer.
+    # Closing this ChangeBlock sends a structural (non-changedInfoOnly) notification to
+    # Hydra, which marks the rprim for full repopulation at the next render tick.
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
-            for st_pv, _, result in writes:
-                st_pv.GetAttr().Set(result)
+            for _, prim, _ in writes:
+                prim_spec = session_layer.GetPrimAtPath(prim.GetPath())
+                if prim_spec and "primvars:st" in prim_spec.attributes:
+                    prim_spec.RemoveProperty(prim_spec.attributes["primvars:st"])
+
+    # CB2: Re-author primvars:st with new values.
+    # Because the spec was just removed, this Set() creates a brand-new spec →
+    # another structural notification. Both notifications are queued before the
+    # render tick, so Hydra re-reads the final state (new UV) in one pass.
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for st_pv, _, uv_data in writes:
+                st_pv.GetAttr().Set(uv_data)
+                indices_attr = st_pv.GetIndicesAttr()
+                if indices_attr and indices_attr.IsValid():
+                    indices_attr.Set(Vt.IntArray(list(range(len(uv_data)))))
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
     return written_prims
-
-
-class _ResyncScheduler:
-    """Kit update event stream으로 SetActive(F→T)를 별개의 두 Kit tick에서 실행."""
-
-    def __init__(self, stage, prims: list):
-        self._stage = stage
-        self._prims = [p for p in prims if p.IsValid()]
-        self._deactivated: list = []
-        self._phase = 0
-        self._sub = omni.kit.app.get_app().get_update_event_stream() \
-            .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
-
-    def cancel(self):
-        self._sub = None
-        if self._deactivated:
-            session = self._stage.GetSessionLayer()
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._deactivated:
-                        if p.IsValid():
-                            p.SetActive(True)
-            self._deactivated = []
-
-    def _on_tick(self, _event):
-        session = self._stage.GetSessionLayer()
-        if self._phase == 0:
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._prims:
-                        if p.IsValid():
-                            p.SetActive(False)
-                            self._deactivated.append(p)
-            self._phase = 1
-        else:
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._deactivated:
-                        if p.IsValid():
-                            p.SetActive(True)
-            self._deactivated = []
-            self._sub = None
 
 
 NUM_FILES = 5
@@ -140,7 +154,7 @@ class UsdInterpolationUI:
         self._maps: list[dict | None] = [None] * NUM_FILES
 
         self._pending_t: float = 0.0
-        self._resync: _ResyncScheduler | None = None
+        self._is_animating: bool = False
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
@@ -170,7 +184,7 @@ class UsdInterpolationUI:
                 with ui.HStack(height=24, spacing=8):
                     self._btn_play = ui.Button("Play ▶", width=80,
                                                clicked_fn=self._on_play_clicked)
-                    self._btn_reverse = ui.Button("Reverse ◀", width=90,
+                    self._btn_reverse = ui.Button("Reverse ◄", width=90,
                                                   clicked_fn=self._on_reverse_clicked)
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
@@ -186,6 +200,9 @@ class UsdInterpolationUI:
         self._maps[idx] = st_map
         loaded = [i for i, m in enumerate(self._maps) if m is not None]
         self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded}")
+        stage = omni.usd.get_context().get_stage()
+        if stage:
+            validate_mesh_compatibility(self._maps, stage)
         self._try_enable_slider()
 
     def _try_enable_slider(self):
@@ -195,17 +212,8 @@ class UsdInterpolationUI:
                 return
         self._slider.enabled = False
 
-    def _start_resync(self, prims: list):
-        if self._resync:
-            self._resync.cancel()
-        stage = omni.usd.get_context().get_stage()
-        if stage and prims:
-            self._resync = _ResyncScheduler(stage, prims)
-
     def _on_refresh_clicked(self):
-        written = self._refresh(self._pending_t)
-        if written:
-            self._start_resync(written)
+        self._refresh(self._pending_t)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -226,14 +234,14 @@ class UsdInterpolationUI:
         if self._btn_play:
             self._btn_play.text = "Play ▶"
         if self._btn_reverse:
-            self._btn_reverse.text = "Reverse ◀"
+            self._btn_reverse.text = "Reverse ◄"
 
     async def _animate(self, forward: bool):
         DURATION = 2.5
         if self._btn_play:
             self._btn_play.text = "Stop ■" if forward else "Play ▶"
         if self._btn_reverse:
-            self._btn_reverse.text = "Reverse ◀" if forward else "Stop ■"
+            self._btn_reverse.text = "Reverse ◄" if forward else "Stop ■"
 
         start_t = self._pending_t
         target = 1.0 if forward else 0.0
@@ -241,6 +249,7 @@ class UsdInterpolationUI:
         elapsed = 0.0
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
+        self._is_animating = True
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -249,16 +258,14 @@ class UsdInterpolationUI:
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
 
-                self._pending_t = new_t
-                if self._t_label:
-                    self._t_label.text = f"t: {new_t:.3f}"
-                self._refresh(new_t)
+                self._slider.model.set_value(new_t)
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
             return
         finally:
+            self._is_animating = False
             self._stop_play()
 
     def _on_slider_changed(self, model):
@@ -266,9 +273,7 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        written = self._refresh(t)
-        if written:
-            self._start_resync(written)
+        self._refresh(t)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
@@ -288,9 +293,6 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
-        if self._resync:
-            self._resync.cancel()
-            self._resync = None
         if self._window:
             self._window.destroy()
             self._window = None
