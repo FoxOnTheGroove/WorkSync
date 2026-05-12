@@ -1,15 +1,10 @@
 import asyncio
-import os
 import numpy as np
 
-from pxr import Usd, UsdGeom, UsdShade, Vt, Sdf
+from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
-
-_MDL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uv_lerp.mdl")
-_BLEND_SHADERS: dict = {}   # prim_path → UsdShade.Shader
-_CURRENT_SEG: int = -1
 
 
 def _get_attr(attr) -> object:
@@ -19,43 +14,6 @@ def _get_attr(attr) -> object:
         if samples:
             val = attr.Get(samples[0])
     return val
-
-
-def _get_mesh_texture(stage, prim_path: str) -> str:
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim.IsValid():
-        return ""
-    mat, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
-    if not mat:
-        return ""
-    surf, _, _ = mat.ComputeSurfaceSource()
-    if not surf:
-        return ""
-    inp = surf.GetInput("diffuse_texture")
-    if not inp:
-        return ""
-    val = inp.Get()
-    if val is None:
-        return ""
-    return val.path if hasattr(val, "path") else str(val)
-
-
-def _create_blend_material(stage, session_layer, prim_path: str, prim, texture_path: str):
-    safe = prim_path.replace("/", "_").lstrip("_")
-    mat_path = f"/_uvblend/{safe}"
-    with Usd.EditContext(stage, session_layer):
-        mat = UsdShade.Material.Define(stage, mat_path)
-        shader = UsdShade.Shader.Define(stage, mat_path + "/Shader")
-        shader.SetSourceAsset(Sdf.AssetPath(_MDL_PATH), "mdl")
-        shader.SetSourceAssetSubIdentifier("uv_lerp_mat", "mdl")
-        shader.CreateInput("diffuse_texture", Sdf.ValueTypeNames.Asset).Set(
-            Sdf.AssetPath(texture_path))
-        shader.CreateInput("t", Sdf.ValueTypeNames.Float).Set(0.0)
-        mat.CreateSurfaceOutput("mdl").ConnectToSource(
-            shader.ConnectableAPI(), "out")
-        UsdShade.MaterialBindingAPI(prim).Bind(mat)
-    _BLEND_SHADERS[prim_path] = shader
-    print(f"[usd_interpolation] Bound blend material: {prim_path}, tex={texture_path or 'none'}")
 
 
 def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
@@ -84,69 +42,68 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
-def _setup_segment(stage, map_a: dict, map_b: dict):
-    """Write primvars:st_a and st_b for all prims in this segment, create blend materials."""
-    session_layer = stage.GetSessionLayer()
-    # Write primvars in one ChangeBlock
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for prim_path, st_a in map_a.items():
-                st_b = map_b.get(prim_path)
-                if st_b is None:
-                    continue
-                prim = stage.GetPrimAtPath(prim_path)
-                if not prim.IsValid():
-                    continue
-                pv_api = UsdGeom.PrimvarsAPI(prim)
-                orig_pv = pv_api.GetPrimvar("st")
-                interp = orig_pv.GetInterpolation() if orig_pv else UsdGeom.Tokens.vertex
-                indices = orig_pv.GetIndices() if (orig_pv and orig_pv.IsIndexed()) else None
-                for name, arr in [("st_a", st_a), ("st_b", st_b)]:
-                    pv = pv_api.GetPrimvar(name)
-                    if not pv or not pv.GetAttr().IsValid():
-                        pv = pv_api.CreatePrimvar(
-                            name, Sdf.ValueTypeNames.Float2Array, interp)
-                    pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(arr)))
-                    if indices is not None:
-                        pv.SetIndices(indices)
+def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
+    # [분석] GetAttr().Set() vs st_pv.Set():
+    # 인덱스드 primvar에서 compact 배열 크기가 바뀌면 indices가 out-of-range가 될 수 있으나,
+    # 우리는 len(st_a)==len(st_b) 체크 후에만 lerp하므로 크기 변경은 없다.
+    # changedInfoOnly 문제(Hydra GPU 버퍼 미갱신)는 어느 쪽 API를 써도 동일하게 발생.
+    #
+    # [분석] 메시 지오메트리 영향 여부:
+    # primvars:st 쓰기는 UV 좌표만 바꾼다. points/faceVertexCounts/faceVertexIndices는
+    # 별개 attribute이므로 st Set() 호출만으로는 절대 영향받지 않는다.
+    # 깨져 보이는 현상은 지오메트리 손상이 아니라 Hydra GPU UV 버퍼가 stale 상태인 것.
+    #
+    # [분석] [u, 0.5] 구조:
+    # st_a[i]=(u_i,0.5), st_b[i]=(u_i',0.5) 이면
+    # lerped[i]=(u_i+t*(u_i'-u_i), 0.5+t*0.0)=(lerped_u, 0.5)
+    # V=0.5는 수학적으로 보존. 단, st_b의 V가 0.5가 아니면 drift 발생.
 
-    # Create blend materials outside ChangeBlock to avoid nested Define conflicts
-    for prim_path in map_a:
-        if prim_path not in _BLEND_SHADERS:
-            prim = stage.GetPrimAtPath(prim_path)
-            if prim.IsValid():
-                tex = _get_mesh_texture(stage, prim_path)
-                _create_blend_material(stage, session_layer, prim_path, prim, tex)
-
-
-def apply_blend_t(map_a: dict, t: float) -> list:
-    """Update material.inputs:t only — no primvar write, no resync needed."""
     stage = omni.usd.get_context().get_stage()
     if stage is None:
+        print("[usd_interpolation] ERROR: No editor stage found")
         return []
-    written = []
+
+    writes = []
+    for prim_path, st_a in map_a.items():
+        st_b = map_b.get(prim_path)
+        if st_b is None:
+            print(f"[usd_interpolation] SKIP {prim_path}: not in map_b")
+            continue
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            continue
+        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+        if not st_pv or not st_pv.GetAttr().IsValid():
+            continue
+        if len(st_a) != len(st_b):
+            print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
+            chosen = st_a if t < 0.5 else st_b
+            writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
+            continue
+        t32    = np.float32(t)
+        lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
+        writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
+
+    if not writes:
+        return []
+
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
-            for prim_path in map_a:
-                shader = _BLEND_SHADERS.get(prim_path)
-                if shader is None:
-                    continue
-                t_inp = shader.GetInput("t")
-                if t_inp:
-                    t_inp.Set(float(t))
-                    prim = stage.GetPrimAtPath(prim_path)
-                    if prim.IsValid():
-                        written.append(prim)
-    if written:
-        print(f"[usd_interpolation] Blend t={t:.3f} → {len(written)} mesh(es)")
-    return written
+            for st_pv, _, result in writes:
+                st_pv.GetAttr().Set(result)
+
+    written_prims = [p for _, p, _ in writes]
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
+    return written_prims
 
 
 class _ResyncScheduler:
-    """3-phase: MakeInvisible(ph0) → SetActive(F)(ph1) → SetActive(T)+MakeVisible(ph2).
+    """Kit update event stream으로 SetActive(F→T)를 3개의 별개 tick에서 실행.
 
-    Used only on segment boundary when st_a/st_b primvars are (re)written.
+    Phase 0: MakeInvisible만 (SetActive 없음) — Hydra가 mesh를 invisible로 렌더
+    Phase 1: SetActive(False) — 이미 invisible이라 blank frame 없음
+    Phase 2: SetActive(True) + MakeVisible — Hydra UV 버퍼 갱신 후 mesh 재표시
     """
 
     def __init__(self, stage, prims: list):
@@ -259,12 +216,9 @@ class UsdInterpolationUI:
                               clicked_fn=self._on_refresh_clicked)
 
     def _on_load(self, idx: int):
-        global _BLEND_SHADERS, _CURRENT_SEG
         path = self._fields[idx].model.get_value_as_string().strip()
         if idx == 0:
             omni.usd.get_context().open_stage(path)
-            _BLEND_SHADERS = {}
-            _CURRENT_SEG = -1
         st_map = load_st_map(path)
         if st_map is None:
             self._set_status(f"ERROR: Failed to load File {idx}")
@@ -289,8 +243,6 @@ class UsdInterpolationUI:
             self._resync = _ResyncScheduler(stage, prims)
 
     def _on_refresh_clicked(self):
-        global _CURRENT_SEG
-        _CURRENT_SEG = -1   # force segment re-setup + resync
         written = self._refresh(self._pending_t)
         if written:
             self._start_resync(written)
@@ -329,7 +281,7 @@ class UsdInterpolationUI:
         elapsed = 0.0
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
-        self._is_animating = True
+        self._is_animating = True  # _on_slider_changed 에서 resync 스킵하도록
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -337,7 +289,10 @@ class UsdInterpolationUI:
                 frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
+
+                # set_value → _on_slider_changed 호출되지만 _is_animating=True 이므로 resync 생략
                 self._slider.model.set_value(new_t)
+
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
@@ -356,31 +311,16 @@ class UsdInterpolationUI:
             self._start_resync(written)
 
     def _refresh(self, t: float) -> list:
-        global _CURRENT_SEG
         raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
         print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | local_t={local_t:.4f}")
-
         map_a = self._maps[seg]
         map_b = self._maps[seg + 1]
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
             return []
-
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            return []
-
-        seg_changed = (seg != _CURRENT_SEG)
-        if seg_changed:
-            _CURRENT_SEG = seg
-            _setup_segment(stage, map_a, map_b)
-            print(f"[usd_interpolation] Segment → {seg}→{seg+1}")
-
-        written = apply_blend_t(map_a, local_t)
-        # Resync only on segment change so Hydra rebuilds st_a/st_b GPU buffers
-        return written if seg_changed else []
+        return apply_lerped_st_all(map_a, map_b, local_t)
 
     def _set_status(self, text: str):
         if self._status_label:
