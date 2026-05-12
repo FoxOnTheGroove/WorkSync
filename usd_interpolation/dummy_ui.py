@@ -141,6 +141,7 @@ class UsdInterpolationUI:
 
         self._pending_t: float = 0.0
         self._resync: _ResyncScheduler | None = None
+        self._is_animating: bool = False
         self._play_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
@@ -241,6 +242,7 @@ class UsdInterpolationUI:
         elapsed = 0.0
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
+        self._is_animating = True  # _on_slider_changed 에서 resync 스킵하도록
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -249,16 +251,15 @@ class UsdInterpolationUI:
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
 
-                self._pending_t = new_t
-                if self._t_label:
-                    self._t_label.text = f"t: {new_t:.3f}"
-                self._refresh(new_t)
+                # set_value → _on_slider_changed 호출되지만 _is_animating=True 이므로 resync 생략
+                self._slider.model.set_value(new_t)
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
             return
         finally:
+            self._is_animating = False
             self._stop_play()
 
     def _on_slider_changed(self, model):
@@ -267,7 +268,7 @@ class UsdInterpolationUI:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
         written = self._refresh(t)
-        if written:
+        if written and not self._is_animating:  # 애니메이션 중엔 resync 불필요 (프레임마다 과도)
             self._start_resync(written)
 
     def _refresh(self, t: float) -> list:
