@@ -47,6 +47,39 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
+def validate_mesh_compatibility(maps: list, stage) -> None:
+    """로드된 모든 map의 UV 배열 길이와 stage faceVertex 수를 비교 출력."""
+    all_paths: set = set()
+    for m in maps:
+        if m is not None:
+            all_paths.update(m.keys())
+    if not all_paths:
+        return
+
+    for prim_path in sorted(all_paths):
+        prim = stage.GetPrimAtPath(prim_path)
+        stage_fvc = None
+        if prim.IsValid() and prim.IsA(UsdGeom.Mesh):
+            fvc = UsdGeom.Mesh(prim).GetFaceVertexCountsAttr().Get()
+            if fvc:
+                stage_fvc = int(sum(fvc))
+
+        uv_lengths = []
+        parts = [f"stage_fvc={stage_fvc}"]
+        for i, m in enumerate(maps):
+            if m is not None and prim_path in m:
+                n = len(m[prim_path])
+                uv_lengths.append(n)
+                parts.append(f"map{i}={n}")
+            else:
+                parts.append(f"map{i}=-")
+
+        all_same = len(set(uv_lengths)) <= 1
+        match_stage = stage_fvc is None or all(n == stage_fvc for n in uv_lengths)
+        tag = "OK" if (all_same and match_stage) else "MISMATCH"
+        print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
+
+
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -220,6 +253,9 @@ class UsdInterpolationUI:
         self._maps[idx] = st_map
         loaded = [i for i, m in enumerate(self._maps) if m is not None]
         self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded}")
+        stage = omni.usd.get_context().get_stage()
+        if stage:
+            validate_mesh_compatibility(self._maps, stage)
         self._try_enable_slider()
 
     def _try_enable_slider(self):
