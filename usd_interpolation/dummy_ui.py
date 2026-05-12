@@ -112,27 +112,16 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
 
     session_layer = stage.GetSessionLayer()
 
-    # CB1: Remove primvars:st spec from session layer.
-    # Closing this ChangeBlock sends a structural (non-changedInfoOnly) notification to
-    # Hydra, which marks the rprim for full repopulation at the next render tick.
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for _, prim, _ in writes:
-                prim_spec = session_layer.GetPrimAtPath(prim.GetPath())
-                if prim_spec and "primvars:st" in prim_spec.attributes:
-                    prim_spec.RemoveProperty(prim_spec.attributes["primvars:st"])
-
-    # CB2: Re-author primvars:st with new values.
-    # Because the spec was just removed, this Set() creates a brand-new spec →
-    # another structural notification. Both notifications are queued before the
-    # render tick, so Hydra re-reads the final state (new UV) in one pass.
+    # Set() alone issues only a changedInfo (value-only) notification — no structural
+    # notification — so Hydra never triggers a double-buffer swap. This prevents the
+    # "two-steps-ago UV leaking from the inactive buffer" artefact on the second move.
+    # BlockIndices() shadows any base-layer indices spec with SdfValueBlock, keeping
+    # the primvar non-indexed regardless of what the root layer contains.
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, uv_data in writes:
                 st_pv.GetAttr().Set(uv_data)
-                indices_attr = st_pv.GetIndicesAttr()
-                if indices_attr and indices_attr.IsValid():
-                    indices_attr.Set(Vt.IntArray(list(range(len(uv_data)))))
+                st_pv.BlockIndices()
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
