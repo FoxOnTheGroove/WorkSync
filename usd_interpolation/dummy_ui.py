@@ -43,6 +43,23 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
+    # [분석] GetAttr().Set() vs st_pv.Set():
+    # GetAttr().Set() 는 primvar API를 우회해 raw UsdAttribute를 직접 쓴다.
+    # 인덱스드 primvar에서 compact 배열 크기가 바뀌면 indices가 out-of-range가 될 수 있으나,
+    # 우리는 len(st_a)==len(st_b) 체크 후에만 lerp하므로 크기 변경은 없다.
+    # 그러나 st_pv.Set() 쪽이 primvar 레이어 의미론을 인지하는 상위 API이므로 더 안전.
+    # changedInfoOnly 문제(Hydra GPU 버퍼 미갱신)는 어느 쪽 API를 써도 동일하게 발생.
+    #
+    # [분석] 메시 지오메트리 영향 여부:
+    # primvars:st 쓰기는 UV 좌표만 바꾼다. points/faceVertexCounts/faceVertexIndices는
+    # 별개 attribute이므로 st Set() 호출만으로는 절대 영향받지 않는다.
+    # 깨져 보이는 현상은 지오메트리 손상이 아니라 Hydra GPU UV 버퍼가 stale 상태인 것.
+    #
+    # [분석] [u, 0.5] 구조:
+    # st_a[i] = (u_i, 0.5), st_b[i] = (u_i', 0.5) 이면
+    # lerped[i] = (u_i + t*(u_i'-u_i), 0.5 + t*0.0) = (lerped_u, 0.5)
+    # V=0.5는 수학적으로 보존된다. 단, st_b의 V가 0.5가 아니면 drift 발생.
+
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
@@ -58,8 +75,15 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if not prim.IsValid():
             continue
         st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-        if not st_pv or not st_pv.GetAttr().IsValid():
+        if not st_pv or not st_pv.HasValue():
             continue
+
+        # stmap 인덱스 검증: 로드된 compact 배열 크기와 현재 stage의 compact 크기 일치 확인
+        cur_raw = _get_attr(st_pv.GetAttr())
+        cur_len = len(cur_raw) if cur_raw is not None else -1
+        if cur_len != len(st_a):
+            print(f"[usd_interpolation] MISMATCH {prim_path}: map_a compact={len(st_a)} stage compact={cur_len} — wrong stmap?")
+
         if len(st_a) != len(st_b):
             print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
             chosen = st_a if t < 0.5 else st_b
@@ -76,7 +100,8 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, result in writes:
-                st_pv.GetAttr().Set(result)
+                # GetAttr().Set() 대신 st_pv.Set() 사용 — primvar 상위 API
+                st_pv.Set(result)
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
@@ -209,8 +234,9 @@ class UsdInterpolationUI:
 
     def _on_refresh_clicked(self):
         written = self._refresh(self._pending_t)
-        if written:
-            self._start_resync(written)
+        # resync 비활성화 — SetActive 토글이 깜박임을 유발하므로 주석 처리
+        # if written:
+        #     self._start_resync(written)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -272,19 +298,31 @@ class UsdInterpolationUI:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
         written = self._refresh(t)
-        if written and not self._is_animating:  # 애니메이션 중엔 resync 불필요 (프레임마다 과도)
-            self._start_resync(written)
+        # resync 비활성화 — SetActive 토글이 깜박임을 유발하므로 주석 처리
+        # if written and not self._is_animating:
+        #     self._start_resync(written)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
-        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | local_t={local_t:.4f}")
+
+        # [필터] local_t 범위 검증: 0~0.2 초과 시 경고 후 스킵
+        if not (0.0 <= local_t <= 0.2):
+            print(f"[usd_interpolation] FILTER local_t={local_t:.4f} out of [0, 0.2] — skipping (t={t:.4f} seg={seg})")
+            return []
+
+        # stmap 인덱스 확인
         map_a = self._maps[seg]
         map_b = self._maps[seg + 1]
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
             return []
+
+        a_info = {k: len(v) for k, v in map_a.items()}
+        b_info = {k: len(v) for k, v in map_b.items()}
+        print(f"[usd_interpolation] t={t:.4f} seg={seg}→{seg+1} local_t={local_t:.4f} | map_a={a_info} map_b={b_info}")
+
         return apply_lerped_st_all(map_a, map_b, local_t)
 
     def _set_status(self, text: str):
