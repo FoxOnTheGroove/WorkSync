@@ -310,12 +310,18 @@ class UsdInterpolationUI:
         if self._play_task and not self._play_task.done():
             self._stop_play()
         else:
+            if self._resync:
+                self._resync.cancel()
+                self._resync = None
             self._play_task = asyncio.ensure_future(self._animate(forward=True))
 
     def _on_reverse_clicked(self):
         if self._play_task and not self._play_task.done():
             self._stop_play()
         else:
+            if self._resync:
+                self._resync.cancel()
+                self._resync = None
             self._play_task = asyncio.ensure_future(self._animate(forward=False))
 
     def _stop_play(self):
@@ -364,6 +370,9 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
+        if self._resync:
+            self._resync.cancel()
+            self._resync = None
         written = self._refresh(t)
         if written and not self._is_animating:
             self._start_resync(written)
