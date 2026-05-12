@@ -120,7 +120,8 @@ class _ResyncScheduler:
                     for p in self._deactivated:
                         if p.IsValid():
                             p.SetActive(True)
-            self._deactivated = []  
+                            UsdGeom.Imageable(p).MakeVisible()
+            self._deactivated = []
 
     def _on_tick(self, _event):
         if self._cancelled:  # cancel() 후 Kit이 이미 큐에 올린 stale 콜백 방어
@@ -131,6 +132,7 @@ class _ResyncScheduler:
                 with Sdf.ChangeBlock():
                     for p in self._prims:
                         if p.IsValid():
+                            UsdGeom.Imageable(p).MakeInvisible()
                             p.SetActive(False)
                             self._deactivated.append(p)
             self._phase = 1
@@ -140,6 +142,7 @@ class _ResyncScheduler:
                     for p in self._deactivated:
                         if p.IsValid():
                             p.SetActive(True)
+                            UsdGeom.Imageable(p).MakeVisible()
             self._deactivated = []
             self._sub = None
 
@@ -224,9 +227,8 @@ class UsdInterpolationUI:
 
     def _on_refresh_clicked(self):
         written = self._refresh(self._pending_t)
-        # resync 비활성화 — SetActive 토글이 깜박임을 유발하므로 주석 처리
-        # if written:
-        #     self._start_resync(written)
+        if written:
+            self._start_resync(written)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -288,9 +290,8 @@ class UsdInterpolationUI:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
         written = self._refresh(t)
-        # resync 비활성화 — SetActive 토글이 깜백임을 유발하므로 주석 처리
-        # if written and not self._is_animating:
-        #     self._start_resync(written)
+        if written and not self._is_animating:
+            self._start_resync(written)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
