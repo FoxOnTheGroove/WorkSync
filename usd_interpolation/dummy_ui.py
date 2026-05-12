@@ -5,7 +5,6 @@ from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
-import omni.timeline
 
 
 def _get_attr(attr) -> object:
@@ -81,11 +80,6 @@ def validate_mesh_compatibility(maps: list, stage) -> None:
         print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
 
 
-# Alternates between 0 and 1; toggling the timeline time code forces Hydra to
-# re-read all time-varying primvars, bypassing the changedInfoOnly dirty-bit bug.
-_UV_SLOT = [0]
-
-
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -116,24 +110,32 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    next_slot = 1 - _UV_SLOT[0]
-    tc = Usd.TimeCode(next_slot)
-
     session_layer = stage.GetSessionLayer()
-    with Usd.EditContext(stage, session_layer):    
+
+    # CB1: Remove primvars:st spec from session layer.
+    # Closing this ChangeBlock sends a structural (non-changedInfoOnly) notification to
+    # Hydra, which marks the rprim for full repopulation at the next render tick.
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for _, prim, _ in writes:
+                prim_spec = session_layer.GetPrimAtPath(prim.GetPath())
+                if prim_spec and "primvars:st" in prim_spec.attributes:
+                    prim_spec.RemoveProperty(prim_spec.attributes["primvars:st"])
+
+    # CB2: Re-author primvars:st with new values.
+    # Because the spec was just removed, this Set() creates a brand-new spec →
+    # another structural notification. Both notifications are queued before the
+    # render tick, so Hydra re-reads the final state (new UV) in one pass.
+    with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, uv_data in writes:
-                st_pv.GetAttr().Set(uv_data, tc)
+                st_pv.GetAttr().Set(uv_data)
                 indices_attr = st_pv.GetIndicesAttr()
                 if indices_attr and indices_attr.IsValid():
-                    indices_attr.Set(Vt.IntArray(list(range(len(uv_data)))), tc)
-
-    _UV_SLOT[0] = next_slot
-    fps = stage.GetTimeCodesPerSecond()
-    omni.timeline.get_timeline_interface().set_current_time(next_slot / fps)
+                    indices_attr.Set(Vt.IntArray(list(range(len(uv_data)))))
 
     written_prims = [p for _, p, _ in writes]
-    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es), slot={next_slot}")
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
     return written_prims
 
 
