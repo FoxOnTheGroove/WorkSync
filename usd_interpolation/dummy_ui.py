@@ -3,6 +3,7 @@ import numpy as np
 
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
+import omni.timeline
 import omni.usd
 import omni.ui as ui
 
@@ -345,7 +346,8 @@ class UsdInterpolationUI:
             time_code = seg * BAKE_STEPS + round(local_t * BAKE_STEPS)
             stage = omni.usd.get_context().get_stage()
             if stage:
-                stage.SetCurrentTime(time_code)
+                fps = stage.GetTimeCodesPerSecond()
+                omni.timeline.get_timeline_interface().set_current_time(time_code / fps)
         else:
             written = self._refresh(t)
             if written and not self._is_animating:
