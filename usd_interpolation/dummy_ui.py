@@ -185,11 +185,6 @@ class UsdInterpolationUI:
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
 
-        self._resync_countdown: int = 0
-        self._resync_prims: list = []
-        self._update_sub = omni.kit.app.get_app().get_update_event_stream() \
-            .create_subscription_to_pop(self._on_update_tick, name="usd_interp_debounce")
-
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
         with self._window.frame:
@@ -246,13 +241,6 @@ class UsdInterpolationUI:
         stage = omni.usd.get_context().get_stage()
         if stage and prims:
             self._resync = _ResyncScheduler(stage, prims)
-
-    def _on_update_tick(self, _event):
-        if self._resync_countdown > 0:
-            self._resync_countdown -= 1
-            if self._resync_countdown == 0 and self._resync_prims:
-                self._start_resync(self._resync_prims)
-                self._resync_prims = []
 
     def _on_refresh_clicked(self):
         written = self._refresh(self._pending_t)
@@ -320,8 +308,7 @@ class UsdInterpolationUI:
         self._pending_t = t
         written = self._refresh(t)
         if written and not self._is_animating:
-            self._resync_prims = written
-            self._resync_countdown = 6  # ~100ms at 60fps — 빠른 드래그 시 debounce
+            self._start_resync(written)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
@@ -341,7 +328,6 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
-        self._update_sub = None
         if self._resync:
             self._resync.cancel()
             self._resync = None
