@@ -126,11 +126,14 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
 
 
 class _ResyncScheduler:
-    """Kit update event stream으로 SetActive(F→T)를 3개의 별개 tick에서 실행.
+    """Kit update event stream으로 SetActive(F→T)를 2회 반복, 6개의 별개 tick에서 실행.
 
-    Phase 0: MakeInvisible만 (SetActive 없음) — Hydra가 mesh를 invisible로 렌더
-    Phase 1: SetActive(False) — 이미 invisible이라 blank frame 없음
-    Phase 2: SetActive(True) + MakeVisible — Hydra UV 버퍼 갱신 후 mesh 재표시
+    Phase 0: MakeInvisible
+    Phase 1: SetActive(False)
+    Phase 2: SetActive(True) + MakeVisible  ← 1st cycle
+    Phase 3: MakeInvisible
+    Phase 4: SetActive(False)
+    Phase 5: SetActive(True) + MakeVisible  ← 2nd cycle (Hydra UV 버퍼 강제 갱신)
     """
 
     def __init__(self, stage, prims: list):
@@ -180,6 +183,32 @@ class _ResyncScheduler:
                             self._deactivated.append(p)
             self._invisible_prims = []
             self._phase = 2
+        elif self._phase == 2:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._deactivated:
+                        if p.IsValid():
+                            p.SetActive(True)
+                            UsdGeom.Imageable(p).MakeVisible()
+            self._deactivated = []
+            self._phase = 3
+        elif self._phase == 3:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._prims:
+                        if p.IsValid():
+                            UsdGeom.Imageable(p).MakeInvisible()
+                            self._invisible_prims.append(p)
+            self._phase = 4
+        elif self._phase == 4:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._invisible_prims:
+                        if p.IsValid():
+                            p.SetActive(False)
+                            self._deactivated.append(p)
+            self._invisible_prims = []
+            self._phase = 5
         else:
             with Usd.EditContext(self._stage, session):
                 with Sdf.ChangeBlock():
@@ -311,7 +340,7 @@ class UsdInterpolationUI:
         elapsed = 0.0
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
-        self._is_animating = True  # _on_slider_changed 에서 resync 스킵하도록
+        self._is_animating = True
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -320,7 +349,6 @@ class UsdInterpolationUI:
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
 
-                # set_value → _on_slider_changed 호출되지만 _is_animating=True 이므로 resync 생략
                 self._slider.model.set_value(new_t)
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
