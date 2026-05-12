@@ -88,10 +88,18 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         return []
 
     session_layer = stage.GetSessionLayer()
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for st_pv, _, result in writes:
-                st_pv.GetAttr().Set(result)
+    # Remove existing specs first (non-changedInfoOnly notification),
+    # then re-author (spec-created notification) — both bypass Hydra's changedInfoOnly skip.
+    # Must NOT use ChangeBlock: batching coalesces remove+add back into changedInfoOnly.
+    for st_pv, prim, lerped in writes:
+        prim_spec = session_layer.GetPrimAtPath(str(prim.GetPath()))
+        if prim_spec:
+            for attr_name in ("primvars:st", "primvars:st:indices"):
+                attr_spec = prim_spec.attributes.get(attr_name)
+                if attr_spec:
+                    prim_spec.RemoveProperty(attr_spec)
+        with Usd.EditContext(stage, session_layer):
+            st_pv.GetAttr().Set(lerped)
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
