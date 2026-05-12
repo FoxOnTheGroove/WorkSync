@@ -91,10 +91,12 @@ class _ResyncScheduler:
         self._prims = [p for p in prims if p.IsValid()]
         self._deactivated: list = []
         self._phase = 0
+        self._cancelled: bool = False
         self._sub = omni.kit.app.get_app().get_update_event_stream() \
             .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
 
     def cancel(self):
+        self._cancelled = True  # _on_tick 이 큐에 남아있어도 실행 차단
         self._sub = None
         if self._deactivated:
             session = self._stage.GetSessionLayer()
@@ -106,6 +108,8 @@ class _ResyncScheduler:
             self._deactivated = []
 
     def _on_tick(self, _event):
+        if self._cancelled:  # cancel() 후 Kit이 이미 큐에 올린 stale 콜백 방어
+            return
         session = self._stage.GetSessionLayer()
         if self._phase == 0:
             with Usd.EditContext(self._stage, session):
@@ -171,7 +175,7 @@ class UsdInterpolationUI:
                 with ui.HStack(height=24, spacing=8):
                     self._btn_play = ui.Button("Play ▶", width=80,
                                                clicked_fn=self._on_play_clicked)
-                    self._btn_reverse = ui.Button("Reverse ◀", width=90,
+                    self._btn_reverse = ui.Button("Reverse ◄", width=90,
                                                   clicked_fn=self._on_reverse_clicked)
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
@@ -227,14 +231,14 @@ class UsdInterpolationUI:
         if self._btn_play:
             self._btn_play.text = "Play ▶"
         if self._btn_reverse:
-            self._btn_reverse.text = "Reverse ◀"
+            self._btn_reverse.text = "Reverse ◄"
 
     async def _animate(self, forward: bool):
         DURATION = 2.5
         if self._btn_play:
             self._btn_play.text = "Stop ■" if forward else "Play ▶"
         if self._btn_reverse:
-            self._btn_reverse.text = "Reverse ◀" if forward else "Stop ■"
+            self._btn_reverse.text = "Reverse ◄" if forward else "Stop ■"
 
         start_t = self._pending_t
         target = 1.0 if forward else 0.0
