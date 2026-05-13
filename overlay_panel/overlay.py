@@ -53,20 +53,30 @@ def _to_pressure(uv_val: float) -> str:
     vals = _PRESSURE_MAP
     n = len(vals)
     if n < 2:
+        print(f"[Pressure] PRESSURE_MAP empty, uv={uv_val:.6f}")
         return "-"
     v_min, v_max = vals[0], vals[-1]
     if v_max == v_min:
         return "0.00"
     norm = [(v - v_min) / (v_max - v_min) for v in vals]
     if uv_val <= norm[0]:
+        print(f"[Pressure] uv={uv_val:.6f} <= norm[0]={norm[0]:.6f} (val={vals[0]}) → clamp 0.00")
         return "0.00"
     if uv_val >= norm[-1]:
+        print(f"[Pressure] uv={uv_val:.6f} >= norm[{n-1}]={norm[-1]:.6f} (val={vals[-1]}) → clamp {n-1:.2f}")
         return f"{n - 1:.2f}"
     for i in range(n - 1):
         if norm[i] <= uv_val <= norm[i + 1]:
             span = norm[i + 1] - norm[i]
             t = (uv_val - norm[i]) / span if span > 0 else 0.0
-            return f"{i + t:.2f}"
+            result = i + t
+            print(
+                f"[Pressure] uv={uv_val:.6f} | "
+                f"n1=[{i}] val={vals[i]:.6f} norm={norm[i]:.6f} | "
+                f"n2=[{i+1}] val={vals[i+1]:.6f} norm={norm[i+1]:.6f} | "
+                f"→ idx={result:.2f}"
+            )
+            return f"{result:.2f}"
     return f"{n - 1:.2f}"
 
 
@@ -94,7 +104,7 @@ class ColorpickOverlay:
         uv       = info.get("uv_value", 0.0) or 0.0
         hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
         temp_str = f"온도 {_to_temp(c)}"
-        pres_str = f"압력 {_to_pressure(uv)} K"
+        pres_str = f"압력(v_idx) {_to_pressure(uv)}"
         ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_name)
         return inst._add(info["prim_path"], hex_str, temp_str, pres_str, ui_color, pos3d)
@@ -115,7 +125,7 @@ class ColorpickOverlay:
             cls._instances[vp_name]._set_visible_all(visible)
 
     @classmethod
-    def set_visible_all(cls, visible: bool):
+    def visible_all(cls, visible: bool):
         for inst in cls._instances.values():
             inst._set_visible_all(visible)
 
