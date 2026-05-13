@@ -81,71 +81,6 @@ def validate_mesh_compatibility(maps: list, stage) -> None:
         print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
 
 
-class _ResyncScheduler:
-    """Flicker-free 3-phase rprim rebuild via Kit update ticks:
-    Phase 0: MakeInvisible  (mesh hides without blank frame)
-    Phase 1: SetActive(False)
-    Phase 2: SetActive(True) + MakeVisible  (Hydra rebuilds from Fabric = correct UV)
-    """
-
-    def __init__(self, stage, prims: list):
-        self._stage = stage
-        self._prims = [p for p in prims if p.IsValid()]
-        self._invisible_prims: list = []
-        self._deactivated: list = []
-        self._phase = 0
-        self._cancelled: bool = False
-        self._sub = omni.kit.app.get_app().get_update_event_stream() \
-            .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
-
-    def cancel(self):
-        self._cancelled = True
-        self._sub = None
-        session = self._stage.GetSessionLayer()
-        with Usd.EditContext(self._stage, session):
-            with Sdf.ChangeBlock():
-                for p in self._deactivated:
-                    if p.IsValid():
-                        p.SetActive(True)
-                        UsdGeom.Imageable(p).MakeVisible()
-                for p in self._invisible_prims:
-                    if p.IsValid():
-                        UsdGeom.Imageable(p).MakeVisible()
-        self._deactivated = []
-        self._invisible_prims = []
-
-    def _on_tick(self, _event):
-        if self._cancelled:
-            return
-        session = self._stage.GetSessionLayer()
-        if self._phase == 0:
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._prims:
-                        if p.IsValid():
-                            UsdGeom.Imageable(p).MakeInvisible()
-                            self._invisible_prims.append(p)
-            self._phase = 1
-        elif self._phase == 1:
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._invisible_prims:
-                        if p.IsValid():
-                            p.SetActive(False)
-                            self._deactivated.append(p)
-            self._invisible_prims = []
-            self._phase = 2
-        else:
-            with Usd.EditContext(self._stage, session):
-                with Sdf.ChangeBlock():
-                    for p in self._deactivated:
-                        if p.IsValid():
-                            p.SetActive(True)
-                            UsdGeom.Imageable(p).MakeVisible()
-            self._deactivated = []
-            self._sub = None
-
-
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -176,7 +111,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Path 1: usdrt — sync 지연 없이 Fabric에 즉시 기록
+    # Path 1: usdrt — Fabric에 즉시 올바른 값 기록 (sync 지연 우회)
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
@@ -186,7 +121,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
 
-    # Path 2: pxr session layer — USD→Fabric sync이 올바른 값으로 Fabric을 유지하도록
+    # Path 2: pxr session layer — Hydra dirty 알림 + sync가 올바른 값 유지
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
@@ -216,9 +151,6 @@ class UsdInterpolationUI:
         self._pending_t: float = 0.0
         self._is_animating: bool = False
         self._play_task: asyncio.Task | None = None
-        self._resync: _ResyncScheduler | None = None
-        self._debounce_task: asyncio.Task | None = None
-        self._last_written_prims: list = []
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
 
@@ -252,28 +184,6 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
-    def _cancel_resync(self):
-        if self._resync:
-            self._resync.cancel()
-            self._resync = None
-
-    def _cancel_debounce(self):
-        if self._debounce_task and not self._debounce_task.done():
-            self._debounce_task.cancel()
-        self._debounce_task = None
-
-    async def _debounce_resync(self):
-        await asyncio.sleep(0.2)
-        self._cancel_resync()
-        stage = omni.usd.get_context().get_stage()
-        if stage and self._last_written_prims:
-            self._resync = _ResyncScheduler(stage, list(self._last_written_prims))
-
-    def _schedule_resync_debounced(self, prims: list):
-        self._last_written_prims = prims
-        self._cancel_debounce()
-        self._debounce_task = asyncio.ensure_future(self._debounce_resync())
-
     def _on_load(self, idx: int):
         path = self._fields[idx].model.get_value_as_string().strip()
         if idx == 0:
@@ -298,12 +208,7 @@ class UsdInterpolationUI:
         self._slider.enabled = False
 
     def _on_refresh_clicked(self):
-        prims = self._refresh(self._pending_t)
-        if prims:
-            self._cancel_resync()
-            stage = omni.usd.get_context().get_stage()
-            if stage:
-                self._resync = _ResyncScheduler(stage, prims)
+        self._refresh(self._pending_t)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -363,9 +268,7 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        prims = self._refresh(t)
-        if prims:
-            self._schedule_resync_debounced(prims)
+        self._refresh(t)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
@@ -385,8 +288,6 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
-        self._cancel_debounce()
-        self._cancel_resync()
         if self._window:
             self._window.destroy()
             self._window = None
