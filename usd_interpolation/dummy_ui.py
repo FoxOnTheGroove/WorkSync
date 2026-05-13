@@ -251,7 +251,7 @@ class UsdInterpolationUI:
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
             return []
-        result = apply_lerped_st_all(map_a, map_b, local_t, write_fabric=False)
+        result = apply_lerped_st_all(map_a, map_b, local_t)
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
         self._flush_task = asyncio.ensure_future(
@@ -263,7 +263,7 @@ class UsdInterpolationUI:
         try:
             for i in range(n):
                 await omni.kit.app.get_app().next_update_async()
-                apply_lerped_st_all(map_a, map_b, local_t, write_fabric=(i == n - 1))
+                apply_lerped_st_all(map_a, map_b, local_t)
         except asyncio.CancelledError:
             pass
 
