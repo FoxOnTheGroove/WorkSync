@@ -1,6 +1,7 @@
 import asyncio
 import numpy as np
 
+import usdrt
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.timeline
@@ -49,7 +50,7 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 _UV_SLOT = [0]  # alternates between 0 and 1
 
 
-def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
+def apply_lerped_st_all(map_a: dict, map_b: dict, t: float, write_fabric: bool = True) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
@@ -77,7 +78,18 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # session layer에 time sample로 쓰기 (slot 0↔1 alternating)
+    # Step 1: usdrt → Fabric에 직접 정확한 UV 쓰기 (선택적)
+    if write_fabric:
+        usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
+        for _, prim, uv_data in writes:
+            usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
+            if not usdrt_prim.IsValid():
+                continue
+            usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
+            if usdrt_attr:
+                usdrt_attr.Set(uv_data)
+
+    # Step 2: session layer에 time sample로 쓰기 (slot 0↔1 alternating)
     # time-varying primvar로 만들어 timecode 변경 시 Hydra가 full re-evaluation 경로를 타도록 한다
     next_slot = 1 - _UV_SLOT[0]  # 0→1, 1→0
     tc = Usd.TimeCode(float(next_slot))
@@ -88,7 +100,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
                 st_pv.GetAttr().Set(uv_data, tc)
     _UV_SLOT[0] = next_slot
 
-    # timeline timecode 이동 → Hydra time-varying primvar 재평가
+    # Step 3: timeline 현재 시간을 해당 timecode로 이동 → Hydra stale GPU 버퍼 flush
     fps = stage.GetTimeCodesPerSecond()
     omni.timeline.get_timeline_interface().set_current_time(float(next_slot) / fps)
 
@@ -156,16 +168,13 @@ class UsdInterpolationUI:
             self._set_status(f"ERROR: Failed to load File {idx}")
             return
         self._maps[idx] = st_map
-        loaded = [i for i, m in enumerate(self._maps) if m is not None]
-        self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded}")
+        loaded_indices = [i for i, m in enumerate(self._maps) if m is not None]
+        self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded_indices}")
         self._try_enable_slider()
 
     def _try_enable_slider(self):
-        for i in range(NUM_FILES - 1):
-            if self._maps[i] is not None and self._maps[i + 1] is not None:
-                self._slider.enabled = True
-                return
-        self._slider.enabled = False
+        loaded = [m for m in self._maps if m is not None]
+        self._slider.enabled = len(loaded) >= 2
 
     def _on_refresh_clicked(self):
         self._refresh(self._pending_t)
@@ -231,14 +240,16 @@ class UsdInterpolationUI:
         self._refresh(t)
 
     def _refresh(self, t: float) -> list:
-        raw = t * (NUM_FILES - 1)
-        seg = min(int(raw), NUM_FILES - 2)
-        local_t = min(raw - seg, 1.0)
-        map_a = self._maps[seg]
-        map_b = self._maps[seg + 1]
-        if map_a is None or map_b is None:
-            self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
+        loaded = [m for m in self._maps if m is not None]
+        n = len(loaded)
+        if n < 2:
+            self._set_status("Need at least 2 files loaded")
             return []
+        raw = t * (n - 1)
+        seg = min(int(raw), n - 2)
+        local_t = min(raw - seg, 1.0)
+        map_a = loaded[seg]
+        map_b = loaded[seg + 1]
         result = apply_lerped_st_all(map_a, map_b, local_t)
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
