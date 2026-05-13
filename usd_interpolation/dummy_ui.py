@@ -124,6 +124,7 @@ class UsdInterpolationUI:
         self._pending_t: float = 0.0
         self._is_animating: bool = False
         self._play_task: asyncio.Task | None = None
+        self._flush_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
 
@@ -249,7 +250,21 @@ class UsdInterpolationUI:
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
             return []
-        return apply_lerped_st_all(map_a, map_b, local_t)
+        result = apply_lerped_st_all(map_a, map_b, local_t)
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+        self._flush_task = asyncio.ensure_future(
+            self._flush_followup(map_a, map_b, local_t, 4)
+        )
+        return result
+
+    async def _flush_followup(self, map_a, map_b, local_t, n):
+        try:
+            for _ in range(n):
+                await omni.kit.app.get_app().next_update_async()
+                apply_lerped_st_all(map_a, map_b, local_t)
+        except asyncio.CancelledError:
+            pass
 
     def _set_status(self, text: str):
         if self._status_label:
@@ -257,6 +272,9 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
+        if self._flush_task:
+            self._flush_task.cancel()
+            self._flush_task = None
         if self._window:
             self._window.destroy()
             self._window = None
