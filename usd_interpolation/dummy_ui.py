@@ -81,6 +81,45 @@ def validate_mesh_compatibility(maps: list, stage) -> None:
         print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
 
 
+class _ResyncScheduler:
+    """Fires SetActive(False) on the next Kit update tick, then SetActive(True)
+    on the tick after that, giving Hydra a full rprim reinit per slider move."""
+
+    def __init__(self, stage, prims: list):
+        self._stage = stage
+        self._prims = [p for p in prims if p.IsValid()]
+        self._phase = 0
+        self._sub = omni.kit.app.get_app().get_update_event_stream() \
+            .create_subscription_to_pop(self._on_tick, name="usd_interp_resync")
+
+    def cancel(self):
+        self._sub = None
+        session = self._stage.GetSessionLayer()
+        # restore any prims left inactive by a mid-flight cancel
+        with Usd.EditContext(self._stage, session):
+            with Sdf.ChangeBlock():
+                for p in self._prims:
+                    if p.IsValid() and not p.IsActive():
+                        p.SetActive(True)
+
+    def _on_tick(self, _event):
+        session = self._stage.GetSessionLayer()
+        if self._phase == 0:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._prims:
+                        if p.IsValid():
+                            p.SetActive(False)
+            self._phase = 1
+        else:
+            with Usd.EditContext(self._stage, session):
+                with Sdf.ChangeBlock():
+                    for p in self._prims:
+                        if p.IsValid():
+                            p.SetActive(True)
+            self._sub = None
+
+
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -111,8 +150,10 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Step 1: pre-write correct UV to Fabric so Hydra reads the right
-    # value when the rprim is rebuilt in Step 3.
+    # Write UV directly to Fabric via usdrt. No pxr Set() call here to
+    # avoid the changedInfo notification that triggers Hydra's double-buffer
+    # swap. The _ResyncScheduler will fire SetActive F/T on subsequent ticks
+    # to force a clean rprim rebuild that reads these Fabric values.
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
@@ -121,25 +162,6 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
-
-    session_layer = stage.GetSessionLayer()
-
-    # Step 2: UV value + deactivate. Closing this ChangeBlock sends one
-    # notification; Hydra removes the rprim from the render index.
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for st_pv, prim, uv_data in writes:
-                st_pv.GetAttr().Set(uv_data)
-                st_pv.BlockIndices()
-                prim.SetActive(False)
-
-    # Step 3: reactivate in a separate ChangeBlock so Hydra receives a
-    # second distinct notification and fully rebuilds the rprim, reading
-    # UV from Fabric where the correct value is already in place.
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for _, prim, _ in writes:
-                prim.SetActive(True)
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
@@ -163,6 +185,7 @@ class UsdInterpolationUI:
         self._pending_t: float = 0.0
         self._is_animating: bool = False
         self._play_task: asyncio.Task | None = None
+        self._resync: _ResyncScheduler | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
 
@@ -196,6 +219,13 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
+    def _start_resync(self, prims: list):
+        if self._resync:
+            self._resync.cancel()
+        stage = omni.usd.get_context().get_stage()
+        if stage and prims:
+            self._resync = _ResyncScheduler(stage, prims)
+
     def _on_load(self, idx: int):
         path = self._fields[idx].model.get_value_as_string().strip()
         if idx == 0:
@@ -220,7 +250,9 @@ class UsdInterpolationUI:
         self._slider.enabled = False
 
     def _on_refresh_clicked(self):
-        self._refresh(self._pending_t)
+        prims = self._refresh(self._pending_t)
+        if prims:
+            self._start_resync(prims)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -280,7 +312,9 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        self._refresh(t)
+        prims = self._refresh(t)
+        if prims:
+            self._start_resync(prims)
 
     def _refresh(self, t: float) -> list:
         raw = t * (NUM_FILES - 1)
@@ -300,6 +334,9 @@ class UsdInterpolationUI:
 
     def destroy(self):
         self._stop_play()
+        if self._resync:
+            self._resync.cancel()
+            self._resync = None
         if self._window:
             self._window.destroy()
             self._window = None
