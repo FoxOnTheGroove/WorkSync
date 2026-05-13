@@ -10,9 +10,9 @@ from .colorpick import Colorpick
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
 PANEL_W          = 160
-PANEL_H          = 80
+PANEL_H          = 93
 PANEL_BG         = 0xFFFFFFFF
-SWATCH_COL_W     = PANEL_H
+SWATCH_COL_W     = 80
 DOT_SIZE         = 13
 LABEL_SIZE       = 13
 PANEL_PAD        = 6
@@ -206,6 +206,8 @@ class ColorpickOverlay:
                     ui.Rectangle(style={
                         "background_color": PANEL_BG,
                         "border_radius": 4,
+                        "border_color": 0xFFCCCCCC,
+                        "border_width": 1,
                     })
                     with ui.HStack():
                         with ui.VStack(width=SWATCH_COL_W):
