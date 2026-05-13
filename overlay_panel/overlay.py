@@ -9,8 +9,8 @@ from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
-PANEL_W          = 160
-PANEL_H          = 93
+PANEL_W          = 173
+PANEL_H          = 80
 PANEL_BG         = 0xFFFFFFFF
 SWATCH_COL_W     = 80
 DOT_SIZE         = 13
@@ -204,11 +204,19 @@ class ColorpickOverlay:
             with win.frame:
                 with ui.ZStack():
                     ui.Rectangle(style={
-                        "background_color": PANEL_BG,
-                        "border_radius": 4,
-                        "border_color": 0xFFCCCCCC,
-                        "border_width": 1,
+                        "background_color": 0xFFCCCCCC,
+                        "border_radius": 5,
                     })
+                    with ui.VStack():
+                        ui.Spacer(height=1)
+                        with ui.HStack():
+                            ui.Spacer(width=1)
+                            ui.Rectangle(style={
+                                "background_color": PANEL_BG,
+                                "border_radius": 4,
+                            })
+                            ui.Spacer(width=1)
+                        ui.Spacer(height=1)
                     with ui.HStack():
                         with ui.VStack(width=SWATCH_COL_W):
                             ui.Spacer(height=PANEL_PAD)
