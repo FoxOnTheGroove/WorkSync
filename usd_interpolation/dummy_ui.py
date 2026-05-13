@@ -38,6 +38,17 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
                 st_raw = st_pv.ComputeFlattened(samples[0])
         if st_raw is not None:
             result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
+            # 진단: 원본 indexing 상태 확인
+            try:
+                is_indexed = st_pv.IsIndexed()
+                raw_values = st_pv.GetAttr().Get(tc)
+                raw_len = len(raw_values) if raw_values is not None else 0
+                idx_arr = st_pv.GetIndices(tc) if is_indexed else None
+                idx_len = len(idx_arr) if idx_arr else 0
+                print(f"[usd_interpolation] {prim.GetPath()}: indexed={is_indexed}, "
+                      f"values={raw_len}, indices={idx_len}, flattened={len(st_raw)}")
+            except Exception as e:
+                print(f"[usd_interpolation] {prim.GetPath()}: diagnostic error: {e}")
             print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
 
     if not result:
@@ -111,23 +122,31 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Path 1: usdrt — Fabric에 즉시 올바른 값 기록 (sync 지연 우회)
+    # Path 1: usdrt — Fabric에 즉시 올바른 값 + identity indices 기록
+    # base layer의 stale indices를 명시적으로 덮어써
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
         if not usdrt_prim.IsValid():
             continue
-        usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
-        if usdrt_attr:
-            usdrt_attr.Set(uv_data)
+        n = len(uv_data)
+        usdrt_st = usdrt_prim.GetAttribute("primvars:st")
+        if usdrt_st:
+            usdrt_st.Set(uv_data)
+        usdrt_idx = usdrt_prim.GetAttribute("primvars:st:indices")
+        if usdrt_idx:
+            usdrt_idx.Set(Vt.IntArray(list(range(n))))
 
-    # Path 2: pxr session layer — Hydra dirty 알림 + sync가 올바른 값 유지
+    # Path 2: pxr session layer — 명시적 identity indices (SdfValueBlock 안씬)
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, uv_data in writes:
+                n = len(uv_data)
                 st_pv.GetAttr().Set(uv_data)
-                st_pv.BlockIndices()
+                indices_attr = st_pv.GetIndicesAttr()
+                if indices_attr:
+                    indices_attr.Set(Vt.IntArray(list(range(n))))
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
