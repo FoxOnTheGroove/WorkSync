@@ -47,7 +47,7 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
-_UV_SLOT = [1]  # alternates between 1 and 2 (slot 0 intentionally unused)
+_UV_SLOT = [0]  # alternates between 0 and 1
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
@@ -88,9 +88,9 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
 
-    # Step 2: session layer에 time sample로 쓰기 (slot 1↔2 alternating, 0 미사용)
+    # Step 2: session layer에 time sample로 쓰기 (slot 0↔1 alternating)
     # time-varying primvar로 만들어 timecode 변경 시 Hydra가 full re-evaluation 경로를 타도록 한다
-    next_slot = 3 - _UV_SLOT[0]  # 1→2, 2→1
+    next_slot = 1 - _UV_SLOT[0]  # 0→1, 1→0
     tc = Usd.TimeCode(float(next_slot))
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
