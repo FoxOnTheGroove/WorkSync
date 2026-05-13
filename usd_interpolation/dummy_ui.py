@@ -111,8 +111,8 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Step 1: pre-write correct UV to Fabric so both Hydra buffer slots
-    # will read the right value when the rprim reinitialises below.
+    # Step 1: pre-write correct UV to Fabric so Hydra reads the right
+    # value when the rprim is rebuilt in Step 3.
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
@@ -122,17 +122,23 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
 
-    # Step 2: single ChangeBlock — UV value + SetActive F→T.
-    # SetActive forces Hydra to fully reinitialise the rprim (clearing
-    # both double-buffer slots) and re-read from Fabric, where the
-    # correct value is already in place from Step 1.
     session_layer = stage.GetSessionLayer()
+
+    # Step 2: UV value + deactivate. Closing this ChangeBlock sends one
+    # notification; Hydra removes the rprim from the render index.
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, prim, uv_data in writes:
                 st_pv.GetAttr().Set(uv_data)
                 st_pv.BlockIndices()
                 prim.SetActive(False)
+
+    # Step 3: reactivate in a separate ChangeBlock so Hydra receives a
+    # second distinct notification and fully rebuilds the rprim, reading
+    # UV from Fabric where the correct value is already in place.
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for _, prim, _ in writes:
                 prim.SetActive(True)
 
     written_prims = [p for _, p, _ in writes]
