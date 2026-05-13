@@ -2,7 +2,7 @@ import asyncio
 import numpy as np
 
 import usdrt
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
@@ -111,17 +111,25 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
+    # Step 1: write correct UV directly to Fabric so it is in place before
+    # Hydra reads it on the next render tick.
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
-        print(f"[usdrt] prim={prim.GetPath()} valid={usdrt_prim.IsValid()}")
         if not usdrt_prim.IsValid():
             continue
         usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
-        print(f"[usdrt] attr={usdrt_attr!r} truthy={bool(usdrt_attr)}")
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
-            print(f"[usdrt] Set called len={len(uv_data)}")
+
+    # Step 2: emit a changedInfo notification via pxr so Hydra marks the
+    # rprim dirty and re-reads from Fabric on the next tick.
+    session_layer = stage.GetSessionLayer()
+    with Usd.EditContext(stage, session_layer):
+        with Sdf.ChangeBlock():
+            for st_pv, _, uv_data in writes:
+                st_pv.GetAttr().Set(uv_data)
+                st_pv.BlockIndices()
 
     written_prims = [p for _, p, _ in writes]
     print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
