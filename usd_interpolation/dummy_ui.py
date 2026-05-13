@@ -4,6 +4,7 @@ import numpy as np
 import usdrt
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
+import omni.timeline
 import omni.usd
 import omni.ui as ui
 
@@ -46,6 +47,9 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
+_UV_SLOT = [0]  # alternating 0/1 time sample slot
+
+
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -74,7 +78,7 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Path 1: usdrt — Fabric에 올바른 값 즉시 기록
+    # Step 1: usdrt → Fabric에 직접 정확한 UV 쓰기
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
@@ -84,24 +88,22 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
 
-    # Path 2: pxr session layer + 동기적 SetActive F→T 재빌드
-    # 두 ChangeBlock을 같은 Python call 안에서 연속 실행 (await/yield 없음)
-    # → render thread가 중간 상태(rprim 제거)를 볼 틈 없음 → 깜박임 없음
-    # SetActive(F)→HdRenderIndex.RemoveRprim, SetActive(T)→Insert 새 rprim
-    # 새 rprim은 Fabric에서 fresh하게 읽음 (usdrt가 끝난 올바른 값)
+    # Step 2: session layer에 time sample로 쓰기 (slot 0↔1 alternating)
+    # time-varying primvar로 만들어 timecode 변경 시 Hydra가 full re-evaluation 경로를 타도록 한다
+    next_slot = 1 - _UV_SLOT[0]
+    tc = Usd.TimeCode(float(next_slot))
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, uv_data in writes:
-                st_pv.GetAttr().Set(uv_data)
-                st_pv.BlockIndices()
-        with Sdf.ChangeBlock():
-            for _, prim, _ in writes:
-                prim.SetActive(False)
-        with Sdf.ChangeBlock():
-            for _, prim, _ in writes:
-                prim.SetActive(True)
+                st_pv.GetAttr().Set(uv_data, tc)
+    _UV_SLOT[0] = next_slot
 
+    # Step 3: timeline 현재 시간을 해당 timecode로 이동 → Hydra stale GPU 버퍼 flush
+    fps = stage.GetTimeCodesPerSecond()
+    omni.timeline.get_timeline_interface().set_current_time(float(next_slot) / fps)
+
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es) slot={next_slot}")
     return [p for _, p, _ in writes]
 
 
