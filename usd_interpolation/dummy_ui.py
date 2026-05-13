@@ -50,7 +50,7 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 _UV_SLOT = [0]  # alternates between 0 and 1
 
 
-def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
+def apply_lerped_st_all(map_a: dict, map_b: dict, t: float, write_fabric: bool = True) -> list:
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         print("[usd_interpolation] ERROR: No editor stage found")
@@ -78,15 +78,16 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Step 1: usdrt → Fabric에 직접 정확한 UV 쓰기
-    usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
-    for _, prim, uv_data in writes:
-        usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
-        if not usdrt_prim.IsValid():
-            continue
-        usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
-        if usdrt_attr:
-            usdrt_attr.Set(uv_data)
+    # Step 1: usdrt → Fabric에 직접 정확한 UV 쓰기 (선택적)
+    if write_fabric:
+        usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
+        for _, prim, uv_data in writes:
+            usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
+            if not usdrt_prim.IsValid():
+                continue
+            usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
+            if usdrt_attr:
+                usdrt_attr.Set(uv_data)
 
     # Step 2: session layer에 time sample로 쓰기 (slot 0↔1 alternating)
     # time-varying primvar로 만들어 timecode 변경 시 Hydra가 full re-evaluation 경로를 타도록 한다
@@ -250,19 +251,19 @@ class UsdInterpolationUI:
         if map_a is None or map_b is None:
             self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
             return []
-        result = apply_lerped_st_all(map_a, map_b, local_t)
+        result = apply_lerped_st_all(map_a, map_b, local_t, write_fabric=False)
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
         self._flush_task = asyncio.ensure_future(
-            self._flush_followup(map_a, map_b, local_t, n=10)
+            self._flush_followup(map_a, map_b, local_t, n=30)
         )
         return result
 
-    async def _flush_followup(self, map_a, map_b, local_t, n=10):
+    async def _flush_followup(self, map_a, map_b, local_t, n=30):
         try:
-            for _ in range(n):
+            for i in range(n):
                 await omni.kit.app.get_app().next_update_async()
-                apply_lerped_st_all(map_a, map_b, local_t)
+                apply_lerped_st_all(map_a, map_b, local_t, write_fabric=(i == n - 1))
         except asyncio.CancelledError:
             pass
 
