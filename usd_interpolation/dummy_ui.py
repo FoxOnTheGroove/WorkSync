@@ -47,8 +47,7 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
-_UV_NUM_SLOTS = 4
-_UV_SLOT = [0]  # cycles 0→1→2→3→0 to guarantee Hydra change detection
+_UV_SLOT = [1]  # alternates between 1 and 2 (slot 0 intentionally unused)
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
@@ -89,9 +88,9 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if usdrt_attr:
             usdrt_attr.Set(uv_data)
 
-    # Step 2: session layer에 time sample로 쓰기 (slot 0→1→2→3→0 cycling)
+    # Step 2: session layer에 time sample로 쓰기 (slot 1↔2 alternating, 0 미사용)
     # time-varying primvar로 만들어 timecode 변경 시 Hydra가 full re-evaluation 경로를 타도록 한다
-    next_slot = (_UV_SLOT[0] + 1) % _UV_NUM_SLOTS
+    next_slot = 3 - _UV_SLOT[0]  # 1→2, 2→1
     tc = Usd.TimeCode(float(next_slot))
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
@@ -255,14 +254,14 @@ class UsdInterpolationUI:
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
         self._flush_task = asyncio.ensure_future(
-            self._flush_followup(map_a, map_b, local_t, n=5, interval=0.1)
+            self._flush_followup(map_a, map_b, local_t, n=10)
         )
         return result
 
-    async def _flush_followup(self, map_a, map_b, local_t, n=5, interval=0.1):
+    async def _flush_followup(self, map_a, map_b, local_t, n=10):
         try:
             for _ in range(n):
-                await asyncio.sleep(interval)
+                await omni.kit.app.get_app().next_update_async()
                 apply_lerped_st_all(map_a, map_b, local_t)
         except asyncio.CancelledError:
             pass
