@@ -38,58 +38,12 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
                 st_raw = st_pv.ComputeFlattened(samples[0])
         if st_raw is not None:
             result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
-            # 진단: 원본 indexing 상태 확인
-            try:
-                is_indexed = st_pv.IsIndexed()
-                raw_values = st_pv.GetAttr().Get(tc)
-                raw_len = len(raw_values) if raw_values is not None else 0
-                idx_arr = st_pv.GetIndices(tc) if is_indexed else None
-                idx_len = len(idx_arr) if idx_arr else 0
-                print(f"[usd_interpolation] {prim.GetPath()}: indexed={is_indexed}, "
-                      f"values={raw_len}, indices={idx_len}, flattened={len(st_raw)}")
-            except Exception as e:
-                print(f"[usd_interpolation] {prim.GetPath()}: diagnostic error: {e}")
-            print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
 
     if not result:
         print(f"[usd_interpolation] ERROR: No mesh with st found in {usd_file_path}")
         return None
 
-    print(f"[usd_interpolation] Loaded {len(result)} mesh(es) from {usd_file_path}")
     return result
-
-
-def validate_mesh_compatibility(maps: list, stage) -> None:
-    """로드된 모든 map의 UV 배열 길이와 stage faceVertex 수를 비교 출력."""
-    all_paths: set = set()
-    for m in maps:
-        if m is not None:
-            all_paths.update(m.keys())
-    if not all_paths:
-        return
-
-    for prim_path in sorted(all_paths):
-        prim = stage.GetPrimAtPath(prim_path)
-        stage_fvc = None
-        if prim.IsValid() and prim.IsA(UsdGeom.Mesh):
-            fvc = UsdGeom.Mesh(prim).GetFaceVertexCountsAttr().Get()
-            if fvc:
-                stage_fvc = int(sum(fvc))
-
-        uv_lengths = []
-        parts = [f"stage_fvc={stage_fvc}"]
-        for i, m in enumerate(maps):
-            if m is not None and prim_path in m:
-                n = len(m[prim_path])
-                uv_lengths.append(n)
-                parts.append(f"map{i}={n}")
-            else:
-                parts.append(f"map{i}=-")
-
-        all_same = len(set(uv_lengths)) <= 1
-        match_stage = stage_fvc is None or all(n == stage_fvc for n in uv_lengths)
-        tag = "OK" if (all_same and match_stage) else "MISMATCH"
-        print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
@@ -102,7 +56,6 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     for prim_path, st_a in map_a.items():
         st_b = map_b.get(prim_path)
         if st_b is None:
-            print(f"[usd_interpolation] SKIP {prim_path}: not in map_b")
             continue
         prim = stage.GetPrimAtPath(prim_path)
         if not prim.IsValid():
@@ -111,7 +64,6 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
         if not st_pv or not st_pv.GetAttr().IsValid():
             continue
         if len(st_a) != len(st_b):
-            print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
             chosen = st_a if t < 0.5 else st_b
             writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
             continue
@@ -122,35 +74,35 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
     if not writes:
         return []
 
-    # Path 1: usdrt — Fabric에 즉시 올바른 값 + identity indices 기록
-    # base layer의 stale indices를 명시적으로 덮어써
+    # Path 1: usdrt — Fabric에 올바른 값 즉시 기록
     usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
     for _, prim, uv_data in writes:
         usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(str(prim.GetPath())))
         if not usdrt_prim.IsValid():
             continue
-        n = len(uv_data)
-        usdrt_st = usdrt_prim.GetAttribute("primvars:st")
-        if usdrt_st:
-            usdrt_st.Set(uv_data)
-        usdrt_idx = usdrt_prim.GetAttribute("primvars:st:indices")
-        if usdrt_idx:
-            usdrt_idx.Set(Vt.IntArray(list(range(n))))
+        usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
+        if usdrt_attr:
+            usdrt_attr.Set(uv_data)
 
-    # Path 2: pxr session layer — 명시적 identity indices (SdfValueBlock 안씬)
+    # Path 2: pxr session layer + 동기적 SetActive F→T 재빌드
+    # 두 ChangeBlock을 같은 Python call 안에서 연속 실행 (await/yield 없음)
+    # → render thread가 중간 상태(rprim 제거)를 볼 틈 없음 → 깜박임 없음
+    # SetActive(F)→HdRenderIndex.RemoveRprim, SetActive(T)→Insert 새 rprim
+    # 새 rprim은 Fabric에서 fresh하게 읽음 (usdrt가 끝난 올바른 값)
     session_layer = stage.GetSessionLayer()
     with Usd.EditContext(stage, session_layer):
         with Sdf.ChangeBlock():
             for st_pv, _, uv_data in writes:
-                n = len(uv_data)
                 st_pv.GetAttr().Set(uv_data)
-                indices_attr = st_pv.GetIndicesAttr()
-                if indices_attr:
-                    indices_attr.Set(Vt.IntArray(list(range(n))))
+                st_pv.BlockIndices()
+        with Sdf.ChangeBlock():
+            for _, prim, _ in writes:
+                prim.SetActive(False)
+        with Sdf.ChangeBlock():
+            for _, prim, _ in writes:
+                prim.SetActive(True)
 
-    written_prims = [p for _, p, _ in writes]
-    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
-    return written_prims
+    return [p for _, p, _ in writes]
 
 
 NUM_FILES = 5
@@ -214,9 +166,6 @@ class UsdInterpolationUI:
         self._maps[idx] = st_map
         loaded = [i for i, m in enumerate(self._maps) if m is not None]
         self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded}")
-        stage = omni.usd.get_context().get_stage()
-        if stage:
-            validate_mesh_compatibility(self._maps, stage)
         self._try_enable_slider()
 
     def _try_enable_slider(self):
@@ -293,7 +242,6 @@ class UsdInterpolationUI:
         raw = t * (NUM_FILES - 1)
         seg = min(int(raw), NUM_FILES - 2)
         local_t = min(raw - seg, 1.0)
-        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | local_t={local_t:.4f}")
         map_a = self._maps[seg]
         map_b = self._maps[seg + 1]
         if map_a is None or map_b is None:
