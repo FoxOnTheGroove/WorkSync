@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import os
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
@@ -33,12 +34,40 @@ _WIN_FLAGS = (
 )
 
 
+def _load_pressure_map():
+    path = os.path.join(os.path.dirname(__file__), "data", "plot_velocity")
+    try:
+        with open(path) as f:
+            return [float(l.strip()) for l in f if l.strip()]
+    except Exception:
+        return []
+
+_PRESSURE_MAP = _load_pressure_map()
+
+
 def _to_temp(rgb) -> str:
     return "111"
 
 
-def _to_pressure(rgb) -> str:
-    return "111"
+def _to_pressure(uv_val: float) -> str:
+    vals = _PRESSURE_MAP
+    n = len(vals)
+    if n < 2:
+        return "-"
+    v_min, v_max = vals[0], vals[-1]
+    if v_max == v_min:
+        return "0.00"
+    norm = [(v - v_min) / (v_max - v_min) for v in vals]
+    if uv_val <= norm[0]:
+        return "0.00"
+    if uv_val >= norm[-1]:
+        return f"{n - 1:.2f}"
+    for i in range(n - 1):
+        if norm[i] <= uv_val <= norm[i + 1]:
+            span = norm[i + 1] - norm[i]
+            t = (uv_val - norm[i]) / span if span > 0 else 0.0
+            return f"{i + t:.2f}"
+    return f"{n - 1:.2f}"
 
 
 class ColorpickOverlay:
@@ -62,9 +91,10 @@ class ColorpickOverlay:
         if not info["hit"]:
             return None
         c        = info["texel_color"]
+        uv       = info.get("uv_value", 0.0) or 0.0
         hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
         temp_str = f"온도 {_to_temp(c)}"
-        pres_str = f"압력 {_to_pressure(c)}"
+        pres_str = f"압력 {_to_pressure(uv)} K"
         ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_name)
         return inst._add(info["prim_path"], hex_str, temp_str, pres_str, ui_color, pos3d)
