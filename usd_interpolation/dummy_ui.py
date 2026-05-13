@@ -255,11 +255,11 @@ class UsdInterpolationUI:
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
         self._flush_task = asyncio.ensure_future(
-            self._flush_followup(map_a, map_b, local_t, n=30)
+            self._flush_followup(map_a, map_b, local_t, n=40)
         )
         return result
 
-    async def _flush_followup(self, map_a, map_b, local_t, n=30):
+    async def _flush_followup(self, map_a, map_b, local_t, n=40):
         try:
             for i in range(n):
                 await omni.kit.app.get_app().next_update_async()
