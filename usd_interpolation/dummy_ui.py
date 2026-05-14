@@ -271,9 +271,19 @@ class UsdInterpolationUI:
         finally:
             self._is_animating = False
             if self._pick_original is not None:
-                path = _TBN_PATH if _TRIGGER_MODE == "tbn" else _PICK_PATH
-                _carb_settings.get_settings().set(path, self._pick_original)
+                orig = self._pick_original
                 self._pick_original = None
+                path = _TBN_PATH if _TRIGGER_MODE == "tbn" else _PICK_PATH
+
+                async def _end_flush(p=path, o=orig):
+                    s = _carb_settings.get_settings()
+                    s.set(p, not o if isinstance(o, bool) else (3 if o != 3 else 2))
+                    await omni.kit.app.get_app().next_update_async()
+                    s.set(p, o)
+
+                if self._flush_task and not self._flush_task.done():
+                    self._flush_task.cancel()
+                self._flush_task = asyncio.ensure_future(_end_flush())
             self._stop_play()
 
     def _on_slider_changed(self, model):
