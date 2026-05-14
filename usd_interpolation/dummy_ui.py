@@ -9,31 +9,23 @@ import omni.timeline
 import omni.usd
 import omni.ui as ui
 
-_PICK_PATH = "/rtx/hydra/instancePickingEnabled"
-_TBN_PATH = "/rtx/hydra/TBNFrameMode"  # 0=auto,1=cpu,2=gpu,3=force gpu
+# TBNFrameMode: 0=auto, 1=cpu, 2=gpu, 3=force_gpu
+# 트리거: original ↔ (original + 1) % 4  → 기본값이 어떤 값이어도 인접값으로 변경 후 원복
+_TBN_PATH = "/rtx/hydra/TBNFrameMode"
 ANIM_FLIP_EVERY_N = 10  # 애니메이션 중 N프레임마다 1회 flip
 
-# "picking" : instancePickingEnabled bool 토글 (동작 확인됨)
-# "tbn"     : TBNFrameMode 2↔3 (gpu↔force gpu) 토글 (가설: 동일 파이프라인 내 전환이라 더 가벼울 수 있음)
-_TRIGGER_MODE = "picking"
+
+def _tbn_flip(original: int) -> int:
+    return (original + 1) % 4
 
 
 async def _trigger_rerender(restore: bool = True):
     s = _carb_settings.get_settings()
-    if _TRIGGER_MODE == "tbn":
-        cur = s.get(_TBN_PATH) or 0
-        # gpu(2)↔force gpu(3) 토글; 현재값이 범위 밖이면 2↔3로 고정
-        nxt = 3 if cur != 3 else 2
-        s.set(_TBN_PATH, nxt)
-        await omni.kit.app.get_app().next_update_async()
-        if restore:
-            s.set(_TBN_PATH, cur)
-    else:  # "picking"
-        cur = s.get(_PICK_PATH)
-        s.set(_PICK_PATH, not cur)
-        await omni.kit.app.get_app().next_update_async()
-        if restore:
-            s.set(_PICK_PATH, cur)
+    cur = s.get(_TBN_PATH) or 0
+    s.set(_TBN_PATH, _tbn_flip(cur))
+    await omni.kit.app.get_app().next_update_async()
+    if restore:
+        s.set(_TBN_PATH, cur)
 
 
 def _get_attr(attr) -> object:
@@ -150,7 +142,7 @@ class UsdInterpolationUI:
 
         self._pending_t: float = 0.0
         self._is_animating: bool = False
-        self._pick_original: bool | None = None
+        self._tbn_original: int | None = None
         self._anim_frame: int = 0
         self._play_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
@@ -242,8 +234,7 @@ class UsdInterpolationUI:
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
         self._anim_frame = 0
-        s = _carb_settings.get_settings()
-        self._pick_original = s.get(_TBN_PATH if _TRIGGER_MODE == "tbn" else _PICK_PATH)
+        self._tbn_original = _carb_settings.get_settings().get(_TBN_PATH) or 0
         self._is_animating = True
         try:
             while True:
@@ -253,16 +244,15 @@ class UsdInterpolationUI:
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
 
-                self._slider.model.set_value(new_t)  # → _on_slider_changed → _refresh(do_trigger=False)
+                self._slider.model.set_value(new_t)
 
                 self._anim_frame += 1
                 if self._anim_frame % ANIM_FLIP_EVERY_N == 0:
                     s = _carb_settings.get_settings()
-                    if _TRIGGER_MODE == "tbn":
-                        cur = s.get(_TBN_PATH) or 0
-                        s.set(_TBN_PATH, 3 if cur != 3 else 2)
-                    else:
-                        s.set(_PICK_PATH, not s.get(_PICK_PATH))
+                    cur = s.get(_TBN_PATH) or 0
+                    # original ↔ adjacent: 짝수 flip → adjacent, 홀수 flip → original
+                    flipped = _tbn_flip(self._tbn_original)
+                    s.set(_TBN_PATH, flipped if cur == self._tbn_original else self._tbn_original)
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
@@ -270,16 +260,15 @@ class UsdInterpolationUI:
             return
         finally:
             self._is_animating = False
-            if self._pick_original is not None:
-                orig = self._pick_original
-                self._pick_original = None
-                path = _TBN_PATH if _TRIGGER_MODE == "tbn" else _PICK_PATH
+            if self._tbn_original is not None:
+                orig = self._tbn_original
+                self._tbn_original = None
 
-                async def _end_flush(p=path, o=orig):
+                async def _end_flush(o=orig):
                     s = _carb_settings.get_settings()
-                    s.set(p, not o if isinstance(o, bool) else (3 if o != 3 else 2))
+                    s.set(_TBN_PATH, _tbn_flip(o))
                     await omni.kit.app.get_app().next_update_async()
-                    s.set(p, o)
+                    s.set(_TBN_PATH, o)
 
                 if self._flush_task and not self._flush_task.done():
                     self._flush_task.cancel()
