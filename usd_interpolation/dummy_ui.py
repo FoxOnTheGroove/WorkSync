@@ -2,7 +2,7 @@ import asyncio
 import numpy as np
 
 import carb.settings as _carb_settings
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.usd
 import omni.ui as ui
@@ -67,7 +67,9 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> int:
             uv = np.ascontiguousarray(st_a if t < 0.5 else st_b)
         else:
             uv = np.ascontiguousarray(st_a + np.float32(t) * (st_b - st_a))
-        st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(uv))
+        uv_vt = Vt.Vec2fArray.FromNumpy(uv)
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            st_pv.GetAttr().Set(uv_vt)
         count += 1
     if count:
         print(f"[usd_interpolation] t={t:.3f} {count}mesh")
