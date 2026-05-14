@@ -12,12 +12,13 @@ import omni.ui as ui
 _PICK_PATH = "/rtx/hydra/instancePickingEnabled"
 
 
-async def _trigger_rerender():
+async def _trigger_rerender(restore: bool = True):
     s = _carb_settings.get_settings()
     cur = s.get(_PICK_PATH)
     s.set(_PICK_PATH, not cur)
     await omni.kit.app.get_app().next_update_async()
-    s.set(_PICK_PATH, cur)
+    if restore:
+        s.set(_PICK_PATH, cur)
 
 
 def _get_attr(attr) -> object:
@@ -134,6 +135,7 @@ class UsdInterpolationUI:
 
         self._pending_t: float = 0.0
         self._is_animating: bool = False
+        self._pick_original: bool | None = None
         self._play_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
@@ -223,6 +225,7 @@ class UsdInterpolationUI:
         elapsed = 0.0
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
+        self._pick_original = _carb_settings.get_settings().get(_PICK_PATH)
         self._is_animating = True
         try:
             while True:
@@ -240,6 +243,9 @@ class UsdInterpolationUI:
             return
         finally:
             self._is_animating = False
+            if self._pick_original is not None:
+                _carb_settings.get_settings().set(_PICK_PATH, self._pick_original)
+                self._pick_original = None
             self._stop_play()
 
     def _on_slider_changed(self, model):
@@ -263,7 +269,7 @@ class UsdInterpolationUI:
         result = apply_lerped_st_all(map_a, map_b, local_t)
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
-        self._flush_task = asyncio.ensure_future(_trigger_rerender())
+        self._flush_task = asyncio.ensure_future(_trigger_rerender(restore=not self._is_animating))
         return result
 
     def _set_status(self, text: str):
