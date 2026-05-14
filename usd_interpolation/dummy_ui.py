@@ -1,12 +1,23 @@
 import asyncio
 import numpy as np
 
+import carb.settings as _carb_settings
 import usdrt
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
 import omni.timeline
 import omni.usd
 import omni.ui as ui
+
+_PICK_PATH = "/rtx/hydra/intancePickingEnable"  # 오타 포함, 실제 키 그대로
+
+
+async def _trigger_rerender():
+    s = _carb_settings.get_settings()
+    cur = s.get(_PICK_PATH) or 0
+    s.set(_PICK_PATH, 1 - cur)
+    await omni.kit.app.get_app().next_update_async()
+    s.set(_PICK_PATH, cur)
 
 
 def _get_attr(attr) -> object:
@@ -252,18 +263,8 @@ class UsdInterpolationUI:
         result = apply_lerped_st_all(map_a, map_b, local_t)
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
-        self._flush_task = asyncio.ensure_future(
-            self._flush_followup(map_a, map_b, local_t, n=40)
-        )
+        self._flush_task = asyncio.ensure_future(_trigger_rerender())
         return result
-
-    async def _flush_followup(self, map_a, map_b, local_t, n=40):
-        try:
-            for i in range(n):
-                await omni.kit.app.get_app().next_update_async()
-                apply_lerped_st_all(map_a, map_b, local_t)
-        except asyncio.CancelledError:
-            pass
 
     def _set_status(self, text: str):
         if self._status_label:
