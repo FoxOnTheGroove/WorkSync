@@ -64,6 +64,8 @@ class UVMixer:
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
         cls._bake_timesamples()
+        if cls._tbn_enabled and len(cls.get_loaded_slots()) >= 2:
+            cls._schedule_trigger()
         return True
 
     @classmethod
