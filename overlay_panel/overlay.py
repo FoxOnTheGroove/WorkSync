@@ -45,39 +45,36 @@ def _load_pressure_map():
 _PRESSURE_MAP = _load_pressure_map()
 
 
-def _to_temp(rgb) -> str:
-    return "111"
-
-
-def _to_pressure(uv_val: float) -> str:
+def _pressure_data(uv_val: float):
     vals = _PRESSURE_MAP
     n = len(vals)
     if n < 2:
         print(f"[Pressure] PRESSURE_MAP empty, uv={uv_val:.6f}")
-        return "-"
+        return None, None
     v_min, v_max = vals[0], vals[-1]
     if v_max == v_min:
-        return "0.00"
+        return 0.0, vals[0]
     norm = [(v - v_min) / (v_max - v_min) for v in vals]
     if uv_val <= norm[0]:
-        print(f"[Pressure] uv={uv_val:.6f} <= norm[0]={norm[0]:.6f} (val={vals[0]}) → clamp 0.00")
-        return "0.00"
+        print(f"[Pressure] uv={uv_val:.6f} <= norm[0]={norm[0]:.6f} (val={vals[0]}) → clamp 0")
+        return 0.0, vals[0]
     if uv_val >= norm[-1]:
-        print(f"[Pressure] uv={uv_val:.6f} >= norm[{n-1}]={norm[-1]:.6f} (val={vals[-1]}) → clamp {n-1:.2f}")
-        return f"{n - 1:.2f}"
+        print(f"[Pressure] uv={uv_val:.6f} >= norm[{n-1}]={norm[-1]:.6f} (val={vals[-1]}) → clamp {n-1}")
+        return float(n - 1), vals[-1]
     for i in range(n - 1):
         if norm[i] <= uv_val <= norm[i + 1]:
             span = norm[i + 1] - norm[i]
             t = (uv_val - norm[i]) / span if span > 0 else 0.0
-            result = i + t
+            idx = i + t
+            interp_val = vals[i] + t * (vals[i + 1] - vals[i])
             print(
                 f"[Pressure] uv={uv_val:.6f} | "
                 f"n1=[{i}] val={vals[i]:.6f} norm={norm[i]:.6f} | "
                 f"n2=[{i+1}] val={vals[i+1]:.6f} norm={norm[i+1]:.6f} | "
-                f"→ idx={result:.2f}"
+                f"→ idx={idx:.2f} val={interp_val:.6f}"
             )
-            return f"{result:.2f}"
-    return f"{n - 1:.2f}"
+            return idx, interp_val
+    return float(n - 1), vals[-1]
 
 
 class ColorpickOverlay:
@@ -100,14 +97,15 @@ class ColorpickOverlay:
         info = Colorpick.get_result_by_name(vp_name)
         if not info["hit"]:
             return None
-        c        = info["texel_color"]
-        uv       = info.get("uv_value", 0.0) or 0.0
-        hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
-        temp_str = f"온도 {_to_temp(c)}"
-        pres_str = f"압력(v_idx) {_to_pressure(uv)}"
-        ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
+        c   = info["texel_color"]
+        uv  = info.get("uv_value", 0.0) or 0.0
+        idx, val = _pressure_data(uv)
+        hex_str   = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
+        pres_str  = f"압력(v_idx) {idx:.2f}"   if idx is not None else "압력(v_idx) -"
+        plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
+        ui_color  = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_name)
-        return inst._add(info["prim_path"], hex_str, temp_str, pres_str, ui_color, pos3d)
+        return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d)
 
     @classmethod
     def off(cls, identifier):
@@ -244,12 +242,12 @@ class ColorpickOverlay:
                                     "#000000",
                                     style=_lbl_style,
                                 )
-                            temp_lbl = ui.Label(
-                                "온도 -",
+                            pres_lbl  = ui.Label(
+                                "압력(v_idx) -",
                                 style=_lbl_style,
                             )
-                            pres_lbl = ui.Label(
-                                "압력 -",
+                            plotv_lbl = ui.Label(
+                                "plot_v value : -",
                                 style=_lbl_style,
                             )
                             ui.Spacer(height=PANEL_PAD)
@@ -260,8 +258,8 @@ class ColorpickOverlay:
                 "swatch":      swatch,
                 "color_dot":   dot,
                 "hex_label":   hex_lbl,
-                "temp_label":  temp_lbl,
                 "press_label": pres_lbl,
+                "plotv_label": plotv_lbl,
                 "world_pos":   None,
                 "marker_path": None,
             })
@@ -353,8 +351,8 @@ class ColorpickOverlay:
 
     # ------------------------------------------------------------------
 
-    def _add(self, prim_path: str, hex_str: str, temp_str: str,
-             pres_str: str, ui_color: int, pos3d: tuple) -> int:
+    def _add(self, prim_path: str, hex_str: str, pres_str: str,
+             plotv_str: str, ui_color: int, pos3d: tuple) -> int:
         if len(self._active) >= MAX_OVERLAYS:
             oldest_key = next(iter(self._active))
             self._deactivate(oldest_key)
@@ -369,8 +367,8 @@ class ColorpickOverlay:
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
         slot["hex_label"].text   = hex_str
-        slot["temp_label"].text  = temp_str
         slot["press_label"].text = pres_str
+        slot["plotv_label"].text = plotv_str
 
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
