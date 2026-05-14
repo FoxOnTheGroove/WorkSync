@@ -9,13 +9,13 @@ import omni.timeline
 import omni.usd
 import omni.ui as ui
 
-_PICK_PATH = "/rtx/hydra/intancePickingEnable"  # 오타 포함, 실제 키 그대로
+_PICK_PATH = "/rtx/hydra/instancePickingEnabled"
 
 
 async def _trigger_rerender():
     s = _carb_settings.get_settings()
-    cur = s.get(_PICK_PATH) or 0
-    s.set(_PICK_PATH, 1 - cur)
+    cur = s.get(_PICK_PATH)
+    s.set(_PICK_PATH, not cur)
     await omni.kit.app.get_app().next_update_async()
     s.set(_PICK_PATH, cur)
 
