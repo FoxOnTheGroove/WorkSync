@@ -9,16 +9,44 @@ import omni.timeline
 import omni.usd
 import omni.ui as ui
 
+# 재렌더 트리거 전략 선택:
+#   "picking"  - instancePickingEnabled 토글 (현재, 동작 확인됨, 렉 있음)
+#   "aa"       - AA 모드 토글 (가벼움, UV 재읽기 여부 미확인)
+#   "viewport" - omni.kit.viewport.utility invalidation (가장 클린, API 존재 여부 확인 필요)
+_TRIGGER_MODE = "picking"
+
 _PICK_PATH = "/rtx/hydra/instancePickingEnabled"
+_AA_PATH = "/rtx/post/aa/op"
 
 
 async def _trigger_rerender(restore: bool = True):
-    s = _carb_settings.get_settings()
-    cur = s.get(_PICK_PATH)
-    s.set(_PICK_PATH, not cur)
-    await omni.kit.app.get_app().next_update_async()
-    if restore:
-        s.set(_PICK_PATH, cur)
+    if _TRIGGER_MODE == "aa":
+        s = _carb_settings.get_settings()
+        cur = s.get(_AA_PATH) or 0
+        s.set(_AA_PATH, (cur + 1) % 4)
+        await omni.kit.app.get_app().next_update_async()
+        if restore:
+            s.set(_AA_PATH, cur)
+
+    elif _TRIGGER_MODE == "viewport":
+        try:
+            import omni.kit.viewport.utility as _vp_util
+            vp = _vp_util.get_active_viewport()
+            if hasattr(vp, "request_draw"):
+                vp.request_draw()
+            elif hasattr(vp, "invalidate"):
+                vp.invalidate()
+        except Exception:
+            pass
+        await omni.kit.app.get_app().next_update_async()
+
+    else:  # "picking" (default)
+        s = _carb_settings.get_settings()
+        cur = s.get(_PICK_PATH)
+        s.set(_PICK_PATH, not cur)
+        await omni.kit.app.get_app().next_update_async()
+        if restore:
+            s.set(_PICK_PATH, cur)
 
 
 def _get_attr(attr) -> object:
