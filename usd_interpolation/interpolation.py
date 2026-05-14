@@ -14,6 +14,7 @@ class UVMixer:
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
     _tbn_default: int = 0          # 0=auto, 2=gpu
+    _tbn_enabled: bool = True
     _play_duration: float = 2.5
     _flip_every_n: int = 10
 
@@ -37,6 +38,7 @@ class UVMixer:
     def init(cls, *,
              num_slots: int | None = None,
              tbn_default: int | None = None,
+             tbn_enabled: bool | None = None,
              play_duration: float | None = None,
              flip_every_n: int | None = None) -> None:
         if num_slots is not None and num_slots != cls._num_slots:
@@ -44,6 +46,8 @@ class UVMixer:
             cls._num_slots = num_slots
         if tbn_default is not None:
             cls._tbn_default = tbn_default
+        if tbn_enabled is not None:
+            cls._tbn_enabled = tbn_enabled
         if play_duration is not None:
             cls._play_duration = play_duration
         if flip_every_n is not None:
@@ -84,8 +88,11 @@ class UVMixer:
         loaded_count = len([m for m in cls._maps if m is not None])
         if loaded_count >= 2:
             tc = t * (loaded_count - 1)
-            omni.timeline.get_timeline_interface().set_current_time(tc)
-        cls._schedule_trigger()
+            stage = omni.usd.get_context().get_stage()
+            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+            omni.timeline.get_timeline_interface().set_current_time(tc / tps)
+        if cls._tbn_enabled:
+            cls._schedule_trigger()
 
     @classmethod
     def get_t(cls) -> float:
@@ -238,7 +245,8 @@ class UVMixer:
 
         cls._anim_frame = 0
         cls._is_animating = True
-        _carb_settings.get_settings().set(cls._TBN_PATH, cls._TBN_GPU)
+        if cls._tbn_enabled:
+            _carb_settings.get_settings().set(cls._TBN_PATH, cls._TBN_GPU)
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -250,14 +258,17 @@ class UVMixer:
                 cls._t = new_t
                 loaded_count = len([m for m in cls._maps if m is not None])
                 if loaded_count >= 2:
-                    omni.timeline.get_timeline_interface().set_current_time(new_t * (loaded_count - 1))
+                    stage = omni.usd.get_context().get_stage()
+                    tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+                    omni.timeline.get_timeline_interface().set_current_time(new_t * (loaded_count - 1) / tps)
                 cls._notify(new_t)
 
-                cls._anim_frame += 1
-                if cls._anim_frame % cls._flip_every_n == 0:
-                    s = _carb_settings.get_settings()
-                    cur = s.get(cls._TBN_PATH) or cls._TBN_GPU
-                    s.set(cls._TBN_PATH, cls._TBN_FORCE if cur == cls._TBN_GPU else cls._TBN_GPU)
+                if cls._tbn_enabled:
+                    cls._anim_frame += 1
+                    if cls._anim_frame % cls._flip_every_n == 0:
+                        s = _carb_settings.get_settings()
+                        cur = s.get(cls._TBN_PATH) or cls._TBN_GPU
+                        s.set(cls._TBN_PATH, cls._TBN_FORCE if cur == cls._TBN_GPU else cls._TBN_GPU)
 
                 if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
@@ -274,6 +285,7 @@ class UVMixer:
                 await omni.kit.app.get_app().next_update_async()
                 s.set(cls._TBN_PATH, cls._tbn_default)
 
-            if cls._flush_task and not cls._flush_task.done():
-                cls._flush_task.cancel()
-            cls._flush_task = asyncio.ensure_future(_end_flush())
+            if cls._tbn_enabled:
+                if cls._flush_task and not cls._flush_task.done():
+                    cls._flush_task.cancel()
+                cls._flush_task = asyncio.ensure_future(_end_flush())

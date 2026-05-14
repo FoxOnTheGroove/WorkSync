@@ -18,7 +18,7 @@ class UsdInterpolationUI:
         self._btn_reverse: ui.Button | None = None
 
     def build_ui(self):
-        UVMixer.init(num_slots=NUM_FILES, tbn_default=0, play_duration=2.5, flip_every_n=10)
+        UVMixer.init(num_slots=NUM_FILES, tbn_default=0, tbn_enabled=True, play_duration=2.5, flip_every_n=10)
         UVMixer.subscribe(self._on_t_changed)
 
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
