@@ -2,7 +2,6 @@ import asyncio
 import numpy as np
 
 import carb.settings as _carb_settings
-import usdrt
 from pxr import Usd, UsdGeom, Vt
 import omni.kit.app
 import omni.usd
@@ -50,23 +49,25 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
 
 
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> int:
-    usdrt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return 0
     count = 0
     for prim_path, st_a in map_a.items():
         st_b = map_b.get(prim_path)
         if st_b is None:
             continue
-        usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
-        if not usdrt_prim.IsValid():
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
             continue
-        usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
-        if not usdrt_attr:
+        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+        if not st_pv or not st_pv.GetAttr().IsValid():
             continue
         if len(st_a) != len(st_b):
             uv = np.ascontiguousarray(st_a if t < 0.5 else st_b)
         else:
             uv = np.ascontiguousarray(st_a + np.float32(t) * (st_b - st_a))
-        usdrt_attr.Set(Vt.Vec2fArray.FromNumpy(uv))
+        st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(uv))
         count += 1
     if count:
         print(f"[usd_interpolation] t={t:.3f} {count}mesh")
