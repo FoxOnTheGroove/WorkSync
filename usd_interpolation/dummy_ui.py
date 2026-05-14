@@ -10,43 +10,26 @@ import omni.usd
 import omni.ui as ui
 
 # 재렌더 트리거 전략 선택:
-#   "picking"  - instancePickingEnabled 토글 (현재, 동작 확인됨, 렉 있음)
-#   "aa"       - AA 모드 토글 (가벼움, UV 재읽기 여부 미확인)
-#   "viewport" - omni.kit.viewport.utility invalidation (가장 클린, API 존재 여부 확인 필요)
-_TRIGGER_MODE = "picking"
+#   "picking"  - instancePickingEnabled 토글 (동작 확인됨, 렉 있음)
+#   "extent"   - usdrt로 extent 재기록 → render setting 불필요 (테스트 중)
+_TRIGGER_MODE = "extent"
 
 _PICK_PATH = "/rtx/hydra/instancePickingEnabled"
-_AA_PATH = "/rtx/post/aa/op"
 
 
 async def _trigger_rerender(restore: bool = True):
-    if _TRIGGER_MODE == "aa":
-        s = _carb_settings.get_settings()
-        cur = s.get(_AA_PATH) or 0
-        s.set(_AA_PATH, (cur + 1) % 4)
+    # "extent" 모드는 apply_lerped_st_all 내부에서 처리하므로 여기선 프레임 대기만
+    if _TRIGGER_MODE == "extent":
         await omni.kit.app.get_app().next_update_async()
-        if restore:
-            s.set(_AA_PATH, cur)
+        return
 
-    elif _TRIGGER_MODE == "viewport":
-        try:
-            import omni.kit.viewport.utility as _vp_util
-            vp = _vp_util.get_active_viewport()
-            if hasattr(vp, "request_draw"):
-                vp.request_draw()
-            elif hasattr(vp, "invalidate"):
-                vp.invalidate()
-        except Exception:
-            pass
-        await omni.kit.app.get_app().next_update_async()
-
-    else:  # "picking" (default)
-        s = _carb_settings.get_settings()
-        cur = s.get(_PICK_PATH)
-        s.set(_PICK_PATH, not cur)
-        await omni.kit.app.get_app().next_update_async()
-        if restore:
-            s.set(_PICK_PATH, cur)
+    # "picking" (default)
+    s = _carb_settings.get_settings()
+    cur = s.get(_PICK_PATH)
+    s.set(_PICK_PATH, not cur)
+    await omni.kit.app.get_app().next_update_async()
+    if restore:
+        s.set(_PICK_PATH, cur)
 
 
 def _get_attr(attr) -> object:
@@ -128,6 +111,13 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float, write_fabric: bool =
             usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
             if usdrt_attr:
                 usdrt_attr.Set(uv_data)
+            # extent를 현재값 그대로 재기록 → Hydra가 mesh를 structural dirty로 처리
+            if _TRIGGER_MODE == "extent":
+                ext_attr = usdrt_prim.GetAttribute("extent")
+                if ext_attr:
+                    ext_val = ext_attr.Get()
+                    if ext_val is not None:
+                        ext_attr.Set(ext_val)
 
     # Step 2: session layer time sample 쓰기 (slot 0↔1 alternating)
     next_slot = 1 - _UV_SLOT[0]
