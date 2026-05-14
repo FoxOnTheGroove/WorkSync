@@ -93,8 +93,8 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def on(cls, vp_id: str, pos3d: tuple, **kwargs) -> int | None:
-        info = Colorpick.get_result_by_id(vp_id)
+    def on(cls, vp_name: str, pos3d: tuple, **kwargs) -> int | None:
+        info = Colorpick.get_result_by_name(vp_name)
         if not info["hit"]:
             return None
         c   = info["texel_color"]
@@ -104,23 +104,23 @@ class ColorpickOverlay:
         pres_str  = f"압력(v_idx) {idx:.2f}"   if idx is not None else "압력(v_idx) -"
         plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
         ui_color  = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
-        inst = cls._get_or_create(vp_id)
+        inst = cls._get_or_create(vp_name)
         return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d)
 
     @classmethod
     def off(cls, identifier):
         if isinstance(identifier, int):
-            vp_id = cls._key_to_vp.get(identifier)
-            if vp_id and vp_id in cls._instances:
-                cls._instances[vp_id]._deactivate(identifier)
+            vpname = cls._key_to_vp.get(identifier)
+            if vpname and vpname in cls._instances:
+                cls._instances[vpname]._deactivate(identifier)
         elif isinstance(identifier, str):
             if identifier in cls._instances:
                 cls._instances[identifier]._deactivate_all()
 
     @classmethod
-    def set_visible(cls, vp_id: str, visible: bool):
-        if vp_id in cls._instances:
-            cls._instances[vp_id]._set_visible_all(visible)
+    def set_visible(cls, vp_name: str, visible: bool):
+        if vp_name in cls._instances:
+            cls._instances[vp_name]._set_visible_all(visible)
 
     @classmethod
     def visible_all(cls, visible: bool):
@@ -132,21 +132,21 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def panel_on(cls, vp_id: str, pos3d: tuple, **kwargs) -> int | None:
-        return cls.on(vp_id, pos3d, **kwargs)
+    def panel_on(cls, vp_name: str, pos3d: tuple, **kwargs) -> int | None:
+        return cls.on(vp_name, pos3d, **kwargs)
 
     @classmethod
     def panel_off(cls, key: int):
         cls.off(key)
 
     @classmethod
-    def panel_off_all(cls, vp_id: str):
-        cls.off(vp_id)
+    def panel_off_all(cls, vp_name: str):
+        cls.off(vp_name)
 
     @classmethod
-    def destroy(cls, vp_id: str = None):
-        if vp_id:
-            inst = cls._instances.pop(vp_id, None)
+    def destroy(cls, vp_name: str = None):
+        if vp_name:
+            inst = cls._instances.pop(vp_name, None)
             if inst:
                 inst._destroy()
         else:
@@ -155,97 +155,103 @@ class ColorpickOverlay:
             cls._instances.clear()
 
     @classmethod
-    def _get_or_create(cls, vp_id: str) -> "ColorpickOverlay":
-        if vp_id not in cls._instances:
-            cls._instances[vp_id] = cls(vp_id)
-        return cls._instances[vp_id]
+    def _get_or_create(cls, vpname: str) -> "ColorpickOverlay":
+        if vpname not in cls._instances:
+            cls._instances[vpname] = cls(vpname)
+        return cls._instances[vpname]
 
     # ------------------------------------------------------------------
     # 인스턴스 (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
-    def __init__(self, vp_id: str):
-        self._vp_id        = vp_id
+    def __init__(self, vpname: str):
+        self._vpname       = vpname
         self._viewport_api = None
         self._frame        = None
         self._slots: list[dict] = []
         self._active: OrderedDict[int, int] = OrderedDict()
         self._update_sub   = None
-        self._setup(vp_id)
+        self._setup(vpname)
 
-    def _setup(self, vp_id: str):
+    def _setup(self, vpname: str):
         try:
-            vphs = hytwin_vp_wg.ViewportWidgetHost().get_instances()
-            vph  = next((v for v in vphs if v.viewport_api.id == vp_id), None)
-            if vph is None:
-                print(f"[ColorpickOverlay] viewport id '{vp_id}' not found")
-                return
+            vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
             self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
             self._create_slots()
             self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
-                self._on_update, name=f"colorpick_overlay_{vp_id}"
+                self._on_update, name=f"colorpick_overlay_{vpname}"
             )
         except Exception as e:
-            print(f"[ColorpickOverlay] setup failed for id '{vp_id}': {e}")
+            print(f"[ColorpickOverlay] setup failed for '{vpname}': {e}")
 
     def _create_slots(self):
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
 
         for i in range(MAX_OVERLAYS):
             win = ui.Window(
-                f"_cpoverlay_{self._vp_id}_{i}",
+                f"_cpoverlay_{self._vpname}_{i}",
                 flags=_WIN_FLAGS,
                 width=PANEL_W, height=PANEL_H,
                 visible=False,
             )
-            win.frame.style = {
-                "background_color": PANEL_BG,
-                "border_radius":    5,
-                "border_color":     0xFFCCCCCC,
-                "border_width":     1.5,
-            }
+            win.frame.style = {"background_color": 0x00000000}
             win.frame.opaque_for_mouse_events = False
             win.padding_x = 0
             win.padding_y = 0
             with win.frame:
-                with ui.HStack():
-                    with ui.VStack(width=SWATCH_COL_W):
-                        ui.Spacer(height=PANEL_PAD)
+                with ui.ZStack():
+                    ui.Rectangle(style={
+                        "background_color": 0xFFCCCCCC,
+                        "border_radius": 5,
+                    })
+                    with ui.VStack():
+                        ui.Spacer(height=1)
                         with ui.HStack():
-                            ui.Spacer(width=PANEL_PAD)
-                            swatch = ui.Rectangle(
-                                style={
-                                    "background_color": 0xFF808080,
-                                    "border_radius": 4,
-                                },
-                            )
-                            ui.Spacer(width=PANEL_PAD)
-                        ui.Spacer(height=PANEL_PAD)
-                    with ui.VStack(spacing=ITEM_GAP):
-                        ui.Spacer(height=PANEL_PAD)
-                        with ui.HStack(height=DOT_SIZE, spacing=4):
-                            dot = ui.Rectangle(
-                                width=DOT_SIZE,
-                                style={
-                                    "background_color": 0xFF808080,
-                                    "border_radius": 2,
-                                },
-                            )
-                            hex_lbl = ui.Label(
-                                "#000000",
+                            ui.Spacer(width=1)
+                            ui.Rectangle(style={
+                                "background_color": PANEL_BG,
+                                "border_radius": 4,
+                            })
+                            ui.Spacer(width=1)
+                        ui.Spacer(height=1)
+                    with ui.HStack():
+                        with ui.VStack(width=SWATCH_COL_W):
+                            ui.Spacer(height=PANEL_PAD)
+                            with ui.HStack():
+                                ui.Spacer(width=PANEL_PAD)
+                                swatch = ui.Rectangle(
+                                    style={
+                                        "background_color": 0xFF808080,
+                                        "border_radius": 4,
+                                    },
+                                )
+                                ui.Spacer(width=PANEL_PAD)
+                            ui.Spacer(height=PANEL_PAD)
+                        with ui.VStack(spacing=ITEM_GAP):
+                            ui.Spacer(height=PANEL_PAD)
+                            with ui.HStack(height=DOT_SIZE, spacing=4):
+                                dot = ui.Rectangle(
+                                    width=DOT_SIZE,
+                                    style={
+                                        "background_color": 0xFF808080,
+                                        "border_radius": 2,
+                                    },
+                                )
+                                hex_lbl = ui.Label(
+                                    "#000000",
+                                    style=_lbl_style,
+                                )
+                            pres_lbl  = ui.Label(
+                                "압력(v_idx) -",
                                 style=_lbl_style,
                             )
-                        pres_lbl  = ui.Label(
-                            "압력(v_idx) -",
-                            style=_lbl_style,
-                        )
-                        plotv_lbl = ui.Label(
-                            "plot_v value : -",
-                            style=_lbl_style,
-                        )
-                        ui.Spacer(height=PANEL_PAD)
-                    ui.Spacer(width=PANEL_PAD)
+                            plotv_lbl = ui.Label(
+                                "plot_v value : -",
+                                style=_lbl_style,
+                            )
+                            ui.Spacer(height=PANEL_PAD)
+                        ui.Spacer(width=PANEL_PAD)
 
             self._slots.append({
                 "window":      win,
@@ -369,7 +375,7 @@ class ColorpickOverlay:
 
         key = ColorpickOverlay._gen_key()
         self._active[key] = slot_idx
-        ColorpickOverlay._key_to_vp[key] = self._vp_id
+        ColorpickOverlay._key_to_vp[key] = self._vpname
         return key
 
     def _deactivate(self, key: int):
