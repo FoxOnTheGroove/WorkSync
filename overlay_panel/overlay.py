@@ -1,7 +1,7 @@
 from collections import OrderedDict
+import os
 import omni.kit.app
 import omni.usd
-import omni.ui.scene as sc
 import omni.ui as ui
 import morph.hytwin_viewportwidget_extension as hytwin_vp_wg
 from pxr import UsdGeom, UsdShade, Sdf, Gf, Usd
@@ -9,42 +9,77 @@ from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
-LABEL_OFFSET_Y   = 5.0
-PANEL_W          = 160          # W:H = 2:1
-PANEL_H          = 80           # W:H = 2:1
-PANEL_BG         = 0xFFFFFFFF   # 불투명 흰색 ABGR
-SWATCH_COL_W     = PANEL_H      # 사와치 열 너비 = 패널 높이 → margin 뺀 실제 사와치가 정사각형
+PANEL_W          = 173
+PANEL_H          = 80
+PANEL_BG         = 0xFFFFFFFF
+SWATCH_COL_W     = 80
 DOT_SIZE         = 13
 LABEL_SIZE       = 13
-PANEL_PAD        = 6            # 패널 내부 여백
-ITEM_GAP         = 5            # 항목 간 세로 간격
-LINE_THICKNESS   = 2
-LINE_COLOR       = 0xFFFFFFFF
+PANEL_PAD        = 6
+ITEM_GAP         = 5
+PANEL_OFFSET_X   = 12
+PANEL_OFFSET_Y   = 12
 MAX_OVERLAYS     = 5
 
 _WIN_FLAGS = (
-    ui.WINDOW_FLAGS_NO_TITLE_BAR |
-    ui.WINDOW_FLAGS_NO_SCROLLBAR |
-    ui.WINDOW_FLAGS_NO_RESIZE    |
-    ui.WINDOW_FLAGS_NO_CLOSE     |
-    ui.WINDOW_FLAGS_NO_COLLAPSE  |
-    ui.WINDOW_FLAGS_NO_MOVE      |
-    ui.WINDOW_FLAGS_NO_DOCKING   |
-    ui.WINDOW_FLAGS_NO_BACKGROUND
+    ui.WINDOW_FLAGS_NO_TITLE_BAR          |
+    ui.WINDOW_FLAGS_NO_SCROLLBAR          |
+    ui.WINDOW_FLAGS_NO_RESIZE             |
+    ui.WINDOW_FLAGS_NO_CLOSE              |
+    ui.WINDOW_FLAGS_NO_COLLAPSE           |
+    ui.WINDOW_FLAGS_NO_MOVE               |
+    ui.WINDOW_FLAGS_NO_DOCKING            |
+    ui.WINDOW_FLAGS_NO_BACKGROUND         |
+    ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING
 )
 
 
-def _to_temp(rgb) -> str:
-    return "111"
+def _load_pressure_map():
+    path = os.path.join(os.path.dirname(__file__), "data", "plot_velocity")
+    try:
+        with open(path) as f:
+            return [float(l.strip()) for l in f if l.strip()]
+    except Exception:
+        return []
+
+_PRESSURE_MAP = _load_pressure_map()
 
 
-def _to_pressure(rgb) -> str:
-    return "111"
+def _pressure_data(uv_val: float):
+    vals = _PRESSURE_MAP
+    n = len(vals)
+    if n < 2:
+        print(f"[Pressure] PRESSURE_MAP empty, uv={uv_val:.6f}")
+        return None, None
+    v_min, v_max = vals[0], vals[-1]
+    if v_max == v_min:
+        return 0.0, vals[0]
+    norm = [(v - v_min) / (v_max - v_min) for v in vals]
+    if uv_val <= norm[0]:
+        print(f"[Pressure] uv={uv_val:.6f} <= norm[0]={norm[0]:.6f} (val={vals[0]}) → clamp 0")
+        return 0.0, vals[0]
+    if uv_val >= norm[-1]:
+        print(f"[Pressure] uv={uv_val:.6f} >= norm[{n-1}]={norm[-1]:.6f} (val={vals[-1]}) → clamp {n-1}")
+        return float(n - 1), vals[-1]
+    for i in range(n - 1):
+        if norm[i] <= uv_val <= norm[i + 1]:
+            span = norm[i + 1] - norm[i]
+            t = (uv_val - norm[i]) / span if span > 0 else 0.0
+            idx = i + t
+            interp_val = vals[i] + t * (vals[i + 1] - vals[i])
+            print(
+                f"[Pressure] uv={uv_val:.6f} | "
+                f"n1=[{i}] val={vals[i]:.6f} norm={norm[i]:.6f} | "
+                f"n2=[{i+1}] val={vals[i+1]:.6f} norm={norm[i+1]:.6f} | "
+                f"→ idx={idx:.2f} val={interp_val:.6f}"
+            )
+            return idx, interp_val
+    return float(n - 1), vals[-1]
 
 
 class ColorpickOverlay:
-    _instances: dict  = {}   # vpname  -> ColorpickOverlay
-    _key_to_vp: dict  = {}   # key     -> vpname
+    _instances: dict  = {}
+    _key_to_vp: dict  = {}
     _next_key: int    = 0
 
     @classmethod
@@ -59,21 +94,21 @@ class ColorpickOverlay:
 
     @classmethod
     def on(cls, vp_name: str, pos3d: tuple, **kwargs) -> int | None:
-        """히트가 있으면 오버레이를 추가하고 key 반환. 히트 없으면 None."""
         info = Colorpick.get_result_by_name(vp_name)
         if not info["hit"]:
             return None
-        c        = info["texel_color"]
-        hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
-        temp_str = f"온도 {_to_temp(c)}"
-        pres_str = f"압력 {_to_pressure(c)}"
-        ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]  # ABGR
+        c   = info["texel_color"]
+        uv  = info.get("uv_value", 0.0) or 0.0
+        idx, val = _pressure_data(uv)
+        hex_str   = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
+        pres_str  = f"압력(v_idx) {idx:.2f}"   if idx is not None else "압력(v_idx) -"
+        plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
+        ui_color  = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_name)
-        return inst._add(info["prim_path"], hex_str, temp_str, pres_str, ui_color, pos3d)
+        return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d)
 
     @classmethod
     def off(cls, identifier):
-        """key (int) → 해당 오버레이만 끔.  vpname (str) → 해당 뷰포트 전체 끔."""
         if isinstance(identifier, int):
             vpname = cls._key_to_vp.get(identifier)
             if vpname and vpname in cls._instances:
@@ -84,18 +119,16 @@ class ColorpickOverlay:
 
     @classmethod
     def set_visible(cls, vp_name: str, visible: bool):
-        """선·패널만 visible 토글. 마커 유지. 뷰포트 단위."""
         if vp_name in cls._instances:
             cls._instances[vp_name]._set_visible_all(visible)
 
     @classmethod
-    def set_visible_all(cls, visible: bool):
-        """모든 뷰포트의 선·패널 visible 토글."""
+    def visible_all(cls, visible: bool):
         for inst in cls._instances.values():
             inst._set_visible_all(visible)
 
     # ------------------------------------------------------------------
-    # 외부 호출용 convenience API
+    # convenience API
     # ------------------------------------------------------------------
 
     @classmethod
@@ -128,12 +161,11 @@ class ColorpickOverlay:
         return cls._instances[vpname]
 
     # ------------------------------------------------------------------
-    # 인스턴스  (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
+    # 인스턴스 (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
     def __init__(self, vpname: str):
         self._vpname       = vpname
-        self._scene_view   = None
         self._viewport_api = None
         self._frame        = None
         self._slots: list[dict] = []
@@ -144,7 +176,6 @@ class ColorpickOverlay:
     def _setup(self, vpname: str):
         try:
             vph = hytwin_vp_wg.ViewportWidgetHost().get_instance_by_viewport_name(vpname)
-            self._scene_view   = vph.scene_view
             self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
             self._create_slots()
@@ -155,40 +186,35 @@ class ColorpickOverlay:
             print(f"[ColorpickOverlay] setup failed for '{vpname}': {e}")
 
     def _create_slots(self):
-        """MAX_OVERLAYS 개의 슬롯 생성.
-        3D: sc.Line  /  2D: ui.Window (frame 미사용 — 제스처 보호)
-        """
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
 
         for i in range(MAX_OVERLAYS):
-            slot: dict = {}
-
-            # ── 3D 씬뷰: sc.Line ──────────────────────────────────
-            with self._scene_view.scene:
-                with sc.Transform(
-                    transform=sc.Matrix44.get_translation_matrix(0, 0, 0),
-                    visible=False,
-                ) as line_root:
-                    sc.Line(
-                        [0, 0, 0],
-                        [0, LABEL_OFFSET_Y, 0],
-                        color=LINE_COLOR,
-                        thickness=LINE_THICKNESS,
-                    )
-
-            # ── 2D 패널: 독립 ui.Window ───────────────────────────
             win = ui.Window(
                 f"_cpoverlay_{self._vpname}_{i}",
                 flags=_WIN_FLAGS,
                 width=PANEL_W, height=PANEL_H,
                 visible=False,
             )
+            win.frame.style = {"background_color": 0x00000000}
+            win.frame.opaque_for_mouse_events = False
+            win.padding_x = 0
+            win.padding_y = 0
             with win.frame:
                 with ui.ZStack():
                     ui.Rectangle(style={
-                        "background_color": PANEL_BG,
-                        "border_radius": 4,
+                        "background_color": 0xFFCCCCCC,
+                        "border_radius": 5,
                     })
+                    with ui.VStack():
+                        ui.Spacer(height=1)
+                        with ui.HStack():
+                            ui.Spacer(width=1)
+                            ui.Rectangle(style={
+                                "background_color": PANEL_BG,
+                                "border_radius": 4,
+                            })
+                            ui.Spacer(width=1)
+                        ui.Spacer(height=1)
                     with ui.HStack():
                         with ui.VStack(width=SWATCH_COL_W):
                             ui.Spacer(height=PANEL_PAD)
@@ -216,25 +242,24 @@ class ColorpickOverlay:
                                     "#000000",
                                     style=_lbl_style,
                                 )
-                            temp_lbl = ui.Label(
-                                "온도 -",
+                            pres_lbl  = ui.Label(
+                                "압력(v_idx) -",
                                 style=_lbl_style,
                             )
-                            pres_lbl = ui.Label(
-                                "압력 -",
+                            plotv_lbl = ui.Label(
+                                "plot_v value : -",
                                 style=_lbl_style,
                             )
                             ui.Spacer(height=PANEL_PAD)
                         ui.Spacer(width=PANEL_PAD)
 
             self._slots.append({
-                "line_root":   line_root,
                 "window":      win,
                 "swatch":      swatch,
                 "color_dot":   dot,
                 "hex_label":   hex_lbl,
-                "temp_label":  temp_lbl,
                 "press_label": pres_lbl,
+                "plotv_label": plotv_lbl,
                 "world_pos":   None,
                 "marker_path": None,
             })
@@ -248,46 +273,86 @@ class ColorpickOverlay:
             return 0.0, 0.0
 
     def _on_update(self, event):
-        """패널 위치를 3D→2D 투영으로 매 프레임 갱신."""
         if not self._active:
             return
         stage = omni.usd.get_context().get_stage()
         if not stage:
             return
         ox, oy = self._viewport_offset()
+        rw, rh = self._viewport_api.resolution
+        dw = self._frame.computed_width  or rw
+        dh = self._frame.computed_height or rh
+        sx = dw / rw if rw > 0 else 1.0
+        sy = dh / rh if rh > 0 else 1.0
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             if slot["world_pos"] is None:
                 continue
             sp = self._world_to_screen(slot["world_pos"], stage)
             if sp:
-                slot["window"].position_x = ox + sp[0] - PANEL_W / 2
-                slot["window"].position_y = oy + sp[1] - PANEL_H / 2
+                px = ox + sp[0] * sx
+                py = oy + sp[1] * sy
+                raw_x = px + PANEL_OFFSET_X
+                raw_y = py + PANEL_OFFSET_Y
+                slot["window"].position_x = max(ox, min(ox + dw - PANEL_W, raw_x))
+                slot["window"].position_y = max(oy, min(oy + dh - PANEL_H, raw_y))
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
-        """world 좌표 → 화면 픽셀 (x, y). 카메라 뒤면 None."""
         try:
+            w, h      = self._viewport_api.resolution
             cam_path  = self._viewport_api.get_active_camera()
             cam_prim  = stage.GetPrimAtPath(str(cam_path))
             if not cam_prim.IsValid():
                 return None
-            cam_gf  = UsdGeom.Camera(cam_prim).GetCamera(Usd.TimeCode.Default())
-            frustum = cam_gf.frustum
-            view    = frustum.ComputeViewMatrix()
-            proj    = frustum.ComputeProjectionMatrix()
-            cam_space = view.Transform(Gf.Vec3d(*world_pos))
-            if cam_space[2] >= 0:   # 카메라 뒤
+            cam_schema = UsdGeom.Camera(cam_prim)
+            focal = cam_schema.GetFocalLengthAttr().Get()
+            ap_h  = cam_schema.GetHorizontalApertureAttr().Get()
+            if not focal or focal == 0:
                 return None
-            ndc = proj.Transform(cam_space)
-            w, h = self._viewport_api.resolution
-            return (ndc[0] + 1) / 2 * w, (1 - ndc[1]) / 2 * h
+            tan_hx = ap_h / (2.0 * focal)
+            tan_hy = tan_hx * h / w
+            view      = self._viewport_api.view_matrix  # AttributeError → fallback
+            cam_space = view.Transform(Gf.Vec3d(*world_pos))
+            if cam_space[2] >= 0:
+                return None
+            d = -cam_space[2]
+            x_ndc = cam_space[0] / (d * tan_hx)
+            y_ndc = cam_space[1] / (d * tan_hy)
+            return (x_ndc + 1) / 2 * w, (1 - y_ndc) / 2 * h
+        except AttributeError:
+            return self._world_to_screen_fallback(world_pos, stage)
+        except Exception:
+            return None
+
+    def _world_to_screen_fallback(self, world_pos: tuple, stage) -> "tuple | None":
+        try:
+            w, h      = self._viewport_api.resolution
+            cam_path  = self._viewport_api.get_active_camera()
+            cam_prim  = stage.GetPrimAtPath(str(cam_path))
+            if not cam_prim.IsValid():
+                return None
+            cam_schema = UsdGeom.Camera(cam_prim)
+            focal = cam_schema.GetFocalLengthAttr().Get()
+            ap_h  = cam_schema.GetHorizontalApertureAttr().Get()
+            if not focal or focal == 0:
+                return None
+            tan_hx    = ap_h / (2.0 * focal)
+            tan_hy    = tan_hx * h / w
+            frustum   = cam_schema.GetCamera(Usd.TimeCode.Default()).frustum
+            cam_space = frustum.ComputeViewMatrix().Transform(Gf.Vec3d(*world_pos))
+            if cam_space[2] >= 0:
+                return None
+            d = -cam_space[2]
+            x_ndc = cam_space[0] / (d * tan_hx)
+            y_ndc = cam_space[1] / (d * tan_hy)
+            return (x_ndc + 1) / 2 * w, (1 - y_ndc) / 2 * h
         except Exception:
             return None
 
     # ------------------------------------------------------------------
 
-    def _add(self, prim_path: str, hex_str: str, temp_str: str,
-             pres_str: str, ui_color: int, pos3d: tuple) -> int:
+    def _add(self, prim_path: str, hex_str: str, pres_str: str,
+             plotv_str: str, ui_color: int, pos3d: tuple) -> int:
         if len(self._active) >= MAX_OVERLAYS:
             oldest_key = next(iter(self._active))
             self._deactivate(oldest_key)
@@ -296,17 +361,14 @@ class ColorpickOverlay:
         slot_idx = next(i for i in range(MAX_OVERLAYS) if i not in used)
         slot     = self._slots[slot_idx]
 
-        x, y, z = pos3d
-        slot["world_pos"]           = (x, y + LABEL_OFFSET_Y, z)
-        slot["line_root"].transform = sc.Matrix44.get_translation_matrix(x, y, z)
-        slot["line_root"].visible   = True
-        slot["window"].visible      = True
+        slot["world_pos"]      = pos3d
+        slot["window"].visible = True
 
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
         slot["hex_label"].text   = hex_str
-        slot["temp_label"].text  = temp_str
         slot["press_label"].text = pres_str
+        slot["plotv_label"].text = plotv_str
 
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
@@ -320,9 +382,8 @@ class ColorpickOverlay:
         slot_idx = self._active.pop(key, None)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["line_root"].visible = False
-            slot["window"].visible    = False
-            slot["world_pos"]         = None
+            slot["window"].visible = False
+            slot["world_pos"]      = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
 
@@ -333,15 +394,11 @@ class ColorpickOverlay:
     def _set_visible(self, key: int, visible: bool):
         slot_idx = self._active.get(key)
         if slot_idx is not None:
-            slot = self._slots[slot_idx]
-            slot["line_root"].visible = visible
-            slot["window"].visible    = visible
+            self._slots[slot_idx]["window"].visible = visible
 
     def _set_visible_all(self, visible: bool):
         for slot_idx in self._active.values():
-            slot = self._slots[slot_idx]
-            slot["line_root"].visible = visible
-            slot["window"].visible    = visible
+            self._slots[slot_idx]["window"].visible = visible
 
     # ------------------------------------------------------------------
 
@@ -393,5 +450,4 @@ class ColorpickOverlay:
             if win:
                 win.destroy()
         self._update_sub = None
-        self._scene_view = None
         self._slots.clear()
