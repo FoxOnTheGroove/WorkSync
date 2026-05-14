@@ -9,21 +9,11 @@ import omni.timeline
 import omni.usd
 import omni.ui as ui
 
-# 재렌더 트리거 전략 선택:
-#   "picking"  - instancePickingEnabled 토글 (동작 확인됨, 렉 있음)
-#   "extent"   - usdrt로 extent 재기록 → render setting 불필요 (테스트 중)
-_TRIGGER_MODE = "extent"
-
 _PICK_PATH = "/rtx/hydra/instancePickingEnabled"
+ANIM_FLIP_EVERY_N = 10  # 애니메이션 중 N프레임마다 1회 flip
 
 
 async def _trigger_rerender(restore: bool = True):
-    # "extent" 모드는 apply_lerped_st_all 내부에서 처리하므로 여기선 프레임 대기만
-    if _TRIGGER_MODE == "extent":
-        await omni.kit.app.get_app().next_update_async()
-        return
-
-    # "picking" (default)
     s = _carb_settings.get_settings()
     cur = s.get(_PICK_PATH)
     s.set(_PICK_PATH, not cur)
@@ -111,13 +101,6 @@ def apply_lerped_st_all(map_a: dict, map_b: dict, t: float, write_fabric: bool =
             usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
             if usdrt_attr:
                 usdrt_attr.Set(uv_data)
-            # extent를 현재값 그대로 재기록 → Hydra가 mesh를 structural dirty로 처리
-            if _TRIGGER_MODE == "extent":
-                ext_attr = usdrt_prim.GetAttribute("extent")
-                if ext_attr:
-                    ext_val = ext_attr.Get()
-                    if ext_val is not None:
-                        ext_attr.Set(ext_val)
 
     # Step 2: session layer time sample 쓰기 (slot 0↔1 alternating)
     next_slot = 1 - _UV_SLOT[0]
@@ -154,6 +137,7 @@ class UsdInterpolationUI:
         self._pending_t: float = 0.0
         self._is_animating: bool = False
         self._pick_original: bool | None = None
+        self._anim_frame: int = 0
         self._play_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
         self._btn_play: ui.Button | None = None
@@ -207,7 +191,7 @@ class UsdInterpolationUI:
         self._slider.enabled = len(loaded) >= 2
 
     def _on_refresh_clicked(self):
-        self._refresh(self._pending_t)
+        self._refresh(self._pending_t, do_trigger=True)
 
     def _on_play_clicked(self):
         if self._play_task and not self._play_task.done():
@@ -243,6 +227,7 @@ class UsdInterpolationUI:
         elapsed = 0.0
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
+        self._anim_frame = 0
         self._pick_original = _carb_settings.get_settings().get(_PICK_PATH)
         self._is_animating = True
         try:
@@ -253,7 +238,12 @@ class UsdInterpolationUI:
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
 
-                self._slider.model.set_value(new_t)
+                self._slider.model.set_value(new_t)  # → _on_slider_changed → _refresh(do_trigger=False)
+
+                self._anim_frame += 1
+                if self._anim_frame % ANIM_FLIP_EVERY_N == 0:
+                    s = _carb_settings.get_settings()
+                    s.set(_PICK_PATH, not s.get(_PICK_PATH))
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
@@ -271,9 +261,9 @@ class UsdInterpolationUI:
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         self._pending_t = t
-        self._refresh(t)
+        self._refresh(t, do_trigger=not self._is_animating)
 
-    def _refresh(self, t: float) -> list:
+    def _refresh(self, t: float, do_trigger: bool = True) -> list:
         loaded = [m for m in self._maps if m is not None]
         n = len(loaded)
         if n < 2:
@@ -285,9 +275,10 @@ class UsdInterpolationUI:
         map_a = loaded[seg]
         map_b = loaded[seg + 1]
         result = apply_lerped_st_all(map_a, map_b, local_t)
-        if self._flush_task and not self._flush_task.done():
-            self._flush_task.cancel()
-        self._flush_task = asyncio.ensure_future(_trigger_rerender(restore=not self._is_animating))
+        if do_trigger:
+            if self._flush_task and not self._flush_task.done():
+                self._flush_task.cancel()
+            self._flush_task = asyncio.ensure_future(_trigger_rerender(restore=True))
         return result
 
     def _set_status(self, text: str):
