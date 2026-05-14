@@ -33,11 +33,11 @@ class UVMixer:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     @classmethod
-    def configure(cls, *,
-                  num_slots: int | None = None,
-                  tbn_default: int | None = None,
-                  play_duration: float | None = None,
-                  flip_every_n: int | None = None) -> None:
+    def init(cls, *,
+             num_slots: int | None = None,
+             tbn_default: int | None = None,
+             play_duration: float | None = None,
+             flip_every_n: int | None = None) -> None:
         if num_slots is not None and num_slots != cls._num_slots:
             cls._maps = [None] * num_slots
             cls._num_slots = num_slots
@@ -70,12 +70,17 @@ class UVMixer:
         return [i for i, m in enumerate(cls._maps) if m is not None]
 
     @classmethod
-    def set_t(cls, t: float) -> float:
+    def loads(cls, *paths: str) -> None:
+        cls.init(num_slots=len(paths))
+        for i, path in enumerate(paths):
+            cls.load(path, i)
+
+    @classmethod
+    def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
         cls._apply_lerp(t)
         cls._schedule_trigger()
-        return t
 
     @classmethod
     def get_t(cls) -> float:
