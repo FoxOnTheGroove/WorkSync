@@ -9,23 +9,19 @@ import omni.timeline
 import omni.usd
 import omni.ui as ui
 
-# TBNFrameMode: 0=auto, 1=cpu, 2=gpu, 3=force_gpu
-# 트리거: original ↔ (original + 1) % 4  → 기본값이 어떤 값이어도 인접값으로 변경 후 원복
-_TBN_PATH = "/rtx/hydra/TBNFrameMode"
-ANIM_FLIP_EVERY_N = 10  # 애니메이션 중 N프레임마다 1회 flip
+_TBN_PATH = "/rtx/hydra/TBNFrameMode"  # 0=auto, 1=cpu, 2=gpu, 3=force_gpu
+_TBN_AUTO = 0
+_TBN_GPU = 2
+_TBN_FORCE = 3
+ANIM_FLIP_EVERY_N = 10  # 애니메이션 중 N프레임마다 2↔3 flip
 
 
-def _tbn_flip(original: int) -> int:
-    return (original + 1) % 4
-
-
-async def _trigger_rerender(restore: bool = True):
+async def _trigger_rerender():
+    # 수동 슬라이더/Refresh: auto(0) → gpu(2) → auto(0)
     s = _carb_settings.get_settings()
-    cur = s.get(_TBN_PATH) or 0
-    s.set(_TBN_PATH, _tbn_flip(cur))
+    s.set(_TBN_PATH, _TBN_GPU)
     await omni.kit.app.get_app().next_update_async()
-    if restore:
-        s.set(_TBN_PATH, cur)
+    s.set(_TBN_PATH, _TBN_AUTO)
 
 
 def _get_attr(attr) -> object:
@@ -142,7 +138,6 @@ class UsdInterpolationUI:
 
         self._pending_t: float = 0.0
         self._is_animating: bool = False
-        self._tbn_original: int | None = None
         self._anim_frame: int = 0
         self._play_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
@@ -234,8 +229,8 @@ class UsdInterpolationUI:
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
         self._anim_frame = 0
-        self._tbn_original = _carb_settings.get_settings().get(_TBN_PATH) or 0
         self._is_animating = True
+        _carb_settings.get_settings().set(_TBN_PATH, _TBN_GPU)  # 시작: gpu(2)
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -249,10 +244,8 @@ class UsdInterpolationUI:
                 self._anim_frame += 1
                 if self._anim_frame % ANIM_FLIP_EVERY_N == 0:
                     s = _carb_settings.get_settings()
-                    cur = s.get(_TBN_PATH) or 0
-                    # original ↔ adjacent: 짝수 flip → adjacent, 홀수 flip → original
-                    flipped = _tbn_flip(self._tbn_original)
-                    s.set(_TBN_PATH, flipped if cur == self._tbn_original else self._tbn_original)
+                    cur = s.get(_TBN_PATH) or _TBN_GPU
+                    s.set(_TBN_PATH, _TBN_FORCE if cur == _TBN_GPU else _TBN_GPU)
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
@@ -260,19 +253,17 @@ class UsdInterpolationUI:
             return
         finally:
             self._is_animating = False
-            if self._tbn_original is not None:
-                orig = self._tbn_original
-                self._tbn_original = None
 
-                async def _end_flush(o=orig):
-                    s = _carb_settings.get_settings()
-                    s.set(_TBN_PATH, _tbn_flip(o))
-                    await omni.kit.app.get_app().next_update_async()
-                    s.set(_TBN_PATH, o)
+            async def _end_flush():
+                s = _carb_settings.get_settings()
+                cur = s.get(_TBN_PATH) or _TBN_GPU
+                s.set(_TBN_PATH, _TBN_FORCE if cur == _TBN_GPU else _TBN_GPU)  # 마지막 flip
+                await omni.kit.app.get_app().next_update_async()
+                s.set(_TBN_PATH, _TBN_AUTO)  # 원복: auto(0)
 
-                if self._flush_task and not self._flush_task.done():
-                    self._flush_task.cancel()
-                self._flush_task = asyncio.ensure_future(_end_flush())
+            if self._flush_task and not self._flush_task.done():
+                self._flush_task.cancel()
+            self._flush_task = asyncio.ensure_future(_end_flush())
             self._stop_play()
 
     def _on_slider_changed(self, model):
@@ -297,7 +288,7 @@ class UsdInterpolationUI:
         if do_trigger:
             if self._flush_task and not self._flush_task.done():
                 self._flush_task.cancel()
-            self._flush_task = asyncio.ensure_future(_trigger_rerender(restore=True))
+            self._flush_task = asyncio.ensure_future(_trigger_rerender())
         return result
 
     def _set_status(self, text: str):
