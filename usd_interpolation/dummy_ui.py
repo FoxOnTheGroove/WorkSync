@@ -10,16 +10,30 @@ import omni.usd
 import omni.ui as ui
 
 _PICK_PATH = "/rtx/hydra/instancePickingEnabled"
+_TBN_PATH = "/rtx/hydra/TBNFrameMode"  # 0=auto,1=cpu,2=gpu,3=force gpu
 ANIM_FLIP_EVERY_N = 10  # 애니메이션 중 N프레임마다 1회 flip
+
+# "picking" : instancePickingEnabled bool 토글 (동작 확인됨)
+# "tbn"     : TBNFrameMode 2↔3 (gpu↔force gpu) 토글 (가설: 동일 파이프라인 내 전환이라 더 가벼울 수 있음)
+_TRIGGER_MODE = "picking"
 
 
 async def _trigger_rerender(restore: bool = True):
     s = _carb_settings.get_settings()
-    cur = s.get(_PICK_PATH)
-    s.set(_PICK_PATH, not cur)
-    await omni.kit.app.get_app().next_update_async()
-    if restore:
-        s.set(_PICK_PATH, cur)
+    if _TRIGGER_MODE == "tbn":
+        cur = s.get(_TBN_PATH) or 0
+        # gpu(2)↔force gpu(3) 토글; 현재값이 범위 밖이면 2↔3로 고정
+        nxt = 3 if cur != 3 else 2
+        s.set(_TBN_PATH, nxt)
+        await omni.kit.app.get_app().next_update_async()
+        if restore:
+            s.set(_TBN_PATH, cur)
+    else:  # "picking"
+        cur = s.get(_PICK_PATH)
+        s.set(_PICK_PATH, not cur)
+        await omni.kit.app.get_app().next_update_async()
+        if restore:
+            s.set(_PICK_PATH, cur)
 
 
 def _get_attr(attr) -> object:
@@ -228,7 +242,8 @@ class UsdInterpolationUI:
         dt_scale = travel / DURATION if travel > 0.0 else 0.0
 
         self._anim_frame = 0
-        self._pick_original = _carb_settings.get_settings().get(_PICK_PATH)
+        s = _carb_settings.get_settings()
+        self._pick_original = s.get(_TBN_PATH if _TRIGGER_MODE == "tbn" else _PICK_PATH)
         self._is_animating = True
         try:
             while True:
@@ -243,7 +258,11 @@ class UsdInterpolationUI:
                 self._anim_frame += 1
                 if self._anim_frame % ANIM_FLIP_EVERY_N == 0:
                     s = _carb_settings.get_settings()
-                    s.set(_PICK_PATH, not s.get(_PICK_PATH))
+                    if _TRIGGER_MODE == "tbn":
+                        cur = s.get(_TBN_PATH) or 0
+                        s.set(_TBN_PATH, 3 if cur != 3 else 2)
+                    else:
+                        s.set(_PICK_PATH, not s.get(_PICK_PATH))
 
                 if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
@@ -252,7 +271,8 @@ class UsdInterpolationUI:
         finally:
             self._is_animating = False
             if self._pick_original is not None:
-                _carb_settings.get_settings().set(_PICK_PATH, self._pick_original)
+                path = _TBN_PATH if _TRIGGER_MODE == "tbn" else _PICK_PATH
+                _carb_settings.get_settings().set(path, self._pick_original)
                 self._pick_original = None
             self._stop_play()
 
