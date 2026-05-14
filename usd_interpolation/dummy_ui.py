@@ -1,9 +1,9 @@
 import asyncio
 import numpy as np
 
+import usdrt
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
-import omni.timeline
 import omni.usd
 import omni.ui as ui
 
@@ -46,53 +46,32 @@ def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
     return result
 
 
-_UV_SLOT = [0]  # alternates between 0 and 1
-
-
 def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
-    stage = omni.usd.get_context().get_stage()
-    if stage is None:
-        print("[usd_interpolation] ERROR: No editor stage found")
-        return []
+    stage_id = omni.usd.get_context().get_stage_id()
+    usdrt_stage = usdrt.Usd.Stage.Attach(stage_id)
 
-    writes = []
+    written = []
     for prim_path, st_a in map_a.items():
         st_b = map_b.get(prim_path)
         if st_b is None:
             continue
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim.IsValid():
+        usdrt_prim = usdrt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
+        if not usdrt_prim.IsValid():
             continue
-        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-        if not st_pv or not st_pv.GetAttr().IsValid():
+        usdrt_attr = usdrt_prim.GetAttribute("primvars:st")
+        if not usdrt_attr:
             continue
         if len(st_a) != len(st_b):
             chosen = st_a if t < 0.5 else st_b
-            writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
-            continue
-        t32 = np.float32(t)
-        lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
-        writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
+            usdrt_attr.Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen)))
+        else:
+            t32 = np.float32(t)
+            lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
+            usdrt_attr.Set(Vt.Vec2fArray.FromNumpy(lerped))
+        written.append(prim_path)
 
-    if not writes:
-        return []
-
-    # session layer 단독 (usdrt/Fabric 없음) — slot 0↔1 alternating
-    next_slot = 1 - _UV_SLOT[0]  # 0→1, 1→0
-    tc = Usd.TimeCode(float(next_slot))
-    session_layer = stage.GetSessionLayer()
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for st_pv, _, uv_data in writes:
-                st_pv.GetAttr().Set(uv_data, tc)
-    _UV_SLOT[0] = next_slot
-
-    # timeline timecode 이동 → Hydra time-varying primvar 재평가
-    fps = stage.GetTimeCodesPerSecond()
-    omni.timeline.get_timeline_interface().set_current_time(float(next_slot) / fps)
-
-    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es) slot={next_slot}")
-    return [p for _, p, _ in writes]
+    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(written)} mesh(es) via Fabric")
+    return written
 
 
 NUM_FILES = 5
