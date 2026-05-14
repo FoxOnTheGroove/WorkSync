@@ -5,6 +5,7 @@ import numpy as np
 import carb.settings as _carb_settings
 from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.kit.app
+import omni.timeline
 import omni.usd
 
 
@@ -58,6 +59,7 @@ class UVMixer:
             return False
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
+        cls._bake_timesamples()
         return True
 
     @classmethod
@@ -79,7 +81,10 @@ class UVMixer:
     def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
-        cls._apply_lerp(t)
+        loaded_count = len([m for m in cls._maps if m is not None])
+        if loaded_count >= 2:
+            tc = t * (loaded_count - 1)
+            omni.timeline.get_timeline_interface().set_current_time(tc)
         cls._schedule_trigger()
 
     @classmethod
@@ -144,6 +149,27 @@ class UVMixer:
             print(f"[UVMixer] no mesh with st: {path}")
             return None
         return result
+
+    @classmethod
+    def _bake_timesamples(cls) -> None:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
+        if len(loaded) < 2:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            with Sdf.ChangeBlock():
+                for tc, (_, st_map) in enumerate(loaded):
+                    for prim_path, st_data in st_map.items():
+                        prim = stage.GetPrimAtPath(prim_path)
+                        if not prim.IsValid():
+                            continue
+                        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+                        if not st_pv or not st_pv.GetAttr().IsValid():
+                            continue
+                        st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
     def _apply_lerp(cls, t: float) -> int:
@@ -222,7 +248,9 @@ class UVMixer:
                 new_t = max(0.0, min(1.0, new_t))
 
                 cls._t = new_t
-                cls._apply_lerp(new_t)
+                loaded_count = len([m for m in cls._maps if m is not None])
+                if loaded_count >= 2:
+                    omni.timeline.get_timeline_interface().set_current_time(new_t * (loaded_count - 1))
                 cls._notify(new_t)
 
                 cls._anim_frame += 1
