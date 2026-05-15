@@ -251,7 +251,7 @@ class UVMixer:
                 prim = stage.GetPrimAtPath(prim_path)
                 if not prim.IsValid():
                     continue
-                for attr_name in ("points", "facevertexindices"):
+                for attr_name in ("points", "faceVertexIndices"):
                     attr = prim.GetAttribute(attr_name)
                     if not attr or not attr.IsValid():
                         continue
