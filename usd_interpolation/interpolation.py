@@ -17,7 +17,7 @@ class UVMixer:
     _tbn_enabled: bool = True
     _play_duration: float = 2.5
     _flip_every_n: int = 10
-    _dirty_attr: str = "faceVertexIndices"  # "faceVertexIndices" | "extent"
+    _dirty_attr: str = "doubleSided"  # "doubleSided" | "faceVertexIndices"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -186,8 +186,8 @@ class UVMixer:
                     if not st_pv or not st_pv.GetAttr().IsValid():
                         continue
                     st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if cls._dirty_attr == "extent":
-                        dirty = UsdGeom.Boundable(prim).GetExtentAttr()
+                    if cls._dirty_attr == "doubleSided":
+                        dirty = UsdGeom.Mesh(prim).GetDoubleSidedAttr()
                     else:
                         dirty = UsdGeom.Mesh(prim).GetFaceVertexIndicesAttr()
                     if dirty and dirty.IsValid():
