@@ -2,9 +2,9 @@ import asyncio
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom
-import usdrt
+from pxr import Usd, UsdGeom, Vt
 import omni.kit.app
+import omni.timeline
 import omni.usd
 
 
@@ -13,6 +13,7 @@ class UVMixer:
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
     _play_duration: float = 2.5
+    _dirty_attr: str = "faceVertexCounts"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -20,21 +21,20 @@ class UVMixer:
     _play_task: object = None
     _subscribers: list = []
 
-    # ── usdrt 캐시 (로드 시 1회 구성) ─────────────────────────────────────────
-    _rt_stage: object = None
-    _rt_st_attrs: dict = {}   # prim_path → usdrt Attribute (primvars:st)
-
     # ── Public API ─────────────────────────────────────────────────────────────
 
     @classmethod
     def init(cls, *,
              num_slots: int | None = None,
-             play_duration: float | None = None) -> None:
+             play_duration: float | None = None,
+             dirty_attr: str | None = None) -> None:
         if num_slots is not None and num_slots != cls._num_slots:
             cls._maps = [None] * num_slots
             cls._num_slots = num_slots
         if play_duration is not None:
             cls._play_duration = play_duration
+        if dirty_attr is not None:
+            cls._dirty_attr = dirty_attr
 
     @classmethod
     def load(cls, path: str, slot: int) -> bool:
@@ -46,7 +46,7 @@ class UVMixer:
             return False
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
-        cls._build_rt_cache()
+        cls._bake_timesamples()
         return True
 
     @classmethod
@@ -68,7 +68,12 @@ class UVMixer:
     def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
-        cls._apply_lerp(t)
+        loaded_count = len([m for m in cls._maps if m is not None])
+        if loaded_count >= 2:
+            stage = omni.usd.get_context().get_stage()
+            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+            omni.timeline.get_timeline_interface().set_current_time(
+                t * (loaded_count - 1) / tps)
         cls._notify(t)
 
     @classmethod
@@ -132,41 +137,48 @@ class UVMixer:
         return result
 
     @classmethod
-    def _build_rt_cache(cls) -> None:
-        stage_id = omni.usd.get_context().get_stage_id()
-        cls._rt_stage = usdrt.Usd.Stage.Attach(stage_id)
-        prim_paths = set()
-        for m in cls._maps:
-            if m:
-                prim_paths.update(m.keys())
-        cls._rt_st_attrs.clear()
-        for prim_path in prim_paths:
-            rt_prim = cls._rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
-            if not rt_prim.IsValid():
-                continue
-            rt_st = rt_prim.GetAttribute("primvars:st")
-            if rt_st and rt_st.IsValid():
-                cls._rt_st_attrs[prim_path] = rt_st
-        print(f"[UVMixer] rt cache built ({len(cls._rt_st_attrs)} attrs)")
-
-    @classmethod
-    def _apply_lerp(cls, t: float) -> None:
-        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
-        n = len(loaded)
-        if n < 2 or not cls._rt_st_attrs:
+    def _bake_timesamples(cls) -> None:
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
             return
-        pos = t * (n - 1)
-        idx = min(int(pos), n - 2)
-        frac = pos - idx
-        map_a = loaded[idx][1]
-        map_b = loaded[idx + 1][1]
-        for prim_path, rt_st in cls._rt_st_attrs.items():
-            st_a = map_a.get(prim_path)
-            st_b = map_b.get(prim_path)
-            if st_a is None or st_b is None or st_a.shape != st_b.shape:
+        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
+        if len(loaded) < 2:
+            return
+        dirty_name = {"faceVertexCounts": "faceVertexCounts",
+                      "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
+
+        dirty_cache: dict = {}
+        for prim_path in loaded[0][1].keys():
+            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+            if not pxr_prim.IsValid():
                 continue
-            st = (st_a * (1.0 - frac) + st_b * frac).astype(np.float32)
-            rt_st.Set(usdrt.Vt.Vec2fArray(st.reshape(-1, 2).tolist()))
+            pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+            if not pxr_dirty or not pxr_dirty.IsValid():
+                continue
+            val = pxr_dirty.Get(Usd.TimeCode.Default())
+            if val is None:
+                samples = pxr_dirty.GetTimeSamples()
+                if samples:
+                    val = pxr_dirty.Get(samples[0])
+            if val is None:
+                continue
+            dirty_cache[prim_path] = val
+
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            for tc, (_, st_map) in enumerate(loaded):
+                for prim_path, st_data in st_map.items():
+                    pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    if prim_path in dirty_cache:
+                        pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+                        if pxr_dirty and pxr_dirty.IsValid():
+                            pxr_dirty.Set(dirty_cache[prim_path], tc)
+        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
     def _notify(cls, t: float) -> None:
