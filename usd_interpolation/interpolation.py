@@ -183,20 +183,11 @@ class UVMixer:
                         continue
                     st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
                     mesh = UsdGeom.Mesh(prim)
-                    for attr in (
-                        prim.GetAttribute("points"),
-                        prim.GetAttribute("normals"),
-                        mesh.GetFaceVertexIndicesAttr(),
-                    ):
-                        if not attr or not attr.IsValid():
-                            continue
-                        val = attr.Get(Usd.TimeCode.Default())
-                        if val is None:
-                            samples = attr.GetTimeSamples()
-                            if samples:
-                                val = attr.Get(samples[0])
+                    idx_attr = mesh.GetFaceVertexIndicesAttr()
+                    if idx_attr and idx_attr.IsValid():
+                        val = idx_attr.Get(Usd.TimeCode.Default())
                         if val is not None:
-                            attr.Set(val, tc)
+                            idx_attr.Set(val, tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
@@ -249,35 +240,7 @@ class UVMixer:
             await omni.kit.app.get_app().next_update_async()
             s.set(cls._TBN_PATH, cls._tbn_default)
         else:
-            cls._touch_normals()
             await omni.kit.app.get_app().next_update_async()
-
-    @classmethod
-    def _touch_normals(cls) -> None:
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            return
-        prim_paths = set()
-        for m in cls._maps:
-            if m is not None:
-                prim_paths.update(m.keys())
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            for prim_path in prim_paths:
-                prim = stage.GetPrimAtPath(prim_path)
-                if not prim.IsValid():
-                    continue
-                mesh = UsdGeom.Mesh(prim)
-                for attr in (prim.GetAttribute("points"), mesh.GetFaceVertexIndicesAttr()):
-                    if not attr or not attr.IsValid():
-                        continue
-                    val = attr.Get(Usd.TimeCode.Default())
-                    if val is None:
-                        samples = attr.GetTimeSamples()
-                        if samples:
-                            val = attr.Get(samples[0])
-                    if val is not None:
-                        attr.Set(val)
-                        print(f"[UVMixer] touched {attr.GetName()}: {prim_path}")
 
     @classmethod
     def _notify(cls, t: float) -> None:
@@ -321,9 +284,6 @@ class UVMixer:
                         s = _carb_settings.get_settings()
                         cur = s.get(cls._TBN_PATH) or cls._TBN_GPU
                         s.set(cls._TBN_PATH, cls._TBN_FORCE if cur == cls._TBN_GPU else cls._TBN_GPU)
-                else:
-                    cls._touch_normals()
-
                 if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
