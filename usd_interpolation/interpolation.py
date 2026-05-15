@@ -208,39 +208,6 @@ class UVMixer:
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
-    def _apply_lerp(cls, t: float) -> int:
-        loaded = [m for m in cls._maps if m is not None]
-        n = len(loaded)
-        if n < 2:
-            return 0
-        raw = t * (n - 1)
-        seg = min(int(raw), n - 2)
-        local_t = min(raw - seg, 1.0)
-        map_a, map_b = loaded[seg], loaded[seg + 1]
-
-        if omni.usd.get_context().get_stage() is None:
-            return 0
-        rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
-        count = 0
-        for prim_path, st_a in map_a.items():
-            st_b = map_b.get(prim_path)
-            if st_b is None:
-                continue
-            rt_prim = rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
-            if not rt_prim.IsValid():
-                continue
-            st_attr = rt_prim.GetAttribute("primvars:st")
-            if not st_attr or not st_attr.IsValid():
-                continue
-            if len(st_a) != len(st_b):
-                uv = np.ascontiguousarray(st_a if local_t < 0.5 else st_b)
-            else:
-                uv = np.ascontiguousarray(st_a + np.float32(local_t) * (st_b - st_a))
-            st_attr.Set(usdrt.Vt.Vec2fArray(uv))
-            count += 1
-        return count
-
-    @classmethod
     def _schedule_trigger(cls) -> None:
         if cls._flush_task and not cls._flush_task.done():
             cls._flush_task.cancel()
