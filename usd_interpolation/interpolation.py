@@ -186,6 +186,10 @@ class UVMixer:
                     idx_attr = mesh.GetFaceVertexIndicesAttr()
                     if idx_attr and idx_attr.IsValid():
                         val = idx_attr.Get(Usd.TimeCode.Default())
+                        if val is None:
+                            samples = idx_attr.GetTimeSamples()
+                            if samples:
+                                val = idx_attr.Get(samples[0])
                         if val is not None:
                             idx_attr.Set(val, tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
