@@ -168,16 +168,15 @@ class UVMixer:
         if len(loaded) < 2:
             return
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                for tc, (_, st_map) in enumerate(loaded):
-                    for prim_path, st_data in st_map.items():
-                        prim = stage.GetPrimAtPath(prim_path)
-                        if not prim.IsValid():
-                            continue
-                        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-                        if not st_pv or not st_pv.GetAttr().IsValid():
-                            continue
-                        st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+            for tc, (_, st_map) in enumerate(loaded):
+                for prim_path, st_data in st_map.items():
+                    prim = stage.GetPrimAtPath(prim_path)
+                    if not prim.IsValid():
+                        continue
+                    st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+                    if not st_pv or not st_pv.GetAttr().IsValid():
+                        continue
+                    st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
