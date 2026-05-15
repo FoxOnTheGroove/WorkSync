@@ -235,10 +235,30 @@ class UVMixer:
             await omni.kit.app.get_app().next_update_async()
             s.set(cls._TBN_PATH, cls._tbn_default)
         else:
-            tl = omni.timeline.get_timeline_interface()
-            tl.play()
+            cls._touch_normals()
             await omni.kit.app.get_app().next_update_async()
-            tl.stop()
+
+    @classmethod
+    def _touch_normals(cls) -> None:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+        prim_paths = set()
+        for m in cls._maps:
+            if m is not None:
+                prim_paths.update(m.keys())
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for prim_path in prim_paths:
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim.IsValid():
+                    continue
+                normals_attr = prim.GetAttribute("normals")
+                if not normals_attr or not normals_attr.IsValid():
+                    continue
+                val = normals_attr.Get()
+                if val is not None:
+                    normals_attr.Set(val)
+                    print(f"[UVMixer] touched normals: {prim_path}")
 
     @classmethod
     def _notify(cls, t: float) -> None:
@@ -283,10 +303,7 @@ class UVMixer:
                         cur = s.get(cls._TBN_PATH) or cls._TBN_GPU
                         s.set(cls._TBN_PATH, cls._TBN_FORCE if cur == cls._TBN_GPU else cls._TBN_GPU)
                 else:
-                    tl = omni.timeline.get_timeline_interface()
-                    tl.play()
-                    await omni.kit.app.get_app().next_update_async()
-                    tl.stop()
+                    cls._touch_normals()
 
                 if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
