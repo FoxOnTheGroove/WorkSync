@@ -180,6 +180,27 @@ class UVMixer:
         rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
         dirty_name = {"faceVertexCounts": "faceVertexCounts",
                       "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
+
+        dirty_cache: dict = {}
+        for prim_path in loaded[0][1].keys():
+            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+            if not pxr_prim.IsValid():
+                continue
+            pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+            if not pxr_dirty or not pxr_dirty.IsValid():
+                continue
+            val = pxr_dirty.Get(Usd.TimeCode.Default())
+            if val is None:
+                samples = pxr_dirty.GetTimeSamples()
+                if samples:
+                    val = pxr_dirty.Get(samples[0])
+            if val is None:
+                continue
+            if cls._dirty_attr == "subdivisionScheme":
+                dirty_cache[prim_path] = str(val)
+            else:
+                dirty_cache[prim_path] = usdrt.Vt.IntArray(list(val))
+
         for tc, (_, st_map) in enumerate(loaded):
             tc_code = usdrt.Usd.TimeCode(tc)
             for prim_path, st_data in st_map.items():
@@ -189,22 +210,12 @@ class UVMixer:
                 st_attr = rt_prim.GetAttribute("primvars:st")
                 if not st_attr or not st_attr.IsValid():
                     continue
-                st_attr.Set(usdrt.Vt.Vec2fArray(np.ascontiguousarray(st_data)), tc_code)
-                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                if not pxr_prim.IsValid():
-                    continue
-                pxr_dirty = pxr_prim.GetAttribute(dirty_name)
-                if not pxr_dirty or not pxr_dirty.IsValid():
-                    continue
-                val = pxr_dirty.Get(Usd.TimeCode.Default())
-                if val is None:
-                    samples = pxr_dirty.GetTimeSamples()
-                    if samples:
-                        val = pxr_dirty.Get(samples[0])
-                if val is not None:
+                st_arr = usdrt.Vt.Vec2fArray(np.ascontiguousarray(st_data, dtype=np.float32))
+                st_attr.Set(st_arr, tc_code)
+                if prim_path in dirty_cache:
                     rt_dirty = rt_prim.GetAttribute(dirty_name)
                     if rt_dirty and rt_dirty.IsValid():
-                        rt_dirty.Set(val, tc_code)
+                        rt_dirty.Set(dirty_cache[prim_path], tc_code)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
