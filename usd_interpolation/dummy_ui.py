@@ -4,8 +4,11 @@ import omni.ui as ui
 from .interpolation import UVMixer
 
 NUM_FILES = 5
-# "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation" | "faceVaryingLinearInterpolation"
-DIRTY_ATTR = "faceVaryingLinearInterpolation"
+# "none"          - dirty attr 없음 (st만)
+# "faceVertexIndices" - IntArray, 같은 값 bake
+# "fvli_same"     - faceVaryingLinearInterpolation, 같은 값 bake
+# "fvli_diff"     - faceVaryingLinearInterpolation, 다른 값 교번 bake
+DIRTY_ATTR = "fvli_diff"
 
 
 class UsdInterpolationUI:
