@@ -251,8 +251,8 @@ class UVMixer:
                 prim = stage.GetPrimAtPath(prim_path)
                 if not prim.IsValid():
                     continue
-                for attr_name in ("points", "faceVertexIndices"):
-                    attr = prim.GetAttribute(attr_name)
+                mesh = UsdGeom.Mesh(prim)
+                for attr in (prim.GetAttribute("points"), mesh.GetFaceVertexIndicesAttr()):
                     if not attr or not attr.IsValid():
                         continue
                     val = attr.Get(Usd.TimeCode.Default())
@@ -262,8 +262,7 @@ class UVMixer:
                             val = attr.Get(samples[0])
                     if val is not None:
                         attr.Set(val)
-                        print(f"[UVMixer] touched {attr_name}: {prim_path}")
-                        break
+                        print(f"[UVMixer] touched {attr.GetName()}: {prim_path}")
 
     @classmethod
     def _notify(cls, t: float) -> None:
