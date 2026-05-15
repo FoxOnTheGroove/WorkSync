@@ -4,7 +4,6 @@ from typing import Callable
 import numpy as np
 import carb.settings as _carb_settings
 from pxr import Usd, UsdGeom, Vt
-import usdrt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -177,11 +176,9 @@ class UVMixer:
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         if len(loaded) < 2:
             return
-        rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
         dirty_name = {"faceVertexCounts": "faceVertexCounts",
                       "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
 
-        # ── dirty 값 1회 추출 → usdrt 타입으로 변환 캐시 ────────────────────────
         dirty_cache: dict = {}
         for prim_path in loaded[0][1].keys():
             pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
@@ -197,28 +194,22 @@ class UVMixer:
                     val = pxr_dirty.Get(samples[0])
             if val is None:
                 continue
-            if cls._dirty_attr == "subdivisionScheme":
-                dirty_cache[prim_path] = str(val)
-            else:
-                dirty_cache[prim_path] = usdrt.Vt.IntArray(list(val))
+            dirty_cache[prim_path] = val
 
-        # ── st: pxr session layer 타임샘플 / dirty: usdrt Fabric 타임샘플 ──────
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
-                rt_tc = usdrt.Usd.TimeCode(tc)
                 for prim_path, st_data in st_map.items():
                     pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                    if pxr_prim.IsValid():
-                        st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                        if st_pv and st_pv.GetAttr().IsValid():
-                            st_pv.GetAttr().Set(
-                                Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    if not pxr_prim.IsValid():
+                        continue
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
                     if prim_path in dirty_cache:
-                        rt_prim = rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
-                        if rt_prim.IsValid():
-                            rt_dirty = rt_prim.GetAttribute(dirty_name)
-                            if rt_dirty and rt_dirty.IsValid():
-                                rt_dirty.Set(dirty_cache[prim_path], rt_tc)
+                        pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+                        if pxr_dirty and pxr_dirty.IsValid():
+                            pxr_dirty.Set(dirty_cache[prim_path], tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
