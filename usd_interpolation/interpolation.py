@@ -2,9 +2,9 @@ import asyncio
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom
-import usdrt
+from pxr import Usd, UsdGeom, Vt
 import omni.kit.app
+import omni.timeline
 import omni.usd
 
 
@@ -17,7 +17,6 @@ class UVMixer:
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
-    _dirty_cache: dict = {}
     _t: float = 0.0
     _play_task: object = None
     _subscribers: list = []
@@ -47,9 +46,7 @@ class UVMixer:
             return False
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
-        cls._cache_dirty_values(st_map.keys())
-        if len(cls.get_loaded_slots()) >= 2:
-            cls._apply_lerp(cls._t)
+        cls._bake_timesamples()
         return True
 
     @classmethod
@@ -71,7 +68,12 @@ class UVMixer:
     def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
-        cls._apply_lerp(t)
+        loaded_count = len([m for m in cls._maps if m is not None])
+        if loaded_count >= 2:
+            stage = omni.usd.get_context().get_stage()
+            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+            omni.timeline.get_timeline_interface().set_current_time(
+                t * (loaded_count - 1) / tps)
         cls._notify(t)
 
     @classmethod
@@ -135,17 +137,22 @@ class UVMixer:
         return result
 
     @classmethod
-    def _cache_dirty_values(cls, prim_paths) -> None:
+    def _bake_timesamples(cls) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
-        for prim_path in prim_paths:
-            if prim_path in cls._dirty_cache:
-                continue
+        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
+        if len(loaded) < 2:
+            return
+        dirty_name = {"faceVertexCounts": "faceVertexCounts",
+                      "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
+
+        dirty_cache: dict = {}
+        for prim_path in loaded[0][1].keys():
             pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
             if not pxr_prim.IsValid():
                 continue
-            pxr_dirty = pxr_prim.GetAttribute(cls._dirty_attr)
+            pxr_dirty = pxr_prim.GetAttribute(dirty_name)
             if not pxr_dirty or not pxr_dirty.IsValid():
                 continue
             val = pxr_dirty.Get(Usd.TimeCode.Default())
@@ -155,41 +162,23 @@ class UVMixer:
                     val = pxr_dirty.Get(samples[0])
             if val is None:
                 continue
-            cls._dirty_cache[prim_path] = usdrt.Vt.IntArray(list(val))
+            dirty_cache[prim_path] = val
 
-    @classmethod
-    def _apply_lerp(cls, t: float) -> None:
-        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
-        n = len(loaded)
-        if n < 2:
-            return
-
-        pos = t * (n - 1)
-        idx = min(int(pos), n - 2)
-        frac = pos - idx
-        map_a = loaded[idx][1]
-        map_b = loaded[idx + 1][1]
-
-        rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
-        for prim_path, st_a in map_a.items():
-            st_b = map_b.get(prim_path)
-            if st_b is None or st_a.shape != st_b.shape:
-                continue
-            st = (st_a * (1.0 - frac) + st_b * frac).astype(np.float32)
-
-            rt_prim = rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
-            if not rt_prim.IsValid():
-                continue
-
-            rt_st = rt_prim.GetAttribute("primvars:st")
-            if rt_st and rt_st.IsValid():
-                rt_st.Set(usdrt.Vt.Vec2fArray(st.reshape(-1, 2).tolist()))
-
-            cached = cls._dirty_cache.get(prim_path)
-            if cached is not None:
-                rt_dirty = rt_prim.GetAttribute(cls._dirty_attr)
-                if rt_dirty and rt_dirty.IsValid():
-                    rt_dirty.Set(cached)
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            for tc, (_, st_map) in enumerate(loaded):
+                for prim_path, st_data in st_map.items():
+                    pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    if prim_path in dirty_cache:
+                        pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+                        if pxr_dirty and pxr_dirty.IsValid():
+                            pxr_dirty.Set(dirty_cache[prim_path], tc)
+        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
     def _notify(cls, t: float) -> None:
@@ -213,11 +202,7 @@ class UVMixer:
                 frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))
-
-                cls._t = new_t
-                cls._apply_lerp(new_t)
-                cls._notify(new_t)
-
+                cls.set_t(new_t)
                 if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
