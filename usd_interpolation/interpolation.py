@@ -251,17 +251,19 @@ class UVMixer:
                 prim = stage.GetPrimAtPath(prim_path)
                 if not prim.IsValid():
                     continue
-                normals_attr = prim.GetAttribute("normals")
-                if not normals_attr or not normals_attr.IsValid():
-                    continue
-                val = normals_attr.Get(Usd.TimeCode.Default())
-                if val is None:
-                    samples = normals_attr.GetTimeSamples()
-                    if samples:
-                        val = normals_attr.Get(samples[0])
-                if val is not None:
-                    normals_attr.Set(val)
-                    print(f"[UVMixer] touched normals: {prim_path}")
+                for attr_name in ("points", "facevertexindices"):
+                    attr = prim.GetAttribute(attr_name)
+                    if not attr or not attr.IsValid():
+                        continue
+                    val = attr.Get(Usd.TimeCode.Default())
+                    if val is None:
+                        samples = attr.GetTimeSamples()
+                        if samples:
+                            val = attr.Get(samples[0])
+                    if val is not None:
+                        attr.Set(val)
+                        print(f"[UVMixer] touched {attr_name}: {prim_path}")
+                        break
 
     @classmethod
     def _notify(cls, t: float) -> None:
