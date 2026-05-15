@@ -17,6 +17,7 @@ class UVMixer:
     _tbn_enabled: bool = True
     _play_duration: float = 2.5
     _flip_every_n: int = 10
+    _dirty_attr: str = "faceVertexIndices"  # "faceVertexIndices" | "extent"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -40,7 +41,8 @@ class UVMixer:
              tbn_default: int | None = None,
              tbn_enabled: bool | None = None,
              play_duration: float | None = None,
-             flip_every_n: int | None = None) -> None:
+             flip_every_n: int | None = None,
+             dirty_attr: str | None = None) -> None:
         if num_slots is not None and num_slots != cls._num_slots:
             cls._maps = [None] * num_slots
             cls._num_slots = num_slots
@@ -52,6 +54,8 @@ class UVMixer:
             cls._play_duration = play_duration
         if flip_every_n is not None:
             cls._flip_every_n = flip_every_n
+        if dirty_attr is not None:
+            cls._dirty_attr = dirty_attr
         try:
             import omni.kit.viewport.utility
             vp = omni.kit.viewport.utility.get_active_viewport()
@@ -182,16 +186,18 @@ class UVMixer:
                     if not st_pv or not st_pv.GetAttr().IsValid():
                         continue
                     st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    mesh = UsdGeom.Mesh(prim)
-                    idx_attr = mesh.GetFaceVertexIndicesAttr()
-                    if idx_attr and idx_attr.IsValid():
-                        val = idx_attr.Get(Usd.TimeCode.Default())
+                    if cls._dirty_attr == "extent":
+                        dirty = UsdGeom.Boundable(prim).GetExtentAttr()
+                    else:
+                        dirty = UsdGeom.Mesh(prim).GetFaceVertexIndicesAttr()
+                    if dirty and dirty.IsValid():
+                        val = dirty.Get(Usd.TimeCode.Default())
                         if val is None:
-                            samples = idx_attr.GetTimeSamples()
+                            samples = dirty.GetTimeSamples()
                             if samples:
-                                val = idx_attr.Get(samples[0])
+                                val = dirty.Get(samples[0])
                         if val is not None:
-                            idx_attr.Set(val, tc)
+                            dirty.Set(val, tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
