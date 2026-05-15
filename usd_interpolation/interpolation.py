@@ -252,7 +252,7 @@ class UVMixer:
                 if not prim.IsValid():
                     continue
                 mesh = UsdGeom.Mesh(prim)
-                for attr in (prim.GetAttribute("points"), mesh.GetFaceVertexIndicesAttr()):
+                for attr in (prim.GetAttribute("points"),):
                     if not attr or not attr.IsValid():
                         continue
                     val = attr.Get(Usd.TimeCode.Default())
