@@ -4,8 +4,8 @@ import omni.ui as ui
 from .interpolation import UVMixer
 
 NUM_FILES = 5
-# "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation"
-DIRTY_ATTR = "faceVertexCounts"
+# "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation" | "faceVaryingLinearInterpolation"
+DIRTY_ATTR = "faceVaryingLinearInterpolation"
 
 
 class UsdInterpolationUI:

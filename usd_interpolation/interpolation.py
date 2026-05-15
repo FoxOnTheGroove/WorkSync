@@ -13,7 +13,7 @@ class UVMixer:
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
     _play_duration: float = 2.5
-    _dirty_attr: str = "faceVertexCounts"  # "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation"
+    _dirty_attr: str = "faceVertexCounts"  # "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation" | "faceVaryingLinearInterpolation"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -144,11 +144,15 @@ class UVMixer:
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         if len(loaded) < 2:
             return
+        # faceVaryingLinearInterpolation: tc별 교번 값으로 dirty 보장 (token이라 값 변화 필요)
+        _FVLI = cls._dirty_attr == "faceVaryingLinearInterpolation"
+        _FVLI_PAIR = ("none", "cornersPlus1")
+
         dirty_name = {
             "faceVertexCounts": "faceVertexCounts",
             "faceVertexIndices": "faceVertexIndices",
             "orientation":       "orientation",
-        }.get(cls._dirty_attr)  # None → "none" 모드
+        }.get(cls._dirty_attr)  # None → "none" 또는 faceVaryingLinearInterpolation 모드
 
         dirty_cache: dict = {}
         if dirty_name:
@@ -178,7 +182,14 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if dirty_name and prim_path in dirty_cache:
+                    if _FVLI:
+                        mesh = UsdGeom.Mesh(pxr_prim)
+                        fvli_attr = mesh.GetFaceVaryingLinearInterpolationAttr()
+                        if not fvli_attr or not fvli_attr.IsValid():
+                            fvli_attr = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                        if fvli_attr and fvli_attr.IsValid():
+                            fvli_attr.Set(_FVLI_PAIR[tc % 2], tc)
+                    elif dirty_name and prim_path in dirty_cache:
                         pxr_dirty = pxr_prim.GetAttribute(dirty_name)
                         if pxr_dirty and pxr_dirty.IsValid():
                             pxr_dirty.Set(dirty_cache[prim_path], tc)
