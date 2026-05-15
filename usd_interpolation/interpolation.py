@@ -191,6 +191,10 @@ class UVMixer:
                         if not attr or not attr.IsValid():
                             continue
                         val = attr.Get(Usd.TimeCode.Default())
+                        if val is None:
+                            samples = attr.GetTimeSamples()
+                            if samples:
+                                val = attr.Get(samples[0])
                         if val is not None:
                             attr.Set(val, tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
