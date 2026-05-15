@@ -3,7 +3,8 @@ from typing import Callable
 
 import numpy as np
 import carb.settings as _carb_settings
-from pxr import Usd, UsdGeom, Vt, Sdf
+from pxr import Usd, UsdGeom
+import usdrt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -170,36 +171,40 @@ class UVMixer:
 
     @classmethod
     def _bake_timesamples(cls) -> None:
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
             return
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         if len(loaded) < 2:
             return
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            for tc, (_, st_map) in enumerate(loaded):
-                for prim_path, st_data in st_map.items():
-                    prim = stage.GetPrimAtPath(prim_path)
-                    if not prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-                    if not st_pv or not st_pv.GetAttr().IsValid():
-                        continue
-                    st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if cls._dirty_attr == "faceVertexCounts":
-                        dirty = UsdGeom.Mesh(prim).GetFaceVertexCountsAttr()
-                    elif cls._dirty_attr == "subdivisionScheme":
-                        dirty = UsdGeom.Mesh(prim).GetSubdivisionSchemeAttr()
-                    else:
-                        dirty = UsdGeom.Mesh(prim).GetFaceVertexIndicesAttr()
-                    if dirty and dirty.IsValid():
-                        val = dirty.Get(Usd.TimeCode.Default())
-                        if val is None:
-                            samples = dirty.GetTimeSamples()
-                            if samples:
-                                val = dirty.Get(samples[0])
-                        if val is not None:
-                            dirty.Set(val, tc)
+        rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
+        dirty_name = {"faceVertexCounts": "faceVertexCounts",
+                      "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
+        for tc, (_, st_map) in enumerate(loaded):
+            tc_code = usdrt.Usd.TimeCode(tc)
+            for prim_path, st_data in st_map.items():
+                rt_prim = rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
+                if not rt_prim.IsValid():
+                    continue
+                st_attr = rt_prim.GetAttribute("primvars:st")
+                if not st_attr or not st_attr.IsValid():
+                    continue
+                st_attr.Set(usdrt.Vt.Vec2fArray(np.ascontiguousarray(st_data)), tc_code)
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+                if not pxr_dirty or not pxr_dirty.IsValid():
+                    continue
+                val = pxr_dirty.Get(Usd.TimeCode.Default())
+                if val is None:
+                    samples = pxr_dirty.GetTimeSamples()
+                    if samples:
+                        val = pxr_dirty.Get(samples[0])
+                if val is not None:
+                    rt_dirty = rt_prim.GetAttribute(dirty_name)
+                    if rt_dirty and rt_dirty.IsValid():
+                        rt_dirty.Set(val, tc_code)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
@@ -213,29 +218,26 @@ class UVMixer:
         local_t = min(raw - seg, 1.0)
         map_a, map_b = loaded[seg], loaded[seg + 1]
 
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
+        if omni.usd.get_context().get_stage() is None:
             return 0
-
+        rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
         count = 0
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                for prim_path, st_a in map_a.items():
-                    st_b = map_b.get(prim_path)
-                    if st_b is None:
-                        continue
-                    prim = stage.GetPrimAtPath(prim_path)
-                    if not prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-                    if not st_pv or not st_pv.GetAttr().IsValid():
-                        continue
-                    if len(st_a) != len(st_b):
-                        uv = np.ascontiguousarray(st_a if local_t < 0.5 else st_b)
-                    else:
-                        uv = np.ascontiguousarray(st_a + np.float32(local_t) * (st_b - st_a))
-                    st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(uv))
-                    count += 1
+        for prim_path, st_a in map_a.items():
+            st_b = map_b.get(prim_path)
+            if st_b is None:
+                continue
+            rt_prim = rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
+            if not rt_prim.IsValid():
+                continue
+            st_attr = rt_prim.GetAttribute("primvars:st")
+            if not st_attr or not st_attr.IsValid():
+                continue
+            if len(st_a) != len(st_b):
+                uv = np.ascontiguousarray(st_a if local_t < 0.5 else st_b)
+            else:
+                uv = np.ascontiguousarray(st_a + np.float32(local_t) * (st_b - st_a))
+            st_attr.Set(usdrt.Vt.Vec2fArray(uv))
+            count += 1
         return count
 
     @classmethod
