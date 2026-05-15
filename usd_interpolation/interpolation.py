@@ -13,7 +13,7 @@ class UVMixer:
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
     _play_duration: float = 2.5
-    _dirty_attr: str = "faceVertexCounts"
+    _dirty_attr: str = "faceVertexCounts"  # "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -144,25 +144,29 @@ class UVMixer:
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         if len(loaded) < 2:
             return
-        dirty_name = {"faceVertexCounts": "faceVertexCounts",
-                      "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
+        dirty_name = {
+            "faceVertexCounts": "faceVertexCounts",
+            "faceVertexIndices": "faceVertexIndices",
+            "orientation":       "orientation",
+        }.get(cls._dirty_attr)  # None → "none" 모드
 
         dirty_cache: dict = {}
-        for prim_path in loaded[0][1].keys():
-            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-            if not pxr_prim.IsValid():
-                continue
-            pxr_dirty = pxr_prim.GetAttribute(dirty_name)
-            if not pxr_dirty or not pxr_dirty.IsValid():
-                continue
-            val = pxr_dirty.Get(Usd.TimeCode.Default())
-            if val is None:
-                samples = pxr_dirty.GetTimeSamples()
-                if samples:
-                    val = pxr_dirty.Get(samples[0])
-            if val is None:
-                continue
-            dirty_cache[prim_path] = val
+        if dirty_name:
+            for prim_path in loaded[0][1].keys():
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+                if not pxr_dirty or not pxr_dirty.IsValid():
+                    continue
+                val = pxr_dirty.Get(Usd.TimeCode.Default())
+                if val is None:
+                    samples = pxr_dirty.GetTimeSamples()
+                    if samples:
+                        val = pxr_dirty.Get(samples[0])
+                if val is None:
+                    continue
+                dirty_cache[prim_path] = val
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
@@ -174,11 +178,11 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if prim_path in dirty_cache:
+                    if dirty_name and prim_path in dirty_cache:
                         pxr_dirty = pxr_prim.GetAttribute(dirty_name)
                         if pxr_dirty and pxr_dirty.IsValid():
                             pxr_dirty.Set(dirty_cache[prim_path], tc)
-        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
+        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
 
     @classmethod
     def _notify(cls, t: float) -> None:

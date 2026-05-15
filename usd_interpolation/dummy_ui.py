@@ -4,6 +4,8 @@ import omni.ui as ui
 from .interpolation import UVMixer
 
 NUM_FILES = 5
+# "none" | "faceVertexIndices" | "faceVertexCounts" | "orientation"
+DIRTY_ATTR = "faceVertexCounts"
 
 
 class UsdInterpolationUI:
@@ -18,7 +20,7 @@ class UsdInterpolationUI:
         self._btn_reverse: ui.Button | None = None
 
     def build_ui(self):
-        UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr="faceVertexCounts")
+        UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr=DIRTY_ATTR)
         UVMixer.subscribe(self._on_t_changed)
 
         self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
