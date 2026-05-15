@@ -99,8 +99,7 @@ class UVMixer:
             stage = omni.usd.get_context().get_stage()
             tps = stage.GetTimeCodesPerSecond() if stage else 24.0
             omni.timeline.get_timeline_interface().set_current_time(tc / tps)
-        if cls._tbn_enabled:
-            cls._schedule_trigger()
+        cls._schedule_trigger()
 
     @classmethod
     def get_t(cls) -> float:
