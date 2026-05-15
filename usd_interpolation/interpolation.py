@@ -182,6 +182,12 @@ class UVMixer:
                     if not st_pv or not st_pv.GetAttr().IsValid():
                         continue
                     st_pv.GetAttr().Set(Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    mesh = UsdGeom.Mesh(prim)
+                    idx_attr = mesh.GetFaceVertexIndicesAttr()
+                    if idx_attr and idx_attr.IsValid():
+                        val = idx_attr.Get(Usd.TimeCode.Default())
+                        if val is not None:
+                            idx_attr.Set(val, tc)
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
 
     @classmethod
@@ -252,7 +258,7 @@ class UVMixer:
                 if not prim.IsValid():
                     continue
                 mesh = UsdGeom.Mesh(prim)
-                for attr in (prim.GetAttribute("points"),):
+                for attr in (prim.GetAttribute("points"), mesh.GetFaceVertexIndicesAttr()):
                     if not attr or not attr.IsValid():
                         continue
                     val = attr.Get(Usd.TimeCode.Default())
