@@ -254,7 +254,11 @@ class UVMixer:
                 normals_attr = prim.GetAttribute("normals")
                 if not normals_attr or not normals_attr.IsValid():
                     continue
-                val = normals_attr.Get()
+                val = normals_attr.Get(Usd.TimeCode.Default())
+                if val is None:
+                    samples = normals_attr.GetTimeSamples()
+                    if samples:
+                        val = normals_attr.Get(samples[0])
                 if val is not None:
                     normals_attr.Set(val)
                     print(f"[UVMixer] touched normals: {prim_path}")
