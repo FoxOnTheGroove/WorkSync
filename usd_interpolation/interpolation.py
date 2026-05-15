@@ -2,10 +2,9 @@ import asyncio
 from typing import Callable
 
 import numpy as np
-import carb.settings as _carb_settings
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom
+import usdrt
 import omni.kit.app
-import omni.timeline
 import omni.usd
 
 
@@ -13,55 +12,30 @@ class UVMixer:
 
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
-    _tbn_default: int = 0          # 0=auto, 2=gpu
-    _tbn_enabled: bool = True
     _play_duration: float = 2.5
-    _flip_every_n: int = 10
-    _dirty_attr: str = "faceVertexCounts"  # "faceVertexCounts" | "faceVertexIndices" | "subdivisionScheme"
+    _dirty_attr: str = "faceVertexCounts"  # "faceVertexCounts" | "faceVertexIndices"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
+    _dirty_cache: dict = {}
     _t: float = 0.0
-    _is_animating: bool = False
-    _anim_frame: int = 0
     _play_task: object = None
-    _flush_task: object = None
     _subscribers: list = []
-
-    # ── Constants ──────────────────────────────────────────────────────────────
-    _TBN_PATH = "/rtx/hydra/TBNFrameMode"
-    _TBN_GPU = 2
-    _TBN_FORCE = 3
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     @classmethod
     def init(cls, *,
              num_slots: int | None = None,
-             tbn_default: int | None = None,
-             tbn_enabled: bool | None = None,
              play_duration: float | None = None,
-             flip_every_n: int | None = None,
              dirty_attr: str | None = None) -> None:
         if num_slots is not None and num_slots != cls._num_slots:
             cls._maps = [None] * num_slots
             cls._num_slots = num_slots
-        if tbn_default is not None:
-            cls._tbn_default = tbn_default
-        if tbn_enabled is not None:
-            cls._tbn_enabled = tbn_enabled
         if play_duration is not None:
             cls._play_duration = play_duration
-        if flip_every_n is not None:
-            cls._flip_every_n = flip_every_n
         if dirty_attr is not None:
             cls._dirty_attr = dirty_attr
-        try:
-            import omni.kit.viewport.utility
-            vp = omni.kit.viewport.utility.get_active_viewport()
-            print(f"[UVMixer] viewport methods: {[m for m in dir(vp) if not m.startswith('_')]}")
-        except Exception as e:
-            print(f"[UVMixer] viewport dir: {e}")
 
     @classmethod
     def load(cls, path: str, slot: int) -> bool:
@@ -73,9 +47,9 @@ class UVMixer:
             return False
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
-        cls._bake_timesamples()
-        if cls._tbn_enabled and len(cls.get_loaded_slots()) >= 2:
-            cls._schedule_trigger()
+        cls._cache_dirty_values(st_map.keys())
+        if len(cls.get_loaded_slots()) >= 2:
+            cls._apply_lerp(cls._t)
         return True
 
     @classmethod
@@ -97,13 +71,8 @@ class UVMixer:
     def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
-        loaded_count = len([m for m in cls._maps if m is not None])
-        if loaded_count >= 2:
-            tc = t * (loaded_count - 1)
-            stage = omni.usd.get_context().get_stage()
-            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-            omni.timeline.get_timeline_interface().set_current_time(tc / tps)
-        cls._schedule_trigger()
+        cls._apply_lerp(t)
+        cls._notify(t)
 
     @classmethod
     def get_t(cls) -> float:
@@ -136,9 +105,6 @@ class UVMixer:
     @classmethod
     def destroy(cls) -> None:
         cls.stop()
-        if cls._flush_task and not cls._flush_task.done():
-            cls._flush_task.cancel()
-            cls._flush_task = None
         cls._subscribers.clear()
 
     # ── Internal ───────────────────────────────────────────────────────────────
@@ -169,22 +135,17 @@ class UVMixer:
         return result
 
     @classmethod
-    def _bake_timesamples(cls) -> None:
+    def _cache_dirty_values(cls, prim_paths) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
-        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
-        if len(loaded) < 2:
-            return
-        dirty_name = {"faceVertexCounts": "faceVertexCounts",
-                      "subdivisionScheme": "subdivisionScheme"}.get(cls._dirty_attr, "faceVertexIndices")
-
-        dirty_cache: dict = {}
-        for prim_path in loaded[0][1].keys():
+        for prim_path in prim_paths:
+            if prim_path in cls._dirty_cache:
+                continue
             pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
             if not pxr_prim.IsValid():
                 continue
-            pxr_dirty = pxr_prim.GetAttribute(dirty_name)
+            pxr_dirty = pxr_prim.GetAttribute(cls._dirty_attr)
             if not pxr_dirty or not pxr_dirty.IsValid():
                 continue
             val = pxr_dirty.Get(Usd.TimeCode.Default())
@@ -194,39 +155,41 @@ class UVMixer:
                     val = pxr_dirty.Get(samples[0])
             if val is None:
                 continue
-            dirty_cache[prim_path] = val
-
-        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            for tc, (_, st_map) in enumerate(loaded):
-                for prim_path, st_data in st_map.items():
-                    pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.GetAttr().Set(
-                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if prim_path in dirty_cache:
-                        pxr_dirty = pxr_prim.GetAttribute(dirty_name)
-                        if pxr_dirty and pxr_dirty.IsValid():
-                            pxr_dirty.Set(dirty_cache[prim_path], tc)
-        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1})")
+            cls._dirty_cache[prim_path] = usdrt.Vt.IntArray(list(val))
 
     @classmethod
-    def _schedule_trigger(cls) -> None:
-        if cls._flush_task and not cls._flush_task.done():
-            cls._flush_task.cancel()
-        cls._flush_task = asyncio.ensure_future(cls._trigger_rerender())
+    def _apply_lerp(cls, t: float) -> None:
+        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
+        n = len(loaded)
+        if n < 2:
+            return
 
-    @classmethod
-    async def _trigger_rerender(cls) -> None:
-        if cls._tbn_enabled:
-            s = _carb_settings.get_settings()
-            s.set(cls._TBN_PATH, cls._TBN_FORCE)
-            await omni.kit.app.get_app().next_update_async()
-            s.set(cls._TBN_PATH, cls._tbn_default)
-        else:
-            await omni.kit.app.get_app().next_update_async()
+        pos = t * (n - 1)
+        idx = min(int(pos), n - 2)
+        frac = pos - idx
+        map_a = loaded[idx][1]
+        map_b = loaded[idx + 1][1]
+
+        rt_stage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
+        for prim_path, st_a in map_a.items():
+            st_b = map_b.get(prim_path)
+            if st_b is None or st_a.shape != st_b.shape:
+                continue
+            st = (st_a * (1.0 - frac) + st_b * frac).astype(np.float32)
+
+            rt_prim = rt_stage.GetPrimAtPath(usdrt.Sdf.Path(prim_path))
+            if not rt_prim.IsValid():
+                continue
+
+            rt_st = rt_prim.GetAttribute("primvars:st")
+            if rt_st and rt_st.IsValid():
+                rt_st.Set(usdrt.Vt.Vec2fArray(st.reshape(-1, 2).tolist()))
+
+            cached = cls._dirty_cache.get(prim_path)
+            if cached is not None:
+                rt_dirty = rt_prim.GetAttribute(cls._dirty_attr)
+                if rt_dirty and rt_dirty.IsValid():
+                    rt_dirty.Set(cached)
 
     @classmethod
     def _notify(cls, t: float) -> None:
@@ -243,11 +206,6 @@ class UVMixer:
         travel = abs(target - start_t)
         elapsed = 0.0
         dt_scale = travel / cls._play_duration if travel > 0.0 else 0.0
-
-        cls._anim_frame = 0
-        cls._is_animating = True
-        if cls._tbn_enabled:
-            _carb_settings.get_settings().set(cls._TBN_PATH, cls._TBN_GPU)
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
@@ -257,35 +215,12 @@ class UVMixer:
                 new_t = max(0.0, min(1.0, new_t))
 
                 cls._t = new_t
-                loaded_count = len([m for m in cls._maps if m is not None])
-                if loaded_count >= 2:
-                    stage = omni.usd.get_context().get_stage()
-                    tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-                    omni.timeline.get_timeline_interface().set_current_time(new_t * (loaded_count - 1) / tps)
+                cls._apply_lerp(new_t)
                 cls._notify(new_t)
 
-                if cls._tbn_enabled:
-                    cls._anim_frame += 1
-                    if cls._anim_frame % cls._flip_every_n == 0:
-                        s = _carb_settings.get_settings()
-                        cur = s.get(cls._TBN_PATH) or cls._TBN_GPU
-                        s.set(cls._TBN_PATH, cls._TBN_FORCE if cur == cls._TBN_GPU else cls._TBN_GPU)
                 if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
         except asyncio.CancelledError:
             return
         finally:
-            cls._is_animating = False
             cls._play_task = None
-            cls._notify(cls._t)
-
-            async def _end_flush():
-                s = _carb_settings.get_settings()
-                s.set(cls._TBN_PATH, cls._TBN_FORCE)
-                await omni.kit.app.get_app().next_update_async()
-                s.set(cls._TBN_PATH, cls._tbn_default)
-
-            if cls._tbn_enabled:
-                if cls._flush_task and not cls._flush_task.done():
-                    cls._flush_task.cancel()
-                cls._flush_task = asyncio.ensure_future(_end_flush())
