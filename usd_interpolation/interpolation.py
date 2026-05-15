@@ -52,6 +52,12 @@ class UVMixer:
             cls._play_duration = play_duration
         if flip_every_n is not None:
             cls._flip_every_n = flip_every_n
+        try:
+            import omni.kit.viewport.utility
+            vp = omni.kit.viewport.utility.get_active_viewport()
+            print(f"[UVMixer] viewport methods: {[m for m in dir(vp) if not m.startswith('_')]}")
+        except Exception as e:
+            print(f"[UVMixer] viewport dir: {e}")
 
     @classmethod
     def load(cls, path: str, slot: int) -> bool:
@@ -223,10 +229,16 @@ class UVMixer:
 
     @classmethod
     async def _trigger_rerender(cls) -> None:
-        s = _carb_settings.get_settings()
-        s.set(cls._TBN_PATH, cls._TBN_FORCE)
-        await omni.kit.app.get_app().next_update_async()
-        s.set(cls._TBN_PATH, cls._tbn_default)
+        if cls._tbn_enabled:
+            s = _carb_settings.get_settings()
+            s.set(cls._TBN_PATH, cls._TBN_FORCE)
+            await omni.kit.app.get_app().next_update_async()
+            s.set(cls._TBN_PATH, cls._tbn_default)
+        else:
+            tl = omni.timeline.get_timeline_interface()
+            tl.play()
+            await omni.kit.app.get_app().next_update_async()
+            tl.stop()
 
     @classmethod
     def _notify(cls, t: float) -> None:
@@ -270,6 +282,11 @@ class UVMixer:
                         s = _carb_settings.get_settings()
                         cur = s.get(cls._TBN_PATH) or cls._TBN_GPU
                         s.set(cls._TBN_PATH, cls._TBN_FORCE if cur == cls._TBN_GPU else cls._TBN_GPU)
+                else:
+                    tl = omni.timeline.get_timeline_interface()
+                    tl.play()
+                    await omni.kit.app.get_app().next_update_async()
+                    tl.stop()
 
                 if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                     break
