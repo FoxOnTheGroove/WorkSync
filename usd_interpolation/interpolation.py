@@ -13,7 +13,7 @@ class UVMixer:
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
     _play_duration: float = 2.5
-    _dirty_attr: str = "fvli_diff"  # "none" | "faceVertexIndices" | "fvli_same" | "fvli_diff"
+    _dirty_attr: str = "fvli"  # "none" | "fvli"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -144,26 +144,6 @@ class UVMixer:
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         if len(loaded) < 2:
             return
-        _FVLI_PAIR = ("none", "cornersPlus1")  # 교번 pair
-
-        # faceVertexIndices: 현재 값 캐싱
-        indices_cache: dict = {}
-        if cls._dirty_attr == "faceVertexIndices":
-            for prim_path in loaded[0][1].keys():
-                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                if not pxr_prim.IsValid():
-                    continue
-                attr = pxr_prim.GetAttribute("faceVertexIndices")
-                if not attr or not attr.IsValid():
-                    continue
-                val = attr.Get(Usd.TimeCode.Default())
-                if val is None:
-                    samples = attr.GetTimeSamples()
-                    if samples:
-                        val = attr.Get(samples[0])
-                if val is not None:
-                    indices_cache[prim_path] = val
-
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
                 for prim_path, st_data in st_map.items():
@@ -175,18 +155,13 @@ class UVMixer:
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
 
-                    if cls._dirty_attr == "faceVertexIndices":
-                        if prim_path in indices_cache:
-                            pxr_prim.GetAttribute("faceVertexIndices").Set(indices_cache[prim_path], tc)
-
-                    elif cls._dirty_attr in ("fvli_same", "fvli_diff"):
+                    if cls._dirty_attr == "fvli":
                         mesh = UsdGeom.Mesh(pxr_prim)
                         fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
                         if not fvli or not fvli.IsValid():
                             fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
                         if fvli and fvli.IsValid():
-                            val = _FVLI_PAIR[tc % 2] if cls._dirty_attr == "fvli_diff" else _FVLI_PAIR[0]
-                            fvli.Set(val, tc)
+                            fvli.Set("none", tc)
 
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
 
