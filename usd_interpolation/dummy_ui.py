@@ -4,8 +4,6 @@ import omni.ui as ui
 from .interpolation import UVMixer
 
 NUM_FILES = 5
-# "none" | "fvli"
-DIRTY_ATTR = "fvli"
 
 
 class UsdInterpolationUI:
@@ -15,26 +13,28 @@ class UsdInterpolationUI:
         self._status_label: ui.Label | None = None
         self._slider: ui.FloatSlider | None = None
         self._t_label: ui.Label | None = None
-        self._fields: list[ui.StringField] = []
+        self._field: ui.StringField | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
+        self._fvli_cb: ui.CheckBox | None = None
 
     def build_ui(self):
-        UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr=DIRTY_ATTR)
+        UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr="fvli")
         UVMixer.subscribe(self._on_t_changed)
 
-        self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
+        self._window = ui.Window("USD UV Interpolator", width=500, height=260)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
-                for i in range(NUM_FILES):
-                    with ui.HStack(height=24, spacing=4):
-                        ui.Label(f"File {i}:", width=50)
-                        field = ui.StringField()
-                        field.model.set_value(f"/path/to/file{i}.usd")
-                        self._fields.append(field)
-                        idx = i
-                        ui.Button("Load", width=50,
-                                  clicked_fn=lambda _idx=idx: self._on_load(_idx))
+                ui.Label("Paths (space or newline separated):", height=18)
+                self._field = ui.StringField(height=24)
+                self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
+
+                with ui.HStack(height=24, spacing=8):
+                    ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
+                    self._fvli_cb = ui.CheckBox(width=20)
+                    self._fvli_cb.model.set_value(True)
+                    self._fvli_cb.model.add_value_changed_fn(self._on_fvli_toggled)
+                    ui.Label("fvli dirty", width=70)
 
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
@@ -52,16 +52,29 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
-    def _on_load(self, idx: int):
-        path = self._fields[idx].model.get_value_as_string().strip()
-        if idx == 0:
-            omni.usd.get_context().open_stage(path)
-        if not UVMixer.load(path, idx):
-            self._set_status(f"ERROR: failed to load File {idx}")
+    def _on_load_all(self):
+        raw = self._field.model.get_value_as_string()
+        paths = [p for p in raw.split() if p]
+        if not paths:
+            self._set_status("ERROR: no paths")
             return
+        if paths[0]:
+            omni.usd.get_context().open_stage(paths[0])
+        ok = 0
+        for idx, path in enumerate(paths[:NUM_FILES]):
+            if UVMixer.load(path, idx):
+                ok += 1
+            else:
+                self._set_status(f"ERROR: failed slot {idx} ({path})")
+                return
         loaded = UVMixer.get_loaded_slots()
-        self._set_status(f"File {idx} loaded  slots:{loaded}")
+        self._set_status(f"{ok} file(s) loaded  slots:{loaded}")
         self._slider.enabled = len(loaded) >= 2
+
+    def _on_fvli_toggled(self, model):
+        attr = "fvli" if model.get_value_as_bool() else "none"
+        UVMixer.set_dirty_attr(attr)
+        self._set_status(f"dirty_attr → {attr}")
 
     def _on_refresh_clicked(self):
         UVMixer.set_t(UVMixer.get_t())

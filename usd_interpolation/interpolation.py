@@ -37,6 +37,15 @@ class UVMixer:
             cls._dirty_attr = dirty_attr
 
     @classmethod
+    def set_dirty_attr(cls, attr: str) -> None:
+        if attr not in ("none", "fvli"):
+            return
+        cls._dirty_attr = attr
+        if any(m is not None for m in cls._maps):
+            cls._bake_timesamples()
+            cls.set_t(cls._t)
+
+    @classmethod
     def load(cls, path: str, slot: int) -> bool:
         if not (0 <= slot < cls._num_slots):
             print(f"[UVMixer] invalid slot {slot}")
