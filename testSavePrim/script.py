@@ -1,16 +1,9 @@
 import omni.usd
-from pxr import Gf
 
 # ── CONFIG ─────────────────────────────────────────
-SHADER_PATH = "/BlueSphere/Mat/PBR"
-NEW_COLOR   = (0.0, 0.8, 0.2)  # ← 원하는 색으로 교체
+TARGET_PATH = r"C:\path\to\testSavePrim\sphere_blue.usda"
 # ───────────────────────────────────────────────
 
 stage = omni.usd.get_context().get_stage()
-
-shader = stage.GetPrimAtPath(SHADER_PATH)
-shader.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*NEW_COLOR))
-
-layer = stage.GetRootLayer()
-layer.Save()
-print(f"[SAVED] {layer.identifier}")
+stage.GetRootLayer().Export(TARGET_PATH)
+print(f"[SAVED] {TARGET_PATH}")
