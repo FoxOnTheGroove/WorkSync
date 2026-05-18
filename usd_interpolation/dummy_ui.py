@@ -1,5 +1,6 @@
 import omni.usd
 import omni.ui as ui
+from pxr import UsdLux, Sdf
 
 from .interpolation import UVMixer
 
@@ -65,6 +66,16 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
+    @staticmethod
+    def _ensure_dome_light(stage) -> None:
+        has_light = any(prim.HasAPI(UsdLux.LightAPI) for prim in stage.Traverse())
+        if has_light:
+            return
+        dome = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
+        dome.GetPrim().CreateAttribute(
+            "visibleInPrimaryRay", Sdf.ValueTypeNames.Bool
+        ).Set(False)
+
     def _on_load_all(self):
         raw = self._field.model.get_value_as_string()
         paths = [p for p in raw.split() if p]
@@ -73,6 +84,9 @@ class UsdInterpolationUI:
             return
         if paths[0]:
             omni.usd.get_context().open_stage(paths[0])
+        stage = omni.usd.get_context().get_stage()
+        if stage:
+            self._ensure_dome_light(stage)
         ok = 0
         for idx, path in enumerate(paths[:NUM_FILES]):
             if UVMixer.load(path, idx):
@@ -91,50 +105,6 @@ class UsdInterpolationUI:
 
     def _on_refresh_clicked(self):
         UVMixer.set_t(UVMixer.get_t())
-
-    def _on_play_clicked(self):
-        if UVMixer.is_playing():
-            UVMixer.stop()
-        else:
-            UVMixer.play(forward=True)
-            self._btn_play.text = "Stop ■"
-
-    def _on_reverse_clicked(self):
-        if UVMixer.is_playing():
-            UVMixer.stop()
-        else:
-            UVMixer.play(forward=False)
-            self._btn_reverse.text = "Stop ■"
-
-    def _on_slider_changed(self, model):
-        if UVMixer.is_playing():
-            return
-        t = model.get_value_as_float()
-        self._t_label.text = f"t: {t:.3f}"
-        UVMixer.set_t(t)
-
-    def _on_t_changed(self, t: float):
-        if self._slider:
-            self._slider.model.set_value(t)
-        if self._t_label:
-            self._t_label.text = f"t: {t:.3f}"
-        if not UVMixer.is_playing():
-            if self._btn_play:
-                self._btn_play.text = "Play ▶"
-            if self._btn_reverse:
-                self._btn_reverse.text = "Reverse ◄"
-
-    def _set_status(self, text: str):
-        if self._status_label:
-            self._status_label.text = f"Status: {text}"
-
-    def destroy(self):
-        UVMixer.unsubscribe(self._on_t_changed)
-        UVMixer.destroy()
-        if self._window:
-            self._window.destroy()
-            self._window = None
-
 
     def _on_play_clicked(self):
         if UVMixer.is_playing():
