@@ -3,7 +3,7 @@ import time
 from typing import Callable
 
 import numpy as np
-from pxr import Gf, Sdf, Usd, UsdGeom, Vt
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -141,7 +141,7 @@ class UVMixer:
         added = 0
 
         with Usd.EditContext(pxr_stage, session):
-            for copy_idx in range(n):
+            for copy_idx in range(1, n):
                 col = copy_idx % grid_cols
                 row = copy_idx // grid_cols
                 group_path = f"/World/LoadTest/copy_{copy_idx:04d}"
@@ -156,6 +156,14 @@ class UVMixer:
                     dst_path = f"{group_path}/m{mesh_idx:04d}"
                     dst_mesh = UsdGeom.Mesh.Define(pxr_stage, dst_path)
                     dst_prim = dst_mesh.GetPrim()
+                    binding = UsdShade.MaterialBindingAPI(src_prim).GetDirectBinding()
+                    mat_path = binding.GetMaterialPath()
+                    if mat_path:
+                        mat_prim = pxr_stage.GetPrimAtPath(mat_path)
+                        if mat_prim.IsValid():
+                            UsdShade.MaterialBindingAPI.Apply(dst_prim).Bind(
+                                UsdShade.Material(mat_prim)
+                            )
                     for attr_name in ("points", "faceVertexCounts", "faceVertexIndices", "normals"):
                         src_attr = src_prim.GetAttribute(attr_name)
                         if not (src_attr and src_attr.IsValid()):
@@ -255,6 +263,8 @@ class UVMixer:
         int_cache: dict = {}  # prim_path → {"faceVertexIndices": val, "faceVertexCounts": val}
         if cls._dirty_attr == "fvli":
             for prim_path in {p for _, m in loaded for p in m}:
+                if "/World/LoadTest/" in prim_path:
+                    continue  # 복제 prim은 fvli dirty 생략 — 원본 dirty로 RTX sync 충분
                 pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
                 if not pxr_prim.IsValid():
                     continue
@@ -335,4 +345,5 @@ class UVMixer:
         except asyncio.CancelledError:
             return
         finally:
+            print(f"[UVMixer] animate done, wall={time.monotonic() - wall_start:.2f}s  (target={cls._play_duration / max(cls._speed, 0.01):.2f}s)")
             cls._play_task = None
