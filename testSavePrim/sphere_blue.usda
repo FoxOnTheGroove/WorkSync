@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "BlueSphere"
+)
+
+def Sphere "BlueSphere"
+{
+    double radius = 50
+    rel material:binding = </BlueSphere/Mat>
+    float3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Material "Mat"
+    {
+        token outputs:surface.connect = </BlueSphere/Mat/PBR.outputs:surface>
+
+        def Shader "PBR"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0, 0.2, 1)
+            float inputs:roughness = 0.4
+            token outputs:surface
+        }
+    }
+}
