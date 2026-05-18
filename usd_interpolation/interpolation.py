@@ -263,8 +263,6 @@ class UVMixer:
         int_cache: dict = {}  # prim_path → {"faceVertexIndices": val, "faceVertexCounts": val}
         if cls._dirty_attr == "fvli":
             for prim_path in {p for _, m in loaded for p in m}:
-                if "/World/LoadTest/" in prim_path:
-                    continue  # 복제 prim은 fvli dirty 생략 — 원본 dirty로 RTX sync 충분
                 pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
                 if not pxr_prim.IsValid():
                     continue
