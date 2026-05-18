@@ -7,14 +7,16 @@ TARGET_PATH = r"C:\path\to\sphere_blue.usda"  # ← 실제 경로로 교체
 # ───────────────────────────────────────────────
 
 stage = omni.usd.get_context().get_stage()
+flat  = stage.Flatten()
 
-# 세션 레이어 포함 모든 오버라이드가 합산된 단일 레이어
-flat = stage.Flatten()
+# 파일 기반 레이어로 목적지 생성 (익명 레이어는 CopySpec에서 실패함)
+dst_layer = Sdf.Layer.FindOrOpen(TARGET_PATH)
+if dst_layer:
+    dst_layer.Clear()
+else:
+    dst_layer = Sdf.Layer.CreateNew(TARGET_PATH)
 
-# 해당 prim spec만 빈 레이어로 복사
-dst_layer = Sdf.Layer.CreateAnonymous(".usda")
 Sdf.CopySpec(flat, Sdf.Path(PRIM_PATH), dst_layer, Sdf.Path(PRIM_PATH))
 dst_layer.defaultPrim = Sdf.Path(PRIM_PATH).name
-
-dst_layer.Export(TARGET_PATH)
+dst_layer.Save()
 print(f"[SAVED] {PRIM_PATH} → {TARGET_PATH}")
