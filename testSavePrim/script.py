@@ -2,7 +2,7 @@ import omni.usd
 from pxr import Gf
 
 # ── CONFIG ─────────────────────────────────────────
- SHADER_PATH = "/BlueSphere/Mat/PBR"
+SHADER_PATH = "/BlueSphere/Mat/PBR"
 NEW_COLOR   = (0.0, 0.8, 0.2)  # ← 원하는 색으로 교체
 # ───────────────────────────────────────────────
 
