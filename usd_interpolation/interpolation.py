@@ -153,6 +153,16 @@ class UVMixer:
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         if len(loaded) < 2:
             return
+        fvli_cache: dict = {}
+        if cls._dirty_attr == "fvli":
+            for prim_path in {p for _, m in loaded for p in m}:
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                val = attr.Get() if (attr and attr.IsValid()) else None
+                fvli_cache[prim_path] = str(val) if val is not None else "cornersPlus1"
+
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
                 for prim_path, st_data in st_map.items():
@@ -164,13 +174,13 @@ class UVMixer:
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
 
-                    if cls._dirty_attr == "fvli":
+                    if cls._dirty_attr == "fvli" and prim_path in fvli_cache:
                         mesh = UsdGeom.Mesh(pxr_prim)
                         fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
                         if not fvli or not fvli.IsValid():
                             fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
                         if fvli and fvli.IsValid():
-                            fvli.Set("none", tc)
+                            fvli.Set(fvli_cache[prim_path], tc)
 
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
 
