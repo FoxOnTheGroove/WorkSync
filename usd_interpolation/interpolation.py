@@ -38,7 +38,7 @@ class UVMixer:
 
     @classmethod
     def set_dirty_attr(cls, attr: str) -> None:
-        if attr not in ("none", "fvli"):
+        if attr not in ("none", "fvli", "faceVertexIndices", "faceVertexCounts"):
             return
         cls._dirty_attr = attr
         if any(m is not None for m in cls._maps):
@@ -154,6 +154,7 @@ class UVMixer:
         if len(loaded) < 2:
             return
         fvli_cache: dict = {}
+        int_cache: dict = {}  # prim_path → {"faceVertexIndices": val, "faceVertexCounts": val}
         if cls._dirty_attr == "fvli":
             for prim_path in {p for _, m in loaded for p in m}:
                 pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
@@ -162,6 +163,25 @@ class UVMixer:
                 attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
                 val = attr.Get() if (attr and attr.IsValid()) else None
                 fvli_cache[prim_path] = str(val) if val is not None else "cornersPlus1"
+        elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+            for prim_path in {p for _, m in loaded for p in m}:
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                entry = {}
+                for attr_name in ("faceVertexIndices", "faceVertexCounts"):
+                    a = pxr_prim.GetAttribute(attr_name)
+                    if not (a and a.IsValid()):
+                        continue
+                    v = a.Get(Usd.TimeCode.Default())
+                    if v is None:
+                        samples = a.GetTimeSamples()
+                        if samples:
+                            v = a.Get(samples[0])
+                    if v is not None:
+                        entry[attr_name] = v
+                if entry:
+                    int_cache[prim_path] = entry
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
@@ -181,6 +201,10 @@ class UVMixer:
                             fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
                         if fvli and fvli.IsValid():
                             fvli.Set(fvli_cache[prim_path], tc)
+                    elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+                        entry = int_cache.get(prim_path, {})
+                        if cls._dirty_attr in entry:
+                            pxr_prim.GetAttribute(cls._dirty_attr).Set(entry[cls._dirty_attr], tc)
 
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
 

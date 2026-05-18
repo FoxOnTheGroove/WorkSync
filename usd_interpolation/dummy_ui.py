@@ -5,6 +5,8 @@ from .interpolation import UVMixer
 
 NUM_FILES = 5
 
+_DIRTY_OPTIONS = ["none", "fvli", "faceVertexIndices", "faceVertexCounts"]
+
 
 class UsdInterpolationUI:
 
@@ -16,25 +18,36 @@ class UsdInterpolationUI:
         self._field: ui.StringField | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
-        self._fvli_cb: ui.CheckBox | None = None
+        self._radio_collection: ui.RadioCollection | None = None
 
     def build_ui(self):
         UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr="fvli")
         UVMixer.subscribe(self._on_t_changed)
 
-        self._window = ui.Window("USD UV Interpolator", width=500, height=260)
+        self._window = ui.Window("USD UV Interpolator", width=500, height=280)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 ui.Label("Paths (space or newline separated):", height=18)
                 self._field = ui.StringField(height=24)
                 self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
 
-                with ui.HStack(height=24, spacing=8):
+                with ui.HStack(height=24, spacing=4):
                     ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
-                    self._fvli_cb = ui.CheckBox(width=20)
-                    self._fvli_cb.model.set_value(True)
-                    self._fvli_cb.model.add_value_changed_fn(self._on_fvli_toggled)
-                    ui.Label("fvli dirty", width=70)
+                    ui.Spacer(width=8)
+                    self._radio_collection = ui.RadioCollection()
+                    for i, opt in enumerate(_DIRTY_OPTIONS):
+                        with ui.HStack(width=0, spacing=2):
+                            ui.RadioButton(
+                                radio_collection=self._radio_collection,
+                                width=20, height=20,
+                            )
+                            ui.Label(opt, width=ui.Pixel(len(opt) * 7 + 4), height=20)
+                    self._radio_collection.model.set_value(
+                        _DIRTY_OPTIONS.index("fvli")
+                    )
+                    self._radio_collection.model.add_value_changed_fn(
+                        self._on_dirty_changed
+                    )
 
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
@@ -71,13 +84,57 @@ class UsdInterpolationUI:
         self._set_status(f"{ok} file(s) loaded  slots:{loaded}")
         self._slider.enabled = len(loaded) >= 2
 
-    def _on_fvli_toggled(self, model):
-        attr = "fvli" if model.get_value_as_bool() else "none"
+    def _on_dirty_changed(self, model):
+        attr = _DIRTY_OPTIONS[model.get_value_as_int()]
         UVMixer.set_dirty_attr(attr)
         self._set_status(f"dirty_attr → {attr}")
 
     def _on_refresh_clicked(self):
         UVMixer.set_t(UVMixer.get_t())
+
+    def _on_play_clicked(self):
+        if UVMixer.is_playing():
+            UVMixer.stop()
+        else:
+            UVMixer.play(forward=True)
+            self._btn_play.text = "Stop ■"
+
+    def _on_reverse_clicked(self):
+        if UVMixer.is_playing():
+            UVMixer.stop()
+        else:
+            UVMixer.play(forward=False)
+            self._btn_reverse.text = "Stop ■"
+
+    def _on_slider_changed(self, model):
+        if UVMixer.is_playing():
+            return
+        t = model.get_value_as_float()
+        self._t_label.text = f"t: {t:.3f}"
+        UVMixer.set_t(t)
+
+    def _on_t_changed(self, t: float):
+        if self._slider:
+            self._slider.model.set_value(t)
+        if self._t_label:
+            self._t_label.text = f"t: {t:.3f}"
+        if not UVMixer.is_playing():
+            if self._btn_play:
+                self._btn_play.text = "Play ▶"
+            if self._btn_reverse:
+                self._btn_reverse.text = "Reverse ◄"
+
+    def _set_status(self, text: str):
+        if self._status_label:
+            self._status_label.text = f"Status: {text}"
+
+    def destroy(self):
+        UVMixer.unsubscribe(self._on_t_changed)
+        UVMixer.destroy()
+        if self._window:
+            self._window.destroy()
+            self._window = None
+
 
     def _on_play_clicked(self):
         if UVMixer.is_playing():
