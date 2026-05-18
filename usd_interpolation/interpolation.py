@@ -1,8 +1,9 @@
 import asyncio
+import time
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom, Vt
+from pxr import Gf, Sdf, Usd, UsdGeom, Vt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -14,6 +15,7 @@ class UVMixer:
     _num_slots: int = 5
     _play_duration: float = 2.5
     _dirty_attr: str = "fvli"  # "none" | "fvli"
+    _speed: float = 1.0
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -35,6 +37,14 @@ class UVMixer:
             cls._play_duration = play_duration
         if dirty_attr is not None:
             cls._dirty_attr = dirty_attr
+
+    @classmethod
+    def set_speed(cls, speed: float) -> None:
+        cls._speed = max(0.1, float(speed))
+
+    @classmethod
+    def get_speed(cls) -> float:
+        return cls._speed
 
     @classmethod
     def set_dirty_attr(cls, attr: str) -> None:
@@ -112,6 +122,94 @@ class UVMixer:
     @classmethod
     def unsubscribe(cls, callback: Callable[[float], None]) -> None:
         cls._subscribers = [c for c in cls._subscribers if c != callback]
+
+    @classmethod
+    def duplicate_for_load_test(cls, n: int) -> int:
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            return 0
+        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
+        if not loaded:
+            return 0
+        orig_paths = sorted({p for _, m in loaded for p in m})
+        if not orig_paths:
+            return 0
+
+        session = pxr_stage.GetSessionLayer()
+        grid_cols = max(1, int(n ** 0.5))
+        spacing = 200.0
+        added = 0
+
+        with Usd.EditContext(pxr_stage, session):
+            for copy_idx in range(n):
+                col = copy_idx % grid_cols
+                row = copy_idx // grid_cols
+                group_path = f"/World/LoadTest/copy_{copy_idx:04d}"
+                grp = UsdGeom.Xform.Define(pxr_stage, group_path)
+                UsdGeom.XformCommonAPI(grp).SetTranslate(
+                    Gf.Vec3d(col * spacing, 0.0, row * spacing)
+                )
+                for mesh_idx, orig_path in enumerate(orig_paths):
+                    src_prim = pxr_stage.GetPrimAtPath(orig_path)
+                    if not src_prim.IsValid():
+                        continue
+                    dst_path = f"{group_path}/m{mesh_idx:04d}"
+                    dst_mesh = UsdGeom.Mesh.Define(pxr_stage, dst_path)
+                    dst_prim = dst_mesh.GetPrim()
+                    for attr_name in ("points", "faceVertexCounts", "faceVertexIndices", "normals"):
+                        src_attr = src_prim.GetAttribute(attr_name)
+                        if not (src_attr and src_attr.IsValid()):
+                            continue
+                        val = src_attr.Get(Usd.TimeCode.Default())
+                        if val is None:
+                            ts = src_attr.GetTimeSamples()
+                            if ts:
+                                val = src_attr.Get(ts[0])
+                        if val is not None:
+                            dst_prim.CreateAttribute(attr_name, src_attr.GetTypeName()).Set(val)
+                    src_st = UsdGeom.PrimvarsAPI(src_prim).GetPrimvar("st")
+                    if src_st and src_st.GetAttr().IsValid():
+                        val = src_st.ComputeFlattened(Usd.TimeCode.Default())
+                        if val is None:
+                            ts = src_st.GetTimeSamples()
+                            if ts:
+                                val = src_st.ComputeFlattened(ts[0])
+                        if val is not None:
+                            dst_st = UsdGeom.PrimvarsAPI(dst_prim).CreatePrimvar(
+                                "st", src_st.GetTypeName(), src_st.GetInterpolation()
+                            )
+                            dst_st.Set(Vt.Vec2fArray.FromNumpy(
+                                np.array(val, dtype=np.float32).reshape(-1, 2)
+                            ))
+                    for _, m in loaded:
+                        if orig_path in m:
+                            m[dst_path] = m[orig_path].copy()
+                    added += 1
+
+        if added > 0:
+            cls._bake_timesamples()
+            cls.set_t(cls._t)
+        print(f"[UVMixer] duplicated {added} mesh prims ({n} copies)")
+        return added
+
+    @classmethod
+    def clear_load_test(cls) -> None:
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            return
+        root_path = "/World/LoadTest"
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            pxr_stage.RemovePrim(root_path)
+        for m in cls._maps:
+            if m is None:
+                continue
+            for k in list(m.keys()):
+                if k.startswith(root_path):
+                    del m[k]
+        if any(m is not None for m in cls._maps):
+            cls._bake_timesamples()
+            cls.set_t(cls._t)
+        print("[UVMixer] load test prims cleared")
 
     @classmethod
     def destroy(cls) -> None:
@@ -221,12 +319,13 @@ class UVMixer:
         start_t = cls._t
         target = 1.0 if forward else 0.0
         travel = abs(target - start_t)
-        elapsed = 0.0
-        dt_scale = travel / cls._play_duration if travel > 0.0 else 0.0
+        wall_start = time.monotonic()
         try:
             while True:
                 await omni.kit.app.get_app().next_update_async()
-                elapsed += 1.0 / 60.0
+                elapsed = time.monotonic() - wall_start
+                eff_duration = cls._play_duration / max(cls._speed, 0.01)
+                dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
                 frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                 new_t = start_t + (frac if forward else -frac)
                 new_t = max(0.0, min(1.0, new_t))

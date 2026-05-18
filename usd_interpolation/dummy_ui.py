@@ -20,23 +20,28 @@ class UsdInterpolationUI:
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
         self._radio_collection: ui.RadioCollection | None = None
+        self._speed_label: ui.Label | None = None
+        self._dup_field: ui.IntField | None = None
 
     def build_ui(self):
         UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr="fvli")
         UVMixer.subscribe(self._on_t_changed)
 
-        self._window = ui.Window("USD UV Interpolator", width=500, height=280)
+        self._window = ui.Window("USD UV Interpolator", width=520, height=340)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
+
+                # ── Paths ────────────────────────────────────────────────────
                 ui.Label("Paths (space or newline separated):", height=18)
                 self._field = ui.StringField(height=24)
                 self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
 
+                # ── Load + dirty-attr radio ───────────────────────────────────
                 with ui.HStack(height=24, spacing=4):
                     ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
                     ui.Spacer(width=8)
                     self._radio_collection = ui.RadioCollection()
-                    for i, opt in enumerate(_DIRTY_OPTIONS):
+                    for opt in _DIRTY_OPTIONS:
                         with ui.HStack(width=0, spacing=2):
                             ui.RadioButton(
                                 radio_collection=self._radio_collection,
@@ -50,14 +55,17 @@ class UsdInterpolationUI:
                         self._on_dirty_changed
                     )
 
+                # ── Status ───────────────────────────────────────────────────
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
+                # ── t slider ─────────────────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     self._t_label = ui.Label("t: 0.000", width=60)
                     self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     self._slider.enabled = False
                     self._slider.model.add_value_changed_fn(self._on_slider_changed)
 
+                # ── Play controls ─────────────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     self._btn_play = ui.Button("Play ▶", width=80,
                                                clicked_fn=self._on_play_clicked)
@@ -65,6 +73,26 @@ class UsdInterpolationUI:
                                                   clicked_fn=self._on_reverse_clicked)
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
+
+                # ── Speed slider ──────────────────────────────────────────────
+                with ui.HStack(height=24, spacing=8):
+                    ui.Label("Speed:", width=44)
+                    self._speed_label = ui.Label("1.0x", width=34)
+                    speed_slider = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
+                    speed_slider.model.set_value(1.0)
+                    speed_slider.model.add_value_changed_fn(self._on_speed_changed)
+
+                # ── Load test ─────────────────────────────────────────────────
+                with ui.HStack(height=24, spacing=8):
+                    ui.Label("N:", width=18)
+                    self._dup_field = ui.IntField(width=50)
+                    self._dup_field.model.set_value(10)
+                    ui.Button("Duplicate N", width=100,
+                              clicked_fn=self._on_duplicate_clicked)
+                    ui.Button("Clear", width=60,
+                              clicked_fn=self._on_clear_clicked)
+
+    # ── Callbacks ─────────────────────────────────────────────────────────────
 
     @staticmethod
     def _ensure_dome_light(stage) -> None:
@@ -109,6 +137,7 @@ class UsdInterpolationUI:
     def _on_play_clicked(self):
         if UVMixer.is_playing():
             UVMixer.stop()
+            self._btn_play.text = "Play ▶"
         else:
             UVMixer.play(forward=True)
             self._btn_play.text = "Stop ■"
@@ -116,6 +145,7 @@ class UsdInterpolationUI:
     def _on_reverse_clicked(self):
         if UVMixer.is_playing():
             UVMixer.stop()
+            self._btn_reverse.text = "Reverse ◄"
         else:
             UVMixer.play(forward=False)
             self._btn_reverse.text = "Stop ■"
@@ -126,6 +156,25 @@ class UsdInterpolationUI:
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
         UVMixer.set_t(t)
+
+    def _on_speed_changed(self, model):
+        speed = model.get_value_as_float()
+        UVMixer.set_speed(speed)
+        if self._speed_label:
+            self._speed_label.text = f"{speed:.1f}x"
+
+    def _on_duplicate_clicked(self):
+        n = self._dup_field.model.get_value_as_int()
+        if n <= 0:
+            self._set_status("ERROR: N must be > 0")
+            return
+        added = UVMixer.duplicate_for_load_test(n)
+        self._set_status(f"Duplicated {n} copies → {added} prim(s) added")
+        self._slider.enabled = len(UVMixer.get_loaded_slots()) >= 2
+
+    def _on_clear_clicked(self):
+        UVMixer.clear_load_test()
+        self._set_status("Load test prims cleared")
 
     def _on_t_changed(self, t: float):
         if self._slider:
