@@ -94,7 +94,7 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def on(cls, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
+    def on(cls, gesture_id: str, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
         info = Colorpick.get_result_by_id(vp_api_id)
         if not info["hit"]:
             return None
@@ -106,7 +106,7 @@ class ColorpickOverlay:
         plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
         ui_color  = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_api_id)
-        return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d)
+        return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d, gesture_id)
 
     @classmethod
     def off(cls, identifier):
@@ -142,8 +142,8 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def panel_on(cls, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
-        return cls.on(vp_api_id, pos3d, **kwargs)
+    def panel_on(cls, gesture_id: str, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
+        return cls.on(gesture_id, vp_api_id, pos3d, **kwargs)
 
     @classmethod
     def panel_off(cls, key: int):
@@ -171,7 +171,7 @@ class ColorpickOverlay:
         return cls._instances[vp_api_id]
 
     # ------------------------------------------------------------------
-    # 인스턴스 (덼포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
+    # 인스턴스 (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
     def __init__(self, vp_api_id: str):
@@ -367,7 +367,7 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     def _add(self, prim_path: str, hex_str: str, pres_str: str,
-             plotv_str: str, ui_color: int, pos3d: tuple) -> int:
+             plotv_str: str, ui_color: int, pos3d: tuple, gesture_id: str) -> int:
         if len(self._active) >= MAX_OVERLAYS:
             oldest_key = next(iter(self._active))
             self._deactivate(oldest_key)
@@ -410,6 +410,9 @@ class ColorpickOverlay:
         show = ColorpickOverlay._vis_suppress and self._vis_vp
         for slot_idx in self._active.values():
             self._slots[slot_idx]["window"].visible = show
+
+    def _get_slot(self):
+        return list(self._slots)
 
     # ------------------------------------------------------------------
 
