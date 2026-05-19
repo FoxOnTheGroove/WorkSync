@@ -9,7 +9,7 @@ from .colorpick import Colorpick
 
 MARKER_PRIM_NAME = "colorpick_marker"
 MARKER_RADIUS    = 0.35
-PANEL_W          = 173
+PANEL_W          = 190
 PANEL_H          = 80
 PANEL_BG         = 0xFFFFFFFF
 SWATCH_COL_W     = 80
