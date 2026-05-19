@@ -19,6 +19,8 @@ class UsdInterpolationUI:
         self._field: ui.StringField | None = None
         self._btn_play: ui.Button | None = None
         self._btn_reverse: ui.Button | None = None
+        self._btn_loop: ui.Button | None = None
+        self._btn_rev_loop: ui.Button | None = None
         self._radio_collection: ui.RadioCollection | None = None
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
@@ -71,6 +73,10 @@ class UsdInterpolationUI:
                                                clicked_fn=self._on_play_clicked)
                     self._btn_reverse = ui.Button("Reverse ◄", width=90,
                                                   clicked_fn=self._on_reverse_clicked)
+                    self._btn_loop = ui.Button("Loop ↺", width=74,
+                                               clicked_fn=self._on_loop_clicked)
+                    self._btn_rev_loop = ui.Button("Rev Loop ↺", width=90,
+                                                   clicked_fn=self._on_rev_loop_clicked)
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
@@ -150,6 +156,22 @@ class UsdInterpolationUI:
             UVMixer.play(forward=False)
             self._btn_reverse.text = "Stop ■"
 
+    def _on_loop_clicked(self):
+        if UVMixer.is_playing():
+            UVMixer.stop()
+            self._btn_loop.text = "Loop ↺"
+        else:
+            UVMixer.play(forward=True, loop=True)
+            self._btn_loop.text = "Stop ■"
+
+    def _on_rev_loop_clicked(self):
+        if UVMixer.is_playing():
+            UVMixer.stop()
+            self._btn_rev_loop.text = "Rev Loop ↺"
+        else:
+            UVMixer.play(forward=False, loop=True)
+            self._btn_rev_loop.text = "Stop ■"
+
     def _on_slider_changed(self, model):
         if UVMixer.is_playing():
             return
@@ -186,6 +208,10 @@ class UsdInterpolationUI:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
                 self._btn_reverse.text = "Reverse ◄"
+            if self._btn_loop:
+                self._btn_loop.text = "Loop ↺"
+            if self._btn_rev_loop:
+                self._btn_rev_loop.text = "Rev Loop ↺"
 
     def _set_status(self, text: str):
         if self._status_label:
