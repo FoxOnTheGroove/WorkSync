@@ -1,3 +1,5 @@
+import time
+
 import omni.usd
 import omni.ui as ui
 from pxr import UsdLux, Sdf
@@ -23,7 +25,9 @@ class UsdInterpolationUI:
         self._btn_rev_loop: ui.Button | None = None
         self._radio_collection: ui.RadioCollection | None = None
         self._speed_label: ui.Label | None = None
+        self._fps_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
+        self._last_t_time: float = 0.0
 
     def build_ui(self):
         UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr="fvli")
@@ -80,13 +84,15 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
-                # ── Speed slider ──────────────────────────────────────────────
+                # ── Speed slider + FPS ────────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("Speed:", width=44)
                     self._speed_label = ui.Label("1.0x", width=34)
                     speed_slider = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
                     speed_slider.model.set_value(1.0)
                     speed_slider.model.add_value_changed_fn(self._on_speed_changed)
+                    ui.Spacer()
+                    self._fps_label = ui.Label("-- fps", width=54)
 
                 # ── Load test ─────────────────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
@@ -203,7 +209,16 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
+        if UVMixer.is_playing() and self._fps_label:
+            now = time.monotonic()
+            dt = now - self._last_t_time
+            if self._last_t_time > 0.0 and dt > 0.0:
+                self._fps_label.text = f"{1.0 / dt:.1f} fps"
+            self._last_t_time = now
         if not UVMixer.is_playing():
+            self._last_t_time = 0.0
+            if self._fps_label:
+                self._fps_label.text = "-- fps"
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
