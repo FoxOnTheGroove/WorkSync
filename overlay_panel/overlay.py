@@ -374,6 +374,7 @@ class ColorpickOverlay:
 
         used     = set(self._active.values())
         slot_idx = next(i for i in range(MAX_OVERLAYS) if i not in used)
+        key      = ColorpickOverlay._gen_key()
         slot     = self._slots[slot_idx]
 
         slot["world_pos"] = pos3d
@@ -387,7 +388,6 @@ class ColorpickOverlay:
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
 
-        key = ColorpickOverlay._gen_key()
         self._active[key] = slot_idx
         ColorpickOverlay._key_to_vp[key] = self._vp_api_id
         self._refresh_visible()
@@ -411,7 +411,7 @@ class ColorpickOverlay:
         for slot_idx in self._active.values():
             self._slots[slot_idx]["window"].visible = show
 
-    def _get_slot(self):
+    def _get_slots(self):
         return list(self._slots)
 
     # ------------------------------------------------------------------
