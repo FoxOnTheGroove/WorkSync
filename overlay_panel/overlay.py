@@ -94,8 +94,8 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def on(cls, vp_id: str, pos3d: tuple, **kwargs) -> int | None:
-        info = Colorpick.get_result_by_id(vp_id)
+    def on(cls, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
+        info = Colorpick.get_result_by_id(vp_api_id)
         if not info["hit"]:
             return None
         c   = info["texel_color"]
@@ -105,23 +105,23 @@ class ColorpickOverlay:
         pres_str  = f"압력(v_idx) {idx:.2f}"   if idx is not None else "압력(v_idx) -"
         plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
         ui_color  = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
-        inst = cls._get_or_create(vp_id)
+        inst = cls._get_or_create(vp_api_id)
         return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d)
 
     @classmethod
     def off(cls, identifier):
         if isinstance(identifier, int):
-            vp_id = cls._key_to_vp.get(identifier)
-            if vp_id and vp_id in cls._instances:
-                cls._instances[vp_id]._deactivate(identifier)
+            vp_api_id = cls._key_to_vp.get(identifier)
+            if vp_api_id and vp_api_id in cls._instances:
+                cls._instances[vp_api_id]._deactivate(identifier)
         elif isinstance(identifier, str):
             if identifier in cls._instances:
                 cls._instances[identifier]._deactivate_all()
 
     @classmethod
-    def set_visible(cls, vp_id: str, visible: bool):
-        if vp_id in cls._instances:
-            inst = cls._instances[vp_id]
+    def set_visible(cls, vp_api_id: str, visible: bool):
+        if vp_api_id in cls._instances:
+            inst = cls._instances[vp_api_id]
             inst._vis_vp = visible
             inst._refresh_visible()
 
@@ -142,21 +142,21 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
-    def panel_on(cls, vp_id: str, pos3d: tuple, **kwargs) -> int | None:
-        return cls.on(vp_id, pos3d, **kwargs)
+    def panel_on(cls, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
+        return cls.on(vp_api_id, pos3d, **kwargs)
 
     @classmethod
     def panel_off(cls, key: int):
         cls.off(key)
 
     @classmethod
-    def panel_off_all(cls, vp_id: str):
-        cls.off(vp_id)
+    def panel_off_all(cls, vp_api_id: str):
+        cls.off(vp_api_id)
 
     @classmethod
-    def destroy(cls, vp_id: str = None):
-        if vp_id:
-            inst = cls._instances.pop(vp_id, None)
+    def destroy(cls, vp_api_id: str = None):
+        if vp_api_id:
+            inst = cls._instances.pop(vp_api_id, None)
             if inst:
                 inst._destroy()
         else:
@@ -165,40 +165,40 @@ class ColorpickOverlay:
             cls._instances.clear()
 
     @classmethod
-    def _get_or_create(cls, vp_id: str) -> "ColorpickOverlay":
-        if vp_id not in cls._instances:
-            cls._instances[vp_id] = cls(vp_id)
-        return cls._instances[vp_id]
+    def _get_or_create(cls, vp_api_id: str) -> "ColorpickOverlay":
+        if vp_api_id not in cls._instances:
+            cls._instances[vp_api_id] = cls(vp_api_id)
+        return cls._instances[vp_api_id]
 
     # ------------------------------------------------------------------
     # 인스턴스 (덼포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
-    def __init__(self, vp_id: str):
-        self._vp_api_id    = vp_id
+    def __init__(self, vp_api_id: str):
+        self._vp_api_id    = vp_api_id
         self._vis_vp       = True
         self._viewport_api = None
         self._frame        = None
         self._slots: list[dict] = []
         self._active: OrderedDict[int, int] = OrderedDict()
         self._update_sub   = None
-        self._setup(vp_id)
+        self._setup(vp_api_id)
 
-    def _setup(self, vp_id: str):
+    def _setup(self, vp_api_id: str):
         try:
             vphs = hytwin_vp_wg.ViewportWidgetHost().get_instances()
-            vph  = next((v for v in vphs if v.viewport_api.id == vp_id), None)
+            vph  = next((v for v in vphs if v.viewport_api.id == vp_api_id), None)
             if vph is None:
-                print(f"[ColorpickOverlay] viewport id '{vp_id}' not found")
+                print(f"[ColorpickOverlay] viewport id '{vp_api_id}' not found")
                 return
             self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
             self._create_slots()
             self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
-                self._on_update, name=f"colorpick_overlay_{vp_id}"
+                self._on_update, name=f"colorpick_overlay_{vp_api_id}"
             )
         except Exception as e:
-            print(f"[ColorpickOverlay] setup failed for id '{vp_id}': {e}")
+            print(f"[ColorpickOverlay] setup failed for id '{vp_api_id}': {e}")
 
     def _create_slots(self):
         _lbl_style = {"color": 0xFF202020, "font_size": LABEL_SIZE}
