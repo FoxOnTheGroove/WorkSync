@@ -81,6 +81,7 @@ class ColorpickOverlay:
     _instances: dict  = {}
     _key_to_vp: dict  = {}
     _next_key: int    = 0
+    _vis_suppress: bool = True
 
     @classmethod
     def _gen_key(cls) -> int:
@@ -120,12 +121,21 @@ class ColorpickOverlay:
     @classmethod
     def set_visible(cls, vp_name: str, visible: bool):
         if vp_name in cls._instances:
-            cls._instances[vp_name]._set_visible_all(visible)
+            inst = cls._instances[vp_name]
+            inst._vis_vp = visible
+            inst._refresh_visible()
 
     @classmethod
     def visible_all(cls, visible: bool):
         for inst in cls._instances.values():
-            inst._set_visible_all(visible)
+            inst._vis_vp = visible
+            inst._refresh_visible()
+
+    @classmethod
+    def suppress_all(cls, visible: bool):
+        cls._vis_suppress = visible
+        for inst in cls._instances.values():
+            inst._refresh_visible()
 
     # ------------------------------------------------------------------
     # convenience API
@@ -166,6 +176,7 @@ class ColorpickOverlay:
 
     def __init__(self, vpname: str):
         self._vpname       = vpname
+        self._vis_vp       = True
         self._viewport_api = None
         self._frame        = None
         self._slots: list[dict] = []
@@ -361,8 +372,7 @@ class ColorpickOverlay:
         slot_idx = next(i for i in range(MAX_OVERLAYS) if i not in used)
         slot     = self._slots[slot_idx]
 
-        slot["world_pos"]      = pos3d
-        slot["window"].visible = True
+        slot["world_pos"] = pos3d
 
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
@@ -376,6 +386,7 @@ class ColorpickOverlay:
         key = ColorpickOverlay._gen_key()
         self._active[key] = slot_idx
         ColorpickOverlay._key_to_vp[key] = self._vpname
+        self._refresh_visible()
         return key
 
     def _deactivate(self, key: int):
@@ -391,14 +402,10 @@ class ColorpickOverlay:
         for key in list(self._active.keys()):
             self._deactivate(key)
 
-    def _set_visible(self, key: int, visible: bool):
-        slot_idx = self._active.get(key)
-        if slot_idx is not None:
-            self._slots[slot_idx]["window"].visible = visible
-
-    def _set_visible_all(self, visible: bool):
+    def _refresh_visible(self):
+        show = ColorpickOverlay._vis_suppress and self._vis_vp
         for slot_idx in self._active.values():
-            self._slots[slot_idx]["window"].visible = visible
+            self._slots[slot_idx]["window"].visible = show
 
     # ------------------------------------------------------------------
 
