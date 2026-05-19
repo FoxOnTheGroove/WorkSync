@@ -100,9 +100,9 @@ class UVMixer:
         return cls._t
 
     @classmethod
-    def play(cls, forward: bool = True) -> None:
+    def play(cls, forward: bool = True, loop: bool = False) -> None:
         cls.stop()
-        cls._play_task = asyncio.ensure_future(cls._animate(forward))
+        cls._play_task = asyncio.ensure_future(cls._animate(forward, loop))
 
     @classmethod
     def stop(cls) -> None:
@@ -323,22 +323,28 @@ class UVMixer:
                 print(f"[UVMixer] subscriber error: {e}")
 
     @classmethod
-    async def _animate(cls, forward: bool) -> None:
-        start_t = cls._t
-        target = 1.0 if forward else 0.0
-        travel = abs(target - start_t)
+    async def _animate(cls, forward: bool, loop: bool = False) -> None:
         wall_start = time.monotonic()
         try:
             while True:
-                await omni.kit.app.get_app().next_update_async()
-                elapsed = time.monotonic() - wall_start
-                eff_duration = cls._play_duration / max(cls._speed, 0.01)
-                dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
-                frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
-                new_t = start_t + (frac if forward else -frac)
-                new_t = max(0.0, min(1.0, new_t))
-                cls.set_t(new_t)
-                if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
+                start_t = 0.0 if (loop and forward) else (1.0 if (loop and not forward) else cls._t)
+                target = 1.0 if forward else 0.0
+                travel = abs(target - start_t)
+                pass_start = time.monotonic()
+
+                while True:
+                    await omni.kit.app.get_app().next_update_async()
+                    elapsed = time.monotonic() - pass_start
+                    eff_duration = cls._play_duration / max(cls._speed, 0.01)
+                    dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
+                    frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
+                    new_t = start_t + (frac if forward else -frac)
+                    new_t = max(0.0, min(1.0, new_t))
+                    cls.set_t(new_t)
+                    if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
+                        break
+
+                if not loop:
                     break
         except asyncio.CancelledError:
             return
