@@ -16,14 +16,12 @@ class UVMixer:
     _play_duration: float = 2.5
     _dirty_attr: str = "fvli"  # "none" | "fvli"
     _speed: float = 1.0
-    _sync_mode: str = "default"  # "default" | "commit" | "viewport_frame"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
     _t: float = 0.0
     _play_task: object = None
     _subscribers: list = []
-    _dirty_cache: dict = {}  # prim_path → dirty attr value (read once at load)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -41,16 +39,6 @@ class UVMixer:
             cls._dirty_attr = dirty_attr
 
     @classmethod
-    def set_sync_mode(cls, mode: str) -> None:
-        if mode in ("default", "commit", "viewport_frame"):
-            cls._sync_mode = mode
-            print(f"[UVMixer] sync_mode → {mode}")
-
-    @classmethod
-    def get_sync_mode(cls) -> str:
-        return cls._sync_mode
-
-    @classmethod
     def set_speed(cls, speed: float) -> None:
         cls._speed = max(0.1, float(speed))
 
@@ -64,7 +52,7 @@ class UVMixer:
             return
         cls._dirty_attr = attr
         if any(m is not None for m in cls._maps):
-            cls._rebuild_dirty_cache()
+            cls._bake_timesamples()
             cls.set_t(cls._t)
 
     @classmethod
@@ -77,7 +65,7 @@ class UVMixer:
             return False
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
-        cls._rebuild_dirty_cache()
+        cls._bake_timesamples()
         return True
 
     @classmethod
@@ -99,33 +87,12 @@ class UVMixer:
     def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
-        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
-        n = len(loaded)
-        if n >= 2:
-            pxr_stage = omni.usd.get_context().get_stage()
-            if pxr_stage:
-                idx_f = t * (n - 1)
-                idx_a = min(int(idx_f), n - 2)
-                alpha = float(idx_f - idx_a)
-                _, map_a = loaded[idx_a]
-                _, map_b = loaded[idx_a + 1]
-                common = set(map_a.keys()) & set(map_b.keys())
-                with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-                    with Sdf.ChangeBlock():
-                        for prim_path in common:
-                            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                            if not pxr_prim.IsValid():
-                                continue
-                            st_a = map_a[prim_path]
-                            st_b = map_b[prim_path]
-                            lerped = (st_a + (st_b - st_a) * alpha).astype(np.float32)
-                            st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                            if st_pv and st_pv.GetAttr().IsValid():
-                                st_pv.GetAttr().Set(
-                                    Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(lerped)),
-                                    Usd.TimeCode.Default(),
-                                )
-                            cls._write_dirty_attr(pxr_prim, prim_path)
+        loaded_count = len([m for m in cls._maps if m is not None])
+        if loaded_count >= 2:
+            stage = omni.usd.get_context().get_stage()
+            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+            omni.timeline.get_timeline_interface().set_current_time(
+                t * (loaded_count - 1) / tps)
         cls._notify(t)
 
     @classmethod
@@ -228,7 +195,7 @@ class UVMixer:
                     added += 1
 
         if added > 0:
-            cls._rebuild_dirty_cache()
+            cls._bake_timesamples()
             cls.set_t(cls._t)
         print(f"[UVMixer] duplicated {added} mesh prims ({n} copies)")
         return added
@@ -248,7 +215,7 @@ class UVMixer:
                 if k.startswith(root_path):
                     del m[k]
         if any(m is not None for m in cls._maps):
-            cls._rebuild_dirty_cache()
+            cls._bake_timesamples()
             cls.set_t(cls._t)
         print("[UVMixer] load test prims cleared")
 
@@ -285,64 +252,67 @@ class UVMixer:
         return result
 
     @classmethod
-    def _rebuild_dirty_cache(cls) -> None:
-        """Read dirty attr values from live stage and block st indices so flat writes are correct."""
+    def _bake_timesamples(cls) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
-            cls._dirty_cache = {}
             return
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
-        all_paths = {p for _, m in loaded for p in m}
-        cache: dict = {}
-        blocked = 0
+        if len(loaded) < 2:
+            return
+        fvli_cache: dict = {}
+        int_cache: dict = {}  # prim_path → {"faceVertexIndices": val, "faceVertexCounts": val}
+        if cls._dirty_attr == "fvli":
+            for prim_path in {p for _, m in loaded for p in m}:
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                val = attr.Get() if (attr and attr.IsValid()) else None
+                fvli_cache[prim_path] = str(val) if val is not None else "cornersPlus1"
+        elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+            for prim_path in {p for _, m in loaded for p in m}:
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                entry = {}
+                for attr_name in ("faceVertexIndices", "faceVertexCounts"):
+                    a = pxr_prim.GetAttribute(attr_name)
+                    if not (a and a.IsValid()):
+                        continue
+                    v = a.Get(Usd.TimeCode.Default())
+                    if v is None:
+                        samples = a.GetTimeSamples()
+                        if samples:
+                            v = a.Get(samples[0])
+                    if v is not None:
+                        entry[attr_name] = v
+                if entry:
+                    int_cache[prim_path] = entry
+
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                for prim_path in all_paths:
+            for tc, (_, st_map) in enumerate(loaded):
+                for prim_path, st_data in st_map.items():
                     pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
                     if not pxr_prim.IsValid():
                         continue
-                    # Block root-layer st:indices so per-frame flat writes don't get
-                    # re-indexed through the original (now-wrong) index buffer.
                     st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid() and st_pv.IsIndexed():
-                        st_pv.BlockIndices()
-                        blocked += 1
-                    if cls._dirty_attr == "fvli":
-                        attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                        val = attr.Get() if (attr and attr.IsValid()) else None
-                        cache[prim_path] = str(val) if val is not None else "cornersPlus1"
-                    elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
-                        a = pxr_prim.GetAttribute(cls._dirty_attr)
-                        if a and a.IsValid():
-                            v = a.Get(Usd.TimeCode.Default())
-                            if v is None:
-                                ts = a.GetTimeSamples()
-                                if ts:
-                                    v = a.Get(ts[0])
-                            if v is not None:
-                                cache[prim_path] = v
-        cls._dirty_cache = cache
-        print(f"[UVMixer] dirty_cache rebuilt ({len(cache)} prims, attr={cls._dirty_attr}, blocked_indices={blocked})")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
 
-    @classmethod
-    def _write_dirty_attr(cls, pxr_prim, prim_path: str) -> None:
-        """Write dirty attr at Default timecode to force Hydra topology re-eval."""
-        if cls._dirty_attr == "none":
-            return
-        val = cls._dirty_cache.get(prim_path)
-        if val is None:
-            return
-        if cls._dirty_attr == "fvli":
-            mesh = UsdGeom.Mesh(pxr_prim)
-            fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-            if not (fvli and fvli.IsValid()):
-                fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-            if fvli and fvli.IsValid():
-                fvli.Set(val, Usd.TimeCode.Default())
-        elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
-            a = pxr_prim.GetAttribute(cls._dirty_attr)
-            if a and a.IsValid():
-                a.Set(val, Usd.TimeCode.Default())
+                    if cls._dirty_attr == "fvli" and prim_path in fvli_cache:
+                        mesh = UsdGeom.Mesh(pxr_prim)
+                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                        if not fvli or not fvli.IsValid():
+                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                        if fvli and fvli.IsValid():
+                            fvli.Set(fvli_cache[prim_path], tc)
+                    elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+                        entry = int_cache.get(prim_path, {})
+                        if cls._dirty_attr in entry:
+                            pxr_prim.GetAttribute(cls._dirty_attr).Set(entry[cls._dirty_attr], tc)
+
+        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
 
     @classmethod
     def _notify(cls, t: float) -> None:
@@ -351,24 +321,6 @@ class UVMixer:
                 cb(t)
             except Exception as e:
                 print(f"[UVMixer] subscriber error: {e}")
-
-    @classmethod
-    async def _wait_next_frame(cls) -> None:
-        if cls._sync_mode == "viewport_frame":
-            try:
-                from omni.kit.viewport.utility import next_viewport_frame_async
-                vp = None
-                try:
-                    from omni.kit.viewport.utility import get_active_viewport
-                    vp = get_active_viewport()
-                except Exception:
-                    vp = None
-                if vp is not None:
-                    await next_viewport_frame_async(vp)
-                    return
-            except Exception as e:
-                print(f"[UVMixer] viewport_frame wait failed, fallback: {e}")
-        await omni.kit.app.get_app().next_update_async()
 
     @classmethod
     async def _animate(cls, forward: bool, loop: bool = False) -> None:
@@ -381,7 +333,7 @@ class UVMixer:
                 pass_start = time.monotonic()
 
                 while True:
-                    await cls._wait_next_frame()
+                    await omni.kit.app.get_app().next_update_async()
                     elapsed = time.monotonic() - pass_start
                     eff_duration = cls._play_duration / max(cls._speed, 0.01)
                     dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
