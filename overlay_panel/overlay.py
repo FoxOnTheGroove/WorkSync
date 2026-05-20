@@ -171,7 +171,7 @@ class ColorpickOverlay:
         return cls._instances[vp_api_id]
 
     # ------------------------------------------------------------------
-    # 인스턴스 (븷포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
+    # 인스턴스 (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
     def __init__(self, vp_api_id: str):
@@ -384,13 +384,20 @@ class ColorpickOverlay:
         key      = ColorpickOverlay._gen_key()
         slot     = self._slots[slot_idx]
 
-        slot["world_pos"] = pos3d
+        slot["slot_idx"]         = slot_idx
+        slot["key"]              = key
+        slot["viewport_api_id"]  = self._vp_api_id
+        slot["group_id"]         = gesture_id
+        slot["world_pos"]        = pos3d
 
         slot["swatch"].style     = {"background_color": ui_color}
         slot["color_dot"].style  = {"background_color": ui_color}
+        slot["hex"]              = hex_str
+        slot["press"]            = pres_str
+        slot["plotv"]            = plotv_str
         slot["hex_label"].text   = hex_str
-        slot["press_label"].text = pres_str
-        slot["plotv_label"].text = plotv_str
+        slot["press_label"].text = f"press(v_idx): {pres_str}"
+        slot["plotv_label"].text = f"plot_v: {plotv_str}"
 
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
