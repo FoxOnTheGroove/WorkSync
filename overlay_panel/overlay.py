@@ -102,6 +102,12 @@ class ColorpickOverlay:
         cls.off(vp_api_id)
 
     @classmethod
+    def set_datatype_key_all(cls, key: str):
+        for vp_api_id in list(cls._instances.keys()):
+            cls._vp_datatype_key[vp_api_id] = key
+            cls.off(vp_api_id)
+
+    @classmethod
     def set_velocity_range(cls, v_min: float, v_max: float):
         cls._velocity_range = (v_min, v_max)
 
