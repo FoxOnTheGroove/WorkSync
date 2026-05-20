@@ -171,7 +171,7 @@ class ColorpickOverlay:
         return cls._instances[vp_api_id]
 
     # ------------------------------------------------------------------
-    # 인스턴스 (뷰포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
+    # 인스턴스 (븷포트 1개당 1인스턴스 / MAX_OVERLAYS개 슬롯 관리)
     # ------------------------------------------------------------------
 
     def __init__(self, vp_api_id: str):
@@ -269,14 +269,21 @@ class ColorpickOverlay:
                         ui.Spacer(width=PANEL_PAD)
 
             self._slots.append({
-                "window":      win,
-                "swatch":      swatch,
-                "color_dot":   dot,
-                "hex_label":   hex_lbl,
-                "press_label": pres_lbl,
-                "plotv_label": plotv_lbl,
-                "world_pos":   None,
-                "marker_path": None,
+                "key"             : None,
+                "index"           : None,
+                "group_id"        : None,
+                "viewport_api_id" : None,
+                "window"          : win,
+                "swatch"          : swatch,
+                "color_dot"       : dot,
+                "hex"             : None,
+                "press"           : None,
+                "plotv"           : None,
+                "hex_label"       : hex_lbl,
+                "press_label"     : pres_lbl,
+                "plotv_label"     : plotv_lbl,
+                "world_pos"       : None,
+                "marker_path"     : None,
             })
 
     # ------------------------------------------------------------------
