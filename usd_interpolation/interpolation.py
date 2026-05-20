@@ -23,6 +23,7 @@ class UVMixer:
     _t: float = 0.0
     _play_task: object = None
     _subscribers: list = []
+    _dirty_cache: dict = {}  # prim_path → dirty attr value (read once at load)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ class UVMixer:
             return
         cls._dirty_attr = attr
         if any(m is not None for m in cls._maps):
-            cls._bake_timesamples()
+            cls._rebuild_dirty_cache()
             cls.set_t(cls._t)
 
     @classmethod
@@ -76,7 +77,7 @@ class UVMixer:
             return False
         cls._maps[slot] = st_map
         print(f"[UVMixer] slot {slot} loaded ({len(st_map)} mesh)")
-        cls._bake_timesamples()
+        cls._rebuild_dirty_cache()
         return True
 
     @classmethod
@@ -98,14 +99,33 @@ class UVMixer:
     def set_t(cls, t: float) -> None:
         t = max(0.0, min(1.0, t))
         cls._t = t
-        loaded_count = len([m for m in cls._maps if m is not None])
-        if loaded_count >= 2:
-            stage = omni.usd.get_context().get_stage()
-            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-            tl = omni.timeline.get_timeline_interface()
-            tl.set_current_time(t * (loaded_count - 1) / tps)
-            if cls._sync_mode == "commit":
-                tl.commit()
+        loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
+        n = len(loaded)
+        if n >= 2:
+            pxr_stage = omni.usd.get_context().get_stage()
+            if pxr_stage:
+                idx_f = t * (n - 1)
+                idx_a = min(int(idx_f), n - 2)
+                alpha = float(idx_f - idx_a)
+                _, map_a = loaded[idx_a]
+                _, map_b = loaded[idx_a + 1]
+                common = set(map_a.keys()) & set(map_b.keys())
+                with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+                    with Sdf.ChangeBlock():
+                        for prim_path in common:
+                            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                            if not pxr_prim.IsValid():
+                                continue
+                            st_a = map_a[prim_path]
+                            st_b = map_b[prim_path]
+                            lerped = (st_a + (st_b - st_a) * alpha).astype(np.float32)
+                            st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                            if st_pv and st_pv.GetAttr().IsValid():
+                                st_pv.GetAttr().Set(
+                                    Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(lerped)),
+                                    Usd.TimeCode.Default(),
+                                )
+                            cls._write_dirty_attr(pxr_prim, prim_path)
         cls._notify(t)
 
     @classmethod
@@ -208,7 +228,7 @@ class UVMixer:
                     added += 1
 
         if added > 0:
-            cls._bake_timesamples()
+            cls._rebuild_dirty_cache()
             cls.set_t(cls._t)
         print(f"[UVMixer] duplicated {added} mesh prims ({n} copies)")
         return added
@@ -228,7 +248,7 @@ class UVMixer:
                 if k.startswith(root_path):
                     del m[k]
         if any(m is not None for m in cls._maps):
-            cls._bake_timesamples()
+            cls._rebuild_dirty_cache()
             cls.set_t(cls._t)
         print("[UVMixer] load test prims cleared")
 
@@ -265,67 +285,55 @@ class UVMixer:
         return result
 
     @classmethod
-    def _bake_timesamples(cls) -> None:
+    def _rebuild_dirty_cache(cls) -> None:
+        """Read dirty attr values from the live stage (root layer). Called at load / dirty_attr change."""
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
+            cls._dirty_cache = {}
             return
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
-        if len(loaded) < 2:
-            return
-        fvli_cache: dict = {}
-        int_cache: dict = {}  # prim_path → {"faceVertexIndices": val, "faceVertexCounts": val}
-        if cls._dirty_attr == "fvli":
-            for prim_path in {p for _, m in loaded for p in m}:
-                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                if not pxr_prim.IsValid():
-                    continue
+        all_paths = {p for _, m in loaded for p in m}
+        cache: dict = {}
+        for prim_path in all_paths:
+            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+            if not pxr_prim.IsValid():
+                continue
+            if cls._dirty_attr == "fvli":
                 attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
                 val = attr.Get() if (attr and attr.IsValid()) else None
-                fvli_cache[prim_path] = str(val) if val is not None else "cornersPlus1"
-        elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
-            for prim_path in {p for _, m in loaded for p in m}:
-                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                if not pxr_prim.IsValid():
-                    continue
-                entry = {}
-                for attr_name in ("faceVertexIndices", "faceVertexCounts"):
-                    a = pxr_prim.GetAttribute(attr_name)
-                    if not (a and a.IsValid()):
-                        continue
+                cache[prim_path] = str(val) if val is not None else "cornersPlus1"
+            elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+                a = pxr_prim.GetAttribute(cls._dirty_attr)
+                if a and a.IsValid():
                     v = a.Get(Usd.TimeCode.Default())
                     if v is None:
-                        samples = a.GetTimeSamples()
-                        if samples:
-                            v = a.Get(samples[0])
+                        ts = a.GetTimeSamples()
+                        if ts:
+                            v = a.Get(ts[0])
                     if v is not None:
-                        entry[attr_name] = v
-                if entry:
-                    int_cache[prim_path] = entry
+                        cache[prim_path] = v
+        cls._dirty_cache = cache
+        print(f"[UVMixer] dirty_cache rebuilt ({len(cache)} prims, attr={cls._dirty_attr})")
 
-        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            for tc, (_, st_map) in enumerate(loaded):
-                for prim_path, st_data in st_map.items():
-                    pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.GetAttr().Set(
-                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-
-                    if cls._dirty_attr == "fvli" and prim_path in fvli_cache:
-                        mesh = UsdGeom.Mesh(pxr_prim)
-                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                        if not fvli or not fvli.IsValid():
-                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                        if fvli and fvli.IsValid():
-                            fvli.Set(fvli_cache[prim_path], tc)
-                    elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
-                        entry = int_cache.get(prim_path, {})
-                        if cls._dirty_attr in entry:
-                            pxr_prim.GetAttribute(cls._dirty_attr).Set(entry[cls._dirty_attr], tc)
-
-        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
+    @classmethod
+    def _write_dirty_attr(cls, pxr_prim, prim_path: str) -> None:
+        """Write dirty attr at Default timecode to force Hydra topology re-eval."""
+        if cls._dirty_attr == "none":
+            return
+        val = cls._dirty_cache.get(prim_path)
+        if val is None:
+            return
+        if cls._dirty_attr == "fvli":
+            mesh = UsdGeom.Mesh(pxr_prim)
+            fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+            if not (fvli and fvli.IsValid()):
+                fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+            if fvli and fvli.IsValid():
+                fvli.Set(val, Usd.TimeCode.Default())
+        elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+            a = pxr_prim.GetAttribute(cls._dirty_attr)
+            if a and a.IsValid():
+                a.Set(val, Usd.TimeCode.Default())
 
     @classmethod
     def _notify(cls, t: float) -> None:
