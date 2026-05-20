@@ -14,7 +14,7 @@ class UVMixer:
     # ── Configuration ──────────────────────────────────────────────────────────
     _num_slots: int = 5
     _play_duration: float = 2.5
-    _dirty_attr: str = "fvli"  # "none" | "fvli"
+    _dirty_attr: str = "fvli"  # "none"|"fvli"|"faceVertexIndices"|"faceVertexCounts"|"interp_meta"|"elemsize_meta"
     _speed: float = 1.0
 
     # ── State ──────────────────────────────────────────────────────────────────
@@ -22,6 +22,7 @@ class UVMixer:
     _t: float = 0.0
     _play_task: object = None
     _subscribers: list = []
+    _dirty_cache: dict = {}  # prim_path → metadata value, used by interp_meta / elemsize_meta
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -48,7 +49,8 @@ class UVMixer:
 
     @classmethod
     def set_dirty_attr(cls, attr: str) -> None:
-        if attr not in ("none", "fvli", "faceVertexIndices", "faceVertexCounts"):
+        if attr not in ("none", "fvli", "faceVertexIndices", "faceVertexCounts",
+                        "interp_meta", "elemsize_meta"):
             return
         cls._dirty_attr = attr
         if any(m is not None for m in cls._maps):
@@ -93,6 +95,17 @@ class UVMixer:
             tps = stage.GetTimeCodesPerSecond() if stage else 24.0
             omni.timeline.get_timeline_interface().set_current_time(
                 t * (loaded_count - 1) / tps)
+            if cls._dirty_attr in ("interp_meta", "elemsize_meta") and cls._dirty_cache and stage:
+                meta_key = "interpolation" if cls._dirty_attr == "interp_meta" else "elementSize"
+                with Usd.EditContext(stage, stage.GetSessionLayer()):
+                    with Sdf.ChangeBlock():
+                        for prim_path, val in cls._dirty_cache.items():
+                            pxr_prim = stage.GetPrimAtPath(prim_path)
+                            if not pxr_prim.IsValid():
+                                continue
+                            st_attr = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st").GetAttr()
+                            if st_attr.IsValid():
+                                st_attr.SetMetadata(meta_key, val)
         cls._notify(t)
 
     @classmethod
@@ -261,8 +274,11 @@ class UVMixer:
             return
         fvli_cache: dict = {}
         int_cache: dict = {}  # prim_path → {"faceVertexIndices": val, "faceVertexCounts": val}
+        cls._dirty_cache = {}
+        all_paths = {p for _, m in loaded for p in m}
+
         if cls._dirty_attr == "fvli":
-            for prim_path in {p for _, m in loaded for p in m}:
+            for prim_path in all_paths:
                 pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
                 if not pxr_prim.IsValid():
                     continue
@@ -270,7 +286,7 @@ class UVMixer:
                 val = attr.Get() if (attr and attr.IsValid()) else None
                 fvli_cache[prim_path] = str(val) if val is not None else "cornersPlus1"
         elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
-            for prim_path in {p for _, m in loaded for p in m}:
+            for prim_path in all_paths:
                 pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
                 if not pxr_prim.IsValid():
                     continue
@@ -288,6 +304,18 @@ class UVMixer:
                         entry[attr_name] = v
                 if entry:
                     int_cache[prim_path] = entry
+        elif cls._dirty_attr in ("interp_meta", "elemsize_meta"):
+            meta_key = "interpolation" if cls._dirty_attr == "interp_meta" else "elementSize"
+            for prim_path in all_paths:
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                st_attr = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st").GetAttr()
+                if not st_attr.IsValid():
+                    continue
+                val = st_attr.GetMetadata(meta_key)
+                if val is not None:
+                    cls._dirty_cache[prim_path] = val
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
@@ -311,8 +339,9 @@ class UVMixer:
                         entry = int_cache.get(prim_path, {})
                         if cls._dirty_attr in entry:
                             pxr_prim.GetAttribute(cls._dirty_attr).Set(entry[cls._dirty_attr], tc)
+                    # interp_meta / elemsize_meta: no timesample bake needed (per-frame ping in set_t)
 
-        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}")
+        print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}, meta_cache={len(cls._dirty_cache)}")
 
     @classmethod
     def _notify(cls, t: float) -> None:

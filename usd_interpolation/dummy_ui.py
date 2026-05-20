@@ -6,7 +6,7 @@ from .interpolation import UVMixer
 
 NUM_FILES = 5
 
-_DIRTY_OPTIONS = ["none", "fvli", "faceVertexIndices", "faceVertexCounts"]
+_DIRTY_OPTIONS = ["none", "fvli", "faceVertexIndices", "faceVertexCounts", "interp_meta", "elemsize_meta"]
 
 
 class UsdInterpolationUI:
