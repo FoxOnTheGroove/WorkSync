@@ -286,7 +286,7 @@ class UVMixer:
 
     @classmethod
     def _rebuild_dirty_cache(cls) -> None:
-        """Read dirty attr values from the live stage (root layer). Called at load / dirty_attr change."""
+        """Read dirty attr values from live stage and block st indices so flat writes are correct."""
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             cls._dirty_cache = {}
@@ -294,26 +294,35 @@ class UVMixer:
         loaded = [(i, m) for i, m in enumerate(cls._maps) if m is not None]
         all_paths = {p for _, m in loaded for p in m}
         cache: dict = {}
-        for prim_path in all_paths:
-            pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
-            if not pxr_prim.IsValid():
-                continue
-            if cls._dirty_attr == "fvli":
-                attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                val = attr.Get() if (attr and attr.IsValid()) else None
-                cache[prim_path] = str(val) if val is not None else "cornersPlus1"
-            elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
-                a = pxr_prim.GetAttribute(cls._dirty_attr)
-                if a and a.IsValid():
-                    v = a.Get(Usd.TimeCode.Default())
-                    if v is None:
-                        ts = a.GetTimeSamples()
-                        if ts:
-                            v = a.Get(ts[0])
-                    if v is not None:
-                        cache[prim_path] = v
+        blocked = 0
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            with Sdf.ChangeBlock():
+                for prim_path in all_paths:
+                    pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    # Block root-layer st:indices so per-frame flat writes don't get
+                    # re-indexed through the original (now-wrong) index buffer.
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid() and st_pv.IsIndexed():
+                        st_pv.BlockIndices()
+                        blocked += 1
+                    if cls._dirty_attr == "fvli":
+                        attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                        val = attr.Get() if (attr and attr.IsValid()) else None
+                        cache[prim_path] = str(val) if val is not None else "cornersPlus1"
+                    elif cls._dirty_attr in ("faceVertexIndices", "faceVertexCounts"):
+                        a = pxr_prim.GetAttribute(cls._dirty_attr)
+                        if a and a.IsValid():
+                            v = a.Get(Usd.TimeCode.Default())
+                            if v is None:
+                                ts = a.GetTimeSamples()
+                                if ts:
+                                    v = a.Get(ts[0])
+                            if v is not None:
+                                cache[prim_path] = v
         cls._dirty_cache = cache
-        print(f"[UVMixer] dirty_cache rebuilt ({len(cache)} prims, attr={cls._dirty_attr})")
+        print(f"[UVMixer] dirty_cache rebuilt ({len(cache)} prims, attr={cls._dirty_attr}, blocked_indices={blocked})")
 
     @classmethod
     def _write_dirty_attr(cls, pxr_prim, prim_path: str) -> None:
