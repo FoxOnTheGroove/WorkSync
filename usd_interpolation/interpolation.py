@@ -50,7 +50,7 @@ class UVMixer:
     @classmethod
     def set_dirty_attr(cls, attr: str) -> None:
         if attr not in ("none", "fvli", "faceVertexIndices", "faceVertexCounts",
-                        "interp_meta", "elemsize_meta"):
+                        "interp_meta", "elemsize_meta", "displaycolor"):
             return
         cls._dirty_attr = attr
         if any(m is not None for m in cls._maps):
@@ -316,6 +316,20 @@ class UVMixer:
                 val = st_attr.GetMetadata(meta_key)
                 if val is not None:
                     cls._dirty_cache[prim_path] = val
+        elif cls._dirty_attr == "displaycolor":
+            for prim_path in all_paths:
+                pxr_prim = pxr_stage.GetPrimAtPath(prim_path)
+                if not pxr_prim.IsValid():
+                    continue
+                dc_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("displayColor")
+                if dc_pv and dc_pv.GetAttr().IsValid():
+                    v = dc_pv.Get(Usd.TimeCode.Default())
+                    if v is None:
+                        ts = dc_pv.GetTimeSamples()
+                        v = dc_pv.Get(ts[0]) if ts else None
+                    cls._dirty_cache[prim_path] = v if v is not None else Vt.Vec3fArray([(1.0, 1.0, 1.0)])
+                else:
+                    cls._dirty_cache[prim_path] = Vt.Vec3fArray([(1.0, 1.0, 1.0)])
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, (_, st_map) in enumerate(loaded):
@@ -339,6 +353,14 @@ class UVMixer:
                         entry = int_cache.get(prim_path, {})
                         if cls._dirty_attr in entry:
                             pxr_prim.GetAttribute(cls._dirty_attr).Set(entry[cls._dirty_attr], tc)
+                    elif cls._dirty_attr == "displaycolor" and prim_path in cls._dirty_cache:
+                        dc_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("displayColor")
+                        if not (dc_pv and dc_pv.GetAttr().IsValid()):
+                            dc_pv = UsdGeom.PrimvarsAPI(pxr_prim).CreatePrimvar(
+                                "displayColor", Sdf.ValueTypeNames.Color3fArray, "constant"
+                            )
+                        if dc_pv and dc_pv.GetAttr().IsValid():
+                            dc_pv.GetAttr().Set(cls._dirty_cache[prim_path], tc)
                     # interp_meta / elemsize_meta: no timesample bake needed (per-frame ping in set_t)
 
         print(f"[UVMixer] baked {len(loaded)} timesamples (tc 0..{len(loaded)-1}), dirty={cls._dirty_attr}, meta_cache={len(cls._dirty_cache)}")
