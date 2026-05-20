@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import math
 import os
 import omni.kit.app
 import omni.usd
@@ -82,6 +83,8 @@ class ColorpickOverlay:
     _key_to_vp: dict  = {}
     _next_key: int    = 0
     _vis_suppress: bool = True
+    _vp_datatype_key: dict[str, str]     = {}          # vp_api_id → "pressure"|"velocity"|"temperature"
+    _velocity_range: tuple[float, float] = (0.01, 10.0)
 
     @classmethod
     def _gen_key(cls) -> int:
@@ -94,17 +97,36 @@ class ColorpickOverlay:
     # ------------------------------------------------------------------
 
     @classmethod
+    def set_datatype_key(cls, vp_api_id: str, key: str):
+        cls._vp_datatype_key[vp_api_id] = key
+        cls.off(vp_api_id)
+
+    @classmethod
+    def set_velocity_range(cls, v_min: float, v_max: float):
+        cls._velocity_range = (v_min, v_max)
+
+    @classmethod
     def on(cls, gesture_id: str, vp_api_id: str, pos3d: tuple, **kwargs) -> int | None:
         info = Colorpick.get_result_by_id(vp_api_id)
         if not info["hit"]:
             return None
         c   = info["texel_color"]
         uv  = info.get("uv_value", 0.0) or 0.0
-        idx, val = _pressure_data(uv)
-        hex_str   = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
-        pres_str  = f"압력(v_idx) {idx:.2f}"   if idx is not None else "압력(v_idx) -"
-        plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
-        ui_color  = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
+
+        datatype_key = cls._vp_datatype_key.get(vp_api_id, "pressure")
+        if datatype_key == "velocity":
+            v_min, v_max = cls._velocity_range
+            vel = 10 ** (math.log10(v_min) + uv * math.log10(v_max / v_min))
+            pres_str, plotv_str = f"{vel:.4f}", None
+        elif datatype_key == "temperature":
+            pres_str, plotv_str = "-", None
+        else:
+            idx, val = _pressure_data(uv)
+            pres_str  = f"압력(v_idx) {idx:.2f}"   if idx is not None else "압력(v_idx) -"
+            plotv_str = f"plot_v value : {val:.6f}" if val is not None else "plot_v value : -"
+
+        hex_str  = f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}"
+        ui_color = (0xFF << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
         inst = cls._get_or_create(vp_api_id)
         return inst._add(info["prim_path"], hex_str, pres_str, plotv_str, ui_color, pos3d, gesture_id)
 
@@ -397,7 +419,11 @@ class ColorpickOverlay:
         slot["plotv"]            = plotv_str
         slot["hex_label"].text   = hex_str
         slot["press_label"].text = f"press(v_idx): {pres_str}"
-        slot["plotv_label"].text = f"plot_v: {plotv_str}"
+        if plotv_str is not None:
+            slot["plotv_label"].text    = f"plot_v: {plotv_str}"
+            slot["plotv_label"].visible = True
+        else:
+            slot["plotv_label"].visible = False
 
         self._remove_slot_marker(slot)
         self._create_slot_marker(slot, prim_path, pos3d)
