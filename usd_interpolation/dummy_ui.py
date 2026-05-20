@@ -7,6 +7,7 @@ from .interpolation import UVMixer
 NUM_FILES = 5
 
 _DIRTY_OPTIONS = ["none", "fvli", "faceVertexIndices", "faceVertexCounts"]
+_SYNC_OPTIONS = ["default", "commit", "viewport_frame"]
 
 
 class UsdInterpolationUI:
@@ -22,6 +23,7 @@ class UsdInterpolationUI:
         self._btn_loop: ui.Button | None = None
         self._btn_rev_loop: ui.Button | None = None
         self._radio_collection: ui.RadioCollection | None = None
+        self._sync_radio: ui.RadioCollection | None = None
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
 
@@ -29,7 +31,7 @@ class UsdInterpolationUI:
         UVMixer.init(num_slots=NUM_FILES, play_duration=2.5, dirty_attr="fvli")
         UVMixer.subscribe(self._on_t_changed)
 
-        self._window = ui.Window("USD UV Interpolator", width=520, height=340)
+        self._window = ui.Window("USD UV Interpolator", width=520, height=380)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
 
@@ -88,6 +90,22 @@ class UsdInterpolationUI:
                     speed_slider.model.set_value(1.0)
                     speed_slider.model.add_value_changed_fn(self._on_speed_changed)
 
+                # ── Sync mode radio ───────────────────────────────────────────
+                with ui.HStack(height=24, spacing=4):
+                    ui.Label("Sync:", width=44)
+                    self._sync_radio = ui.RadioCollection()
+                    for opt in _SYNC_OPTIONS:
+                        with ui.HStack(width=0, spacing=2):
+                            ui.RadioButton(
+                                radio_collection=self._sync_radio,
+                                width=20, height=20,
+                            )
+                            ui.Label(opt, width=ui.Pixel(len(opt) * 7 + 4), height=20)
+                    self._sync_radio.model.set_value(
+                        _SYNC_OPTIONS.index("default")
+                    )
+                    self._sync_radio.model.add_value_changed_fn(self._on_sync_changed)
+
                 # ── Load test ─────────────────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("N:", width=18)
@@ -136,6 +154,11 @@ class UsdInterpolationUI:
         attr = _DIRTY_OPTIONS[model.get_value_as_int()]
         UVMixer.set_dirty_attr(attr)
         self._set_status(f"dirty_attr → {attr}")
+
+    def _on_sync_changed(self, model):
+        mode = _SYNC_OPTIONS[model.get_value_as_int()]
+        UVMixer.set_sync_mode(mode)
+        self._set_status(f"sync_mode → {mode}")
 
     def _on_refresh_clicked(self):
         UVMixer.set_t(UVMixer.get_t())

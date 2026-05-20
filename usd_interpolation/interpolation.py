@@ -16,6 +16,7 @@ class UVMixer:
     _play_duration: float = 2.5
     _dirty_attr: str = "fvli"  # "none" | "fvli"
     _speed: float = 1.0
+    _sync_mode: str = "default"  # "default" | "commit" | "viewport_frame"
 
     # ── State ──────────────────────────────────────────────────────────────────
     _maps: list = [None] * 5
@@ -37,6 +38,16 @@ class UVMixer:
             cls._play_duration = play_duration
         if dirty_attr is not None:
             cls._dirty_attr = dirty_attr
+
+    @classmethod
+    def set_sync_mode(cls, mode: str) -> None:
+        if mode in ("default", "commit", "viewport_frame"):
+            cls._sync_mode = mode
+            print(f"[UVMixer] sync_mode → {mode}")
+
+    @classmethod
+    def get_sync_mode(cls) -> str:
+        return cls._sync_mode
 
     @classmethod
     def set_speed(cls, speed: float) -> None:
@@ -91,8 +102,10 @@ class UVMixer:
         if loaded_count >= 2:
             stage = omni.usd.get_context().get_stage()
             tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-            omni.timeline.get_timeline_interface().set_current_time(
-                t * (loaded_count - 1) / tps)
+            tl = omni.timeline.get_timeline_interface()
+            tl.set_current_time(t * (loaded_count - 1) / tps)
+            if cls._sync_mode == "commit":
+                tl.commit()
         cls._notify(t)
 
     @classmethod
@@ -323,6 +336,24 @@ class UVMixer:
                 print(f"[UVMixer] subscriber error: {e}")
 
     @classmethod
+    async def _wait_next_frame(cls) -> None:
+        if cls._sync_mode == "viewport_frame":
+            try:
+                from omni.kit.viewport.utility import next_viewport_frame_async
+                vp = None
+                try:
+                    from omni.kit.viewport.utility import get_active_viewport
+                    vp = get_active_viewport()
+                except Exception:
+                    vp = None
+                if vp is not None:
+                    await next_viewport_frame_async(vp)
+                    return
+            except Exception as e:
+                print(f"[UVMixer] viewport_frame wait failed, fallback: {e}")
+        await omni.kit.app.get_app().next_update_async()
+
+    @classmethod
     async def _animate(cls, forward: bool, loop: bool = False) -> None:
         wall_start = time.monotonic()
         try:
@@ -333,7 +364,7 @@ class UVMixer:
                 pass_start = time.monotonic()
 
                 while True:
-                    await omni.kit.app.get_app().next_update_async()
+                    await cls._wait_next_frame()
                     elapsed = time.monotonic() - pass_start
                     eff_duration = cls._play_duration / max(cls._speed, 0.01)
                     dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
