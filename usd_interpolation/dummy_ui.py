@@ -116,8 +116,8 @@ class UsdInterpolationUI:
         if not paths:
             self._set_status("ERROR: no paths")
             return
-        if paths[0]:
-            omni.usd.get_context().open_stage(paths[0])
+        last_path = paths[min(len(paths), NUM_FILES) - 1]
+        omni.usd.get_context().open_stage(last_path)
         stage = omni.usd.get_context().get_stage()
         if stage:
             self._ensure_dome_light(stage)
