@@ -31,7 +31,8 @@ class UVMixer:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
         st_maps = []
         for path in st_paths:
-            st = cls._read_st(path, target_prim_path)
+            file_map = cls.read_st_file(path)
+            st = file_map.get(target_prim_path)
             if st is None:
                 raise ValueError(f"[UVMixer] no st for {target_prim_path} in {path}")
             st_maps.append(st)
@@ -207,25 +208,27 @@ class UVMixer:
             self._play_task = None
 
     @staticmethod
-    def _read_st(file_path: str, prim_path: str) -> np.ndarray | None:
+    def read_st_file(file_path: str) -> 'dict[str, np.ndarray]':
+        """Open a USD file once and return {prim_path: st_array} for every mesh
+        with a valid st primvar. Combines mesh discovery and st storage so the
+        source file is opened exactly once regardless of how many meshes exist."""
         stage = Usd.Stage.Open(file_path)
         if not stage:
             print(f"[UVMixer] failed to open: {file_path}")
-            return None
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim.IsValid() or not prim.IsA(UsdGeom.Mesh):
-            print(f"[UVMixer] no mesh at {prim_path} in {file_path}")
-            return None
-        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-        if not st_pv or not st_pv.GetAttr().IsValid():
-            print(f"[UVMixer] no st primvar at {prim_path} in {file_path}")
-            return None
-        st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
-        if st_raw is None:
-            samples = st_pv.GetTimeSamples()
-            if samples:
-                st_raw = st_pv.ComputeFlattened(samples[0])
-        if st_raw is None:
-            print(f"[UVMixer] empty st at {prim_path} in {file_path}")
-            return None
-        return np.array(st_raw, dtype=np.float32).reshape(-1, 2)
+            return {}
+        result: dict = {}
+        for prim in stage.Traverse():
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+            if not st_pv or not st_pv.GetAttr().IsValid():
+                continue
+            st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
+            if st_raw is None:
+                samples = st_pv.GetTimeSamples()
+                if samples:
+                    st_raw = st_pv.ComputeFlattened(samples[0])
+            if st_raw is None:
+                continue
+            result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
+        return result

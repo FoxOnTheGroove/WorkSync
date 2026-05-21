@@ -133,39 +133,37 @@ class UsdInterpolationUI:
             return
         self._ensure_dome_light(stage)
         self._src_paths = list(paths)
-
-        # 1) Collect mesh prim paths first (no mutation during traverse)
-        mesh_paths = [str(prim.GetPath())
-                      for prim in stage.Traverse()
-                      if prim.IsA(UsdGeom.Mesh)]
-
-        # 2) Create mixer instances (no baking yet)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
-        ok = skipped = 0
-        for prim_path in mesh_paths:
-            try:
-                mixer = UVMixer.create(prim_path, *paths, use_correction=use_correction)
-                self._mixers.append(mixer)
-                ok += 1
-            except ValueError:
-                skipped += 1
 
-        if not self._mixers:
-            self._set_status(f"ERROR: no usable mesh found (skipped {skipped})")
+        # 1) Open each source file once, read all meshes' st (40e7f7d pattern:
+        #    file-per-open, not mesh-per-open). Avoids repeated open of paths[0]
+        #    while it is still being processed as the display stage.
+        maps_per_file = [UVMixer.read_st_file(p) for p in paths]
+
+        # 2) Meshes present in all source files
+        common_paths = set(maps_per_file[0].keys())
+        for m in maps_per_file[1:]:
+            common_paths &= set(m.keys())
+
+        if not common_paths:
+            self._set_status("ERROR: no mesh found in all source files")
             self._slider.enabled = False
             return
 
-        # 3) Batched bake: all prims / all timesamples in a single ChangeBlock
+        # 3) Build one mixer per mesh from pre-loaded arrays (no per-mesh file open)
+        for prim_path in sorted(common_paths):
+            st_maps = [maps_per_file[i][prim_path] for i in range(len(paths))]
+            mixer = UVMixer._from_maps(prim_path, st_maps, use_correction=use_correction)
+            self._mixers.append(mixer)
+
+        # 4) Single batched bake for all mixers in one ChangeBlock
         UVMixer.bake_all(self._mixers)
 
         self._primary = self._mixers[0]
         self._primary.subscribe(self._on_t_changed)
         self._slider.enabled = True
         self._primary.seek(0.0)
-        msg = f"{ok} mixer(s) created"
-        if skipped:
-            msg += f", {skipped} skipped"
-        self._set_status(msg)
+        self._set_status(f"{len(self._mixers)} mixer(s) created")
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
