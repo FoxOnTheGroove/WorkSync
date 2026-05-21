@@ -4,7 +4,7 @@ import omni.ui as ui
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
 
 from .interpolation import UVMixer
-from .interpolation_api import UVMixer_api
+from .interpolation_api import UVMixerAPI
 
 NUM_FILES = 5
 LOAD_TEST_ROOT = "/World/LoadTest"
@@ -27,8 +27,8 @@ class UsdInterpolationUI:
         self._dup_field: ui.IntField | None = None
 
     def build_ui(self):
-        UVMixer_api.init(num_slots=NUM_FILES, play_duration=2.5, use_correction=True)
-        UVMixer_api.subscribe(self._on_t_changed)
+        UVMixerAPI.setup(num_slots=NUM_FILES, play_duration=2.5, correction=True)
+        UVMixerAPI.subscribe(self._on_t_changed)
 
         self._window = ui.Window("USD UV Interpolator", width=520, height=340)
         with self._window.frame:
@@ -46,7 +46,7 @@ class UsdInterpolationUI:
                     self._correction_cb = ui.CheckBox(width=20, height=20)
                     self._correction_cb.model.set_value(True)
                     self._correction_cb.model.add_value_changed_fn(self._on_correction_changed)
-                    ui.Label("Correction (fvli)", width=140, height=20)
+                    ui.Label("Correction", width=100, height=20)
 
                 # ── Status ───────────────────────────────────────────────────
                 self._status_label = ui.Label("Status: Not loaded", height=20)
@@ -114,63 +114,63 @@ class UsdInterpolationUI:
             self._ensure_dome_light(stage)
         ok = 0
         for idx, path in enumerate(paths[:NUM_FILES]):
-            if UVMixer_api.load(path, idx):
+            if UVMixerAPI.load_file(path, idx):
                 ok += 1
             else:
                 self._set_status(f"ERROR: failed slot {idx} ({path})")
                 return
-        loaded = UVMixer_api.get_loaded_slots()
+        loaded = UVMixerAPI.loaded_slots()
         self._set_status(f"{ok} file(s) loaded  slots:{loaded}")
         self._slider.enabled = len(loaded) >= 2
 
     def _on_correction_changed(self, model):
-        UVMixer_api.set_correction(bool(model.get_value_as_bool()))
+        UVMixerAPI.set_correction(bool(model.get_value_as_bool()))
 
     def _on_refresh_clicked(self):
-        UVMixer_api.set_t(UVMixer_api.get_t())
+        UVMixerAPI.seek(UVMixerAPI.position())
 
     def _on_play_clicked(self):
-        if UVMixer_api.is_playing():
-            UVMixer_api.stop()
+        if UVMixerAPI.is_playing():
+            UVMixerAPI.stop()
             self._btn_play.text = "Play ▶"
         else:
-            UVMixer_api.play(forward=True)
+            UVMixerAPI.play(forward=True)
             self._btn_play.text = "Stop ■"
 
     def _on_reverse_clicked(self):
-        if UVMixer_api.is_playing():
-            UVMixer_api.stop()
+        if UVMixerAPI.is_playing():
+            UVMixerAPI.stop()
             self._btn_reverse.text = "Reverse ◄"
         else:
-            UVMixer_api.play(forward=False)
+            UVMixerAPI.play(forward=False)
             self._btn_reverse.text = "Stop ■"
 
     def _on_loop_clicked(self):
-        if UVMixer_api.is_playing():
-            UVMixer_api.stop()
+        if UVMixerAPI.is_playing():
+            UVMixerAPI.stop()
             self._btn_loop.text = "Loop ↺"
         else:
-            UVMixer_api.play(forward=True, loop=True)
+            UVMixerAPI.play(forward=True, loop=True)
             self._btn_loop.text = "Stop ■"
 
     def _on_rev_loop_clicked(self):
-        if UVMixer_api.is_playing():
-            UVMixer_api.stop()
+        if UVMixerAPI.is_playing():
+            UVMixerAPI.stop()
             self._btn_rev_loop.text = "Rev Loop ↺"
         else:
-            UVMixer_api.play(forward=False, loop=True)
+            UVMixerAPI.play(forward=False, loop=True)
             self._btn_rev_loop.text = "Stop ■"
 
     def _on_slider_changed(self, model):
-        if UVMixer_api.is_playing():
+        if UVMixerAPI.is_playing():
             return
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
-        UVMixer_api.set_t(t)
+        UVMixerAPI.seek(t)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
-        UVMixer_api.set_speed(speed)
+        UVMixerAPI.set_speed(speed)
         if self._speed_label:
             self._speed_label.text = f"{speed:.1f}x"
 
@@ -181,7 +181,7 @@ class UsdInterpolationUI:
             return
         added = self._duplicate_meshes(n)
         self._set_status(f"Duplicated {n} copies → {added} prim(s) added")
-        self._slider.enabled = len(UVMixer_api.get_loaded_slots()) >= 2
+        self._slider.enabled = len(UVMixerAPI.loaded_slots()) >= 2
 
     def _on_clear_clicked(self):
         self._clear_load_test_prims()
@@ -192,7 +192,7 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if not UVMixer_api.is_playing():
+        if not UVMixerAPI.is_playing():
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -207,8 +207,8 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
-        UVMixer_api.unsubscribe(self._on_t_changed)
-        UVMixer_api.destroy()
+        UVMixerAPI.unsubscribe(self._on_t_changed)
+        UVMixerAPI.destroy()
         if self._window:
             self._window.destroy()
             self._window = None
@@ -288,7 +288,7 @@ class UsdInterpolationUI:
 
         if added > 0:
             UVMixer._bake_timesamples()
-            UVMixer_api.set_t(UVMixer_api.get_t())
+            UVMixerAPI.seek(UVMixerAPI.position())
         return added
 
     @staticmethod
@@ -306,4 +306,4 @@ class UsdInterpolationUI:
                     del m[k]
         if any(m is not None for m in UVMixer._maps):
             UVMixer._bake_timesamples()
-            UVMixer_api.set_t(UVMixer_api.get_t())
+            UVMixerAPI.seek(UVMixerAPI.position())

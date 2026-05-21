@@ -54,11 +54,27 @@ class UVMixer:
             cls.set_t(cls._t)
 
     @classmethod
-    def load(cls, path: str, slot: int) -> bool:
+    def load_from_file(cls, path: str, slot: int) -> bool:
         if not (0 <= slot < cls._num_slots):
             print(f"[UVMixer] invalid slot {slot}")
             return False
-        st_map = cls._load_st_map(path)
+        st_map = cls._read_st_from_file(path)
+        if st_map is None:
+            return False
+        cls._maps[slot] = st_map
+        cls._bake_timesamples()
+        return True
+
+    @classmethod
+    def load_from_stage(cls, slot: int, prim_paths: list[str] | None = None) -> bool:
+        if not (0 <= slot < cls._num_slots):
+            print(f"[UVMixer] invalid slot {slot}")
+            return False
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            print("[UVMixer] no stage open")
+            return False
+        st_map = cls._read_st_from_stage(stage, prim_paths)
         if st_map is None:
             return False
         cls._maps[slot] = st_map
@@ -73,12 +89,6 @@ class UVMixer:
     @classmethod
     def get_loaded_slots(cls) -> list[int]:
         return [i for i, m in enumerate(cls._maps) if m is not None]
-
-    @classmethod
-    def loads(cls, *paths: str) -> None:
-        cls.init(num_slots=len(paths))
-        for i, path in enumerate(paths):
-            cls.load(path, i)
 
     @classmethod
     def set_t(cls, t: float) -> None:
@@ -128,13 +138,21 @@ class UVMixer:
     # ── Internal ───────────────────────────────────────────────────────────────
 
     @classmethod
-    def _load_st_map(cls, path: str) -> dict | None:
+    def _read_st_from_file(cls, path: str) -> dict | None:
         stage = Usd.Stage.Open(path)
         if not stage:
             print(f"[UVMixer] failed to open: {path}")
             return None
+        result = cls._read_st_from_stage(stage)
+        if result is None:
+            print(f"[UVMixer] no mesh with st: {path}")
+        return result
+
+    @classmethod
+    def _read_st_from_stage(cls, stage, prim_paths: list[str] | None = None) -> dict | None:
         result = {}
-        for prim in stage.Traverse():
+        prims = (stage.GetPrimAtPath(p) for p in prim_paths) if prim_paths else stage.Traverse()
+        for prim in prims:
             if not prim.IsA(UsdGeom.Mesh):
                 continue
             st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
@@ -147,10 +165,7 @@ class UVMixer:
                     st_raw = st_pv.ComputeFlattened(samples[0])
             if st_raw is not None:
                 result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
-        if not result:
-            print(f"[UVMixer] no mesh with st: {path}")
-            return None
-        return result
+        return result if result else None
 
     @classmethod
     def _bake_timesamples(cls) -> None:
