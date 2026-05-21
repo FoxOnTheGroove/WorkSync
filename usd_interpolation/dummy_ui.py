@@ -4,9 +4,7 @@ import omni.ui as ui
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
 
 from .interpolation import UVMixer
-from .interpolation_api import UVMixerAPI
 
-NUM_FILES = 5
 LOAD_TEST_ROOT = "/World/LoadTest"
 
 
@@ -26,10 +24,11 @@ class UsdInterpolationUI:
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
 
-    def build_ui(self):
-        UVMixerAPI.setup(num_slots=NUM_FILES, play_duration=2.5, correction=True)
-        UVMixerAPI.subscribe(self._on_t_changed)
+        self._mixers: list[UVMixer] = []
+        self._src_paths: list[str] = []
+        self._load_test_mixers: list[UVMixer] = []
 
+    def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=520, height=340)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
@@ -107,70 +106,109 @@ class UsdInterpolationUI:
         if not paths:
             self._set_status("ERROR: no paths")
             return
+        if len(paths) < 2:
+            self._set_status("ERROR: need at least 2 paths")
+            return
+
+        # Destroy existing mixers
+        for m in self._mixers + self._load_test_mixers:
+            m.destroy()
+        self._mixers = []
+        self._load_test_mixers = []
+
         if paths[0]:
             omni.usd.get_context().open_stage(paths[0])
         stage = omni.usd.get_context().get_stage()
-        if stage:
-            self._ensure_dome_light(stage)
+        if stage is None:
+            self._set_status("ERROR: no stage")
+            return
+        self._ensure_dome_light(stage)
+        self._src_paths = paths
+
+        use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
         ok = 0
-        for idx, path in enumerate(paths[:NUM_FILES]):
-            if UVMixerAPI.load_file(path, idx):
+        skipped = 0
+        for prim in stage.Traverse():
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            prim_path = str(prim.GetPath())
+            try:
+                mixer = UVMixer.create(prim_path, *paths, use_correction=use_correction)
+                self._mixers.append(mixer)
                 ok += 1
-            else:
-                self._set_status(f"ERROR: failed slot {idx} ({path})")
-                return
-        loaded = UVMixerAPI.loaded_slots()
-        self._set_status(f"{ok} file(s) loaded  slots:{loaded}")
-        self._slider.enabled = len(loaded) >= 2
+            except ValueError:
+                skipped += 1
+
+        if not self._mixers:
+            self._set_status(f"ERROR: no mesh with st found in all source files (skipped {skipped})")
+            return
+
+        self._mixers[0].subscribe(self._on_t_changed)
+        self._slider.enabled = True
+        self._set_status(f"{ok} mixer(s) created" + (f", {skipped} skipped" if skipped else ""))
 
     def _on_correction_changed(self, model):
-        UVMixerAPI.set_correction(bool(model.get_value_as_bool()))
+        enabled = bool(model.get_value_as_bool())
+        for m in self._mixers + self._load_test_mixers:
+            m.set_correction(enabled)
 
     def _on_refresh_clicked(self):
-        UVMixerAPI.seek(UVMixerAPI.position())
+        t = self._mixers[0].position() if self._mixers else 0.0
+        for m in self._mixers + self._load_test_mixers:
+            m.seek(t)
 
     def _on_play_clicked(self):
-        if UVMixerAPI.is_playing():
-            UVMixerAPI.stop()
+        if any(m.is_playing() for m in self._mixers):
+            for m in self._mixers + self._load_test_mixers:
+                m.stop()
             self._btn_play.text = "Play ▶"
         else:
-            UVMixerAPI.play(forward=True)
+            for m in self._mixers + self._load_test_mixers:
+                m.play(forward=True)
             self._btn_play.text = "Stop ■"
 
     def _on_reverse_clicked(self):
-        if UVMixerAPI.is_playing():
-            UVMixerAPI.stop()
+        if any(m.is_playing() for m in self._mixers):
+            for m in self._mixers + self._load_test_mixers:
+                m.stop()
             self._btn_reverse.text = "Reverse ◄"
         else:
-            UVMixerAPI.play(forward=False)
+            for m in self._mixers + self._load_test_mixers:
+                m.play(forward=False)
             self._btn_reverse.text = "Stop ■"
 
     def _on_loop_clicked(self):
-        if UVMixerAPI.is_playing():
-            UVMixerAPI.stop()
+        if any(m.is_playing() for m in self._mixers):
+            for m in self._mixers + self._load_test_mixers:
+                m.stop()
             self._btn_loop.text = "Loop ↺"
         else:
-            UVMixerAPI.play(forward=True, loop=True)
+            for m in self._mixers + self._load_test_mixers:
+                m.play(forward=True, loop=True)
             self._btn_loop.text = "Stop ■"
 
     def _on_rev_loop_clicked(self):
-        if UVMixerAPI.is_playing():
-            UVMixerAPI.stop()
+        if any(m.is_playing() for m in self._mixers):
+            for m in self._mixers + self._load_test_mixers:
+                m.stop()
             self._btn_rev_loop.text = "Rev Loop ↺"
         else:
-            UVMixerAPI.play(forward=False, loop=True)
+            for m in self._mixers + self._load_test_mixers:
+                m.play(forward=False, loop=True)
             self._btn_rev_loop.text = "Stop ■"
 
     def _on_slider_changed(self, model):
-        if UVMixerAPI.is_playing():
+        if any(m.is_playing() for m in self._mixers):
             return
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
-        UVMixerAPI.seek(t)
+        for m in self._mixers + self._load_test_mixers:
+            m.seek(t)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
-        UVMixerAPI.set_speed(speed)
+        for m in self._mixers + self._load_test_mixers:
+            m.set_speed(speed)
         if self._speed_label:
             self._speed_label.text = f"{speed:.1f}x"
 
@@ -181,7 +219,7 @@ class UsdInterpolationUI:
             return
         added = self._duplicate_meshes(n)
         self._set_status(f"Duplicated {n} copies → {added} prim(s) added")
-        self._slider.enabled = len(UVMixerAPI.loaded_slots()) >= 2
+        self._slider.enabled = bool(self._mixers)
 
     def _on_clear_clicked(self):
         self._clear_load_test_prims()
@@ -192,7 +230,7 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if not UVMixerAPI.is_playing():
+        if not any(m.is_playing() for m in self._mixers):
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -207,26 +245,27 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
-        UVMixerAPI.unsubscribe(self._on_t_changed)
-        UVMixerAPI.destroy()
+        for m in self._mixers + self._load_test_mixers:
+            m.destroy()
+        self._mixers = []
+        self._load_test_mixers = []
         if self._window:
             self._window.destroy()
             self._window = None
 
     # ── Debug helpers (mesh duplicate / clear) ────────────────────────────────
 
-    @staticmethod
-    def _duplicate_meshes(n: int) -> int:
+    def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None:
+        if pxr_stage is None or not self._mixers or not self._src_paths:
             return 0
-        loaded = [(i, m) for i, m in enumerate(UVMixer._maps) if m is not None]
-        if not loaded:
-            return 0
-        orig_paths = sorted({p for _, m in loaded for p in m})
+
+        # Gather original prim paths from existing mixers
+        orig_paths = [m._target for m in self._mixers if not m._target.startswith(LOAD_TEST_ROOT)]
         if not orig_paths:
             return 0
 
+        use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
         session = pxr_stage.GetSessionLayer()
         grid_cols = max(1, int(n ** 0.5))
         spacing = 200.0
@@ -281,29 +320,26 @@ class UsdInterpolationUI:
                             dst_st.Set(Vt.Vec2fArray.FromNumpy(
                                 np.array(val, dtype=np.float32).reshape(-1, 2)
                             ))
-                    for _, m in loaded:
-                        if orig_path in m:
-                            m[dst_path] = m[orig_path].copy()
+                    try:
+                        mixer = UVMixer.create(dst_path, *self._src_paths,
+                                               use_correction=use_correction)
+                        self._load_test_mixers.append(mixer)
+                    except ValueError:
+                        pass
                     added += 1
 
-        if added > 0:
-            UVMixer._bake_timesamples()
-            UVMixerAPI.seek(UVMixerAPI.position())
+        # Sync new mixers to current t
+        t = self._mixers[0].position() if self._mixers else 0.0
+        for m in self._load_test_mixers:
+            m.seek(t)
         return added
 
-    @staticmethod
-    def _clear_load_test_prims() -> None:
+    def _clear_load_test_prims(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             pxr_stage.RemovePrim(LOAD_TEST_ROOT)
-        for m in UVMixer._maps:
-            if m is None:
-                continue
-            for k in list(m.keys()):
-                if k.startswith(LOAD_TEST_ROOT):
-                    del m[k]
-        if any(m is not None for m in UVMixer._maps):
-            UVMixer._bake_timesamples()
-            UVMixerAPI.seek(UVMixerAPI.position())
+        for m in self._load_test_mixers:
+            m.destroy()
+        self._load_test_mixers = []
