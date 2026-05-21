@@ -13,7 +13,7 @@ class UVMixer:
 
     _registry: dict[str, 'UVMixer'] = {}
 
-    # ── Factory ────────────────────────────────────────────────────────────────
+    # ── Factory ──────────────────────────────────────────────────────
 
     @classmethod
     def create(cls,
@@ -65,57 +65,15 @@ class UVMixer:
         inst._subscribers = []
         if key is not None:
             cls._registry[key] = inst
+        inst._bake_timesamples()
         return inst
-
-    @classmethod
-    def bake_all(cls, mixers: 'list[UVMixer]') -> None:
-        """Bake UV + fvli timesamples for all given mixers in a single
-        EditContext + Sdf.ChangeBlock. Must be called after instances are
-        created so that all writes batch into one Hydra notification."""
-        pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None or not mixers:
-            return
-
-        fvli_cache: dict = {}
-        for m in mixers:
-            if not m._use_correction:
-                continue
-            pxr_prim = pxr_stage.GetPrimAtPath(m._target)
-            if not pxr_prim.IsValid():
-                continue
-            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-            val = attr.Get() if (attr and attr.IsValid()) else None
-            fvli_cache[m._target] = str(val) if val is not None else "cornersPlus1"
-
-        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                for m in mixers:
-                    pxr_prim = pxr_stage.GetPrimAtPath(m._target)
-                    if not pxr_prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.BlockIndices()
-                    fvli_val = fvli_cache.get(m._target)
-                    for tc, st_data in enumerate(m._st_maps):
-                        st_pv2 = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                        if st_pv2 and st_pv2.GetAttr().IsValid():
-                            st_pv2.GetAttr().Set(
-                                Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                        if fvli_val is not None:
-                            mesh = UsdGeom.Mesh(pxr_prim)
-                            fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                            if not fvli or not fvli.IsValid():
-                                fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                            if fvli and fvli.IsValid():
-                                fvli.Set(fvli_val, tc)
 
     @classmethod
     def get(cls, key: str) -> 'UVMixer | None':
         """Retrieve a previously created mixer by key."""
         return cls._registry.get(key)
 
-    # ── Playback ───────────────────────────────────────────────────────────────
+    # ── Playback ─────────────────────────────────────────────────────
 
     def play(self, *, forward: bool = True, loop: bool = False) -> None:
         self.stop()
@@ -129,7 +87,7 @@ class UVMixer:
     def is_playing(self) -> bool:
         return self._play_task is not None and not self._play_task.done()
 
-    # ── Position ───────────────────────────────────────────────────────────────
+    # ── Position ─────────────────────────────────────────────────────
 
     def seek(self, t: float) -> None:
         t = max(0.0, min(1.0, t))
@@ -143,7 +101,7 @@ class UVMixer:
     def position(self) -> float:
         return self._t
 
-    # ── Configuration ──────────────────────────────────────────────────────────
+    # ── Configuration ──────────────────────────────────────────────────
 
     def set_speed(self, speed: float) -> None:
         self._speed = max(0.1, float(speed))
@@ -152,11 +110,10 @@ class UVMixer:
         return self._speed
 
     def set_correction(self, enabled: bool) -> None:
-        """Update correction flag only. Caller must invoke UVMixer.bake_all(...)
-        afterward to re-bake. This keeps bake batched across many mixers."""
         self._use_correction = bool(enabled)
+        self._bake_timesamples()
 
-    # ── Callbacks ──────────────────────────────────────────────────────────────
+    # ── Callbacks ────────────────────────────────────────────────────
 
     def subscribe(self, callback: Callable[[float], None]) -> None:
         if callback not in self._subscribers:
@@ -165,7 +122,7 @@ class UVMixer:
     def unsubscribe(self, callback: Callable[[float], None]) -> None:
         self._subscribers = [c for c in self._subscribers if c != callback]
 
-    # ── Lifecycle ──────────────────────────────────────────────────────────────
+    # ── Lifecycle ────────────────────────────────────────────────────
 
     def destroy(self) -> None:
         self.stop()
@@ -174,7 +131,65 @@ class UVMixer:
             UVMixer._registry.pop(self._key, None)
             self._key = None
 
-    # ── Internal ───────────────────────────────────────────────────────────────
+    # ── Internal ─────────────────────────────────────────────────────
+
+    def _bake_timesamples(self) -> None:
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            return
+        pxr_prim = pxr_stage.GetPrimAtPath(self._target)
+        if not pxr_prim.IsValid():
+            return
+
+        fvli_val = None
+        if self._use_correction:
+            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+            val = attr.Get() if (attr and attr.IsValid()) else None
+            fvli_val = str(val) if val is not None else "cornersPlus1"
+
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            with Sdf.ChangeBlock():
+                for tc, st_data in enumerate(self._st_maps):
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    if fvli_val is not None:
+                        mesh = UsdGeom.Mesh(pxr_prim)
+                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                        if not fvli or not fvli.IsValid():
+                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                        if fvli and fvli.IsValid():
+                            fvli.Set(fvli_val, tc)
+
+    def _bake_timesamples(self) -> None:
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            return
+        pxr_prim = pxr_stage.GetPrimAtPath(self._target)
+        if not pxr_prim.IsValid():
+            return
+
+        fvli_val = None
+        if self._use_correction:
+            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+            val = attr.Get() if (attr and attr.IsValid()) else None
+            fvli_val = str(val) if val is not None else "cornersPlus1"
+
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            with Sdf.ChangeBlock():
+                for tc, st_data in enumerate(self._st_maps):
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    if fvli_val is not None:
+                        mesh = UsdGeom.Mesh(pxr_prim)
+                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                        if not fvli or not fvli.IsValid():
+                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                        if fvli and fvli.IsValid():
+                            fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
