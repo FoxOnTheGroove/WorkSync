@@ -3,7 +3,7 @@ import time
 from typing import Callable
 
 import numpy as np
-from pxr import Sdf, Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, Vt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -148,19 +148,18 @@ class UVMixer:
             fvli_val = str(val) if val is not None else "cornersPlus1"
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                for tc, st_data in enumerate(self._st_maps):
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.GetAttr().Set(
-                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if fvli_val is not None:
-                        mesh = UsdGeom.Mesh(pxr_prim)
-                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                        if not fvli or not fvli.IsValid():
-                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                        if fvli and fvli.IsValid():
-                            fvli.Set(fvli_val, tc)
+            for tc, st_data in enumerate(self._st_maps):
+                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                if st_pv and st_pv.GetAttr().IsValid():
+                    st_pv.GetAttr().Set(
+                        Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                if fvli_val is not None:
+                    mesh = UsdGeom.Mesh(pxr_prim)
+                    fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                    if not fvli or not fvli.IsValid():
+                        fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                    if fvli and fvli.IsValid():
+                        fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
