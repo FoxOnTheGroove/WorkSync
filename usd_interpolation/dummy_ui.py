@@ -1,4 +1,7 @@
+import asyncio
+
 import numpy as np
+import omni.kit.app
 import omni.usd
 import omni.ui as ui
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
@@ -35,12 +38,12 @@ class UsdInterpolationUI:
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
 
-                # ── Paths ────────────────────────────────────────────
+                # ── Paths ───────────────────────────────────────────
                 ui.Label("Paths (space or newline separated):", height=18)
                 self._field = ui.StringField(height=24)
                 self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
 
-                # ── Load + correction checkbox ────────────────────────────
+                # ── Load + correction checkbox ────────────────────────
                 with ui.HStack(height=24, spacing=4):
                     ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
                     ui.Spacer(width=8)
@@ -49,17 +52,17 @@ class UsdInterpolationUI:
                     self._correction_cb.model.add_value_changed_fn(self._on_correction_changed)
                     ui.Label("Correction", width=100, height=20)
 
-                # ── Status ───────────────────────────────────────────
+                # ── Status ─────────────────────────────────────────
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
-                # ── t slider ───────────────────────────────────────────
+                # ── t slider ─────────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     self._t_label = ui.Label("t: 0.000", width=60)
                     self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     self._slider.enabled = False
                     self._slider.model.add_value_changed_fn(self._on_slider_changed)
 
-                # ── Play controls ─────────────────────────────────────
+                # ── Play controls ─────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     self._btn_play = ui.Button("Play ▶", width=80,
                                                clicked_fn=self._on_play_clicked)
@@ -72,7 +75,7 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
-                # ── Speed slider ──────────────────────────────────────
+                # ── Speed slider ────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("Speed:", width=44)
                     self._speed_label = ui.Label("1.0x", width=34)
@@ -80,7 +83,7 @@ class UsdInterpolationUI:
                     speed_slider.model.set_value(1.0)
                     speed_slider.model.add_value_changed_fn(self._on_speed_changed)
 
-                # ── Load test (debug) ─────────────────────────────────
+                # ── Load test (debug) ───────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("N:", width=18)
                     self._dup_field = ui.IntField(width=50)
@@ -90,12 +93,12 @@ class UsdInterpolationUI:
                     ui.Button("Clear", width=60,
                               clicked_fn=self._on_clear_clicked)
 
-    # ── Helpers ─────────────────────────────────────────────────────
+    # ── Helpers ──────────────────────────────────────────────
 
     def _all_mixers(self) -> list[UVMixer]:
         return self._mixers + self._load_test_mixers
 
-    # ── Callbacks ─────────────────────────────────────────────────
+    # ── Callbacks ─────────────────────────────────────────────
 
     @staticmethod
     def _ensure_dome_light(stage) -> None:
@@ -135,9 +138,7 @@ class UsdInterpolationUI:
         self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
-        # 1) Open each source file once, read all meshes' st (40e7f7d pattern:
-        #    file-per-open, not mesh-per-open). Avoids repeated open of paths[0]
-        #    while it is still being processed as the display stage.
+        # 1) Open each source file once, read all meshes' st
         maps_per_file = [UVMixer.read_st_file(p) for p in paths]
 
         # 2) Meshes present in all source files
@@ -150,19 +151,27 @@ class UsdInterpolationUI:
             self._slider.enabled = False
             return
 
-        # 3) Build one mixer per mesh from pre-loaded arrays (no per-mesh file open)
+        # 3) Build one mixer per mesh from pre-loaded arrays (no stage writes yet)
         for prim_path in sorted(common_paths):
             st_maps = [maps_per_file[i][prim_path] for i in range(len(paths))]
             mixer = UVMixer._from_maps(prim_path, st_maps, use_correction=use_correction)
             self._mixers.append(mixer)
 
-        # 4) Single batched bake for all mixers in one ChangeBlock
-        UVMixer.bake_all(self._mixers)
-
         self._primary = self._mixers[0]
         self._primary.subscribe(self._on_t_changed)
-        self._slider.enabled = True
-        self._primary.seek(0.0)
+        self._set_status("Loading...")
+
+        # 4) Delay bake_all until Hydra has finished initializing the new stage
+        asyncio.ensure_future(self._bake_after_ready())
+
+    async def _bake_after_ready(self):
+        for _ in range(3):
+            await omni.kit.app.get_app().next_update_async()
+        UVMixer.bake_all(self._mixers)
+        if self._slider:
+            self._slider.enabled = True
+        if self._primary:
+            self._primary.seek(0.0)
         self._set_status(f"{len(self._mixers)} mixer(s) created")
 
     def _on_correction_changed(self, model):
@@ -276,7 +285,7 @@ class UsdInterpolationUI:
             self._window.destroy()
             self._window = None
 
-    # ── Debug helpers (mesh duplicate / clear) ────────────────────────────
+    # ── Debug helpers (mesh duplicate / clear) ────────────────────
 
     def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
