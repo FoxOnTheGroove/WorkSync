@@ -1,7 +1,4 @@
-import asyncio
-
 import numpy as np
-import omni.kit.app
 import omni.usd
 import omni.ui as ui
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
@@ -130,14 +127,6 @@ class UsdInterpolationUI:
         self._primary = None
 
         omni.usd.get_context().open_stage(paths[0])
-        self._set_status("Loading...")
-        asyncio.ensure_future(self._load_async(paths))
-
-    async def _load_async(self, paths: list[str]):
-        # open_stage() is processed asynchronously in Kit; wait for Hydra to initialize
-        for _ in range(3):
-            await omni.kit.app.get_app().next_update_async()
-
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             self._set_status("ERROR: no stage")
@@ -145,12 +134,15 @@ class UsdInterpolationUI:
         self._ensure_dome_light(stage)
         self._src_paths = list(paths)
 
+        # 1) Collect mesh prim paths first (no mutation during traverse)
+        mesh_paths = [str(prim.GetPath())
+                      for prim in stage.Traverse()
+                      if prim.IsA(UsdGeom.Mesh)]
+
+        # 2) Create mixer instances (no baking yet)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
         ok = skipped = 0
-        for prim in stage.Traverse():
-            if not prim.IsA(UsdGeom.Mesh):
-                continue
-            prim_path = str(prim.GetPath())
+        for prim_path in mesh_paths:
             try:
                 mixer = UVMixer.create(prim_path, *paths, use_correction=use_correction)
                 self._mixers.append(mixer)
@@ -160,14 +152,15 @@ class UsdInterpolationUI:
 
         if not self._mixers:
             self._set_status(f"ERROR: no usable mesh found (skipped {skipped})")
-            if self._slider:
-                self._slider.enabled = False
+            self._slider.enabled = False
             return
+
+        # 3) Batched bake: all prims / all timesamples in a single ChangeBlock
+        UVMixer.bake_all(self._mixers)
 
         self._primary = self._mixers[0]
         self._primary.subscribe(self._on_t_changed)
-        if self._slider:
-            self._slider.enabled = True
+        self._slider.enabled = True
         self._primary.seek(0.0)
         msg = f"{ok} mixer(s) created"
         if skipped:
@@ -176,8 +169,10 @@ class UsdInterpolationUI:
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
-        for m in self._all_mixers():
+        mixers = self._all_mixers()
+        for m in mixers:
             m.set_correction(enabled)
+        UVMixer.bake_all(mixers)
         if self._primary:
             self._primary.seek(self._primary.position())
 
@@ -361,7 +356,8 @@ class UsdInterpolationUI:
                     self._load_test_mixers.append(mixer)
                     added += 1
 
-        # Sync load-test mixers to current position via timeline (already set by primary)
+        # Batched bake for base + load-test mixers, then sync timeline
+        UVMixer.bake_all(self._all_mixers())
         if self._primary:
             self._primary.seek(self._primary.position())
         return added
