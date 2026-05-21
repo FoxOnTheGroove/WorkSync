@@ -156,17 +156,17 @@ class UsdInterpolationUI:
             self._slider.enabled = False
             return
 
-        # 3) Build one mixer per mesh (auto-bakes in _init)
-        for prim_path in sorted(common_paths):
-            st_maps = [maps_per_file[i][prim_path] for i in range(len(paths))]
-            mixer = UVMixer._from_maps(prim_path, st_maps, use_correction=use_correction)
-            self._mixers.append(mixer)
+        # 3) Build one mixer for all meshes combined
+        st_maps = [{path: maps_per_file[i][path] for path in common_paths}
+                   for i in range(len(paths))]
+        mixer = UVMixer._from_maps("primary", st_maps, use_correction=use_correction)
+        self._mixers = [mixer]
 
-        self._primary = self._mixers[0]
+        self._primary = mixer
         self._primary.subscribe(self._on_t_changed)
         self._slider.enabled = True
         self._primary.seek(0.0)
-        self._set_status(f"{len(self._mixers)} mixer(s) created")
+        self._set_status(f"1 mixer ({len(common_paths)} mesh(es), {len(paths)} source(s))")
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
@@ -290,6 +290,9 @@ class UsdInterpolationUI:
         spacing = 80.0
         added = 0
 
+        src_mixer = self._mixers[0]
+        orig_mesh_paths = sorted(src_mixer._st_maps[0].keys())
+
         with Usd.EditContext(pxr_stage, session):
             for copy_idx in range(1, n):
                 col = copy_idx % grid_cols
@@ -299,11 +302,15 @@ class UsdInterpolationUI:
                 UsdGeom.XformCommonAPI(grp).SetTranslate(
                     Gf.Vec3d(col * spacing, 0.0, row * spacing)
                 )
-                for mesh_idx, src_mixer in enumerate(self._mixers):
-                    src_prim = pxr_stage.GetPrimAtPath(src_mixer._target)
+
+                # Map original mesh paths → dst paths
+                path_map: dict[str, str] = {}
+                for mesh_idx, orig_path in enumerate(orig_mesh_paths):
+                    dst_path = f"{group_path}/m{mesh_idx:04d}"
+                    path_map[orig_path] = dst_path
+                    src_prim = pxr_stage.GetPrimAtPath(orig_path)
                     if not src_prim.IsValid():
                         continue
-                    dst_path = f"{group_path}/m{mesh_idx:04d}"
                     dst_mesh = UsdGeom.Mesh.Define(pxr_stage, dst_path)
                     dst_prim = dst_mesh.GetPrim()
 
@@ -330,7 +337,7 @@ class UsdInterpolationUI:
                         if val is not None:
                             dst_prim.CreateAttribute(attr_name, src_attr.GetTypeName()).Set(val)
 
-                    # Copy st primvar definition (values will be overwritten by UVMixer)
+                    # Copy st primvar skeleton (values overwritten by UVMixer)
                     src_st = UsdGeom.PrimvarsAPI(src_prim).GetPrimvar("st")
                     if src_st and src_st.GetAttr().IsValid():
                         val = src_st.ComputeFlattened(Usd.TimeCode.Default())
@@ -346,14 +353,17 @@ class UsdInterpolationUI:
                                 np.array(val, dtype=np.float32).reshape(-1, 2)
                             ))
 
-                    # Create UVMixer with cyclically shifted st maps for visual variety
-                    maps = src_mixer._st_maps
-                    shift = copy_idx % len(maps)
-                    shifted_maps = maps[shift:] + maps[:shift]
-                    mixer = UVMixer._from_maps(dst_path, shifted_maps,
-                                               use_correction=use_correction)
-                    self._load_test_mixers.append(mixer)
-                    added += 1
+                # Build shifted st_maps with remapped dst paths
+                maps = src_mixer._st_maps
+                shift = copy_idx % len(maps)
+                shifted_orig = maps[shift:] + maps[:shift]
+                shifted_maps = [{path_map[op]: arr
+                                 for op, arr in tc_map.items() if op in path_map}
+                                for tc_map in shifted_orig]
+                mixer = UVMixer._from_maps(group_path, shifted_maps,
+                                           use_correction=use_correction)
+                self._load_test_mixers.append(mixer)
+                added += 1
 
         if self._primary:
             self._primary.seek(self._primary.position())

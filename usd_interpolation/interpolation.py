@@ -10,6 +10,11 @@ import omni.usd
 
 
 class UVMixer:
+    """Manages UV interpolation for all meshes under one target prim.
+
+    _st_maps: list of {mesh_path: st_array}, one dict per source file (timecode).
+    _label:   identifier string (used as registry key).
+    """
 
     _registry: dict[str, 'UVMixer'] = {}
 
@@ -17,44 +22,43 @@ class UVMixer:
 
     @classmethod
     def create(cls,
-               target_prim_path: str,
+               label: str,
                *st_paths: str,
                key: str | None = None,
                play_duration: float = 1.0,
                use_correction: bool = True) -> 'UVMixer':
-        """
-        Create a UVMixer for target_prim_path, reading st data from each USD file.
-        Requires at least 2 source paths.
-        If key is given, stores the instance in the registry for later retrieval.
+        """Create a UVMixer by reading all meshes from each source USD file.
+        Common mesh paths across all files are used.
         """
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
-        st_maps = []
-        for path in st_paths:
-            file_map = cls.read_st_file(path)
-            st = file_map.get(target_prim_path)
-            if st is None:
-                raise ValueError(f"[UVMixer] no st for {target_prim_path} in {path}")
-            st_maps.append(st)
-        return cls._init(target_prim_path, st_maps,
+        maps_per_file = [cls.read_st_file(p) for p in st_paths]
+        common = set(maps_per_file[0].keys())
+        for m in maps_per_file[1:]:
+            common &= set(m.keys())
+        if not common:
+            raise ValueError(f"[UVMixer] no common mesh paths found across source files")
+        st_maps = [{path: maps_per_file[i][path] for path in common}
+                   for i in range(len(st_paths))]
+        return cls._init(label, st_maps,
                          key=key, play_duration=play_duration, use_correction=use_correction)
 
     @classmethod
     def _from_maps(cls,
-                   target_prim_path: str,
-                   st_maps: list,
+                   label: str,
+                   st_maps: 'list[dict[str, np.ndarray]]',
                    *,
                    key: str | None = None,
                    play_duration: float = 1.0,
                    use_correction: bool = True) -> 'UVMixer':
-        """Create a UVMixer from pre-loaded st arrays (e.g. for duplicated prims)."""
-        return cls._init(target_prim_path, list(st_maps),
+        """Create a UVMixer from pre-built st_maps (list of {mesh_path: array})."""
+        return cls._init(label, list(st_maps),
                          key=key, play_duration=play_duration, use_correction=use_correction)
 
     @classmethod
-    def _init(cls, target, st_maps, *, key, play_duration, use_correction) -> 'UVMixer':
+    def _init(cls, label, st_maps, *, key, play_duration, use_correction) -> 'UVMixer':
         inst = cls.__new__(cls)
-        inst._target = target
+        inst._label = label
         inst._st_maps = st_maps
         inst._t = 0.0
         inst._play_task = None
@@ -70,7 +74,6 @@ class UVMixer:
 
     @classmethod
     def get(cls, key: str) -> 'UVMixer | None':
-        """Retrieve a previously created mixer by key."""
         return cls._registry.get(key)
 
     # ── Playback ─────────────────────────────────────────────────────
@@ -135,31 +138,38 @@ class UVMixer:
 
     def _bake_timesamples(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None:
-            return
-        pxr_prim = pxr_stage.GetPrimAtPath(self._target)
-        if not pxr_prim.IsValid():
+        if pxr_stage is None or not self._st_maps:
             return
 
-        fvli_val = None
+        # Cache fvli per mesh before writing to session layer
+        fvli_cache: dict[str, str] = {}
         if self._use_correction:
-            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-            val = attr.Get() if (attr and attr.IsValid()) else None
-            fvli_val = str(val) if val is not None else "cornersPlus1"
+            for mesh_path in self._st_maps[0]:
+                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                if not pxr_prim.IsValid():
+                    continue
+                attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                val = attr.Get() if (attr and attr.IsValid()) else None
+                fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            for tc, st_data in enumerate(self._st_maps):
-                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                if st_pv and st_pv.GetAttr().IsValid():
-                    st_pv.GetAttr().Set(
-                        Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                if fvli_val is not None:
-                    mesh = UsdGeom.Mesh(pxr_prim)
-                    fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                    if not fvli or not fvli.IsValid():
-                        fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                    if fvli and fvli.IsValid():
-                        fvli.Set(fvli_val, tc)
+            for tc, mesh_map in enumerate(self._st_maps):
+                for mesh_path, st_data in mesh_map.items():
+                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    fvli_val = fvli_cache.get(mesh_path)
+                    if fvli_val is not None:
+                        mesh = UsdGeom.Mesh(pxr_prim)
+                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                        if not fvli or not fvli.IsValid():
+                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                        if fvli and fvli.IsValid():
+                            fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
@@ -194,9 +204,7 @@ class UVMixer:
 
     @staticmethod
     def read_st_file(file_path: str) -> 'dict[str, np.ndarray]':
-        """Open a USD file once and return {prim_path: st_array} for every mesh
-        with a valid st primvar. Combines mesh discovery and st storage so the
-        source file is opened exactly once regardless of how many meshes exist."""
+        """Open a USD file once and return {prim_path: st_array} for every mesh."""
         stage = Usd.Stage.Open(file_path)
         if not stage:
             print(f"[UVMixer] failed to open: {file_path}")
