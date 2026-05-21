@@ -155,6 +155,7 @@ class UsdInterpolationUI:
         self._primary = self._mixers[0]
         self._primary.subscribe(self._on_t_changed)
         self._slider.enabled = True
+        self._primary.seek(0.0)
         msg = f"{ok} mixer(s) created"
         if skipped:
             msg += f", {skipped} skipped"

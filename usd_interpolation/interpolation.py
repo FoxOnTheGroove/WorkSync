@@ -148,6 +148,9 @@ class UVMixer:
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             with Sdf.ChangeBlock():
+                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                if st_pv and st_pv.GetAttr().IsValid():
+                    st_pv.BlockIndices()
                 for tc, st_data in enumerate(self._st_maps):
                     st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
                     if st_pv and st_pv.GetAttr().IsValid():
