@@ -1,7 +1,7 @@
 import numpy as np
 import omni.usd
 import omni.ui as ui
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
 
 from .interpolation import UVMixer
 
@@ -23,6 +23,7 @@ class UsdInterpolationUI:
         self._correction_cb: ui.CheckBox | None = None
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
+        self._stage_field: ui.StringField | None = None
 
         # _primary drives the timeline; all other mixers just have their data baked.
         self._primary: UVMixer | None = None
@@ -35,8 +36,15 @@ class UsdInterpolationUI:
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
 
+                # ── Target prim stage ─────────────────────────
+                ui.Label("Target Prim USD:", height=18)
+                with ui.HStack(height=24, spacing=4):
+                    self._stage_field = ui.StringField(height=24)
+                    self._stage_field.model.set_value("/path/to/target.usd")
+                    ui.Button("Load Target Prim", width=120, clicked_fn=self._on_load_target_prim)
+
                 # ── Paths ───────────────────────────────────────
-                ui.Label("Paths (space or newline separated):", height=18)
+                ui.Label("UV Paths (space or newline separated):", height=18)
                 self._field = ui.StringField(height=24)
                 self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
 
@@ -97,15 +105,17 @@ class UsdInterpolationUI:
 
     # ── Callbacks ───────────────────────────────────────────
 
-    @staticmethod
-    def _ensure_dome_light(stage) -> None:
-        has_light = any(prim.HasAPI(UsdLux.LightAPI) for prim in stage.Traverse())
-        if has_light:
+    def _on_load_target_prim(self):
+        path = self._stage_field.model.get_value_as_string().strip()
+        if not path:
+            self._set_status("ERROR: no target prim path")
             return
-        dome = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
-        dome.GetPrim().CreateAttribute(
-            "visibleInPrimaryRay", Sdf.ValueTypeNames.Bool
-        ).Set(False)
+        omni.usd.get_context().open_stage(path)
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            self._set_status("ERROR: failed to open stage")
+            return
+        self._set_status(f"Target prim loaded: {path}")
 
     def _on_load_all(self):
         raw = self._field.model.get_value_as_string()
@@ -126,12 +136,10 @@ class UsdInterpolationUI:
         self._load_test_mixers = []
         self._primary = None
 
-        omni.usd.get_context().open_stage(paths[0])
         stage = omni.usd.get_context().get_stage()
         if stage is None:
-            self._set_status("ERROR: no stage")
+            self._set_status("ERROR: no stage — load target prim first")
             return
-        self._ensure_dome_light(stage)
         self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
@@ -279,7 +287,7 @@ class UsdInterpolationUI:
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
         session = pxr_stage.GetSessionLayer()
         grid_cols = max(1, int(n ** 0.5))
-        spacing = 200.0
+        spacing = 80.0
         added = 0
 
         with Usd.EditContext(pxr_stage, session):

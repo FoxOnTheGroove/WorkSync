@@ -20,7 +20,7 @@ class UVMixer:
                target_prim_path: str,
                *st_paths: str,
                key: str | None = None,
-               play_duration: float = 2.5,
+               play_duration: float = 1.0,
                use_correction: bool = True) -> 'UVMixer':
         """
         Create a UVMixer for target_prim_path, reading st data from each USD file.
@@ -45,7 +45,7 @@ class UVMixer:
                    st_maps: list,
                    *,
                    key: str | None = None,
-                   play_duration: float = 2.5,
+                   play_duration: float = 1.0,
                    use_correction: bool = True) -> 'UVMixer':
         """Create a UVMixer from pre-loaded st arrays (e.g. for duplicated prims)."""
         return cls._init(target_prim_path, list(st_maps),
