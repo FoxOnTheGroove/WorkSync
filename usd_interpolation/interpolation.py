@@ -5,6 +5,7 @@ from typing import Callable
 import numpy as np
 from pxr import Sdf, Usd, UsdGeom, Vt
 import omni.kit.app
+import omni.timeline
 import omni.usd
 
 
@@ -22,7 +23,7 @@ class UVMixer:
                play_duration: float = 2.5,
                use_correction: bool = True) -> 'UVMixer':
         """
-        Create a UVMixer for target_prim_path, reading st data from each st_path.
+        Create a UVMixer for target_prim_path, reading st data from each USD file.
         Requires at least 2 source paths.
         If key is given, stores the instance in the registry for later retrieval.
         """
@@ -34,20 +35,37 @@ class UVMixer:
             if st is None:
                 raise ValueError(f"[UVMixer] no st for {target_prim_path} in {path}")
             st_maps.append(st)
-        instance = cls.__new__(cls)
-        instance._target = target_prim_path
-        instance._st_maps = st_maps
-        instance._t = 0.0
-        instance._play_task = None
-        instance._speed = 1.0
-        instance._play_duration = play_duration
-        instance._use_correction = use_correction
-        instance._key = key
-        instance._subscribers = []
-        instance._bake_correction()
+        return cls._init(target_prim_path, st_maps,
+                         key=key, play_duration=play_duration, use_correction=use_correction)
+
+    @classmethod
+    def _from_maps(cls,
+                   target_prim_path: str,
+                   st_maps: list,
+                   *,
+                   key: str | None = None,
+                   play_duration: float = 2.5,
+                   use_correction: bool = True) -> 'UVMixer':
+        """Create a UVMixer from pre-loaded st arrays (e.g. for duplicated prims)."""
+        return cls._init(target_prim_path, list(st_maps),
+                         key=key, play_duration=play_duration, use_correction=use_correction)
+
+    @classmethod
+    def _init(cls, target, st_maps, *, key, play_duration, use_correction) -> 'UVMixer':
+        inst = cls.__new__(cls)
+        inst._target = target
+        inst._st_maps = st_maps
+        inst._t = 0.0
+        inst._play_task = None
+        inst._speed = 1.0
+        inst._play_duration = play_duration
+        inst._use_correction = use_correction
+        inst._key = key
+        inst._subscribers = []
+        inst._bake_timesamples()
         if key is not None:
-            cls._registry[key] = instance
-        return instance
+            cls._registry[key] = inst
+        return inst
 
     @classmethod
     def get(cls, key: str) -> 'UVMixer | None':
@@ -71,8 +89,13 @@ class UVMixer:
     # ── Position ───────────────────────────────────────────────────────────────
 
     def seek(self, t: float) -> None:
-        self._t = max(0.0, min(1.0, t))
-        self._write_uv(self._t)
+        t = max(0.0, min(1.0, t))
+        self._t = t
+        n = len(self._st_maps)
+        stage = omni.usd.get_context().get_stage()
+        tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+        omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
+        self._notify(t)
 
     def position(self) -> float:
         return self._t
@@ -87,8 +110,7 @@ class UVMixer:
 
     def set_correction(self, enabled: bool) -> None:
         self._use_correction = bool(enabled)
-        self._bake_correction()
-        self._write_uv(self._t)
+        self._bake_timesamples()
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
 
@@ -110,52 +132,34 @@ class UVMixer:
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
-    def _bake_correction(self) -> None:
+    def _bake_timesamples(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
         pxr_prim = pxr_stage.GetPrimAtPath(self._target)
         if not pxr_prim.IsValid():
             return
-        mesh = UsdGeom.Mesh(pxr_prim)
-        n = len(self._st_maps)
+
+        fvli_val = None
+        if self._use_correction:
+            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+            val = attr.Get() if (attr and attr.IsValid()) else None
+            fvli_val = str(val) if val is not None else "cornersPlus1"
+
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             with Sdf.ChangeBlock():
-                fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                if not fvli or not fvli.IsValid():
-                    fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                if not fvli or not fvli.IsValid():
-                    return
-                if not self._use_correction:
-                    for tc in range(n):
-                        fvli.ClearAtTime(tc)
-                    return
-                orig = fvli.Get()
-                fvli_val = str(orig) if orig is not None else "cornersPlus1"
-                for tc in range(n):
-                    fvli.Set(fvli_val, tc)
-
-    def _write_uv(self, t: float) -> None:
-        pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None:
-            return
-        pxr_prim = pxr_stage.GetPrimAtPath(self._target)
-        if not pxr_prim.IsValid():
-            return
-        n = len(self._st_maps)
-        scaled = t * (n - 1)
-        lo = min(int(scaled), n - 2)
-        hi = lo + 1
-        frac = float(scaled - lo)
-        interp = ((1.0 - frac) * self._st_maps[lo] + frac * self._st_maps[hi]).astype(np.float32)
-        st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-        if st_pv and st_pv.GetAttr().IsValid():
-            with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-                st_pv.GetAttr().Set(
-                    Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(interp)),
-                    Usd.TimeCode.Default()
-                )
-        self._notify(t)
+                for tc, st_data in enumerate(self._st_maps):
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Set(
+                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+                    if fvli_val is not None:
+                        mesh = UsdGeom.Mesh(pxr_prim)
+                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                        if not fvli or not fvli.IsValid():
+                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                        if fvli and fvli.IsValid():
+                            fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
@@ -177,8 +181,7 @@ class UVMixer:
                     frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                     new_t = start_t + (frac if forward else -frac)
                     new_t = max(0.0, min(1.0, new_t))
-                    self._t = new_t
-                    self._write_uv(new_t)
+                    self.seek(new_t)
                     if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                         break
 

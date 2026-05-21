@@ -24,9 +24,11 @@ class UsdInterpolationUI:
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
 
-        self._mixers: list[UVMixer] = []
+        # _primary drives the timeline; all other mixers just have their data baked.
+        self._primary: UVMixer | None = None
+        self._mixers: list[UVMixer] = []        # all base prims
+        self._load_test_mixers: list[UVMixer] = []  # duplicated test prims
         self._src_paths: list[str] = []
-        self._load_test_mixers: list[UVMixer] = []
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=520, height=340)
@@ -88,6 +90,11 @@ class UsdInterpolationUI:
                     ui.Button("Clear", width=60,
                               clicked_fn=self._on_clear_clicked)
 
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _all_mixers(self) -> list[UVMixer]:
+        return self._mixers + self._load_test_mixers
+
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -110,24 +117,25 @@ class UsdInterpolationUI:
             self._set_status("ERROR: need at least 2 paths")
             return
 
-        # Destroy existing mixers
-        for m in self._mixers + self._load_test_mixers:
+        # Tear down previous state
+        if self._primary:
+            self._primary.unsubscribe(self._on_t_changed)
+        for m in self._all_mixers():
             m.destroy()
         self._mixers = []
         self._load_test_mixers = []
+        self._primary = None
 
-        if paths[0]:
-            omni.usd.get_context().open_stage(paths[0])
+        omni.usd.get_context().open_stage(paths[0])
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             self._set_status("ERROR: no stage")
             return
         self._ensure_dome_light(stage)
-        self._src_paths = paths
+        self._src_paths = list(paths)
 
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
-        ok = 0
-        skipped = 0
+        ok = skipped = 0
         for prim in stage.Traverse():
             if not prim.IsA(UsdGeom.Mesh):
                 continue
@@ -140,75 +148,81 @@ class UsdInterpolationUI:
                 skipped += 1
 
         if not self._mixers:
-            self._set_status(f"ERROR: no mesh with st found in all source files (skipped {skipped})")
+            self._set_status(f"ERROR: no usable mesh found (skipped {skipped})")
+            self._slider.enabled = False
             return
 
-        self._mixers[0].subscribe(self._on_t_changed)
+        self._primary = self._mixers[0]
+        self._primary.subscribe(self._on_t_changed)
         self._slider.enabled = True
-        self._set_status(f"{ok} mixer(s) created" + (f", {skipped} skipped" if skipped else ""))
+        msg = f"{ok} mixer(s) created"
+        if skipped:
+            msg += f", {skipped} skipped"
+        self._set_status(msg)
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
-        for m in self._mixers + self._load_test_mixers:
+        for m in self._all_mixers():
             m.set_correction(enabled)
+        if self._primary:
+            self._primary.seek(self._primary.position())
 
     def _on_refresh_clicked(self):
-        t = self._mixers[0].position() if self._mixers else 0.0
-        for m in self._mixers + self._load_test_mixers:
-            m.seek(t)
+        if self._primary:
+            self._primary.seek(self._primary.position())
 
     def _on_play_clicked(self):
-        if any(m.is_playing() for m in self._mixers):
-            for m in self._mixers + self._load_test_mixers:
-                m.stop()
+        if not self._primary:
+            return
+        if self._primary.is_playing():
+            self._primary.stop()
             self._btn_play.text = "Play ▶"
         else:
-            for m in self._mixers + self._load_test_mixers:
-                m.play(forward=True)
+            self._primary.play(forward=True)
             self._btn_play.text = "Stop ■"
 
     def _on_reverse_clicked(self):
-        if any(m.is_playing() for m in self._mixers):
-            for m in self._mixers + self._load_test_mixers:
-                m.stop()
+        if not self._primary:
+            return
+        if self._primary.is_playing():
+            self._primary.stop()
             self._btn_reverse.text = "Reverse ◄"
         else:
-            for m in self._mixers + self._load_test_mixers:
-                m.play(forward=False)
+            self._primary.play(forward=False)
             self._btn_reverse.text = "Stop ■"
 
     def _on_loop_clicked(self):
-        if any(m.is_playing() for m in self._mixers):
-            for m in self._mixers + self._load_test_mixers:
-                m.stop()
+        if not self._primary:
+            return
+        if self._primary.is_playing():
+            self._primary.stop()
             self._btn_loop.text = "Loop ↺"
         else:
-            for m in self._mixers + self._load_test_mixers:
-                m.play(forward=True, loop=True)
+            self._primary.play(forward=True, loop=True)
             self._btn_loop.text = "Stop ■"
 
     def _on_rev_loop_clicked(self):
-        if any(m.is_playing() for m in self._mixers):
-            for m in self._mixers + self._load_test_mixers:
-                m.stop()
+        if not self._primary:
+            return
+        if self._primary.is_playing():
+            self._primary.stop()
             self._btn_rev_loop.text = "Rev Loop ↺"
         else:
-            for m in self._mixers + self._load_test_mixers:
-                m.play(forward=False, loop=True)
+            self._primary.play(forward=False, loop=True)
             self._btn_rev_loop.text = "Stop ■"
 
     def _on_slider_changed(self, model):
-        if any(m.is_playing() for m in self._mixers):
+        if self._primary and self._primary.is_playing():
             return
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
-        for m in self._mixers + self._load_test_mixers:
-            m.seek(t)
+        if self._primary:
+            self._primary.seek(t)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
-        for m in self._mixers + self._load_test_mixers:
-            m.set_speed(speed)
+        if self._primary:
+            self._primary.set_speed(speed)
         if self._speed_label:
             self._speed_label.text = f"{speed:.1f}x"
 
@@ -219,7 +233,6 @@ class UsdInterpolationUI:
             return
         added = self._duplicate_meshes(n)
         self._set_status(f"Duplicated {n} copies → {added} prim(s) added")
-        self._slider.enabled = bool(self._mixers)
 
     def _on_clear_clicked(self):
         self._clear_load_test_prims()
@@ -230,7 +243,7 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if not any(m.is_playing() for m in self._mixers):
+        if self._primary and not self._primary.is_playing():
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -245,10 +258,13 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
-        for m in self._mixers + self._load_test_mixers:
+        if self._primary:
+            self._primary.unsubscribe(self._on_t_changed)
+        for m in self._all_mixers():
             m.destroy()
         self._mixers = []
         self._load_test_mixers = []
+        self._primary = None
         if self._window:
             self._window.destroy()
             self._window = None
@@ -258,11 +274,6 @@ class UsdInterpolationUI:
     def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._mixers or not self._src_paths:
-            return 0
-
-        # Gather original prim paths from existing mixers
-        orig_paths = [m._target for m in self._mixers if not m._target.startswith(LOAD_TEST_ROOT)]
-        if not orig_paths:
             return 0
 
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
@@ -280,13 +291,15 @@ class UsdInterpolationUI:
                 UsdGeom.XformCommonAPI(grp).SetTranslate(
                     Gf.Vec3d(col * spacing, 0.0, row * spacing)
                 )
-                for mesh_idx, orig_path in enumerate(orig_paths):
-                    src_prim = pxr_stage.GetPrimAtPath(orig_path)
+                for mesh_idx, src_mixer in enumerate(self._mixers):
+                    src_prim = pxr_stage.GetPrimAtPath(src_mixer._target)
                     if not src_prim.IsValid():
                         continue
                     dst_path = f"{group_path}/m{mesh_idx:04d}"
                     dst_mesh = UsdGeom.Mesh.Define(pxr_stage, dst_path)
                     dst_prim = dst_mesh.GetPrim()
+
+                    # Copy material binding
                     binding = UsdShade.MaterialBindingAPI(src_prim).GetDirectBinding()
                     mat_path = binding.GetMaterialPath()
                     if mat_path:
@@ -295,6 +308,8 @@ class UsdInterpolationUI:
                             UsdShade.MaterialBindingAPI.Apply(dst_prim).Bind(
                                 UsdShade.Material(mat_prim)
                             )
+
+                    # Copy geometry attributes
                     for attr_name in ("points", "faceVertexCounts", "faceVertexIndices", "normals"):
                         src_attr = src_prim.GetAttribute(attr_name)
                         if not (src_attr and src_attr.IsValid()):
@@ -306,6 +321,8 @@ class UsdInterpolationUI:
                                 val = src_attr.Get(ts[0])
                         if val is not None:
                             dst_prim.CreateAttribute(attr_name, src_attr.GetTypeName()).Set(val)
+
+                    # Copy st primvar definition (values will be overwritten by UVMixer)
                     src_st = UsdGeom.PrimvarsAPI(src_prim).GetPrimvar("st")
                     if src_st and src_st.GetAttr().IsValid():
                         val = src_st.ComputeFlattened(Usd.TimeCode.Default())
@@ -320,18 +337,19 @@ class UsdInterpolationUI:
                             dst_st.Set(Vt.Vec2fArray.FromNumpy(
                                 np.array(val, dtype=np.float32).reshape(-1, 2)
                             ))
-                    try:
-                        mixer = UVMixer.create(dst_path, *self._src_paths,
+
+                    # Create UVMixer with cyclically shifted st maps for visual variety
+                    maps = src_mixer._st_maps
+                    shift = copy_idx % len(maps)
+                    shifted_maps = maps[shift:] + maps[:shift]
+                    mixer = UVMixer._from_maps(dst_path, shifted_maps,
                                                use_correction=use_correction)
-                        self._load_test_mixers.append(mixer)
-                    except ValueError:
-                        pass
+                    self._load_test_mixers.append(mixer)
                     added += 1
 
-        # Sync new mixers to current t
-        t = self._mixers[0].position() if self._mixers else 0.0
-        for m in self._load_test_mixers:
-            m.seek(t)
+        # Sync load-test mixers to current position via timeline (already set by primary)
+        if self._primary:
+            self._primary.seek(self._primary.position())
         return added
 
     def _clear_load_test_prims(self) -> None:
