@@ -19,15 +19,15 @@ _FVLI_ALT = {
 
 
 class UVMixer:
-    """Manages UV interpolation for all meshes under one target prim.
+    """하나의 타겟 prim 아래 있는 모든 메쉬의 UV 보간을 관리한다.
 
-    _st_maps: list of {mesh_path: st_array}, one dict per source file (timecode).
-    _label:   identifier string (used as registry key).
+    _st_maps: 소스 파일(=타임코드)별 {mesh_path: st_array} 딕셔너리 리스트.
+    _label:   식별자 문자열 (registry 키로 사용).
     """
 
     _registry: dict[str, 'UVMixer'] = {}
 
-    # ── Factory ──────────────────────────────────────────────────────
+    # ── 팩토리 ──────────────────────────────────────────────────────
 
     @classmethod
     def create(cls,
@@ -36,8 +36,8 @@ class UVMixer:
                key: str | None = None,
                play_duration: float = 1.0,
                use_correction: bool = True) -> 'UVMixer':
-        """Create a UVMixer by reading all meshes from each source USD file.
-        Common mesh paths across all files are used.
+        """각 소스 USD 파일에서 모든 메쉬를 읽어 UVMixer를 생성한다.
+        모든 파일에 공통으로 존재하는 메쉬 경로만 사용한다.
         """
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
@@ -60,7 +60,7 @@ class UVMixer:
                    key: str | None = None,
                    play_duration: float = 1.0,
                    use_correction: bool = True) -> 'UVMixer':
-        """Create a UVMixer from pre-built st_maps (list of {mesh_path: array})."""
+        """이미 빌드된 st_maps(리스트 of {mesh_path: array})로부터 UVMixer를 생성한다."""
         return cls._init(label, list(st_maps),
                          key=key, play_duration=play_duration, use_correction=use_correction)
 
@@ -76,7 +76,6 @@ class UVMixer:
         inst._use_correction = use_correction
         inst._key = key
         inst._subscribers = []
-        inst._boundary_subscribers = []
         inst._fvli_cache: dict[str, str] = {}
         if key is not None:
             cls._registry[key] = inst
@@ -87,7 +86,7 @@ class UVMixer:
     def get(cls, key: str) -> 'UVMixer | None':
         return cls._registry.get(key)
 
-    # ── Playback ─────────────────────────────────────────────────────
+    # ── 재생 ─────────────────────────────────────────────────────
 
     def play(self, *, forward: bool = True, loop: bool = False) -> None:
         self.stop()
@@ -101,7 +100,7 @@ class UVMixer:
     def is_playing(self) -> bool:
         return self._play_task is not None and not self._play_task.done()
 
-    # ── Position ─────────────────────────────────────────────────────
+    # ── 위치 ─────────────────────────────────────────────────────
 
     def seek(self, t: float, *, _correction: bool = True) -> None:
         t = max(0.0, min(1.0, t))
@@ -135,7 +134,7 @@ class UVMixer:
     def position(self) -> float:
         return self._t
 
-    # ── Configuration ──────────────────────────────────────────────────
+    # ── 설정 ──────────────────────────────────────────────────
 
     def set_speed(self, speed: float) -> None:
         self._speed = max(0.1, float(speed))
@@ -147,7 +146,7 @@ class UVMixer:
         self._use_correction = bool(enabled)
         self._bake_timesamples()
 
-    # ── Callbacks ────────────────────────────────────────────────────
+    # ── 콜백 ────────────────────────────────────────────────────
 
     def subscribe(self, callback: Callable[[float], None]) -> None:
         if callback not in self._subscribers:
@@ -156,24 +155,16 @@ class UVMixer:
     def unsubscribe(self, callback: Callable[[float], None]) -> None:
         self._subscribers = [c for c in self._subscribers if c != callback]
 
-    def subscribe_boundary(self, callback: Callable[[], None]) -> None:
-        if callback not in self._boundary_subscribers:
-            self._boundary_subscribers.append(callback)
-
-    def unsubscribe_boundary(self, callback: Callable[[], None]) -> None:
-        self._boundary_subscribers = [c for c in self._boundary_subscribers if c != callback]
-
-    # ── Lifecycle ────────────────────────────────────────────────────
+    # ── 라이프사이클 ────────────────────────────────────────────────────
 
     def destroy(self) -> None:
         self.stop()
         self._subscribers.clear()
-        self._boundary_subscribers.clear()
         if self._key is not None:
             UVMixer._registry.pop(self._key, None)
             self._key = None
 
-    # ── Internal ─────────────────────────────────────────────────────
+    # ── 내부 ─────────────────────────────────────────────────────
 
     def _bake_timesamples(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
@@ -205,10 +196,6 @@ class UVMixer:
         for cb in list(self._subscribers):
             cb(t)
 
-    def _notify_boundary(self) -> None:
-        for cb in list(self._boundary_subscribers):
-            cb()
-
     async def _animate(self, forward: bool, loop: bool = False) -> None:
         try:
             while True:
@@ -230,20 +217,18 @@ class UVMixer:
                         break
 
                 self.apply_correction()
-                self._notify_boundary()
 
                 if not loop:
                     break
         except asyncio.CancelledError:
             self.apply_correction()
-            self._notify_boundary()
             return
         finally:
             self._play_task = None
 
     @staticmethod
     def read_st_file(file_path: str) -> 'dict[str, np.ndarray]':
-        """Open a USD file once and return {prim_path: st_array} for every mesh."""
+        """USD 파일을 한 번 열어 모든 메쉬의 {prim_path: st_array}를 반환한다."""
         stage = Usd.Stage.Open(file_path)
         if not stage:
             print(f"[UVMixer] failed to open: {file_path}")

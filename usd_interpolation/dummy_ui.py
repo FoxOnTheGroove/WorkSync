@@ -25,10 +25,10 @@ class UsdInterpolationUI:
         self._dup_field: ui.IntField | None = None
         self._stage_field: ui.StringField | None = None
 
-        # _primary drives the timeline; all other mixers just have their data baked.
+        # _primary가 타임라인을 구동한다; 나머지 mixer는 데이터만 baked.
         self._primary: UVMixer | None = None
-        self._mixers: list[UVMixer] = []        # all base prims
-        self._load_test_mixers: list[UVMixer] = []  # duplicated test prims
+        self._mixers: list[UVMixer] = []        # 원본 prim 들
+        self._load_test_mixers: list[UVMixer] = []  # 복제된 테스트 prim 들
         self._src_paths: list[str] = []
 
     def build_ui(self):
@@ -36,19 +36,19 @@ class UsdInterpolationUI:
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
 
-                # ── Target prim stage ─────────────────────────
+                # ── 타겟 prim 스테이지 ─────────────────────────
                 ui.Label("Target Prim USD:", height=18)
                 with ui.HStack(height=24, spacing=4):
                     self._stage_field = ui.StringField(height=24)
                     self._stage_field.model.set_value("/path/to/target.usd")
                     ui.Button("Load Target Prim", width=120, clicked_fn=self._on_load_target_prim)
 
-                # ── Paths ───────────────────────────────────────
+                # ── 경로 입력 ───────────────────────────────────────
                 ui.Label("UV Paths (space or newline separated):", height=18)
                 self._field = ui.StringField(height=24)
                 self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
 
-                # ── Load + correction checkbox ────────────────────
+                # ── 로드 + correction 체크박스 ────────────────────
                 with ui.HStack(height=24, spacing=4):
                     ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
                     ui.Spacer(width=8)
@@ -57,17 +57,17 @@ class UsdInterpolationUI:
                     self._correction_cb.model.add_value_changed_fn(self._on_correction_changed)
                     ui.Label("Correction", width=100, height=20)
 
-                # ── Status ─────────────────────────────────────
+                # ── 상태 표시 ─────────────────────────────────────
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
-                # ── t slider ─────────────────────────────────────
+                # ── t 슬라이더 ─────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     self._t_label = ui.Label("t: 0.000", width=60)
                     self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     self._slider.enabled = False
                     self._slider.model.add_value_changed_fn(self._on_slider_changed)
 
-                # ── Play controls ─────────────────────────
+                # ── 재생 컨트롤 ─────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     self._btn_play = ui.Button("Play ▶", width=80,
                                                clicked_fn=self._on_play_clicked)
@@ -80,7 +80,7 @@ class UsdInterpolationUI:
                     ui.Button("Refresh", width=70,
                               clicked_fn=self._on_refresh_clicked)
 
-                # ── Speed slider ────────────────────────
+                # ── 속도 슬라이더 ────────────────────────
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("Speed:", width=44)
                     self._speed_label = ui.Label("1.0x", width=34)
@@ -88,7 +88,7 @@ class UsdInterpolationUI:
                     speed_slider.model.set_value(1.0)
                     speed_slider.model.add_value_changed_fn(self._on_speed_changed)
 
-                # ── Load test (debug) ──────────────────────
+                # ── 로드 테스트 (디버그) ──────────────────────
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("N:", width=18)
                     self._dup_field = ui.IntField(width=50)
@@ -98,12 +98,18 @@ class UsdInterpolationUI:
                     ui.Button("Clear", width=60,
                               clicked_fn=self._on_clear_clicked)
 
-    # ── Helpers ────────────────────────────────────────────
+    # ── 헬퍼 ────────────────────────────────────────────
 
     def _all_mixers(self) -> list[UVMixer]:
         return self._mixers + self._load_test_mixers
 
-    # ── Callbacks ───────────────────────────────────────────
+    def _apply_load_test_correction(self) -> None:
+        # 복제 메쉬에 대한 보정은 primary가 트리거하지 못하므로
+        # 더미 UI 쪽에서 직접 호출한다.
+        for m in self._load_test_mixers:
+            m.apply_correction()
+
+    # ── 콜백 ───────────────────────────────────────────
 
     def _on_load_target_prim(self):
         path = self._stage_field.model.get_value_as_string().strip()
@@ -127,10 +133,9 @@ class UsdInterpolationUI:
             self._set_status("ERROR: need at least 2 paths")
             return
 
-        # Tear down previous state
+        # 이전 상태 정리
         if self._primary:
             self._primary.unsubscribe(self._on_t_changed)
-            self._primary.unsubscribe_boundary(self._on_animate_boundary)
         for m in self._all_mixers():
             m.destroy()
         self._mixers = []
@@ -144,10 +149,10 @@ class UsdInterpolationUI:
         self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
-        # 1) Open each source file once, read all meshes' st
+        # 1) 각 소스 파일을 한 번씩 열어 모든 메쉬의 st 데이터를 읽는다
         maps_per_file = [UVMixer.read_st_file(p) for p in paths]
 
-        # 2) Meshes present in all source files
+        # 2) 모든 소스 파일에 공통으로 존재하는 메쉬만 사용
         common_paths = set(maps_per_file[0].keys())
         for m in maps_per_file[1:]:
             common_paths &= set(m.keys())
@@ -157,7 +162,7 @@ class UsdInterpolationUI:
             self._slider.enabled = False
             return
 
-        # 3) Build one mixer for all meshes combined
+        # 3) 모든 메쉬를 하나의 mixer로 묶어서 생성
         st_maps = [{path: maps_per_file[i][path] for path in common_paths}
                    for i in range(len(paths))]
         mixer = UVMixer._from_maps("primary", st_maps, use_correction=use_correction)
@@ -165,7 +170,6 @@ class UsdInterpolationUI:
 
         self._primary = mixer
         self._primary.subscribe(self._on_t_changed)
-        self._primary.subscribe_boundary(self._on_animate_boundary)
         self._slider.enabled = True
         self._primary.seek(0.0)
         self._set_status(f"1 mixer ({len(common_paths)} mesh(es), {len(paths)} source(s))")
@@ -186,6 +190,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_play.text = "Play ▶"
         else:
             self._primary.play(forward=True)
@@ -196,6 +201,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_reverse.text = "Reverse ◄"
         else:
             self._primary.play(forward=False)
@@ -206,6 +212,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_loop.text = "Loop ↺"
         else:
             self._primary.play(forward=True, loop=True)
@@ -216,6 +223,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_rev_loop.text = "Rev Loop ↺"
         else:
             self._primary.play(forward=False, loop=True)
@@ -248,18 +256,16 @@ class UsdInterpolationUI:
         self._clear_load_test_prims()
         self._set_status("Load test prims cleared")
 
-    def _on_animate_boundary(self) -> None:
-        for m in self._load_test_mixers:
-            m.apply_correction()
-
     def _on_t_changed(self, t: float):
         if self._slider:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if self._primary and not self._primary.is_playing():
-            for m in self._load_test_mixers:
-                m.apply_correction()
+        if not self._primary:
+            return
+        if not self._primary.is_playing():
+            # 수동 seek (슬라이더 등) — 복제 메쉬 보정
+            self._apply_load_test_correction()
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -268,6 +274,10 @@ class UsdInterpolationUI:
                 self._btn_loop.text = "Loop ↺"
             if self._btn_rev_loop:
                 self._btn_rev_loop.text = "Rev Loop ↺"
+        else:
+            # 재생 중 — t가 끝점에 도달한 프레임을 boundary 로 간주
+            if t <= 0.0 or t >= 1.0:
+                self._apply_load_test_correction()
 
     def _set_status(self, text: str):
         if self._status_label:
@@ -276,7 +286,6 @@ class UsdInterpolationUI:
     def destroy(self):
         if self._primary:
             self._primary.unsubscribe(self._on_t_changed)
-            self._primary.unsubscribe_boundary(self._on_animate_boundary)
         for m in self._all_mixers():
             m.destroy()
         self._mixers = []
@@ -286,7 +295,7 @@ class UsdInterpolationUI:
             self._window.destroy()
             self._window = None
 
-    # ── Debug helpers (mesh duplicate / clear) ────────────────────
+    # ── 디버그 헬퍼 (메쉬 복제 / 정리) ────────────────────
 
     def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
@@ -312,7 +321,7 @@ class UsdInterpolationUI:
                     Gf.Vec3d(col * spacing, 0.0, row * spacing)
                 )
 
-                # Map original mesh paths → dst paths
+                # 원본 메쉬 경로 → 복제 경로 매핑
                 path_map: dict[str, str] = {}
                 for mesh_idx, orig_path in enumerate(orig_mesh_paths):
                     dst_path = f"{group_path}/m{mesh_idx:04d}"
@@ -323,7 +332,7 @@ class UsdInterpolationUI:
                     dst_mesh = UsdGeom.Mesh.Define(pxr_stage, dst_path)
                     dst_prim = dst_mesh.GetPrim()
 
-                    # Copy material binding
+                    # 머티리얼 바인딩 복사
                     binding = UsdShade.MaterialBindingAPI(src_prim).GetDirectBinding()
                     mat_path = binding.GetMaterialPath()
                     if mat_path:
@@ -333,7 +342,7 @@ class UsdInterpolationUI:
                                 UsdShade.Material(mat_prim)
                             )
 
-                    # Copy geometry attributes
+                    # 지오메트리 어트리뷰트 복사
                     for attr_name in ("points", "faceVertexCounts", "faceVertexIndices", "normals"):
                         src_attr = src_prim.GetAttribute(attr_name)
                         if not (src_attr and src_attr.IsValid()):
@@ -346,7 +355,7 @@ class UsdInterpolationUI:
                         if val is not None:
                             dst_prim.CreateAttribute(attr_name, src_attr.GetTypeName()).Set(val)
 
-                    # Copy st primvar skeleton (values overwritten by UVMixer)
+                    # st primvar 스켈레톤 복사 (값은 UVMixer가 덮어씀)
                     src_st = UsdGeom.PrimvarsAPI(src_prim).GetPrimvar("st")
                     if src_st and src_st.GetAttr().IsValid():
                         val = src_st.ComputeFlattened(Usd.TimeCode.Default())
@@ -362,7 +371,7 @@ class UsdInterpolationUI:
                                 np.array(val, dtype=np.float32).reshape(-1, 2)
                             ))
 
-                # Build shifted st_maps with remapped dst paths
+                # 복제 경로로 재매핑하면서 타임코드를 시프트한 st_maps 구성
                 maps = src_mixer._st_maps
                 shift = copy_idx % len(maps)
                 shifted_orig = maps[shift:] + maps[:shift]
