@@ -137,13 +137,14 @@ class UVMixer:
 
     # ── Internal ─────────────────────────────────────────────────────
 
-    def _bake_timesamples(self) -> None:
+    def _bake_timesamples(self, with_correction: bool | None = None) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._st_maps:
             return
 
+        use_corr = self._use_correction if with_correction is None else with_correction
         fvli_cache: dict[str, str] = {}
-        if self._use_correction:
+        if use_corr:
             for mesh_path in self._st_maps[0]:
                 pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
                 if not pxr_prim.IsValid():
@@ -162,7 +163,7 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    fvli_val = fvli_cache.get(mesh_path)
+                    fvli_val = fvli_cache.get(mesh_path) if use_corr else None
                     if fvli_val is not None:
                         mesh = UsdGeom.Mesh(pxr_prim)
                         fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
@@ -177,6 +178,7 @@ class UVMixer:
 
     async def _animate(self, forward: bool, loop: bool = False) -> None:
         try:
+            self._bake_timesamples(with_correction=False)
             while True:
                 start_t = 0.0 if (loop and forward) else (1.0 if (loop and not forward) else self._t)
                 target = 1.0 if forward else 0.0
@@ -195,9 +197,11 @@ class UVMixer:
                     if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                         break
 
+                self._bake_timesamples(with_correction=self._use_correction)
                 if not loop:
                     break
         except asyncio.CancelledError:
+            self._bake_timesamples(with_correction=self._use_correction)
             return
         finally:
             self._play_task = None
