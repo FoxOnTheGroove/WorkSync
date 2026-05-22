@@ -154,6 +154,16 @@ class UVMixer:
                 fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            # Clear fvli session opinions when not using correction
+            if not use_corr:
+                for mesh_path in self._st_maps[0]:
+                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                    if fvli and fvli.IsValid():
+                        fvli.Clear()
+
             for tc, mesh_map in enumerate(self._st_maps):
                 for mesh_path, st_data in mesh_map.items():
                     pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
@@ -163,14 +173,15 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    fvli_val = fvli_cache.get(mesh_path) if use_corr else None
-                    if fvli_val is not None:
-                        mesh = UsdGeom.Mesh(pxr_prim)
-                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                        if not fvli or not fvli.IsValid():
-                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                        if fvli and fvli.IsValid():
-                            fvli.Set(fvli_val, tc)
+                    if use_corr:
+                        fvli_val = fvli_cache.get(mesh_path)
+                        if fvli_val is not None:
+                            mesh = UsdGeom.Mesh(pxr_prim)
+                            fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                            if not fvli or not fvli.IsValid():
+                                fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                            if fvli and fvli.IsValid():
+                                fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
