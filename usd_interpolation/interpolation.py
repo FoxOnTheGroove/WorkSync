@@ -199,7 +199,7 @@ class UVMixer:
                 continue
             attr = rt_prim.GetAttribute("primvars:st")
             if attr and attr.IsValid():
-                attr.Set(usdrt.Vt.Vec2fArray.FromNumpy(uv))
+                attr.Set(usdrt.Vt.Vec2fArray(uv))
 
     def _trigger_dirty(self) -> None:
         """타임라인을 alt→orig 순으로 이동해 fvli DirtyTopology를 발생시킨다.
