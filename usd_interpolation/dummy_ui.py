@@ -354,6 +354,13 @@ class UsdInterpolationUI:
                         if val is not None:
                             dst_prim.CreateAttribute(attr_name, src_attr.GetTypeName()).Set(val)
 
+                    # fvli 어트리뷰트 복사 — Fabric이 미러링하도록 USD에 먼저 존재해야 함
+                    src_fvli = UsdGeom.Mesh(src_prim).GetFaceVaryingLinearInterpolationAttr()
+                    fvli_val = src_fvli.Get() if (src_fvli and src_fvli.IsValid()) else None
+                    dst_fvli = UsdGeom.Mesh(dst_prim).CreateFaceVaryingLinearInterpolationAttr()
+                    if fvli_val is not None:
+                        dst_fvli.Set(fvli_val)
+
                     # st primvar 스켈레톤 복사 (값은 UVMixer가 덮어씀)
                     src_st = UsdGeom.PrimvarsAPI(src_prim).GetPrimvar("st")
                     if src_st and src_st.GetAttr().IsValid():
