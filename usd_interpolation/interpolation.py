@@ -193,11 +193,13 @@ class UVMixer:
                         break
 
                 self.apply_correction()
+                self._notify(self._t)
 
                 if not loop:
                     break
         except asyncio.CancelledError:
             self.apply_correction()
+            self._notify(self._t)
             return
         finally:
             self._play_task = None
