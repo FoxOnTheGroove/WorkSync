@@ -275,9 +275,8 @@ class UsdInterpolationUI:
             if self._btn_rev_loop:
                 self._btn_rev_loop.text = "Rev Loop ↺"
         else:
-            # 재생 중 — t가 끝점에 도달한 프레임을 boundary 로 간주
-            if t <= 0.0 or t >= 1.0:
-                self._apply_load_test_correction()
+            # 재생 중 — 매 프레임 load_test 보정 (primary와 동일한 빈도로 fvli 토글)
+            self._apply_load_test_correction()
 
     def _set_status(self, text: str):
         if self._status_label:
