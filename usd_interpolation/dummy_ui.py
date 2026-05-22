@@ -1,7 +1,7 @@
 import numpy as np
 import omni.usd
 import omni.ui as ui
-from pxr import Gf, Usd, UsdGeom, UsdShade, Vt
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
 
 from .interpolation import UVMixer
 
@@ -104,8 +104,8 @@ class UsdInterpolationUI:
         return self._mixers + self._load_test_mixers
 
     def _apply_load_test_correction(self) -> None:
-        # 각 복제 mixer는 자기 메쉬의 fvli를 직접 dirty 처리해야 한다
-        # (Fabric은 timesample을 지원 안 하므로 primary의 dirty가 복제까지 커버하지 못함)
+        # 복제 메쉬에 대한 보정은 primary가 트리거하지 못하므로
+        # 더미 UI 쪽에서 직접 호출한다.
         for m in self._load_test_mixers:
             m.apply_correction()
 
@@ -261,14 +261,11 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        is_playing = self._primary and self._primary.is_playing()
-        # 복제 mixer UV 동기화. 재생 중에는 fvli dirty 스킵 (boundary에서 일괄 처리)
-        for m in self._load_test_mixers:
-            m.seek(t, _correction=not is_playing)
-        # 재생 중 끝점 도달 시 boundary correction 적용
-        if is_playing and (t <= 0.0 or t >= 1.0):
+        if not self._primary:
+            return
+        if not self._primary.is_playing():
+            # 수동 seek (슬라이더 등) — 복제 메쉬 보정
             self._apply_load_test_correction()
-        if not is_playing:
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -277,6 +274,10 @@ class UsdInterpolationUI:
                 self._btn_loop.text = "Loop ↺"
             if self._btn_rev_loop:
                 self._btn_rev_loop.text = "Rev Loop ↺"
+        else:
+            # 재생 중 — t가 끝점에 도달한 프레임을 boundary 로 간주
+            if t <= 0.0 or t >= 1.0:
+                self._apply_load_test_correction()
 
     def _set_status(self, text: str):
         if self._status_label:
@@ -354,7 +355,8 @@ class UsdInterpolationUI:
                         if val is not None:
                             dst_prim.CreateAttribute(attr_name, src_attr.GetTypeName()).Set(val)
 
-                    # fvli 어트리뷰트 복사 — Fabric이 미러링하도록 USD에 먼저 존재해야 함
+                    # fvli 어트리뷰트 복사 — 원본 메쉬와 동일한 토글 동작을 위해
+                    # dst_prim에도 fvli가 실제로 authored 되어 있어야 한다.
                     src_fvli = UsdGeom.Mesh(src_prim).GetFaceVaryingLinearInterpolationAttr()
                     fvli_val = src_fvli.Get() if (src_fvli and src_fvli.IsValid()) else None
                     dst_fvli = UsdGeom.Mesh(dst_prim).CreateFaceVaryingLinearInterpolationAttr()
