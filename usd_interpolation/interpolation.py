@@ -3,7 +3,8 @@ import time
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom
+import usdrt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -23,7 +24,7 @@ _PLAY_DURATION = 1.0
 class UVMixer:
     """하나의 타겟 prim 아래 있는 모든 메쉬의 UV 보간을 관리한다.
 
-    _st_maps: 소스 파일(=타임코드)별 {mesh_path: st_array} 딕셔너리 리스트.
+    _st_maps: 소스 파일(=보간 키프레임)별 {mesh_path: st_array} 딕셔너리 리스트.
     """
 
     # ── 팩토리 ──────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ class UVMixer:
         for m in maps_per_file[1:]:
             common &= set(m.keys())
         if not common:
-            raise ValueError(f"[UVMixer] no common mesh paths found across source files")
+            raise ValueError("[UVMixer] no common mesh paths found across source files")
         st_maps = [{path: maps_per_file[i][path] for path in common}
                    for i in range(len(st_paths))]
         return cls.create(st_maps, use_correction=use_correction)
@@ -65,7 +66,7 @@ class UVMixer:
         inst._use_correction = use_correction
         inst._subscribers = []
         inst._fvli_cache: dict[str, str] = {}
-        inst._bake_timesamples()
+        inst._bake_fvli()
         return inst
 
     # ── 재생 ─────────────────────────────────────────────────────
@@ -87,31 +88,10 @@ class UVMixer:
     def seek(self, t: float, *, _correction: bool = True) -> None:
         t = max(0.0, min(1.0, t))
         self._t = t
-        n = len(self._st_maps)
-        stage = omni.usd.get_context().get_stage()
-        tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-        omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
+        self._write_uv(t)
         if _correction:
-            self.apply_correction()
+            self._trigger_dirty()
         self._notify(t)
-
-    def apply_correction(self) -> None:
-        if not self._use_correction or not self._fvli_cache:
-            return
-        stage = omni.usd.get_context().get_stage()
-        if not stage:
-            return
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            for mesh_path, orig_val in self._fvli_cache.items():
-                pxr_prim = stage.GetPrimAtPath(mesh_path)
-                if not pxr_prim.IsValid():
-                    continue
-                fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                if not fvli or not fvli.IsValid():
-                    fvli = UsdGeom.Mesh(pxr_prim).CreateFaceVaryingLinearInterpolationAttr()
-                if fvli and fvli.IsValid():
-                    fvli.Set(_FVLI_ALT.get(orig_val, orig_val))
-                    fvli.Set(orig_val)
 
     def position(self) -> float:
         return self._t
@@ -123,7 +103,7 @@ class UVMixer:
 
     def set_correction(self, enabled: bool) -> None:
         self._use_correction = bool(enabled)
-        self._bake_timesamples()
+        self._bake_fvli()
 
     # ── 콜백 ────────────────────────────────────────────────────
 
@@ -142,31 +122,96 @@ class UVMixer:
 
     # ── 내부 ─────────────────────────────────────────────────────
 
-    def _bake_timesamples(self) -> None:
+    def _bake_fvli(self) -> None:
+        """fvli를 타임코드에 bake한다. UV는 seek 시 직접 쓰므로 여기서 다루지 않는다."""
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._st_maps:
             return
 
-        self._fvli_cache = {}
-        if self._use_correction:
+        # 이전 fvli 타임샘플 제거 (correction 토글 시 잔존 방지)
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for mesh_path in self._st_maps[0]:
                 pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
                 if not pxr_prim.IsValid():
                     continue
-                attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                val = attr.Get() if (attr and attr.IsValid()) else None
-                self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
+                fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                if fvli and fvli.IsValid():
+                    fvli.ClearAtTime(0)
+                    fvli.ClearAtTime(1)
 
+        self._fvli_cache = {}
+        if not self._use_correction:
+            return
+
+        # 각 메쉬의 원본 fvli 값 기록
+        for mesh_path in self._st_maps[0]:
+            pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+            if not pxr_prim.IsValid():
+                continue
+            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+            val = attr.Get() if (attr and attr.IsValid()) else None
+            self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
+
+        # tc=0 → alt 값, tc=1 → orig 값: 타임라인 이동이 DirtyTopology를 발생시킨다
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            for tc, mesh_map in enumerate(self._st_maps):
-                for mesh_path, st_data in mesh_map.items():
-                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.GetAttr().Set(
-                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+            for mesh_path, orig_val in self._fvli_cache.items():
+                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                if not pxr_prim.IsValid():
+                    continue
+                fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                if not fvli or not fvli.IsValid():
+                    fvli = UsdGeom.Mesh(pxr_prim).CreateFaceVaryingLinearInterpolationAttr()
+                if fvli and fvli.IsValid():
+                    fvli.Set(_FVLI_ALT.get(orig_val, orig_val), 0)
+                    fvli.Set(orig_val, 1)
+
+    def _write_uv(self, t: float) -> None:
+        """CPU lerp로 UV를 계산한 뒤 UsdRt(Fabric)으로 직접 기입한다."""
+        n = len(self._st_maps)
+        if n == 0:
+            return
+        if n == 1:
+            i, alpha = 0, 0.0
+        else:
+            pos = t * (n - 1)
+            i = min(int(pos), n - 2)
+            alpha = pos - i
+
+        stage_id = omni.usd.get_context().get_stage_id()
+        if not stage_id:
+            return
+        rt_stage = usdrt.Usd.Stage.Attach(stage_id)
+
+        for mesh_path in self._st_maps[0]:
+            a = self._st_maps[i].get(mesh_path)
+            if a is None:
+                continue
+            if alpha == 0.0 or n == 1:
+                uv = np.ascontiguousarray(a, dtype=np.float32)
+            else:
+                b = self._st_maps[i + 1].get(mesh_path)
+                if b is None:
+                    continue
+                uv = np.ascontiguousarray((1.0 - alpha) * a + alpha * b, dtype=np.float32)
+
+            rt_prim = rt_stage.GetPrimAtPath(mesh_path)
+            if not rt_prim.IsValid():
+                continue
+            attr = rt_prim.GetAttribute("primvars:st")
+            if attr and attr.IsValid():
+                attr.Set(usdrt.Vt.Vec2fArray.FromNumpy(uv))
+
+    def _trigger_dirty(self) -> None:
+        """타임라인을 alt→orig 순으로 이동해 fvli DirtyTopology를 발생시킨다.
+        씬의 모든 bake된 prim에 동시 적용된다.
+        """
+        if not self._use_correction or not self._fvli_cache:
+            return
+        stage = omni.usd.get_context().get_stage()
+        tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+        tl = omni.timeline.get_timeline_interface()
+        tl.set_current_time(0.0)           # tc=0: alt fvli 경유
+        tl.set_current_time(1.0 / tps)    # tc=1: orig fvli 복귀
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
@@ -192,12 +237,12 @@ class UVMixer:
                     if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                         break
 
-                self.apply_correction()
+                self._trigger_dirty()
 
                 if not loop:
                     break
         except asyncio.CancelledError:
-            self.apply_correction()
+            self._trigger_dirty()
             return
         finally:
             self._play_task = None

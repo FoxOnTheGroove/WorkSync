@@ -1,7 +1,7 @@
 import numpy as np
 import omni.usd
 import omni.ui as ui
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+from pxr import Gf, Usd, UsdGeom, UsdShade, Vt
 
 from .interpolation import UVMixer
 
@@ -103,12 +103,6 @@ class UsdInterpolationUI:
     def _all_mixers(self) -> list[UVMixer]:
         return self._mixers + self._load_test_mixers
 
-    def _apply_load_test_correction(self) -> None:
-        # 복제 메쉬에 대한 보정은 primary가 트리거하지 못하므로
-        # 더미 UI 쪽에서 직접 호출한다.
-        for m in self._load_test_mixers:
-            m.apply_correction()
-
     # ── 콜백 ───────────────────────────────────────────
 
     def _on_load_target_prim(self):
@@ -190,7 +184,6 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
-            self._apply_load_test_correction()
             self._btn_play.text = "Play ▶"
         else:
             self._primary.play(forward=True)
@@ -201,7 +194,6 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
-            self._apply_load_test_correction()
             self._btn_reverse.text = "Reverse ◄"
         else:
             self._primary.play(forward=False)
@@ -212,7 +204,6 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
-            self._apply_load_test_correction()
             self._btn_loop.text = "Loop ↺"
         else:
             self._primary.play(forward=True, loop=True)
@@ -223,7 +214,6 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
-            self._apply_load_test_correction()
             self._btn_rev_loop.text = "Rev Loop ↺"
         else:
             self._primary.play(forward=False, loop=True)
@@ -261,11 +251,10 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if not self._primary:
-            return
-        if not self._primary.is_playing():
-            # 수동 seek (슬라이더 등) — 복제 메쉬 보정
-            self._apply_load_test_correction()
+        # 복제 mixer UV 동기화 — UV 직접 쓰기만 수행 (dirty는 primary의 _trigger_dirty가 처리)
+        for m in self._load_test_mixers:
+            m.seek(t, _correction=False)
+        if self._primary and not self._primary.is_playing():
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -274,10 +263,6 @@ class UsdInterpolationUI:
                 self._btn_loop.text = "Loop ↺"
             if self._btn_rev_loop:
                 self._btn_rev_loop.text = "Rev Loop ↺"
-        else:
-            # 재생 중 — t가 끝점에 도달한 프레임을 boundary 로 간주
-            if t <= 0.0 or t >= 1.0:
-                self._apply_load_test_correction()
 
     def _set_status(self, text: str):
         if self._status_label:
