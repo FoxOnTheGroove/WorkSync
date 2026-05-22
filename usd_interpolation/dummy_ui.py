@@ -150,7 +150,7 @@ class UsdInterpolationUI:
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
         # 1) 각 소스 파일을 한 번씩 열어 모든 메쉬의 st 데이터를 읽는다
-        maps_per_file = [UVMixer.read_st_file(p) for p in paths]
+        maps_per_file = [UVMixer.make_st_map(p) for p in paths]
 
         # 2) 모든 소스 파일에 공통으로 존재하는 메쉬만 사용
         common_paths = set(maps_per_file[0].keys())
@@ -165,7 +165,7 @@ class UsdInterpolationUI:
         # 3) 모든 메쉬를 하나의 mixer로 묶어서 생성
         st_maps = [{path: maps_per_file[i][path] for path in common_paths}
                    for i in range(len(paths))]
-        mixer = UVMixer._from_maps("primary", st_maps, use_correction=use_correction)
+        mixer = UVMixer.create(st_maps, use_correction=use_correction)
         self._mixers = [mixer]
 
         self._primary = mixer
@@ -378,8 +378,7 @@ class UsdInterpolationUI:
                 shifted_maps = [{path_map[op]: arr
                                  for op, arr in tc_map.items() if op in path_map}
                                 for tc_map in shifted_orig]
-                mixer = UVMixer._from_maps(group_path, shifted_maps,
-                                           use_correction=use_correction)
+                mixer = UVMixer.create(shifted_maps, use_correction=use_correction)
                 self._load_test_mixers.append(mixer)
                 added += 1
 

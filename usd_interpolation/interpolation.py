@@ -17,31 +17,35 @@ _FVLI_ALT = {
     "all":          "cornersPlus1",
 }
 
+_PLAY_DURATION = 1.0
+
 
 class UVMixer:
     """하나의 타겟 prim 아래 있는 모든 메쉬의 UV 보간을 관리한다.
 
     _st_maps: 소스 파일(=타임코드)별 {mesh_path: st_array} 딕셔너리 리스트.
-    _label:   식별자 문자열 (registry 키로 사용).
     """
-
-    _registry: dict[str, 'UVMixer'] = {}
 
     # ── 팩토리 ──────────────────────────────────────────────────────
 
     @classmethod
     def create(cls,
-               label: str,
-               *st_paths: str,
-               key: str | None = None,
-               play_duration: float = 1.0,
+               st_maps: 'list[dict[str, np.ndarray]]',
+               *,
                use_correction: bool = True) -> 'UVMixer':
+        """이미 빌드된 st_maps(리스트 of {mesh_path: array})로부터 UVMixer를 생성한다."""
+        return cls._init(list(st_maps), use_correction=use_correction)
+
+    @classmethod
+    def create_with_maps(cls,
+                         *st_paths: str,
+                         use_correction: bool = True) -> 'UVMixer':
         """각 소스 USD 파일에서 모든 메쉬를 읽어 UVMixer를 생성한다.
         모든 파일에 공통으로 존재하는 메쉬 경로만 사용한다.
         """
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
-        maps_per_file = [cls.read_st_file(p) for p in st_paths]
+        maps_per_file = [cls.make_st_map(p) for p in st_paths]
         common = set(maps_per_file[0].keys())
         for m in maps_per_file[1:]:
             common &= set(m.keys())
@@ -49,42 +53,20 @@ class UVMixer:
             raise ValueError(f"[UVMixer] no common mesh paths found across source files")
         st_maps = [{path: maps_per_file[i][path] for path in common}
                    for i in range(len(st_paths))]
-        return cls._init(label, st_maps,
-                         key=key, play_duration=play_duration, use_correction=use_correction)
+        return cls.create(st_maps, use_correction=use_correction)
 
     @classmethod
-    def _from_maps(cls,
-                   label: str,
-                   st_maps: 'list[dict[str, np.ndarray]]',
-                   *,
-                   key: str | None = None,
-                   play_duration: float = 1.0,
-                   use_correction: bool = True) -> 'UVMixer':
-        """이미 빌드된 st_maps(리스트 of {mesh_path: array})로부터 UVMixer를 생성한다."""
-        return cls._init(label, list(st_maps),
-                         key=key, play_duration=play_duration, use_correction=use_correction)
-
-    @classmethod
-    def _init(cls, label, st_maps, *, key, play_duration, use_correction) -> 'UVMixer':
+    def _init(cls, st_maps, *, use_correction) -> 'UVMixer':
         inst = cls.__new__(cls)
-        inst._label = label
         inst._st_maps = st_maps
         inst._t = 0.0
         inst._play_task = None
         inst._speed = 1.0
-        inst._play_duration = play_duration
         inst._use_correction = use_correction
-        inst._key = key
         inst._subscribers = []
         inst._fvli_cache: dict[str, str] = {}
-        if key is not None:
-            cls._registry[key] = inst
         inst._bake_timesamples()
         return inst
-
-    @classmethod
-    def get(cls, key: str) -> 'UVMixer | None':
-        return cls._registry.get(key)
 
     # ── 재생 ─────────────────────────────────────────────────────
 
@@ -139,9 +121,6 @@ class UVMixer:
     def set_speed(self, speed: float) -> None:
         self._speed = max(0.1, float(speed))
 
-    def get_speed(self) -> float:
-        return self._speed
-
     def set_correction(self, enabled: bool) -> None:
         self._use_correction = bool(enabled)
         self._bake_timesamples()
@@ -160,9 +139,6 @@ class UVMixer:
     def destroy(self) -> None:
         self.stop()
         self._subscribers.clear()
-        if self._key is not None:
-            UVMixer._registry.pop(self._key, None)
-            self._key = None
 
     # ── 내부 ─────────────────────────────────────────────────────
 
@@ -207,7 +183,7 @@ class UVMixer:
                 while True:
                     await omni.kit.app.get_app().next_update_async()
                     elapsed = time.monotonic() - pass_start
-                    eff_duration = self._play_duration / max(self._speed, 0.01)
+                    eff_duration = _PLAY_DURATION / max(self._speed, 0.01)
                     dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
                     frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                     new_t = start_t + (frac if forward else -frac)
@@ -227,7 +203,7 @@ class UVMixer:
             self._play_task = None
 
     @staticmethod
-    def read_st_file(file_path: str) -> 'dict[str, np.ndarray]':
+    def make_st_map(file_path: str) -> 'dict[str, np.ndarray]':
         """USD 파일을 한 번 열어 모든 메쉬의 {prim_path: st_array}를 반환한다."""
         stage = Usd.Stage.Open(file_path)
         if not stage:
