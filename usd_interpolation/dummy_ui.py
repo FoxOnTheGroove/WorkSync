@@ -130,6 +130,7 @@ class UsdInterpolationUI:
         # Tear down previous state
         if self._primary:
             self._primary.unsubscribe(self._on_t_changed)
+            self._primary.unsubscribe_boundary(self._on_animate_boundary)
         for m in self._all_mixers():
             m.destroy()
         self._mixers = []
@@ -164,6 +165,7 @@ class UsdInterpolationUI:
 
         self._primary = mixer
         self._primary.subscribe(self._on_t_changed)
+        self._primary.subscribe_boundary(self._on_animate_boundary)
         self._slider.enabled = True
         self._primary.seek(0.0)
         self._set_status(f"1 mixer ({len(common_paths)} mesh(es), {len(paths)} source(s))")
@@ -246,12 +248,18 @@ class UsdInterpolationUI:
         self._clear_load_test_prims()
         self._set_status("Load test prims cleared")
 
+    def _on_animate_boundary(self) -> None:
+        for m in self._load_test_mixers:
+            m.apply_correction()
+
     def _on_t_changed(self, t: float):
         if self._slider:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
         if self._primary and not self._primary.is_playing():
+            for m in self._load_test_mixers:
+                m.apply_correction()
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
@@ -268,6 +276,7 @@ class UsdInterpolationUI:
     def destroy(self):
         if self._primary:
             self._primary.unsubscribe(self._on_t_changed)
+            self._primary.unsubscribe_boundary(self._on_animate_boundary)
         for m in self._all_mixers():
             m.destroy()
         self._mixers = []

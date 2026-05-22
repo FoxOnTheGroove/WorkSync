@@ -76,6 +76,7 @@ class UVMixer:
         inst._use_correction = use_correction
         inst._key = key
         inst._subscribers = []
+        inst._boundary_subscribers = []
         inst._fvli_cache: dict[str, str] = {}
         if key is not None:
             cls._registry[key] = inst
@@ -102,26 +103,34 @@ class UVMixer:
 
     # ── Position ─────────────────────────────────────────────────────
 
-    def seek(self, t: float) -> None:
+    def seek(self, t: float, *, _correction: bool = True) -> None:
         t = max(0.0, min(1.0, t))
         self._t = t
         n = len(self._st_maps)
         stage = omni.usd.get_context().get_stage()
         tps = stage.GetTimeCodesPerSecond() if stage else 24.0
         omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
-        if self._use_correction and self._fvli_cache and stage:
-            with Usd.EditContext(stage, stage.GetSessionLayer()):
-                for mesh_path, orig_val in self._fvli_cache.items():
-                    pxr_prim = stage.GetPrimAtPath(mesh_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                    if not fvli or not fvli.IsValid():
-                        fvli = UsdGeom.Mesh(pxr_prim).CreateFaceVaryingLinearInterpolationAttr()
-                    if fvli and fvli.IsValid():
-                        fvli.Set(_FVLI_ALT.get(orig_val, orig_val))
-                        fvli.Set(orig_val)
+        if _correction:
+            self.apply_correction()
         self._notify(t)
+
+    def apply_correction(self) -> None:
+        if not self._use_correction or not self._fvli_cache:
+            return
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for mesh_path, orig_val in self._fvli_cache.items():
+                pxr_prim = stage.GetPrimAtPath(mesh_path)
+                if not pxr_prim.IsValid():
+                    continue
+                fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                if not fvli or not fvli.IsValid():
+                    fvli = UsdGeom.Mesh(pxr_prim).CreateFaceVaryingLinearInterpolationAttr()
+                if fvli and fvli.IsValid():
+                    fvli.Set(_FVLI_ALT.get(orig_val, orig_val))
+                    fvli.Set(orig_val)
 
     def position(self) -> float:
         return self._t
@@ -147,11 +156,19 @@ class UVMixer:
     def unsubscribe(self, callback: Callable[[float], None]) -> None:
         self._subscribers = [c for c in self._subscribers if c != callback]
 
+    def subscribe_boundary(self, callback: Callable[[], None]) -> None:
+        if callback not in self._boundary_subscribers:
+            self._boundary_subscribers.append(callback)
+
+    def unsubscribe_boundary(self, callback: Callable[[], None]) -> None:
+        self._boundary_subscribers = [c for c in self._boundary_subscribers if c != callback]
+
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def destroy(self) -> None:
         self.stop()
         self._subscribers.clear()
+        self._boundary_subscribers.clear()
         if self._key is not None:
             UVMixer._registry.pop(self._key, None)
             self._key = None
@@ -188,6 +205,10 @@ class UVMixer:
         for cb in list(self._subscribers):
             cb(t)
 
+    def _notify_boundary(self) -> None:
+        for cb in list(self._boundary_subscribers):
+            cb()
+
     async def _animate(self, forward: bool, loop: bool = False) -> None:
         try:
             while True:
@@ -204,13 +225,18 @@ class UVMixer:
                     frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
                     new_t = start_t + (frac if forward else -frac)
                     new_t = max(0.0, min(1.0, new_t))
-                    self.seek(new_t)
+                    self.seek(new_t, _correction=False)
                     if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                         break
+
+                self.apply_correction()
+                self._notify_boundary()
 
                 if not loop:
                     break
         except asyncio.CancelledError:
+            self.apply_correction()
+            self._notify_boundary()
             return
         finally:
             self._play_task = None
