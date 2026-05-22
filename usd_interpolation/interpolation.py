@@ -8,6 +8,15 @@ import omni.kit.app
 import omni.timeline
 import omni.usd
 
+_FVLI_ALT = {
+    "cornersPlus1": "cornersPlus2",
+    "cornersPlus2": "cornersPlus1",
+    "cornersOnly":  "none",
+    "none":         "cornersOnly",
+    "boundaries":   "cornersPlus1",
+    "all":          "cornersPlus1",
+}
+
 
 class UVMixer:
     """Manages UV interpolation for all meshes under one target prim.
@@ -68,6 +77,7 @@ class UVMixer:
         inst._key = key
         inst._subscribers = []
         inst._fvli_cache: dict[str, str] = {}
+        inst._fvli_toggle = False
         if key is not None:
             cls._registry[key] = inst
         inst._bake_timesamples()
@@ -101,6 +111,7 @@ class UVMixer:
         tps = stage.GetTimeCodesPerSecond() if stage else 24.0
         omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
         if self._use_correction and self._fvli_cache and stage:
+            at_endpoint = (t == 0.0 or t == 1.0)
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 for mesh_path, fvli_val in self._fvli_cache.items():
                     pxr_prim = stage.GetPrimAtPath(mesh_path)
@@ -111,7 +122,10 @@ class UVMixer:
                     if not fvli or not fvli.IsValid():
                         fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
                     if fvli and fvli.IsValid():
-                        fvli.Set(fvli_val)
+                        write_val = fvli_val if (at_endpoint or not self._fvli_toggle) \
+                                    else _FVLI_ALT.get(fvli_val, fvli_val)
+                        fvli.Set(write_val)
+            self._fvli_toggle = not self._fvli_toggle
         self._notify(t)
 
     def position(self) -> float:
