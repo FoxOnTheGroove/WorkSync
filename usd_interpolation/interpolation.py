@@ -8,6 +8,14 @@ import omni.kit.app
 import omni.timeline
 import omni.usd
 
+_FVLI_ALT = {
+    "cornersPlus1": "cornersPlus2",
+    "cornersPlus2": "cornersPlus1",
+    "cornersOnly":  "none",
+    "none":         "cornersOnly",
+    "boundaries":   "cornersPlus1",
+    "all":          "cornersPlus1",
+}
 
 
 class UVMixer:
@@ -68,6 +76,7 @@ class UVMixer:
         inst._use_correction = use_correction
         inst._key = key
         inst._subscribers = []
+        inst._fvli_cache: dict[str, str] = {}
         if key is not None:
             cls._registry[key] = inst
         inst._bake_timesamples()
@@ -100,6 +109,18 @@ class UVMixer:
         stage = omni.usd.get_context().get_stage()
         tps = stage.GetTimeCodesPerSecond() if stage else 24.0
         omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
+        if self._use_correction and self._fvli_cache and stage:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for mesh_path, orig_val in self._fvli_cache.items():
+                    pxr_prim = stage.GetPrimAtPath(mesh_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+                    if not fvli or not fvli.IsValid():
+                        fvli = UsdGeom.Mesh(pxr_prim).CreateFaceVaryingLinearInterpolationAttr()
+                    if fvli and fvli.IsValid():
+                        fvli.Set(_FVLI_ALT.get(orig_val, orig_val))
+                        fvli.Set(orig_val)
         self._notify(t)
 
     def position(self) -> float:
@@ -137,33 +158,22 @@ class UVMixer:
 
     # ── Internal ─────────────────────────────────────────────────────
 
-    def _bake_timesamples(self, with_correction: bool | None = None) -> None:
+    def _bake_timesamples(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._st_maps:
             return
 
-        use_corr = self._use_correction if with_correction is None else with_correction
-        fvli_cache: dict[str, str] = {}
-        if use_corr:
+        self._fvli_cache = {}
+        if self._use_correction:
             for mesh_path in self._st_maps[0]:
                 pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
                 if not pxr_prim.IsValid():
                     continue
                 attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
                 val = attr.Get() if (attr and attr.IsValid()) else None
-                fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
+                self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            # Clear fvli session opinions when not using correction
-            if not use_corr:
-                for mesh_path in self._st_maps[0]:
-                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                    if fvli and fvli.IsValid():
-                        fvli.Clear()
-
             for tc, mesh_map in enumerate(self._st_maps):
                 for mesh_path, st_data in mesh_map.items():
                     pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
@@ -173,15 +183,6 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    if use_corr:
-                        fvli_val = fvli_cache.get(mesh_path)
-                        if fvli_val is not None:
-                            mesh = UsdGeom.Mesh(pxr_prim)
-                            fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                            if not fvli or not fvli.IsValid():
-                                fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                            if fvli and fvli.IsValid():
-                                fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
@@ -189,7 +190,6 @@ class UVMixer:
 
     async def _animate(self, forward: bool, loop: bool = False) -> None:
         try:
-            self._bake_timesamples(with_correction=False)
             while True:
                 start_t = 0.0 if (loop and forward) else (1.0 if (loop and not forward) else self._t)
                 target = 1.0 if forward else 0.0
@@ -208,11 +208,9 @@ class UVMixer:
                     if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
                         break
 
-                self._bake_timesamples(with_correction=self._use_correction)
                 if not loop:
                     break
         except asyncio.CancelledError:
-            self._bake_timesamples(with_correction=self._use_correction)
             return
         finally:
             self._play_task = None
