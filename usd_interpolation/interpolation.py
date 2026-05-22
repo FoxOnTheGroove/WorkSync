@@ -67,6 +67,7 @@ class UVMixer:
         inst._use_correction = use_correction
         inst._key = key
         inst._subscribers = []
+        inst._fvli_cache: dict[str, str] = {}
         if key is not None:
             cls._registry[key] = inst
         inst._bake_timesamples()
@@ -99,6 +100,18 @@ class UVMixer:
         stage = omni.usd.get_context().get_stage()
         tps = stage.GetTimeCodesPerSecond() if stage else 24.0
         omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
+        if self._use_correction and self._fvli_cache and stage:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for mesh_path, fvli_val in self._fvli_cache.items():
+                    pxr_prim = stage.GetPrimAtPath(mesh_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    mesh = UsdGeom.Mesh(pxr_prim)
+                    fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
+                    if not fvli or not fvli.IsValid():
+                        fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
+                    if fvli and fvli.IsValid():
+                        fvli.Set(fvli_val)
         self._notify(t)
 
     def position(self) -> float:
@@ -141,8 +154,8 @@ class UVMixer:
         if pxr_stage is None or not self._st_maps:
             return
 
-        # Cache fvli per mesh before writing to session layer
-        fvli_cache: dict[str, str] = {}
+        # Build fvli cache for use in seek()
+        self._fvli_cache: dict[str, str] = {}
         if self._use_correction:
             for mesh_path in self._st_maps[0]:
                 pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
@@ -150,7 +163,7 @@ class UVMixer:
                     continue
                 attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
                 val = attr.Get() if (attr and attr.IsValid()) else None
-                fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
+                self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, mesh_map in enumerate(self._st_maps):
@@ -162,14 +175,6 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-                    fvli_val = fvli_cache.get(mesh_path)
-                    if fvli_val is not None:
-                        mesh = UsdGeom.Mesh(pxr_prim)
-                        fvli = mesh.GetFaceVaryingLinearInterpolationAttr()
-                        if not fvli or not fvli.IsValid():
-                            fvli = mesh.CreateFaceVaryingLinearInterpolationAttr()
-                        if fvli and fvli.IsValid():
-                            fvli.Set(fvli_val, tc)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
