@@ -6,7 +6,6 @@ import numpy as np
 from pxr import Usd, UsdGeom
 import usdrt
 import omni.kit.app
-import omni.timeline
 import omni.usd
 
 _FVLI_ALT = {
@@ -96,6 +95,10 @@ class UVMixer:
     def position(self) -> float:
         return self._t
 
+    def apply_correction(self) -> None:
+        """외부에서 fvli dirty를 명시적으로 트리거할 때 호출."""
+        self._trigger_dirty()
+
     # ── 설정 ──────────────────────────────────────────────────
 
     def set_speed(self, speed: float) -> None:
@@ -123,12 +126,15 @@ class UVMixer:
     # ── 내부 ─────────────────────────────────────────────────────
 
     def _bake_fvli(self) -> None:
-        """fvli를 타임코드에 bake한다. UV는 seek 시 직접 쓰므로 여기서 다루지 않는다."""
+        """각 메쉬의 원본 fvli 값을 캐시한다.
+        Fabric은 timesample을 지원하지 않으므로 timecode bake는 하지 않고,
+        실제 dirty 트리거는 _trigger_dirty에서 UsdRt로 직접 수행한다.
+        """
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._st_maps:
             return
 
-        # 이전 fvli 타임샘플 제거 (correction 토글 시 잔존 방지)
+        # 과거 잘못된 구현이 남긴 타임샘플 잔재 정리 (idempotent)
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for mesh_path in self._st_maps[0]:
                 pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
@@ -143,7 +149,7 @@ class UVMixer:
         if not self._use_correction:
             return
 
-        # 각 메쉬의 원본 fvli 값 기록
+        # 각 메쉬의 원본 fvli 값 기록 (alt→orig 토글의 복귀 값)
         for mesh_path in self._st_maps[0]:
             pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
             if not pxr_prim.IsValid():
@@ -151,19 +157,6 @@ class UVMixer:
             attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
             val = attr.Get() if (attr and attr.IsValid()) else None
             self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
-
-        # tc=0 → alt 값, tc=1 → orig 값: 타임라인 이동이 DirtyTopology를 발생시킨다
-        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            for mesh_path, orig_val in self._fvli_cache.items():
-                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                if not pxr_prim.IsValid():
-                    continue
-                fvli = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                if not fvli or not fvli.IsValid():
-                    fvli = UsdGeom.Mesh(pxr_prim).CreateFaceVaryingLinearInterpolationAttr()
-                if fvli and fvli.IsValid():
-                    fvli.Set(_FVLI_ALT.get(orig_val, orig_val), 0)
-                    fvli.Set(orig_val, 1)
 
     def _write_uv(self, t: float) -> None:
         """CPU lerp로 UV를 계산한 뒤 UsdRt(Fabric)으로 직접 기입한다."""
@@ -202,16 +195,26 @@ class UVMixer:
                 attr.Set(usdrt.Vt.Vec2fArray(uv))
 
     def _trigger_dirty(self) -> None:
-        """타임라인을 alt→orig 순으로 이동해 fvli DirtyTopology를 발생시킨다.
-        씬의 모든 bake된 prim에 동시 적용된다.
+        """UsdRt로 fvli를 alt→orig 두 번 써서 Hydra DirtyTopology를 발생시킨다.
+        Fabric은 timesample을 지원하지 않으므로 타임라인 토글 대신 직접 기입한다.
         """
         if not self._use_correction or not self._fvli_cache:
             return
-        stage = omni.usd.get_context().get_stage()
-        tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-        tl = omni.timeline.get_timeline_interface()
-        tl.set_current_time(0.0)           # tc=0: alt fvli 경유
-        tl.set_current_time(1.0 / tps)    # tc=1: orig fvli 복귀
+        stage_id = omni.usd.get_context().get_stage_id()
+        if not stage_id:
+            return
+        rt_stage = usdrt.Usd.Stage.Attach(stage_id)
+        for mesh_path, orig_val in self._fvli_cache.items():
+            rt_prim = rt_stage.GetPrimAtPath(mesh_path)
+            if not rt_prim.IsValid():
+                continue
+            attr = rt_prim.GetAttribute("faceVaryingLinearInterpolation")
+            if not attr or not attr.IsValid():
+                attr = rt_prim.CreateAttribute(
+                    "faceVaryingLinearInterpolation", usdrt.Sdf.ValueTypeNames.Token)
+            if attr and attr.IsValid():
+                attr.Set(_FVLI_ALT.get(orig_val, orig_val))
+                attr.Set(orig_val)
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):

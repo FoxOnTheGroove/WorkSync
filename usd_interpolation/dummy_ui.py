@@ -103,6 +103,12 @@ class UsdInterpolationUI:
     def _all_mixers(self) -> list[UVMixer]:
         return self._mixers + self._load_test_mixers
 
+    def _apply_load_test_correction(self) -> None:
+        # 각 복제 mixer는 자기 메쉬의 fvli를 직접 dirty 처리해야 한다
+        # (Fabric은 timesample을 지원 안 하므로 primary의 dirty가 복제까지 커버하지 못함)
+        for m in self._load_test_mixers:
+            m.apply_correction()
+
     # ── 콜백 ───────────────────────────────────────────
 
     def _on_load_target_prim(self):
@@ -184,6 +190,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_play.text = "Play ▶"
         else:
             self._primary.play(forward=True)
@@ -194,6 +201,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_reverse.text = "Reverse ◄"
         else:
             self._primary.play(forward=False)
@@ -204,6 +212,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_loop.text = "Loop ↺"
         else:
             self._primary.play(forward=True, loop=True)
@@ -214,6 +223,7 @@ class UsdInterpolationUI:
             return
         if self._primary.is_playing():
             self._primary.stop()
+            self._apply_load_test_correction()
             self._btn_rev_loop.text = "Rev Loop ↺"
         else:
             self._primary.play(forward=False, loop=True)
@@ -251,10 +261,14 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        # 복제 mixer UV 동기화 — UV 직접 쓰기만 수행 (dirty는 primary의 _trigger_dirty가 처리)
+        is_playing = self._primary and self._primary.is_playing()
+        # 복제 mixer UV 동기화. 재생 중에는 fvli dirty 스킵 (boundary에서 일괄 처리)
         for m in self._load_test_mixers:
-            m.seek(t, _correction=False)
-        if self._primary and not self._primary.is_playing():
+            m.seek(t, _correction=not is_playing)
+        # 재생 중 끝점 도달 시 boundary correction 적용
+        if is_playing and (t <= 0.0 or t >= 1.0):
+            self._apply_load_test_correction()
+        if not is_playing:
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
             if self._btn_reverse:
