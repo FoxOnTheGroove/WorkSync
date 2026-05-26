@@ -166,6 +166,9 @@ class UVMixer:
         """소스 간 UV 길이 불일치, 리맵 후 경로 부재 메쉬를 경고하고 유효 경로만 반환한다."""
         warnings: list[str] = []
         valid: set[str] = set()
+        if not st_maps:
+            return warnings, valid
+
         all_paths = set(st_maps[0].keys())
         stage = omni.usd.get_context().get_stage() if self._target_path else None
         source_root: str | None = None

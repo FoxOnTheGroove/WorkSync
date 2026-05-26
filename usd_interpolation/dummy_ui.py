@@ -105,9 +105,6 @@ class UsdInterpolationUI:
 
     # ── 헬퍼 ────────────────────────────────────────────
 
-    def _correction_enabled(self) -> bool:
-        return bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
-
     def _all_keys(self) -> list[str]:
         keys = [self._primary_key] if self._primary_key else []
         return keys + self._load_test_keys
@@ -169,25 +166,30 @@ class UsdInterpolationUI:
         self._load_test_keys = []
 
         self._src_paths = list(paths)
-        target_path = (self._target_path_field.model.get_value_as_string().strip()
-                       if self._target_path_field else None) or None
+        use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
+
+        target_path = self._target_path_field.model.get_value_as_string().strip() \
+            if self._target_path_field else None
+        target_path = target_path or None
         key = target_path or "__primary__"
 
         # 타겟이 바뀌면 이전 primary 폐기, 아니면 같은 mixer 재로드(구독 유지)
-        if self._primary_key != key:
-            if self._primary_key:
-                UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
-                UVMixerService.destroy(self._primary_key)
+        if self._primary_key and self._primary_key != key:
+            UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
+            UVMixerService.destroy(self._primary_key)
+            self._primary_key = None
+        if self._primary_key is None:
             UVMixerService.create(target_path, key=key)
             UVMixerService.subscribe(key, self._on_t_changed)
             self._primary_key = key
 
         warnings = UVMixerService.load(key, *paths)
-        UVMixerService.set_correction(key, self._correction_enabled())
+        UVMixerService.set_correction(key, use_correction)
         self._slider.enabled = True
         UVMixerService.set_value(key, 0.0)
 
-        n_meshes = len(UVMixerService.get_mesh_paths(key))
+        src = UVMixerService.get_instance(key)
+        n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
         status = f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))"
         if warnings:
             status += f" | {len(warnings)} skipped"
@@ -288,6 +290,7 @@ class UsdInterpolationUI:
         if not orig_mesh_paths:
             return 0
 
+        use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
         session = pxr_stage.GetSessionLayer()
         grid_cols = max(1, int(n ** 0.5))
         spacing = 80.0
@@ -374,7 +377,7 @@ class UsdInterpolationUI:
                 key = f"loadtest_{copy_idx:04d}"
                 UVMixerService.create(group_path, key=key)
                 UVMixerService.load(key, *shifted)
-                UVMixerService.set_correction(key, self._correction_enabled())
+                UVMixerService.set_correction(key, use_correction)
                 self._load_test_keys.append(key)
                 added += 1
 
