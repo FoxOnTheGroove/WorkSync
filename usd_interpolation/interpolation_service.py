@@ -52,11 +52,10 @@ class UVMixerService:
 
     # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
     @classmethod
-    def load(cls, key: str, *st_paths: str) -> None:
-        """소스 USD 파일들을 mixer에 주입한다(재호출 시 재로드)."""
+    def load(cls, key: str, *st_paths: str) -> 'list[str]':
+        """소스 USD 파일들을 mixer에 주입한다(재호출 시 재로드). 경고 목록을 반환한다."""
         m = cls._instances.get(key)
-        if m:
-            m.load(*st_paths)
+        return m.load(*st_paths) if m else []
 
     @classmethod
     def play(cls, key: str) -> None:

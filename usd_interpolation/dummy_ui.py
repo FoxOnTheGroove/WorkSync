@@ -183,14 +183,17 @@ class UsdInterpolationUI:
             UVMixerService.subscribe(key, self._on_t_changed)
             self._primary_key = key
 
-        UVMixerService.load(key, *paths)
+        warnings = UVMixerService.load(key, *paths)
         UVMixerService.set_correction(key, use_correction)
         self._slider.enabled = True
         UVMixerService.set_value(key, 0.0)
 
         src = UVMixerService.get_instance(key)
         n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
-        self._set_status(f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))")
+        status = f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))"
+        if warnings:
+            status += f" | {len(warnings)} skipped"
+        self._set_status(status)
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())

@@ -46,9 +46,10 @@ class UVMixer:
         inst._fvli_cache = {}
         return inst
 
-    def load(self, *st_paths: str) -> None:
+    def load(self, *st_paths: str) -> 'list[str]':
         """소스 USD 파일들을 읽어 보간 데이터를 주입한다.
-        재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다."""
+        재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다.
+        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다."""
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
         maps_per_file = [self.make_st_map(p) for p in st_paths]
@@ -60,11 +61,20 @@ class UVMixer:
         st_maps = [{path: maps_per_file[i][path] for path in common}
                    for i in range(len(st_paths))]
 
+        warnings, valid = self._validate(st_maps)
+        for w in warnings:
+            print(f"[UVMixer] {w}")
+        if not valid:
+            raise ValueError("[UVMixer] no valid meshes remain after validation")
+        if valid != common:
+            st_maps = [{p: frame[p] for p in valid} for frame in st_maps]
+
         self.stop()
         self._clear_baked()
         self._st_maps = self._remap(st_maps, self._target_path)
         self._t = 0.0
         self._bake_timesamples()
+        return warnings
 
     # ── 재생 ─────────────────────────────────────────────────────
 
@@ -152,6 +162,41 @@ class UVMixer:
         self._subscribers.clear()
 
     # ── 내부 ─────────────────────────────────────────────────────
+
+    def _validate(self, st_maps: 'list[dict[str, np.ndarray]]') -> 'tuple[list[str], set[str]]':
+        """소스 간 UV 길이 불일치, 리맵 후 경로 부재 메쉬를 경고하고 유효 경로만 반환한다."""
+        warnings: list[str] = []
+        valid: set[str] = set()
+        if not st_maps:
+            return warnings, valid
+
+        all_paths = set(st_maps[0].keys())
+        stage = omni.usd.get_context().get_stage() if self._target_path else None
+        source_root: str | None = None
+        if self._target_path and all_paths:
+            sample = next(iter(all_paths))
+            source_root = '/' + sample.split('/')[1]
+
+        for path in sorted(all_paths):
+            lengths = [len(frame[path]) for frame in st_maps]
+            if len(set(lengths)) > 1:
+                warnings.append(
+                    f"skip '{path}': UV count differs across sources {lengths}"
+                )
+                continue
+
+            if self._target_path and source_root and stage:
+                remapped = self._target_path + path[len(source_root):]
+                prim = stage.GetPrimAtPath(remapped)
+                if not prim.IsValid() or not prim.IsA(UsdGeom.Mesh):
+                    warnings.append(
+                        f"skip '{path}': remapped path '{remapped}' not found in stage"
+                    )
+                    continue
+
+            valid.add(path)
+
+        return warnings, valid
 
     def _refresh_fvli_cache(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
