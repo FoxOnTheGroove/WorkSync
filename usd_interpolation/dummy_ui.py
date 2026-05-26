@@ -1,7 +1,7 @@
 import numpy as np
 import omni.usd
 import omni.ui as ui
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+from pxr import Gf, Usd, UsdGeom, UsdShade, Vt
 
 from .interpolation_service import UVMixerService
 
@@ -284,8 +284,10 @@ class UsdInterpolationUI:
 
     def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
-        src_mixer = UVMixerService.get_instance(self._primary_key) if self._primary_key else None
-        if pxr_stage is None or src_mixer is None or not src_mixer._st_maps or not self._src_paths:
+        if pxr_stage is None or not self._primary_key or not self._src_paths:
+            return 0
+        orig_mesh_paths = UVMixerService.get_mesh_paths(self._primary_key)
+        if not orig_mesh_paths:
             return 0
 
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
@@ -294,10 +296,9 @@ class UsdInterpolationUI:
         spacing = 80.0
         added = 0
 
-        orig_mesh_paths = sorted(src_mixer._st_maps[0].keys())
         # load(*paths)의 _remap 결과와 경로가 일치하도록 서브구조를 보존한다.
         # primary가 target_path로 remap됐으면 그 길이, 아니면 source root 기준으로 strip.
-        target = src_mixer._target_path
+        target = UVMixerService.get_target_path(self._primary_key)
 
         def _subpath(p: str) -> str:
             if target:

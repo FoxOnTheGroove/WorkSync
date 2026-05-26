@@ -66,8 +66,7 @@ class UVMixer:
             print(f"[UVMixer] {w}")
         if not valid:
             raise ValueError("[UVMixer] no valid meshes remain after validation")
-        if valid != common:
-            st_maps = [{p: frame[p] for p in valid} for frame in st_maps]
+        st_maps = [{p: frame[p] for p in valid} for frame in st_maps]
 
         self.stop()
         self._clear_baked()
@@ -174,8 +173,7 @@ class UVMixer:
         stage = omni.usd.get_context().get_stage() if self._target_path else None
         source_root: str | None = None
         if self._target_path and all_paths:
-            sample = next(iter(all_paths))
-            source_root = '/' + sample.split('/')[1]
+            source_root = self._source_root(next(iter(all_paths)))
 
         for path in sorted(all_paths):
             lengths = [len(frame[path]) for frame in st_maps]
@@ -281,13 +279,16 @@ class UVMixer:
             self._play_task = None
 
     @staticmethod
+    def _source_root(path: str) -> str:
+        return '/' + path.split('/')[1]
+
+    @staticmethod
     def _remap(st_maps: 'list[dict[str, np.ndarray]]',
                target_path: 'str | None') -> 'list[dict[str, np.ndarray]]':
         """소스 st_maps의 최상위 루트를 target_path로 교체한다. None이면 그대로 반환."""
         if not target_path:
             return list(st_maps)
-        sample = next(iter(st_maps[0]))
-        source_root = '/' + sample.split('/')[1]  # e.g. '/World'
+        source_root = UVMixer._source_root(next(iter(st_maps[0])))
         return [
             {target_path + src[len(source_root):]: arr for src, arr in frame.items()}
             for frame in st_maps

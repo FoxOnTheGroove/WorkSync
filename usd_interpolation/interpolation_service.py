@@ -15,26 +15,23 @@ class UVMixerService:
         cls._instances[key] = mixer
         return mixer
 
-    @staticmethod
-    def make_st_map(file_path: str) -> dict:
-        """USD 파일을 열어 {mesh_path: st_array} 맵을 반환한다."""
-        return UVMixer.make_st_map(file_path)
-
     # ── 레지스트리 ───────────────────────────────────────────────
-    @classmethod
-    def get_instances(cls) -> dict[str, UVMixer]:
-        """등록된 모든 {key: mixer}의 복사본을 반환한다."""
-        return dict(cls._instances)
-
     @classmethod
     def get_instance(cls, key: str) -> 'UVMixer | None':
         """key에 해당하는 mixer를 반환한다(없으면 None)."""
         return cls._instances.get(key)
 
     @classmethod
-    def get_key(cls, mixer: UVMixer) -> 'str | None':
-        """mixer 인스턴스로 등록된 key를 역조회한다(없으면 None)."""
-        return next((k for k, v in cls._instances.items() if v is mixer), None)
+    def get_mesh_paths(cls, key: str) -> 'list[str]':
+        """로드된 메쉬 경로 목록을 정렬해 반환한다(미로드 시 빈 리스트)."""
+        m = cls._instances.get(key)
+        return sorted(m._st_maps[0].keys()) if m and m._st_maps else []
+
+    @classmethod
+    def get_target_path(cls, key: str) -> 'str | None':
+        """mixer의 target_path를 반환한다."""
+        m = cls._instances.get(key)
+        return m._target_path if m else None
 
     @classmethod
     def destroy(cls, key: str) -> None:
