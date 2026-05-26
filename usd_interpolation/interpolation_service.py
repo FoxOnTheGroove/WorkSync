@@ -75,11 +75,11 @@ class UVMixerService:
         return m.is_playing() if m else False
 
     @classmethod
-    def set_value(cls, key: str, t: float) -> None:
-        """보간 위치 t(0.0~1.0)를 설정한다."""
+    def set_value(cls, key: str, t: float, drive_timeline: bool = True) -> None:
+        """보간 위치 t(0.0~1.0)를 설정한다. drive_timeline=False면 전역 타임라인은 건드리지 않는다."""
         m = cls._instances.get(key)
         if m:
-            m.set_value(t)
+            m.set_value(t, drive_timeline=drive_timeline)
 
     @classmethod
     def get_value(cls, key: str) -> float:

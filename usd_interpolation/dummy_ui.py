@@ -109,12 +109,6 @@ class UsdInterpolationUI:
         keys = [self._primary_key] if self._primary_key else []
         return keys + self._load_test_keys
 
-    def _apply_load_test_correction(self) -> None:
-        # 복제 메쉬에 대한 보정은 primary가 트리거하지 못하므로
-        # 더미 UI 쪽에서 직접 호출한다.
-        for k in self._load_test_keys:
-            UVMixerService.apply_correction(k)
-
     # ── 콜백 ───────────────────────────────────────────
 
     def _on_load_target_prim(self):
@@ -208,7 +202,6 @@ class UsdInterpolationUI:
             return
         if UVMixerService.is_playing(self._primary_key):
             UVMixerService.stop(self._primary_key)
-            self._apply_load_test_correction()
             self._btn_play.text = "Play ▶"
         else:
             UVMixerService.play(self._primary_key)
@@ -254,17 +247,12 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if not self._primary_key:
-            return
-        if not UVMixerService.is_playing(self._primary_key):
-            # 수동 seek (슬라이더 등) — 복제 메쉬 보정
-            self._apply_load_test_correction()
-            if self._btn_play:
-                self._btn_play.text = "Play ▶"
-        else:
-            # 재생 중 — 패스 끝 또는 보정 알림 시점에만 load_test 보정
-            if t <= 0.0 or t >= 1.0:
-                self._apply_load_test_correction()
+        # primary가 이미 전역 타임라인을 옮겼으므로 follower는 타임라인을 건드리지 않고
+        # 자기 메쉬 correction + _t 동기화만 한다.
+        for k in self._load_test_keys:
+            UVMixerService.set_value(k, t, drive_timeline=False)
+        if self._btn_play and self._primary_key and not UVMixerService.is_playing(self._primary_key):
+            self._btn_play.text = "Play ▶"
 
     def _set_status(self, text: str):
         if self._status_label:

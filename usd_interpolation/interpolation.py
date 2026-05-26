@@ -93,15 +93,16 @@ class UVMixer:
 
     # ── 위치 ─────────────────────────────────────────────────────
 
-    def set_value(self, t: float, *, _correction: bool = True) -> None:
+    def set_value(self, t: float, *, _correction: bool = True, drive_timeline: bool = True) -> None:
         if not self._st_maps:
             return
         t = max(0.0, min(1.0, t))
         self._t = t
-        n = len(self._st_maps)
-        stage = omni.usd.get_context().get_stage()
-        tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-        omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
+        if drive_timeline:
+            n = len(self._st_maps)
+            stage = omni.usd.get_context().get_stage()
+            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+            omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
         if _correction:
             self.apply_correction()
         self._notify(t)
