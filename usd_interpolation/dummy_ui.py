@@ -20,6 +20,7 @@ class UsdInterpolationUI:
         self._reverse_cb: ui.CheckBox | None = None
         self._loop_cb: ui.CheckBox | None = None
         self._correction_cb: ui.CheckBox | None = None
+        self._target_path_field: ui.StringField | None = None
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
         self._stage_field: ui.StringField | None = None
@@ -41,6 +42,12 @@ class UsdInterpolationUI:
                     self._stage_field = ui.StringField(height=24)
                     self._stage_field.model.set_value("/path/to/target.usd")
                     ui.Button("Load Target Prim", width=120, clicked_fn=self._on_load_target_prim)
+
+                # ── 타겟 경로 ─────────────────────────────────────
+                ui.Spacer(height=4)
+                ui.Label("Target Path:", height=18)
+                self._target_path_field = ui.StringField(height=24)
+                self._target_path_field.model.set_value("")
 
                 # ── 경로 입력 ───────────────────────────────────────
                 ui.Label("UV Paths (space or newline separated):", height=18)
@@ -119,6 +126,14 @@ class UsdInterpolationUI:
         if stage is None:
             self._set_status("ERROR: failed to open stage")
             return
+        default_prim = stage.GetDefaultPrim()
+        if default_prim and default_prim.IsValid():
+            target = str(default_prim.GetPath())
+        else:
+            children = stage.GetPseudoRoot().GetChildren()
+            target = str(children[0].GetPath()) if children else ""
+        if self._target_path_field:
+            self._target_path_field.model.set_value(target)
         self._set_status(f"Target prim loaded: {path}")
 
     def _on_load_all(self):
@@ -163,7 +178,9 @@ class UsdInterpolationUI:
         # 3) 모든 메쉬를 하나의 mixer로 묶어서 생성
         st_maps = [{path: maps_per_file[i][path] for path in common_paths}
                    for i in range(len(paths))]
-        mixer = UVMixer.create(None, st_maps, use_correction=use_correction)
+        target_path = self._target_path_field.model.get_value_as_string().strip() \
+            if self._target_path_field else None
+        mixer = UVMixer.create(target_path or None, st_maps, use_correction=use_correction)
         self._mixers = [mixer]
 
         self._primary = mixer
