@@ -1,4 +1,3 @@
-import uuid
 from typing import Callable
 
 from .interpolation import UVMixer
@@ -9,39 +8,44 @@ class UVMixerService:
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
-    def create(cls,
-               target_path: 'str | None',
-               key: 'str | None' = None) -> UVMixer:
+    def create(cls, target_path: 'str | None', key: str) -> UVMixer:
+        """빈 UVMixer를 만들어 key로 등록한다. 소스는 load(key, *paths)로 주입.
+        target_path가 None이면 소스 경로를 그대로 사용(remap 없음)."""
         mixer = UVMixer.create(target_path)
-        key = key or target_path or uuid.uuid4().hex[:8]
         cls._instances[key] = mixer
         return mixer
 
     @staticmethod
     def make_st_map(file_path: str) -> dict:
+        """USD 파일을 열어 {mesh_path: st_array} 맵을 반환한다."""
         return UVMixer.make_st_map(file_path)
 
     # ── 레지스트리 ───────────────────────────────────────────────
     @classmethod
     def get_instances(cls) -> dict[str, UVMixer]:
+        """등록된 모든 {key: mixer}의 복사본을 반환한다."""
         return dict(cls._instances)
 
     @classmethod
     def get_instance(cls, key: str) -> 'UVMixer | None':
+        """key에 해당하는 mixer를 반환한다(없으면 None)."""
         return cls._instances.get(key)
 
     @classmethod
     def get_key(cls, mixer: UVMixer) -> 'str | None':
+        """mixer 인스턴스로 등록된 key를 역조회한다(없으면 None)."""
         return next((k for k, v in cls._instances.items() if v is mixer), None)
 
     @classmethod
     def destroy(cls, key: str) -> None:
+        """key의 mixer를 정지·해제하고 레지스트리에서 제거한다."""
         mixer = cls._instances.pop(key, None)
         if mixer is not None:
             mixer.destroy()
 
     @classmethod
     def destroy_all(cls) -> None:
+        """모든 mixer를 해제하고 레지스트리를 비운다."""
         for m in list(cls._instances.values()):
             m.destroy()
         cls._instances.clear()
@@ -49,76 +53,89 @@ class UVMixerService:
     # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
     @classmethod
     def load(cls, key: str, *st_paths: str) -> None:
+        """소스 USD 파일들을 mixer에 주입한다(재호출 시 재로드)."""
         m = cls._instances.get(key)
         if m:
             m.load(*st_paths)
 
     @classmethod
     def play(cls, key: str) -> None:
+        """t=0→1 보간 재생을 시작한다."""
         m = cls._instances.get(key)
         if m:
             m.play()
 
     @classmethod
     def stop(cls, key: str) -> None:
+        """재생을 정지한다."""
         m = cls._instances.get(key)
         if m:
             m.stop()
 
     @classmethod
     def is_playing(cls, key: str) -> bool:
+        """재생 중이면 True."""
         m = cls._instances.get(key)
         return m.is_playing() if m else False
 
     @classmethod
     def set_value(cls, key: str, t: float) -> None:
+        """보간 위치 t(0.0~1.0)를 설정한다."""
         m = cls._instances.get(key)
         if m:
             m.set_value(t)
 
     @classmethod
     def get_value(cls, key: str) -> float:
+        """현재 보간 위치 t를 반환한다."""
         m = cls._instances.get(key)
         return m.get_value() if m else 0.0
 
     @classmethod
     def apply_correction(cls, key: str) -> None:
+        """fvli 토글로 UV 보정을 수동 적용한다."""
         m = cls._instances.get(key)
         if m:
             m.apply_correction()
 
     @classmethod
     def set_forward(cls, key: str, forward: bool) -> None:
+        """재생 방향을 설정한다(True=정방향)."""
         m = cls._instances.get(key)
         if m:
             m.set_forward(forward)
 
     @classmethod
     def set_loop(cls, key: str, loop: bool) -> None:
+        """재생 루프 여부를 설정한다."""
         m = cls._instances.get(key)
         if m:
             m.set_loop(loop)
 
     @classmethod
     def set_speed(cls, key: str, speed: float) -> None:
+        """재생 속도 배율을 설정한다."""
         m = cls._instances.get(key)
         if m:
             m.set_speed(speed)
 
     @classmethod
     def set_correction(cls, key: str, enabled: bool) -> None:
+        """UV 보정 on/off (rebake 없이 fvli 캐시만 갱신)."""
         m = cls._instances.get(key)
         if m:
             m.set_correction(enabled)
 
     @classmethod
     def subscribe(cls, key: str, callback: Callable[[float], None]) -> None:
+        """t 변경 시 callback(t)를 호출하도록 등록한다."""
         m = cls._instances.get(key)
         if m:
             m.subscribe(callback)
 
     @classmethod
     def unsubscribe(cls, key: str, callback: Callable[[float], None]) -> None:
+        """등록된 콜백을 제거한다."""
         m = cls._instances.get(key)
         if m:
             m.unsubscribe(callback)
