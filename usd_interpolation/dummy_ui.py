@@ -170,32 +170,19 @@ class UsdInterpolationUI:
         self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
-        # 1) 각 소스 파일을 한 번씩 열어 모든 메쉬의 st 데이터를 읽는다
-        maps_per_file = [UVMixerService.make_st_map(p) for p in paths]
-
-        # 2) 모든 소스 파일에 공통으로 존재하는 메쉬만 사용
-        common_paths = set(maps_per_file[0].keys())
-        for m in maps_per_file[1:]:
-            common_paths &= set(m.keys())
-
-        if not common_paths:
-            self._set_status("ERROR: no mesh found in all source files")
-            self._slider.enabled = False
-            return
-
-        # 3) 모든 메쉬를 하나의 mixer로 묶어서 생성
-        st_maps = [{path: maps_per_file[i][path] for path in common_paths}
-                   for i in range(len(paths))]
         target_path = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else None
-        mixer = UVMixerService.create_with_maps(target_path or None, st_maps, use_correction=use_correction)
+        mixer = UVMixerService.create(target_path or None, *paths)
+        if not use_correction:
+            mixer.set_correction(False)
         self._mixers = [mixer]
 
         self._primary = mixer
         self._primary.subscribe(self._on_t_changed)
         self._slider.enabled = True
         self._primary.seek(0.0)
-        self._set_status(f"1 mixer ({len(common_paths)} mesh(es), {len(paths)} source(s))")
+        n_meshes = len(mixer._st_maps[0]) if mixer._st_maps else 0
+        self._set_status(f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))")
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
@@ -373,7 +360,9 @@ class UsdInterpolationUI:
                 shifted_maps = [{path_map[op]: arr
                                  for op, arr in tc_map.items() if op in path_map}
                                 for tc_map in shifted_orig]
-                mixer = UVMixerService.create_with_maps(None, shifted_maps, use_correction=use_correction)
+                mixer = UVMixerService.create_with_maps(None, shifted_maps)
+                if not use_correction:
+                    mixer.set_correction(False)
                 self._load_test_mixers.append(mixer)
                 added += 1
 

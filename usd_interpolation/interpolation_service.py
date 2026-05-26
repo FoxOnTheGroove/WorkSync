@@ -1,8 +1,10 @@
+import uuid
+
 from .interpolation import UVMixer
 
 
 class UVMixerService:
-    _instances: list[UVMixer] = []
+    _instances: dict[str, UVMixer] = {}
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
@@ -10,17 +12,17 @@ class UVMixerService:
                target_path: 'str | None',
                *st_paths: str) -> UVMixer:
         mixer = UVMixer.create(target_path, *st_paths)
-        cls._instances.append(mixer)
+        key = target_path or uuid.uuid4().hex[:8]
+        cls._instances[key] = mixer
         return mixer
 
     @classmethod
     def create_with_maps(cls,
                          target_path: 'str | None',
-                         st_maps: list,
-                         *,
-                         use_correction: bool = True) -> UVMixer:
-        mixer = UVMixer.create_with_maps(target_path, st_maps, use_correction=use_correction)
-        cls._instances.append(mixer)
+                         st_maps: list) -> UVMixer:
+        mixer = UVMixer.create_with_maps(target_path, st_maps)
+        key = target_path or uuid.uuid4().hex[:8]
+        cls._instances[key] = mixer
         return mixer
 
     @staticmethod
@@ -29,20 +31,23 @@ class UVMixerService:
 
     # ── 레지스트리 ───────────────────────────────────────────────
     @classmethod
-    def get_instances(cls) -> list[UVMixer]:
-        return list(cls._instances)
+    def get_instances(cls) -> dict[str, UVMixer]:
+        return dict(cls._instances)
+
+    @classmethod
+    def get_instance(cls, key: str) -> 'UVMixer | None':
+        return cls._instances.get(key)
 
     @classmethod
     def destroy(cls, mixer: UVMixer) -> None:
         mixer.destroy()
-        try:
-            cls._instances.remove(mixer)
-        except ValueError:
-            pass
+        key = next((k for k, v in cls._instances.items() if v is mixer), None)
+        if key is not None:
+            del cls._instances[key]
 
     @classmethod
     def destroy_all(cls) -> None:
-        for m in list(cls._instances):
+        for m in list(cls._instances.values()):
             m.destroy()
         cls._instances.clear()
 
@@ -56,6 +61,6 @@ class UVMixerService:
     # mixer.set_forward(v)        재생 방향 (True=정방향)
     # mixer.set_loop(v)           루프 설정
     # mixer.set_speed(v)          재생 속도 배율
-    # mixer.set_correction(v)     correction on/off
+    # mixer.set_correction(v)     correction on/off (bake 재실행 없음)
     # mixer.subscribe(cb)         t 변경 시 cb(t) 호출 등록
     # mixer.unsubscribe(cb)       콜백 제거

@@ -50,15 +50,13 @@ class UVMixer:
     @classmethod
     def create_with_maps(cls,
                          target_path: 'str | None',
-                         st_maps: 'list[dict[str, np.ndarray]]',
-                         *,
-                         use_correction: bool = True) -> 'UVMixer':
+                         st_maps: 'list[dict[str, np.ndarray]]') -> 'UVMixer':
         """target_path 아래 prim들에 st_maps를 적용하는 UVMixer를 생성한다.
         target_path가 None이면 st_maps의 경로를 그대로 사용한다."""
-        return cls._init(cls._remap(st_maps, target_path), use_correction=use_correction)
+        return cls._init(cls._remap(st_maps, target_path))
 
     @classmethod
-    def _init(cls, st_maps, *, use_correction) -> 'UVMixer':
+    def _init(cls, st_maps) -> 'UVMixer':
         inst = cls.__new__(cls)
         inst._st_maps = st_maps
         inst._t = 0.0
@@ -66,7 +64,7 @@ class UVMixer:
         inst._speed = 1.0
         inst._forward = True
         inst._loop = False
-        inst._use_correction = use_correction
+        inst._use_correction = True
         inst._subscribers = []
         inst._fvli_cache: dict[str, str] = {}
         inst._bake_timesamples()
@@ -133,7 +131,10 @@ class UVMixer:
 
     def set_correction(self, enabled: bool) -> None:
         self._use_correction = bool(enabled)
-        self._bake_timesamples()
+        if enabled:
+            self._refresh_fvli_cache()
+        else:
+            self._fvli_cache = {}
 
     # ── 콜백 ────────────────────────────────────────────────────
 
@@ -152,20 +153,25 @@ class UVMixer:
 
     # ── 내부 ─────────────────────────────────────────────────────
 
+    def _refresh_fvli_cache(self) -> None:
+        pxr_stage = omni.usd.get_context().get_stage()
+        self._fvli_cache = {}
+        if not self._use_correction or pxr_stage is None or not self._st_maps:
+            return
+        for mesh_path in self._st_maps[0]:
+            pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+            if not pxr_prim.IsValid():
+                continue
+            attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
+            val = attr.Get() if (attr and attr.IsValid()) else None
+            self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
+
     def _bake_timesamples(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._st_maps:
             return
 
-        self._fvli_cache = {}
-        if self._use_correction:
-            for mesh_path in self._st_maps[0]:
-                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                if not pxr_prim.IsValid():
-                    continue
-                attr = UsdGeom.Mesh(pxr_prim).GetFaceVaryingLinearInterpolationAttr()
-                val = attr.Get() if (attr and attr.IsValid()) else None
-                self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
+        self._refresh_fvli_cache()
 
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, mesh_map in enumerate(self._st_maps):
