@@ -36,15 +36,12 @@ class UVMixerService:
     @classmethod
     def destroy(cls, key: str) -> None:
         """key의 mixer를 정지·해제하고 레지스트리에서 제거한다."""
-        mixer = cls._instances.pop(key, None)
-        if mixer is not None:
-            mixer.destroy()
+        if m := cls._instances.pop(key, None): m.destroy()
 
     @classmethod
     def destroy_all(cls) -> None:
         """모든 mixer를 해제하고 레지스트리를 비운다."""
-        for m in list(cls._instances.values()):
-            m.destroy()
+        for m in list(cls._instances.values()): m.destroy()
         cls._instances.clear()
 
     # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
@@ -57,16 +54,12 @@ class UVMixerService:
     @classmethod
     def play(cls, key: str) -> None:
         """t=0→1 보간 재생을 시작한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.play()
+        if m := cls._instances.get(key): m.play()
 
     @classmethod
     def stop(cls, key: str) -> None:
         """재생을 정지한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.stop()
+        if m := cls._instances.get(key): m.stop()
 
     @classmethod
     def is_playing(cls, key: str) -> bool:
@@ -77,9 +70,7 @@ class UVMixerService:
     @classmethod
     def set_value(cls, key: str, t: float) -> None:
         """보간 위치 t(0.0~1.0)를 설정한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.set_value(t)
+        if m := cls._instances.get(key): m.set_value(t)
 
     @classmethod
     def get_value(cls, key: str) -> float:
@@ -90,48 +81,34 @@ class UVMixerService:
     @classmethod
     def apply_correction(cls, key: str) -> None:
         """fvli 토글로 UV 보정을 수동 적용한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.apply_correction()
+        if m := cls._instances.get(key): m.apply_correction()
 
     @classmethod
     def set_forward(cls, key: str, forward: bool) -> None:
         """재생 방향을 설정한다(True=정방향)."""
-        m = cls._instances.get(key)
-        if m:
-            m.set_forward(forward)
+        if m := cls._instances.get(key): m.set_forward(forward)
 
     @classmethod
     def set_loop(cls, key: str, loop: bool) -> None:
         """재생 루프 여부를 설정한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.set_loop(loop)
+        if m := cls._instances.get(key): m.set_loop(loop)
 
     @classmethod
     def set_speed(cls, key: str, speed: float) -> None:
         """재생 속도 배율을 설정한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.set_speed(speed)
+        if m := cls._instances.get(key): m.set_speed(speed)
 
     @classmethod
     def set_correction(cls, key: str, enabled: bool) -> None:
         """UV 보정 on/off (rebake 없이 fvli 캐시만 갱신)."""
-        m = cls._instances.get(key)
-        if m:
-            m.set_correction(enabled)
+        if m := cls._instances.get(key): m.set_correction(enabled)
 
     @classmethod
     def subscribe(cls, key: str, callback: Callable[[float], None]) -> None:
         """t 변경 시 callback(t)를 호출하도록 등록한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.subscribe(callback)
+        if m := cls._instances.get(key): m.subscribe(callback)
 
     @classmethod
     def unsubscribe(cls, key: str, callback: Callable[[float], None]) -> None:
         """등록된 콜백을 제거한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.unsubscribe(callback)
+        if m := cls._instances.get(key): m.unsubscribe(callback)
