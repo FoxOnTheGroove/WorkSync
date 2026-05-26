@@ -43,7 +43,7 @@ class UsdInterpolationUI:
                     self._stage_field.model.set_value("/path/to/target.usd")
                     ui.Button("Load Target Prim", width=120, clicked_fn=self._on_load_target_prim)
 
-                # ── 타겟 경로 ─────────────────────────────────────
+                # ── 타겟 경로 (자동 기입 또는 수동 수정) ──────────────────
                 ui.Spacer(height=4)
                 ui.Label("Target Path:", height=18)
                 self._target_path_field = ui.StringField(height=24)
@@ -117,24 +117,31 @@ class UsdInterpolationUI:
     # ── 콜백 ───────────────────────────────────────────
 
     def _on_load_target_prim(self):
-        path = self._stage_field.model.get_value_as_string().strip()
-        if not path:
-            self._set_status("ERROR: no target prim path")
+        usd_path = self._stage_field.model.get_value_as_string().strip()
+        if not usd_path:
+            self._set_status("ERROR: no USD file path")
             return
-        omni.usd.get_context().open_stage(path)
         stage = omni.usd.get_context().get_stage()
         if stage is None:
-            self._set_status("ERROR: failed to open stage")
+            self._set_status("ERROR: no active stage")
             return
-        default_prim = stage.GetDefaultPrim()
+        # 임시로 열어 default prim 경로 파악 (현재 스테이지 교체 없음)
+        tmp_stage = Usd.Stage.Open(usd_path)
+        if not tmp_stage:
+            self._set_status(f"ERROR: failed to read: {usd_path}")
+            return
+        default_prim = tmp_stage.GetDefaultPrim()
         if default_prim and default_prim.IsValid():
             target = str(default_prim.GetPath())
         else:
-            children = stage.GetPseudoRoot().GetChildren()
-            target = str(children[0].GetPath()) if children else ""
+            children = tmp_stage.GetPseudoRoot().GetChildren()
+            target = str(children[0].GetPath()) if children else "/TargetPrim"
+        # 현재 스테이지에 해당 경로로 Reference 추가
+        prim = stage.DefinePrim(target)
+        prim.GetReferences().AddReference(usd_path)
         if self._target_path_field:
             self._target_path_field.model.set_value(target)
-        self._set_status(f"Target prim loaded: {path}")
+        self._set_status(f"Loaded: {usd_path} → {target}")
 
     def _on_load_all(self):
         raw = self._field.model.get_value_as_string()
@@ -157,7 +164,7 @@ class UsdInterpolationUI:
 
         stage = omni.usd.get_context().get_stage()
         if stage is None:
-            self._set_status("ERROR: no stage — load target prim first")
+            self._set_status("ERROR: no active stage")
             return
         self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
