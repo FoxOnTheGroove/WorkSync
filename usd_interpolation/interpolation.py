@@ -214,18 +214,11 @@ class UVMixer:
     @staticmethod
     def _remap(st_maps: 'list[dict[str, np.ndarray]]',
                target_path: 'str | None') -> 'list[dict[str, np.ndarray]]':
-        """소스 st_maps의 공통 루트를 target_path로 교체한다. None이면 그대로 반환."""
+        """소스 st_maps의 최상위 루트를 target_path로 교체한다. None이면 그대로 반환."""
         if not target_path:
             return list(st_maps)
-        all_paths = list(st_maps[0].keys())
-        parts = [p.split('/') for p in all_paths]
-        common: list = []
-        for level in zip(*parts):
-            if len(set(level)) == 1:
-                common.append(level[0])
-            else:
-                break
-        source_root = '/'.join(common)
+        sample = next(iter(st_maps[0]))
+        source_root = '/' + sample.split('/')[1]  # e.g. '/World'
         return [
             {target_path + src[len(source_root):]: arr for src, arr in frame.items()}
             for frame in st_maps
