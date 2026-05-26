@@ -132,11 +132,12 @@ class UsdInterpolationUI:
             return
         default_prim = tmp_stage.GetDefaultPrim()
         if default_prim and default_prim.IsValid():
-            target = str(default_prim.GetPath())
+            prim_name = default_prim.GetName()
         else:
             children = tmp_stage.GetPseudoRoot().GetChildren()
-            target = str(children[0].GetPath()) if children else "/TargetPrim"
-        # 현재 스테이지에 해당 경로로 Reference 추가
+            prim_name = children[0].GetName() if children else "TargetPrim"
+        # /World/ 아래에 마운트해 이동 시 ancestral prim 충돌 방지
+        target = f"/World/{prim_name}"
         prim = stage.DefinePrim(target)
         prim.GetReferences().AddReference(usd_path)
         if self._target_path_field:
