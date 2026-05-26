@@ -86,7 +86,7 @@ class UVMixer:
 
     # ── 위치 ─────────────────────────────────────────────────────
 
-    def seek(self, t: float, *, _correction: bool = True) -> None:
+    def set_value(self, t: float, *, _correction: bool = True) -> None:
         t = max(0.0, min(1.0, t))
         self._t = t
         n = len(self._st_maps)
@@ -115,7 +115,7 @@ class UVMixer:
                     fvli.Set(_FVLI_ALT.get(orig_val, orig_val))
                     fvli.Set(orig_val)
 
-    def position(self) -> float:
+    def get_value(self) -> float:
         return self._t
 
     # ── 설정 ──────────────────────────────────────────────────
@@ -199,7 +199,7 @@ class UVMixer:
 
                 new_t = self._t + (step if self._forward else -step)
                 new_t = max(0.0, min(1.0, new_t))
-                self.seek(new_t, _correction=False)
+                self.set_value(new_t, _correction=False)
 
                 reached_end = (self._forward and new_t >= 1.0) or \
                               (not self._forward and new_t <= 0.0)
@@ -208,7 +208,7 @@ class UVMixer:
                     self._notify(self._t)
                     if not self._loop:
                         break
-                    self.seek(0.0 if self._forward else 1.0, _correction=False)
+                    self.set_value(0.0 if self._forward else 1.0, _correction=False)
         except asyncio.CancelledError:
             self.apply_correction()
             self._notify(self._t)

@@ -39,11 +39,14 @@ class UVMixerService:
         return cls._instances.get(key)
 
     @classmethod
-    def destroy(cls, mixer: UVMixer) -> None:
-        mixer.destroy()
-        key = next((k for k, v in cls._instances.items() if v is mixer), None)
-        if key is not None:
-            del cls._instances[key]
+    def get_key(cls, mixer: UVMixer) -> 'str | None':
+        return next((k for k, v in cls._instances.items() if v is mixer), None)
+
+    @classmethod
+    def destroy(cls, key: str) -> None:
+        mixer = cls._instances.pop(key, None)
+        if mixer is not None:
+            mixer.destroy()
 
     @classmethod
     def destroy_all(cls) -> None:
@@ -55,8 +58,8 @@ class UVMixerService:
     # mixer.play()                재생 시작
     # mixer.stop()                재생 정지
     # mixer.is_playing() -> bool  재생 중 여부
-    # mixer.seek(t)               t (0.0~1.0) 위치로 이동
-    # mixer.position() -> float   현재 t 값
+    # mixer.set_value(t)           t (0.0~1.0) 위치로 이동
+    # mixer.get_value() -> float   현재 t 값
     # mixer.apply_correction()    UV 보정 수동 적용
     # mixer.set_forward(v)        재생 방향 (True=정방향)
     # mixer.set_loop(v)           루프 설정

@@ -180,7 +180,7 @@ class UsdInterpolationUI:
         self._primary = mixer
         self._primary.subscribe(self._on_t_changed)
         self._slider.enabled = True
-        self._primary.seek(0.0)
+        self._primary.set_value(0.0)
         n_meshes = len(mixer._st_maps[0]) if mixer._st_maps else 0
         self._set_status(f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))")
 
@@ -189,7 +189,7 @@ class UsdInterpolationUI:
         for m in self._all_mixers():
             m.set_correction(enabled)
         if self._primary:
-            self._primary.seek(self._primary.position())
+            self._primary.set_value(self._primary.get_value())
 
     def _on_play_clicked(self):
         if not self._primary:
@@ -216,7 +216,7 @@ class UsdInterpolationUI:
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
         if self._primary:
-            self._primary.seek(t)
+            self._primary.set_value(t)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
@@ -367,7 +367,7 @@ class UsdInterpolationUI:
                 added += 1
 
         if self._primary:
-            self._primary.seek(self._primary.position())
+            self._primary.set_value(self._primary.get_value())
         return added
 
     def _clear_load_test_prims(self) -> None:
@@ -377,5 +377,7 @@ class UsdInterpolationUI:
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             pxr_stage.RemovePrim(LOAD_TEST_ROOT)
         for m in self._load_test_mixers:
-            UVMixerService.destroy(m)
+            key = UVMixerService.get_key(m)
+            if key is not None:
+                UVMixerService.destroy(key)
         self._load_test_mixers = []
