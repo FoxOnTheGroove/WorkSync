@@ -31,18 +31,7 @@ class UVMixer:
     @classmethod
     def create(cls,
                target_path: 'str | None',
-               st_maps: 'list[dict[str, np.ndarray]]',
-               *,
-               use_correction: bool = True) -> 'UVMixer':
-        """target_path 아래 prim들에 st_maps를 적용하는 UVMixer를 생성한다.
-        target_path가 None이면 st_maps의 경로를 그대로 사용한다."""
-        return cls._init(cls._remap(st_maps, target_path), use_correction=use_correction)
-
-    @classmethod
-    def create_with_maps(cls,
-                         target_path: 'str | None',
-                         *st_paths: str,
-                         use_correction: bool = True) -> 'UVMixer':
+               *st_paths: str) -> 'UVMixer':
         """각 소스 USD 파일에서 모든 메쉬를 읽어 UVMixer를 생성한다.
         모든 파일에 공통으로 존재하는 메쉬 경로만 사용한다.
         """
@@ -56,7 +45,17 @@ class UVMixer:
             raise ValueError(f"[UVMixer] no common mesh paths found across source files")
         st_maps = [{path: maps_per_file[i][path] for path in common}
                    for i in range(len(st_paths))]
-        return cls.create(target_path, st_maps, use_correction=use_correction)
+        return cls.create_with_maps(target_path, st_maps)
+
+    @classmethod
+    def create_with_maps(cls,
+                         target_path: 'str | None',
+                         st_maps: 'list[dict[str, np.ndarray]]',
+                         *,
+                         use_correction: bool = True) -> 'UVMixer':
+        """target_path 아래 prim들에 st_maps를 적용하는 UVMixer를 생성한다.
+        target_path가 None이면 st_maps의 경로를 그대로 사용한다."""
+        return cls._init(cls._remap(st_maps, target_path), use_correction=use_correction)
 
     @classmethod
     def _init(cls, st_maps, *, use_correction) -> 'UVMixer':

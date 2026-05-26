@@ -158,8 +158,7 @@ class UsdInterpolationUI:
         # 이전 상태 정리
         if self._primary:
             self._primary.unsubscribe(self._on_t_changed)
-        for m in self._all_mixers():
-            m.destroy()
+        UVMixerService.destroy_all()
         self._mixers = []
         self._load_test_mixers = []
         self._primary = None
@@ -189,7 +188,7 @@ class UsdInterpolationUI:
                    for i in range(len(paths))]
         target_path = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else None
-        mixer = UVMixerService.create(target_path or None, st_maps, use_correction=use_correction)
+        mixer = UVMixerService.create_with_maps(target_path or None, st_maps, use_correction=use_correction)
         self._mixers = [mixer]
 
         self._primary = mixer
@@ -275,8 +274,7 @@ class UsdInterpolationUI:
     def destroy(self):
         if self._primary:
             self._primary.unsubscribe(self._on_t_changed)
-        for m in self._all_mixers():
-            m.destroy()
+        UVMixerService.destroy_all()
         self._mixers = []
         self._load_test_mixers = []
         self._primary = None
@@ -375,7 +373,7 @@ class UsdInterpolationUI:
                 shifted_maps = [{path_map[op]: arr
                                  for op, arr in tc_map.items() if op in path_map}
                                 for tc_map in shifted_orig]
-                mixer = UVMixerService.create(None, shifted_maps, use_correction=use_correction)
+                mixer = UVMixerService.create_with_maps(None, shifted_maps, use_correction=use_correction)
                 self._load_test_mixers.append(mixer)
                 added += 1
 
@@ -390,5 +388,5 @@ class UsdInterpolationUI:
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             pxr_stage.RemovePrim(LOAD_TEST_ROOT)
         for m in self._load_test_mixers:
-            m.destroy()
+            UVMixerService.destroy(m)
         self._load_test_mixers = []
