@@ -88,13 +88,6 @@ class UVMixerService:
         return m.get_value() if m else 0.0
 
     @classmethod
-    def apply_correction(cls, key: str) -> None:
-        """fvli 토글로 UV 보정을 수동 적용한다."""
-        m = cls._instances.get(key)
-        if m:
-            m.apply_correction()
-
-    @classmethod
     def set_forward(cls, key: str, forward: bool) -> None:
         """재생 방향을 설정한다(True=정방향)."""
         m = cls._instances.get(key)
