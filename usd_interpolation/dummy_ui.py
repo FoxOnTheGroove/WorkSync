@@ -3,7 +3,6 @@ import omni.usd
 import omni.ui as ui
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
 
-from .interpolation import UVMixer
 from .interpolation_service import UVMixerService
 
 LOAD_TEST_ROOT = "/World/LoadTest"
@@ -26,10 +25,10 @@ class UsdInterpolationUI:
         self._dup_field: ui.IntField | None = None
         self._stage_field: ui.StringField | None = None
 
-        # _primary가 타임라인을 구동한다; 나머지 mixer는 데이터만 baked.
-        self._primary: UVMixer | None = None
-        self._mixers: list[UVMixer] = []        # 원본 prim 들
-        self._load_test_mixers: list[UVMixer] = []  # 복제된 테스트 prim 들
+        # primary가 타임라인을 구동한다; 나머지 mixer는 데이터만 baked.
+        # mixer 인스턴스는 UVMixerService가 보유하고, UI는 key만 들고 있는다.
+        self._primary_key: str | None = None
+        self._load_test_keys: list[str] = []  # 복제된 테스트 prim mixer key 들
         self._src_paths: list[str] = []
 
     def build_ui(self):
@@ -106,14 +105,15 @@ class UsdInterpolationUI:
 
     # ── 헬퍼 ────────────────────────────────────────────
 
-    def _all_mixers(self) -> list[UVMixer]:
-        return self._mixers + self._load_test_mixers
+    def _all_keys(self) -> list[str]:
+        keys = [self._primary_key] if self._primary_key else []
+        return keys + self._load_test_keys
 
     def _apply_load_test_correction(self) -> None:
         # 복제 메쉬에 대한 보정은 primary가 트리거하지 못하므로
         # 더미 UI 쪽에서 직접 호출한다.
-        for m in self._load_test_mixers:
-            m.apply_correction()
+        for k in self._load_test_keys:
+            UVMixerService.apply_correction(k)
 
     # ── 콜백 ───────────────────────────────────────────
 
@@ -155,73 +155,82 @@ class UsdInterpolationUI:
             self._set_status("ERROR: need at least 2 paths")
             return
 
-        # 이전 상태 정리
-        if self._primary:
-            self._primary.unsubscribe(self._on_t_changed)
-        UVMixerService.destroy_all()
-        self._mixers = []
-        self._load_test_mixers = []
-        self._primary = None
-
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             self._set_status("ERROR: no active stage")
             return
+
+        # load-test 정리
+        for k in self._load_test_keys:
+            UVMixerService.destroy(k)
+        self._load_test_keys = []
+
         self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
         target_path = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else None
-        mixer = UVMixerService.create(target_path or None, *paths)
-        if not use_correction:
-            mixer.set_correction(False)
-        self._mixers = [mixer]
+        target_path = target_path or None
+        key = target_path or "__primary__"
 
-        self._primary = mixer
-        self._primary.subscribe(self._on_t_changed)
+        # 타겟이 바뀌면 이전 primary 폐기, 아니면 같은 mixer 재로드(구독 유지)
+        if self._primary_key and self._primary_key != key:
+            UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
+            UVMixerService.destroy(self._primary_key)
+            self._primary_key = None
+        if self._primary_key is None:
+            UVMixerService.create(target_path, key=key)
+            UVMixerService.subscribe(key, self._on_t_changed)
+            self._primary_key = key
+
+        UVMixerService.load(key, *paths)
+        UVMixerService.set_correction(key, use_correction)
         self._slider.enabled = True
-        self._primary.set_value(0.0)
-        n_meshes = len(mixer._st_maps[0]) if mixer._st_maps else 0
+        UVMixerService.set_value(key, 0.0)
+
+        src = UVMixerService.get_instance(key)
+        n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
         self._set_status(f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))")
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
-        for m in self._all_mixers():
-            m.set_correction(enabled)
-        if self._primary:
-            self._primary.set_value(self._primary.get_value())
+        for k in self._all_keys():
+            UVMixerService.set_correction(k, enabled)
+        if self._primary_key:
+            UVMixerService.set_value(self._primary_key,
+                                     UVMixerService.get_value(self._primary_key))
 
     def _on_play_clicked(self):
-        if not self._primary:
+        if not self._primary_key:
             return
-        if self._primary.is_playing():
-            self._primary.stop()
+        if UVMixerService.is_playing(self._primary_key):
+            UVMixerService.stop(self._primary_key)
             self._apply_load_test_correction()
             self._btn_play.text = "Play ▶"
         else:
-            self._primary.play()
+            UVMixerService.play(self._primary_key)
             self._btn_play.text = "Stop ■"
 
     def _on_reverse_changed(self, model):
-        if self._primary:
-            self._primary.set_forward(not model.get_value_as_bool())
+        if self._primary_key:
+            UVMixerService.set_forward(self._primary_key, not model.get_value_as_bool())
 
     def _on_loop_changed(self, model):
-        if self._primary:
-            self._primary.set_loop(model.get_value_as_bool())
+        if self._primary_key:
+            UVMixerService.set_loop(self._primary_key, model.get_value_as_bool())
 
     def _on_slider_changed(self, model):
-        if self._primary and self._primary.is_playing():
+        if self._primary_key and UVMixerService.is_playing(self._primary_key):
             return
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
-        if self._primary:
-            self._primary.set_value(t)
+        if self._primary_key:
+            UVMixerService.set_value(self._primary_key, t)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
-        if self._primary:
-            self._primary.set_speed(speed)
+        if self._primary_key:
+            UVMixerService.set_speed(self._primary_key, speed)
         if self._speed_label:
             self._speed_label.text = f"{speed:.1f}x"
 
@@ -242,9 +251,9 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        if not self._primary:
+        if not self._primary_key:
             return
-        if not self._primary.is_playing():
+        if not UVMixerService.is_playing(self._primary_key):
             # 수동 seek (슬라이더 등) — 복제 메쉬 보정
             self._apply_load_test_correction()
             if self._btn_play:
@@ -259,12 +268,11 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
-        if self._primary:
-            self._primary.unsubscribe(self._on_t_changed)
+        if self._primary_key:
+            UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
         UVMixerService.destroy_all()
-        self._mixers = []
-        self._load_test_mixers = []
-        self._primary = None
+        self._primary_key = None
+        self._load_test_keys = []
         if self._window:
             self._window.destroy()
             self._window = None
@@ -273,7 +281,8 @@ class UsdInterpolationUI:
 
     def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None or not self._mixers or not self._src_paths:
+        src_mixer = UVMixerService.get_instance(self._primary_key) if self._primary_key else None
+        if pxr_stage is None or src_mixer is None or not src_mixer._st_maps or not self._src_paths:
             return 0
 
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
@@ -282,8 +291,16 @@ class UsdInterpolationUI:
         spacing = 80.0
         added = 0
 
-        src_mixer = self._mixers[0]
         orig_mesh_paths = sorted(src_mixer._st_maps[0].keys())
+        # load(*paths)의 _remap 결과와 경로가 일치하도록 서브구조를 보존한다.
+        # primary가 target_path로 remap됐으면 그 길이, 아니면 source root 기준으로 strip.
+        target = src_mixer._target_path
+
+        def _subpath(p: str) -> str:
+            if target:
+                return p[len(target):]
+            source_root = '/' + p.split('/')[1]
+            return p[len(source_root):]
 
         with Usd.EditContext(pxr_stage, session):
             for copy_idx in range(1, n):
@@ -295,11 +312,8 @@ class UsdInterpolationUI:
                     Gf.Vec3d(col * spacing, 0.0, row * spacing)
                 )
 
-                # 원본 메쉬 경로 → 복제 경로 매핑
-                path_map: dict[str, str] = {}
-                for mesh_idx, orig_path in enumerate(orig_mesh_paths):
-                    dst_path = f"{group_path}/m{mesh_idx:04d}"
-                    path_map[orig_path] = dst_path
+                for orig_path in orig_mesh_paths:
+                    dst_path = group_path + _subpath(orig_path)
                     src_prim = pxr_stage.GetPrimAtPath(orig_path)
                     if not src_prim.IsValid():
                         continue
@@ -353,21 +367,19 @@ class UsdInterpolationUI:
                                 np.array(val, dtype=np.float32).reshape(-1, 2)
                             ))
 
-                # 복제 경로로 재매핑하면서 타임코드를 시프트한 st_maps 구성
-                maps = src_mixer._st_maps
-                shift = copy_idx % len(maps)
-                shifted_orig = maps[shift:] + maps[:shift]
-                shifted_maps = [{path_map[op]: arr
-                                 for op, arr in tc_map.items() if op in path_map}
-                                for tc_map in shifted_orig]
-                mixer = UVMixerService.create_with_maps(None, shifted_maps)
-                if not use_correction:
-                    mixer.set_correction(False)
-                self._load_test_mixers.append(mixer)
+                # 소스 경로를 시프트해 load → 타임코드 시프트 효과
+                shift = copy_idx % len(self._src_paths)
+                shifted = self._src_paths[shift:] + self._src_paths[:shift]
+                key = f"loadtest_{copy_idx:04d}"
+                UVMixerService.create(group_path, key=key)
+                UVMixerService.load(key, *shifted)
+                UVMixerService.set_correction(key, use_correction)
+                self._load_test_keys.append(key)
                 added += 1
 
-        if self._primary:
-            self._primary.set_value(self._primary.get_value())
+        if self._primary_key:
+            UVMixerService.set_value(self._primary_key,
+                                     UVMixerService.get_value(self._primary_key))
         return added
 
     def _clear_load_test_prims(self) -> None:
@@ -376,8 +388,6 @@ class UsdInterpolationUI:
             return
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             pxr_stage.RemovePrim(LOAD_TEST_ROOT)
-        for m in self._load_test_mixers:
-            key = UVMixerService.get_key(m)
-            if key is not None:
-                UVMixerService.destroy(key)
-        self._load_test_mixers = []
+        for k in self._load_test_keys:
+            UVMixerService.destroy(k)
+        self._load_test_keys = []

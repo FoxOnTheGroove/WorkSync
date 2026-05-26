@@ -1,4 +1,5 @@
 import uuid
+from typing import Callable
 
 from .interpolation import UVMixer
 
@@ -10,18 +11,9 @@ class UVMixerService:
     @classmethod
     def create(cls,
                target_path: 'str | None',
-               *st_paths: str) -> UVMixer:
-        mixer = UVMixer.create(target_path, *st_paths)
-        key = target_path or uuid.uuid4().hex[:8]
-        cls._instances[key] = mixer
-        return mixer
-
-    @classmethod
-    def create_with_maps(cls,
-                         target_path: 'str | None',
-                         st_maps: list) -> UVMixer:
-        mixer = UVMixer.create_with_maps(target_path, st_maps)
-        key = target_path or uuid.uuid4().hex[:8]
+               key: 'str | None' = None) -> UVMixer:
+        mixer = UVMixer.create(target_path)
+        key = key or target_path or uuid.uuid4().hex[:8]
         cls._instances[key] = mixer
         return mixer
 
@@ -54,16 +46,79 @@ class UVMixerService:
             m.destroy()
         cls._instances.clear()
 
-    # ── 반환된 UVMixer 인스턴스 API ─────────────────────────────
-    # mixer.play()                재생 시작
-    # mixer.stop()                재생 정지
-    # mixer.is_playing() -> bool  재생 중 여부
-    # mixer.set_value(t)           t (0.0~1.0) 위치로 이동
-    # mixer.get_value() -> float   현재 t 값
-    # mixer.apply_correction()    UV 보정 수동 적용
-    # mixer.set_forward(v)        재생 방향 (True=정방향)
-    # mixer.set_loop(v)           루프 설정
-    # mixer.set_speed(v)          재생 속도 배율
-    # mixer.set_correction(v)     correction on/off (bake 재실행 없음)
-    # mixer.subscribe(cb)         t 변경 시 cb(t) 호출 등록
-    # mixer.unsubscribe(cb)       콜백 제거
+    # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
+    @classmethod
+    def load(cls, key: str, *st_paths: str) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.load(*st_paths)
+
+    @classmethod
+    def play(cls, key: str) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.play()
+
+    @classmethod
+    def stop(cls, key: str) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.stop()
+
+    @classmethod
+    def is_playing(cls, key: str) -> bool:
+        m = cls._instances.get(key)
+        return m.is_playing() if m else False
+
+    @classmethod
+    def set_value(cls, key: str, t: float) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.set_value(t)
+
+    @classmethod
+    def get_value(cls, key: str) -> float:
+        m = cls._instances.get(key)
+        return m.get_value() if m else 0.0
+
+    @classmethod
+    def apply_correction(cls, key: str) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.apply_correction()
+
+    @classmethod
+    def set_forward(cls, key: str, forward: bool) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.set_forward(forward)
+
+    @classmethod
+    def set_loop(cls, key: str, loop: bool) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.set_loop(loop)
+
+    @classmethod
+    def set_speed(cls, key: str, speed: float) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.set_speed(speed)
+
+    @classmethod
+    def set_correction(cls, key: str, enabled: bool) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.set_correction(enabled)
+
+    @classmethod
+    def subscribe(cls, key: str, callback: Callable[[float], None]) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.subscribe(callback)
+
+    @classmethod
+    def unsubscribe(cls, key: str, callback: Callable[[float], None]) -> None:
+        m = cls._instances.get(key)
+        if m:
+            m.unsubscribe(callback)

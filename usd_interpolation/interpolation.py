@@ -29,36 +29,13 @@ class UVMixer:
     # ── 팩토리 ──────────────────────────────────────────────────────
 
     @classmethod
-    def create(cls,
-               target_path: 'str | None',
-               *st_paths: str) -> 'UVMixer':
-        """각 소스 USD 파일에서 모든 메쉬를 읽어 UVMixer를 생성한다.
-        모든 파일에 공통으로 존재하는 메쉬 경로만 사용한다.
-        """
-        if len(st_paths) < 2:
-            raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
-        maps_per_file = [cls.make_st_map(p) for p in st_paths]
-        common = set(maps_per_file[0].keys())
-        for m in maps_per_file[1:]:
-            common &= set(m.keys())
-        if not common:
-            raise ValueError(f"[UVMixer] no common mesh paths found across source files")
-        st_maps = [{path: maps_per_file[i][path] for path in common}
-                   for i in range(len(st_paths))]
-        return cls.create_with_maps(target_path, st_maps)
-
-    @classmethod
-    def create_with_maps(cls,
-                         target_path: 'str | None',
-                         st_maps: 'list[dict[str, np.ndarray]]') -> 'UVMixer':
-        """target_path 아래 prim들에 st_maps를 적용하는 UVMixer를 생성한다.
-        target_path가 None이면 st_maps의 경로를 그대로 사용한다."""
-        return cls._init(cls._remap(st_maps, target_path))
-
-    @classmethod
-    def _init(cls, st_maps) -> 'UVMixer':
+    def create(cls, target_path: 'str | None') -> 'UVMixer':
+        """빈 UVMixer를 생성한다. 소스는 load(*paths)로 주입한다.
+        target_path가 None이면 소스 경로를 그대로 사용한다."""
         inst = cls.__new__(cls)
-        inst._st_maps = st_maps
+        inst._target_path = target_path
+        inst._st_maps = []
+        inst._baked_paths = []
         inst._t = 0.0
         inst._play_task = None
         inst._speed = 1.0
@@ -66,13 +43,34 @@ class UVMixer:
         inst._loop = False
         inst._use_correction = True
         inst._subscribers = []
-        inst._fvli_cache: dict[str, str] = {}
-        inst._bake_timesamples()
+        inst._fvli_cache = {}
         return inst
+
+    def load(self, *st_paths: str) -> None:
+        """소스 USD 파일들을 읽어 보간 데이터를 주입한다.
+        재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다."""
+        if len(st_paths) < 2:
+            raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
+        maps_per_file = [self.make_st_map(p) for p in st_paths]
+        common = set(maps_per_file[0].keys())
+        for m in maps_per_file[1:]:
+            common &= set(m.keys())
+        if not common:
+            raise ValueError(f"[UVMixer] no common mesh paths found across source files")
+        st_maps = [{path: maps_per_file[i][path] for path in common}
+                   for i in range(len(st_paths))]
+
+        self.stop()
+        self._clear_baked()
+        self._st_maps = self._remap(st_maps, self._target_path)
+        self._t = 0.0
+        self._bake_timesamples()
 
     # ── 재생 ─────────────────────────────────────────────────────
 
     def play(self) -> None:
+        if not self._st_maps:
+            return
         self.stop()
         self._play_task = asyncio.ensure_future(self._animate())
 
@@ -87,6 +85,8 @@ class UVMixer:
     # ── 위치 ─────────────────────────────────────────────────────
 
     def set_value(self, t: float, *, _correction: bool = True) -> None:
+        if not self._st_maps:
+            return
         t = max(0.0, min(1.0, t))
         self._t = t
         n = len(self._st_maps)
@@ -166,6 +166,24 @@ class UVMixer:
             val = attr.Get() if (attr and attr.IsValid()) else None
             self._fvli_cache[mesh_path] = str(val) if val is not None else "cornersPlus1"
 
+    def _clear_baked(self) -> None:
+        """이전에 bake한 메쉬들의 st 타임샘플을 session layer에서 제거한다."""
+        if not self._baked_paths:
+            return
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            self._baked_paths = []
+            return
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            for mesh_path in self._baked_paths:
+                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                if not pxr_prim.IsValid():
+                    continue
+                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                if st_pv and st_pv.GetAttr().IsValid():
+                    st_pv.GetAttr().Clear()
+        self._baked_paths = []
+
     def _bake_timesamples(self) -> None:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None or not self._st_maps:
@@ -183,6 +201,7 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+        self._baked_paths = list(self._st_maps[0].keys())
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
