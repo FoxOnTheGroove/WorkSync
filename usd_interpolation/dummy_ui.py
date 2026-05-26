@@ -17,9 +17,8 @@ class UsdInterpolationUI:
         self._t_label: ui.Label | None = None
         self._field: ui.StringField | None = None
         self._btn_play: ui.Button | None = None
-        self._btn_reverse: ui.Button | None = None
-        self._btn_loop: ui.Button | None = None
-        self._btn_rev_loop: ui.Button | None = None
+        self._reverse_cb: ui.CheckBox | None = None
+        self._loop_cb: ui.CheckBox | None = None
         self._correction_cb: ui.CheckBox | None = None
         self._speed_label: ui.Label | None = None
         self._dup_field: ui.IntField | None = None
@@ -71,14 +70,13 @@ class UsdInterpolationUI:
                 with ui.HStack(height=24, spacing=8):
                     self._btn_play = ui.Button("Play ▶", width=80,
                                                clicked_fn=self._on_play_clicked)
-                    self._btn_reverse = ui.Button("Reverse ◄", width=90,
-                                                  clicked_fn=self._on_reverse_clicked)
-                    self._btn_loop = ui.Button("Loop ↺", width=74,
-                                               clicked_fn=self._on_loop_clicked)
-                    self._btn_rev_loop = ui.Button("Rev Loop ↺", width=90,
-                                                   clicked_fn=self._on_rev_loop_clicked)
-                    ui.Button("Refresh", width=70,
-                              clicked_fn=self._on_refresh_clicked)
+                    ui.Spacer(width=8)
+                    self._reverse_cb = ui.CheckBox(width=20, height=20)
+                    self._reverse_cb.model.add_value_changed_fn(self._on_reverse_changed)
+                    ui.Label("Reverse", width=60, height=20)
+                    self._loop_cb = ui.CheckBox(width=20, height=20)
+                    self._loop_cb.model.add_value_changed_fn(self._on_loop_changed)
+                    ui.Label("Loop", width=40, height=20)
 
                 # ── 속도 슬라이더 ────────────────────────
                 with ui.HStack(height=24, spacing=8):
@@ -181,10 +179,6 @@ class UsdInterpolationUI:
         if self._primary:
             self._primary.seek(self._primary.position())
 
-    def _on_refresh_clicked(self):
-        if self._primary:
-            self._primary.seek(self._primary.position())
-
     def _on_play_clicked(self):
         if not self._primary:
             return
@@ -193,41 +187,16 @@ class UsdInterpolationUI:
             self._apply_load_test_correction()
             self._btn_play.text = "Play ▶"
         else:
-            self._primary.play(forward=True)
+            self._primary.play()
             self._btn_play.text = "Stop ■"
 
-    def _on_reverse_clicked(self):
-        if not self._primary:
-            return
-        if self._primary.is_playing():
-            self._primary.stop()
-            self._apply_load_test_correction()
-            self._btn_reverse.text = "Reverse ◄"
-        else:
-            self._primary.play(forward=False)
-            self._btn_reverse.text = "Stop ■"
+    def _on_reverse_changed(self, model):
+        if self._primary:
+            self._primary.set_forward(not model.get_value_as_bool())
 
-    def _on_loop_clicked(self):
-        if not self._primary:
-            return
-        if self._primary.is_playing():
-            self._primary.stop()
-            self._apply_load_test_correction()
-            self._btn_loop.text = "Loop ↺"
-        else:
-            self._primary.play(forward=True, loop=True)
-            self._btn_loop.text = "Stop ■"
-
-    def _on_rev_loop_clicked(self):
-        if not self._primary:
-            return
-        if self._primary.is_playing():
-            self._primary.stop()
-            self._apply_load_test_correction()
-            self._btn_rev_loop.text = "Rev Loop ↺"
-        else:
-            self._primary.play(forward=False, loop=True)
-            self._btn_rev_loop.text = "Stop ■"
+    def _on_loop_changed(self, model):
+        if self._primary:
+            self._primary.set_loop(model.get_value_as_bool())
 
     def _on_slider_changed(self, model):
         if self._primary and self._primary.is_playing():
@@ -268,12 +237,6 @@ class UsdInterpolationUI:
             self._apply_load_test_correction()
             if self._btn_play:
                 self._btn_play.text = "Play ▶"
-            if self._btn_reverse:
-                self._btn_reverse.text = "Reverse ◄"
-            if self._btn_loop:
-                self._btn_loop.text = "Loop ↺"
-            if self._btn_rev_loop:
-                self._btn_rev_loop.text = "Rev Loop ↺"
         else:
             # 재생 중 — 패스 끝 또는 보정 알림 시점에만 load_test 보정
             if t <= 0.0 or t >= 1.0:

@@ -62,6 +62,8 @@ class UVMixer:
         inst._t = 0.0
         inst._play_task = None
         inst._speed = 1.0
+        inst._forward = True
+        inst._loop = False
         inst._use_correction = use_correction
         inst._subscribers = []
         inst._fvli_cache: dict[str, str] = {}
@@ -70,9 +72,9 @@ class UVMixer:
 
     # ── 재생 ─────────────────────────────────────────────────────
 
-    def play(self, *, forward: bool = True, loop: bool = False) -> None:
+    def play(self) -> None:
         self.stop()
-        self._play_task = asyncio.ensure_future(self._animate(forward, loop))
+        self._play_task = asyncio.ensure_future(self._animate())
 
     def stop(self) -> None:
         if self._play_task and not self._play_task.done():
@@ -117,6 +119,12 @@ class UVMixer:
         return self._t
 
     # ── 설정 ──────────────────────────────────────────────────
+
+    def set_forward(self, forward: bool) -> None:
+        self._forward = bool(forward)
+
+    def set_loop(self, loop: bool) -> None:
+        self._loop = bool(loop)
 
     def set_speed(self, speed: float) -> None:
         self._speed = max(0.1, float(speed))
@@ -172,31 +180,27 @@ class UVMixer:
         for cb in list(self._subscribers):
             cb(t)
 
-    async def _animate(self, forward: bool, loop: bool = False) -> None:
+    async def _animate(self) -> None:
         try:
+            last_time = time.monotonic()
             while True:
-                start_t = 0.0 if (loop and forward) else (1.0 if (loop and not forward) else self._t)
-                target = 1.0 if forward else 0.0
-                travel = abs(target - start_t)
-                pass_start = time.monotonic()
+                await omni.kit.app.get_app().next_update_async()
+                now = time.monotonic()
+                step = (now - last_time) * self._speed / _PLAY_DURATION
+                last_time = now
 
-                while True:
-                    await omni.kit.app.get_app().next_update_async()
-                    elapsed = time.monotonic() - pass_start
-                    eff_duration = _PLAY_DURATION / max(self._speed, 0.01)
-                    dt_scale = (travel / eff_duration) if (travel > 0.0 and eff_duration > 0.0) else 0.0
-                    frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
-                    new_t = start_t + (frac if forward else -frac)
-                    new_t = max(0.0, min(1.0, new_t))
-                    self.seek(new_t, _correction=False)
-                    if (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
+                new_t = self._t + (step if self._forward else -step)
+                new_t = max(0.0, min(1.0, new_t))
+                self.seek(new_t, _correction=False)
+
+                reached_end = (self._forward and new_t >= 1.0) or \
+                              (not self._forward and new_t <= 0.0)
+                if reached_end:
+                    self.apply_correction()
+                    self._notify(self._t)
+                    if not self._loop:
                         break
-
-                self.apply_correction()
-                self._notify(self._t)
-
-                if not loop:
-                    break
+                    self.seek(0.0 if self._forward else 1.0, _correction=False)
         except asyncio.CancelledError:
             self.apply_correction()
             self._notify(self._t)
