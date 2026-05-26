@@ -30,14 +30,17 @@ class UVMixer:
 
     @classmethod
     def create(cls,
+               target_path: 'str | None',
                st_maps: 'list[dict[str, np.ndarray]]',
                *,
                use_correction: bool = True) -> 'UVMixer':
-        """이미 빌드된 st_maps(리스트 of {mesh_path: array})로부터 UVMixer를 생성한다."""
-        return cls._init(list(st_maps), use_correction=use_correction)
+        """target_path 아래 prim들에 st_maps를 적용하는 UVMixer를 생성한다.
+        target_path가 None이면 st_maps의 경로를 그대로 사용한다."""
+        return cls._init(cls._remap(st_maps, target_path), use_correction=use_correction)
 
     @classmethod
     def create_with_maps(cls,
+                         target_path: 'str | None',
                          *st_paths: str,
                          use_correction: bool = True) -> 'UVMixer':
         """각 소스 USD 파일에서 모든 메쉬를 읽어 UVMixer를 생성한다.
@@ -53,7 +56,7 @@ class UVMixer:
             raise ValueError(f"[UVMixer] no common mesh paths found across source files")
         st_maps = [{path: maps_per_file[i][path] for path in common}
                    for i in range(len(st_paths))]
-        return cls.create(st_maps, use_correction=use_correction)
+        return cls.create(target_path, st_maps, use_correction=use_correction)
 
     @classmethod
     def _init(cls, st_maps, *, use_correction) -> 'UVMixer':
@@ -207,6 +210,26 @@ class UVMixer:
             return
         finally:
             self._play_task = None
+
+    @staticmethod
+    def _remap(st_maps: 'list[dict[str, np.ndarray]]',
+               target_path: 'str | None') -> 'list[dict[str, np.ndarray]]':
+        """소스 st_maps의 공통 루트를 target_path로 교체한다. None이면 그대로 반환."""
+        if not target_path:
+            return list(st_maps)
+        all_paths = list(st_maps[0].keys())
+        parts = [p.split('/') for p in all_paths]
+        common: list = []
+        for level in zip(*parts):
+            if len(set(level)) == 1:
+                common.append(level[0])
+            else:
+                break
+        source_root = '/'.join(common)
+        return [
+            {target_path + src[len(source_root):]: arr for src, arr in frame.items()}
+            for frame in st_maps
+        ]
 
     @staticmethod
     def make_st_map(file_path: str) -> 'dict[str, np.ndarray]':

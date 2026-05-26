@@ -163,7 +163,7 @@ class UsdInterpolationUI:
         # 3) 모든 메쉬를 하나의 mixer로 묶어서 생성
         st_maps = [{path: maps_per_file[i][path] for path in common_paths}
                    for i in range(len(paths))]
-        mixer = UVMixer.create(st_maps, use_correction=use_correction)
+        mixer = UVMixer.create(None, st_maps, use_correction=use_correction)
         self._mixers = [mixer]
 
         self._primary = mixer
@@ -349,7 +349,7 @@ class UsdInterpolationUI:
                 shifted_maps = [{path_map[op]: arr
                                  for op, arr in tc_map.items() if op in path_map}
                                 for tc_map in shifted_orig]
-                mixer = UVMixer.create(shifted_maps, use_correction=use_correction)
+                mixer = UVMixer.create(None, shifted_maps, use_correction=use_correction)
                 self._load_test_mixers.append(mixer)
                 added += 1
 
