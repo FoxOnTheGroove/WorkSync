@@ -5,7 +5,7 @@ import omni.ui as ui
 from pxr import Gf, Usd, UsdGeom, UsdShade, Vt
 
 from .UVMixer import UV_INTERP_MODE
-from .UVMixerService import UVMixerService
+from .UVMixer_service import UVMixerService
 
 LOAD_TEST_ROOT = "/World/LoadTest"
 
