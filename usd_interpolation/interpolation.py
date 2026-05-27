@@ -19,6 +19,11 @@ _FVLI_ALT = {
 
 PLAY_DURATION = 1.0
 
+# ── 보간 모드 스위치 ─────────────────────────────────────────────────
+# 'timeline' : st를 타임코드로 bake → USD 네이티브 보간 (빠름, 전역 타임라인 사용)
+# 'direct'   : 매 프레임 Python lerp 후 st 직접 write (타임라인 독립, 비용 높음)
+UV_INTERP_MODE: str = 'timeline'
+
 
 class UVMixer:
     """하나의 타겟 prim 아래 있는 모든 메쉬의 UV 보간을 관리한다.
@@ -98,7 +103,9 @@ class UVMixer:
             return
         t = max(0.0, min(1.0, t))
         self._t = t
-        if drive_timeline:
+        if UV_INTERP_MODE == 'direct':
+            self._write_st_direct(t)
+        elif drive_timeline:
             n = len(self._st_maps)
             stage = omni.usd.get_context().get_stage()
             tps = stage.GetTimeCodesPerSecond() if stage else 24.0
@@ -229,12 +236,18 @@ class UVMixer:
         self._baked_paths = []
 
     def _bake_timesamples(self) -> None:
-        pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None or not self._st_maps:
+        if not self._st_maps:
             return
-
+        # _baked_paths는 모드 무관하게 항상 설정 — _clear_baked가 직접 write 값도 정리할 수 있게.
+        self._baked_paths = list(self._st_maps[0].keys())
         self._refresh_fvli_cache()
 
+        if UV_INTERP_MODE == 'direct':
+            return  # direct 모드는 bake 없이 set_value마다 직접 write
+
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            return
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, mesh_map in enumerate(self._st_maps):
                 for mesh_path, st_data in mesh_map.items():
@@ -245,7 +258,27 @@ class UVMixer:
                     if st_pv and st_pv.GetAttr().IsValid():
                         st_pv.GetAttr().Set(
                             Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
-        self._baked_paths = list(self._st_maps[0].keys())
+
+    def _write_st_direct(self, t: float) -> None:
+        """direct 모드 전용: t 위치의 UV를 Python lerp로 계산해 st primvar에 직접 쓴다."""
+        n = len(self._st_maps)
+        idx = t * (n - 1)
+        i = min(int(idx), n - 2)   # floor 프레임 인덱스
+        frac = idx - i              # 보간 비율 [0, 1)
+        pxr_stage = omni.usd.get_context().get_stage()
+        if pxr_stage is None:
+            return
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            for mesh_path, st_a in self._st_maps[i].items():
+                st_b = self._st_maps[i + 1][mesh_path]
+                interp = st_a + frac * (st_b - st_a)
+                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                if not pxr_prim.IsValid():
+                    continue
+                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                if st_pv and st_pv.GetAttr().IsValid():
+                    st_pv.GetAttr().Set(
+                        Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(interp)))
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
