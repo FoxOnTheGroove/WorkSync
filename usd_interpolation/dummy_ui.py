@@ -75,10 +75,11 @@ class UsdInterpolationUI:
                 # ── Mixer 행 (스크롤) ─────────────────────────────────
                 ui.Label("Mixers:", height=16)
                 scroll = ui.ScrollingFrame(
-                    height=198,
+                    height=264,
                     horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_OFF,
                     vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
-                    style={"background_color": 0xFF000000},
+                    style={"background_color": 0xFF1E1E1E,
+                           "border_color": 0xFF444444, "border_width": 1},
                 )
                 with scroll:
                     self._mixer_vstack = ui.VStack(spacing=2)
