@@ -117,7 +117,7 @@ class UVMixer:
                 paths = list(session.subLayerPaths)
                 if self._baked_layer.identifier in paths:
                     idx = paths.index(self._baked_layer.identifier)
-                    session.SetSubLayerOffset(idx, Sdf.LayerOffset(-tc))
+                    session.subLayerOffsets[idx] = Sdf.LayerOffset(-tc)
         elif drive_timeline:
             n = len(self._st_maps)
             stage = omni.usd.get_context().get_stage()
