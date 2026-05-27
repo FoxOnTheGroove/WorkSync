@@ -71,47 +71,48 @@ class UsdInterpolationUI:
                 self._refresh_mode_buttons()
 
                 # ── Mixer 행 (스크롤) ─────────────────────────────────
-                ui.Label("Mixers:", height=18)
+                ui.Label("Mixers:", height=16)
                 scroll = ui.ScrollingFrame(
-                    height=220,
+                    height=198,
                     horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_OFF,
                     vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
+                    style={"background_color": 0xFF000000},
                 )
                 with scroll:
-                    self._mixer_vstack = ui.VStack(spacing=4)
+                    self._mixer_vstack = ui.VStack(spacing=2)
 
     # ── 행 추가 ──────────────────────────────────────────────────────
 
     def _add_mixer_row(self, key: str) -> None:
         """_mixer_vstack 안에 mixer 한 행을 추가하고 _mixer_rows에 등록한다."""
         with self._mixer_vstack:
-            with ui.VStack(spacing=2, style={"margin_bottom": 4}):
+            with ui.VStack(spacing=1, style={"margin": 4, "margin_bottom": 6}):
                 # key 레이블 (구분선 역할)
-                ui.Label(f"── {key} ──", height=16,
-                         style={"color": 0xFFAAAAAA, "font_size": 12})
+                ui.Label(f"── {key} ──", height=14,
+                         style={"color": 0xFFAAAAAA, "font_size": 11})
 
                 # Play / Reverse / Loop 행
-                with ui.HStack(height=24, spacing=6):
+                with ui.HStack(height=20, spacing=6):
                     btn_play = ui.Button("Play ▶", width=72,
                                          clicked_fn=lambda k=key: self._on_mixer_play(k))
-                    rev_cb = ui.CheckBox(width=20, height=20)
+                    rev_cb = ui.CheckBox(width=18, height=18)
                     rev_cb.model.add_value_changed_fn(
                         lambda m, k=key: self._on_mixer_reverse(m, k))
-                    ui.Label("Reverse", width=56, height=20)
-                    loop_cb = ui.CheckBox(width=20, height=20)
+                    ui.Label("Reverse", width=56, height=18)
+                    loop_cb = ui.CheckBox(width=18, height=18)
                     loop_cb.model.add_value_changed_fn(
                         lambda m, k=key: self._on_mixer_loop(m, k))
-                    ui.Label("Loop", width=36, height=20)
+                    ui.Label("Loop", width=36, height=18)
 
                 # t 슬라이더 행
-                with ui.HStack(height=24, spacing=6):
+                with ui.HStack(height=20, spacing=6):
                     t_label = ui.Label("t: 0.000", width=60)
                     slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     slider.model.add_value_changed_fn(
                         lambda m, k=key: self._on_mixer_slider(m, k))
 
                 # 속도 행
-                with ui.HStack(height=24, spacing=6):
+                with ui.HStack(height=20, spacing=6):
                     ui.Label("Speed:", width=44)
                     speed_label = ui.Label("1.0x", width=36)
                     speed_sl = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
