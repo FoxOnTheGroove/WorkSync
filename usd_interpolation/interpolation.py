@@ -3,7 +3,7 @@ import time
 from typing import Callable
 
 import numpy as np
-from pxr import Sdf, Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, Vt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -21,7 +21,7 @@ PLAY_DURATION = 1.0
 
 # ── 보간 모드 스위치 ─────────────────────────────────────────────────
 # 'timeline' : st를 타임코드로 bake → USD 네이티브 보간 (빠름, 전역 타임라인 공유)
-# 'direct'   : 매 프레임 Python lerp 후 st 직접 write (타임라인 독립, Sdf.ChangeBlock 최적화)
+# 'direct'   : 매 프레임 Python lerp 후 st 직접 write (타임라인 독립)
 UV_INTERP_MODE: str = 'timeline'
 
 
@@ -270,18 +270,17 @@ class UVMixer:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
-        with Sdf.ChangeBlock():
-            with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-                for mesh_path, st_a in self._st_maps[i].items():
-                    st_b = self._st_maps[i + 1][mesh_path]
-                    interp = st_a + frac * (st_b - st_a)
-                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.GetAttr().Set(
-                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(interp)))
+        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            for mesh_path, st_a in self._st_maps[i].items():
+                st_b = self._st_maps[i + 1][mesh_path]
+                interp = st_a + frac * (st_b - st_a)
+                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                if not pxr_prim.IsValid():
+                    continue
+                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                if st_pv and st_pv.GetAttr().IsValid():
+                    st_pv.GetAttr().Set(
+                        Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(interp)))
 
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
