@@ -1,10 +1,12 @@
 from typing import Callable
 
-from .interpolation import UVMixer
+from .UVMixer import UVMixer
+from .UVMixer_player import UVMixerPlayer
 
 
 class UVMixerService:
     _instances: dict[str, UVMixer] = {}
+    _shared_player: UVMixerPlayer = UVMixerPlayer()   # N+1 플레이어 중 공유 플레이어 1개
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
@@ -46,6 +48,25 @@ class UVMixerService:
         for m in list(cls._instances.values()):
             m.destroy()
         cls._instances.clear()
+
+    # ── sync ─────────────────────────────────────────────────────────
+
+    @classmethod
+    def sync(cls, reference_key: str) -> None:
+        """reference_key mixer의 t/speed/forward/loop를 shared_player에 복사하고,
+        모든 mixer를 shared_player에 합류시킨다."""
+        ref = cls._instances.get(reference_key)
+        if ref:
+            cls._shared_player.copy_from(ref.own_player)
+        for mixer in cls._instances.values():
+            mixer.join_player(cls._shared_player)
+
+    @classmethod
+    def unsync(cls, key: str) -> None:
+        """해당 key의 mixer를 shared_player에서 떠나 own_player로 복귀시킨다."""
+        mixer = cls._instances.get(key)
+        if mixer:
+            mixer.leave_player()
 
     # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
     @classmethod

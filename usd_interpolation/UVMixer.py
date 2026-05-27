@@ -1,12 +1,10 @@
-import asyncio
-import time
 from typing import Callable
 
 import numpy as np
 from pxr import Usd, UsdGeom, Vt
-import omni.kit.app
-import omni.timeline
 import omni.usd
+
+from .UVMixer_player import UVMixerPlayer
 
 _FVLI_ALT = {
     "cornersPlus1": "cornersPlus2",
@@ -16,8 +14,6 @@ _FVLI_ALT = {
     "boundaries":   "cornersPlus1",
     "all":          "cornersPlus1",
 }
-
-PLAY_DURATION = 1.0
 
 # ── 보간 모드 스위치 ─────────────────────────────────────────────────
 # 'timeline' : st를 타임코드로 bake → USD 네이티브 보간 (빠름, 전역 타임라인 공유)
@@ -29,6 +25,9 @@ class UVMixer:
     """하나의 타겟 prim 아래 있는 모든 메쉬의 UV 보간을 관리한다.
 
     _st_maps: 소스 파일(=타임코드)별 {mesh_path: st_array} 딕셔너리 리스트.
+
+    각 UVMixer는 own_player(UVMixerPlayer)를 소유한다.
+    join_player(shared_player)로 공유 플레이어에 구독 전환 가능 (sync).
     """
 
     # ── 팩토리 ──────────────────────────────────────────────────────
@@ -41,14 +40,15 @@ class UVMixer:
         inst._target_path = target_path
         inst._st_maps = []
         inst._baked_paths = []
-        inst._t = 0.0
-        inst._play_task = None
-        inst._speed = 1.0
-        inst._forward = True
-        inst._loop = False
+        inst._t = 0.0          # 마지막으로 적용된 t (get_value용 캐시)
         inst._use_correction = True
         inst._subscribers = []
         inst._fvli_cache = {}
+        # 각 mixer는 자신의 own_player를 가진다.
+        # join_player(shared_player)로 공유 플레이어에 구독 전환 가능.
+        inst.own_player: UVMixerPlayer = UVMixerPlayer()
+        inst._active_player: UVMixerPlayer = inst.own_player
+        inst.own_player.subscribe_tick(inst._apply_t)
         return inst
 
     def load(self, *st_paths: str) -> 'list[str]':
@@ -73,7 +73,7 @@ class UVMixer:
             raise ValueError("[UVMixer] no valid meshes remain after validation")
         st_maps = [{p: frame[p] for p in valid} for frame in st_maps]
 
-        self.stop()
+        self.own_player.stop()   # own_player만 멈춤. shared_player는 건드리지 않음.
         self._clear_baked()
         self._st_maps = self._remap(st_maps, self._target_path)
         self._t = 0.0
@@ -83,33 +83,31 @@ class UVMixer:
     # ── 재생 ─────────────────────────────────────────────────────
 
     def play(self) -> None:
+        """독립 재생(own_player). 공유 플레이어에 합류된 상태여도 own_player를 따로 시작한다."""
         if not self._st_maps:
             return
-        self.stop()
-        self._play_task = asyncio.ensure_future(self._animate())
+        self.own_player.play()
 
     def stop(self) -> None:
-        if self._play_task and not self._play_task.done():
-            self._play_task.cancel()
-            self._play_task = None
+        """own_player 정지. 공유 플레이어는 건드리지 않는다."""
+        self.own_player.stop()
 
     def is_playing(self) -> bool:
-        return self._play_task is not None and not self._play_task.done()
+        return self.own_player.is_playing()
 
     # ── 위치 ─────────────────────────────────────────────────────
 
-    def set_value(self, t: float, *, correction: bool = True, drive_timeline: bool = True) -> None:
+    def set_value(self, t: float, *, correction: bool = True,
+                  drive_timeline: bool = True) -> None:
+        """UV 속성을 t(0.0~1.0) 위치로 쓴다.
+        drive_timeline은 하위호환용으로 남겨두나, timeline seek는 이제
+        UVMixerPlayer tick 구독자(dummy_ui._on_player_tick)가 담당한다."""
         if not self._st_maps:
             return
         t = max(0.0, min(1.0, t))
         self._t = t
         if UV_INTERP_MODE == 'direct':
             self._write_st_direct(t)
-        elif drive_timeline:
-            n = len(self._st_maps)
-            timeline = omni.timeline.get_timeline_interface()
-            tps = timeline.get_time_codes_per_second()
-            timeline.set_current_time(t * (n - 1) / tps)
         if correction:
             self.apply_correction()
         self._notify(t)
@@ -138,13 +136,13 @@ class UVMixer:
     # ── 설정 ──────────────────────────────────────────────────
 
     def set_forward(self, forward: bool) -> None:
-        self._forward = bool(forward)
+        self.own_player.set_forward(forward)
 
     def set_loop(self, loop: bool) -> None:
-        self._loop = bool(loop)
+        self.own_player.set_loop(loop)
 
     def set_speed(self, speed: float) -> None:
-        self._speed = max(0.1, float(speed))
+        self.own_player.set_speed(speed)
 
     def set_correction(self, enabled: bool) -> None:
         self._use_correction = bool(enabled)
@@ -162,10 +160,37 @@ class UVMixer:
     def unsubscribe(self, callback: Callable[[float], None]) -> None:
         self._subscribers = [c for c in self._subscribers if c != callback]
 
+    # ── 플레이어 구독 전환 ───────────────────────────────────────
+
+    def _apply_t(self, t: float, correction: bool) -> None:
+        """UVMixerPlayer tick 콜백 — UV 속성 write만 담당."""
+        self.set_value(t, correction=correction, drive_timeline=False)
+
+    def join_player(self, player: UVMixerPlayer) -> None:
+        """공유 플레이어에 구독 전환한다. 이전 플레이어에서 unsubscribe."""
+        if self._active_player is player:
+            return
+        self._active_player.unsubscribe_tick(self._apply_t)
+        self._active_player = player
+        player.subscribe_tick(self._apply_t)
+
+    def leave_player(self) -> None:
+        """own_player로 복귀한다. 공유 플레이어의 현재 t를 이어받아 점프 없음."""
+        if self._active_player is self.own_player:
+            return
+        self._active_player.unsubscribe_tick(self._apply_t)
+        self.own_player.copy_from(self._active_player)
+        self._active_player = self.own_player
+        self.own_player.subscribe_tick(self._apply_t)
+
     # ── 라이프사이클 ────────────────────────────────────────────────────
 
     def destroy(self) -> None:
-        self.stop()
+        # 공유 플레이어에 합류된 상태라면 구독 해제 (공유 플레이어는 정지하지 않음)
+        if self._active_player is not self.own_player:
+            self._active_player.unsubscribe_tick(self._apply_t)
+            self._active_player = self.own_player
+        self.own_player.stop()
         self._subscribers.clear()
 
     # ── 내부 ─────────────────────────────────────────────────────
@@ -252,7 +277,6 @@ class UVMixer:
         # timeline 모드: session layer에 bake
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             # session layer tcps를 stage와 맞춰 timeSample 자동 스케일링 방지.
-            # (session 기본 24 vs stage 60이면 샘플이 2.5배로 늘어나 t=1이 40%에서 멈춤)
             pxr_stage.GetSessionLayer().timeCodesPerSecond = pxr_stage.GetTimeCodesPerSecond()
             for tc, mesh_map in enumerate(self._st_maps):
                 for mesh_path, st_data in mesh_map.items():
@@ -268,8 +292,8 @@ class UVMixer:
         """direct 모드 전용: t 위치의 UV를 Python lerp로 계산해 st primvar에 직접 쓴다."""
         n = len(self._st_maps)
         idx = t * (n - 1)
-        i = min(int(idx), n - 2)   # floor 프레임 인덱스
-        frac = idx - i              # 보간 비율 [0, 1)
+        i = min(int(idx), n - 2)
+        frac = idx - i
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
@@ -288,35 +312,6 @@ class UVMixer:
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
             cb(t)
-
-    async def _animate(self) -> None:
-        try:
-            last_time = time.monotonic()
-            while True:
-                await omni.kit.app.get_app().next_update_async()
-                now = time.monotonic()
-                step = (now - last_time) * self._speed / PLAY_DURATION
-                last_time = now
-
-                new_t = self._t + (step if self._forward else -step)
-                new_t = max(0.0, min(1.0, new_t))
-                self.set_value(new_t, correction=False)
-
-                reached_end = (self._forward and new_t >= 1.0) or \
-                              (not self._forward and new_t <= 0.0)
-                if reached_end:
-                    self.apply_correction()
-                    self._notify(self._t)
-                    if not self._loop:
-                        break
-                    self.set_value(0.0 if self._forward else 1.0, correction=False)
-                    self.apply_correction()  # 루프 첫 프레임 보정
-        except asyncio.CancelledError:
-            self.apply_correction()
-            self._notify(self._t)
-            return
-        finally:
-            self._play_task = None
 
     @staticmethod
     def _source_root(path: str) -> str:
