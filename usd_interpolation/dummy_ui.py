@@ -20,9 +20,11 @@ class UsdInterpolationUI:
         self._mixer_vstack: ui.VStack | None = None
 
         # per-mixer 행 위젯 참조
-        # {key: {'t_label', 'slider', 'btn_play', 'speed_label', 'reverse_cb', 'loop_cb'}}
+        # {key: {'t_label', 'slider', 'btn_play', 'speed_label', 'speed_sl',
+        #        'reverse_cb', 'loop_cb'}}
         self._mixer_rows: dict[str, dict] = {}
-        self._in_tick: bool = False          # 슬라이더 갱신 중 재진입 방지
+        self._in_tick: bool = False          # t슬라이더 갱신 중 재진입 방지
+        self._in_sync: bool = False          # speed/reverse/loop 동기화 중 재진입 방지
         self._n_frames: int = 0              # _seek_timeline 용
 
         # shared_player tick/stopped 구독
@@ -125,6 +127,7 @@ class UsdInterpolationUI:
             'slider':     slider,
             'btn_play':   btn_play,
             'speed_label': speed_label,
+            'speed_sl':   speed_sl,
             'reverse_cb': rev_cb,
             'loop_cb':    loop_cb,
         }
@@ -247,17 +250,38 @@ class UsdInterpolationUI:
         UVMixerService._shared_player.set_t(t)
 
     def _on_mixer_reverse(self, model, key: str) -> None:
-        UVMixerService._shared_player.set_forward(not model.get_value_as_bool())
+        if self._in_sync:
+            return
+        forward = not model.get_value_as_bool()
+        UVMixerService._shared_player.set_forward(forward)
+        self._in_sync = True
+        for k, row in self._mixer_rows.items():
+            if k != key:
+                row['reverse_cb'].model.set_value(not forward)
+        self._in_sync = False
 
     def _on_mixer_loop(self, model, key: str) -> None:
-        UVMixerService._shared_player.set_loop(model.get_value_as_bool())
+        if self._in_sync:
+            return
+        loop = model.get_value_as_bool()
+        UVMixerService._shared_player.set_loop(loop)
+        self._in_sync = True
+        for k, row in self._mixer_rows.items():
+            if k != key:
+                row['loop_cb'].model.set_value(loop)
+        self._in_sync = False
 
     def _on_mixer_speed(self, model, key: str) -> None:
+        if self._in_sync:
+            return
         speed = model.get_value_as_float()
         UVMixerService._shared_player.set_speed(speed)
-        row = self._mixer_rows.get(key)
-        if row:
+        self._in_sync = True
+        for k, row in self._mixer_rows.items():
             row['speed_label'].text = f"{speed:.1f}x"
+            if k != key:
+                row['speed_sl'].model.set_value(speed)
+        self._in_sync = False
 
     # ── 라이프사이클 ─────────────────────────────────────────────────
 
