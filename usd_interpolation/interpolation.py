@@ -3,7 +3,7 @@ import time
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom, Vt
+from pxr import Sdf, Usd, UsdGeom, Vt
 import omni.kit.app
 import omni.timeline
 import omni.usd
@@ -20,8 +20,11 @@ _FVLI_ALT = {
 PLAY_DURATION = 1.0
 
 # ── 보간 모드 스위치 ─────────────────────────────────────────────────
-# 'timeline' : st를 타임코드로 bake → USD 네이티브 보간 (빠름, 전역 타임라인 사용)
+# 'timeline' : st를 타임코드로 bake → USD 네이티브 보간 (빠름, 전역 타임라인 공유)
 # 'direct'   : 매 프레임 Python lerp 후 st 직접 write (타임라인 독립, 비용 높음)
+# 'sublayer' : per-mixer anonymous 레이어 bake → offset 메타 1건 변경 (빠름 + 독립)
+#              ※ sublayer 모드에서 global tc는 0으로 고정됨.
+#                timeline 모드 mixer와 동시 사용 시 읽기 위치가 어긋날 수 있음.
 UV_INTERP_MODE: str = 'timeline'
 
 
@@ -49,6 +52,7 @@ class UVMixer:
         inst._use_correction = True
         inst._subscribers = []
         inst._fvli_cache = {}
+        inst._baked_layer: 'Sdf.Layer | None' = None
         return inst
 
     def load(self, *st_paths: str) -> 'list[str]':
@@ -105,6 +109,15 @@ class UVMixer:
         self._t = t
         if UV_INTERP_MODE == 'direct':
             self._write_st_direct(t)
+        elif UV_INTERP_MODE == 'sublayer' and self._baked_layer is not None:
+            tc = t * (len(self._st_maps) - 1)
+            stage = omni.usd.get_context().get_stage()
+            if stage:
+                session = stage.GetSessionLayer()
+                paths = list(session.subLayerPaths)
+                if self._baked_layer.identifier in paths:
+                    idx = paths.index(self._baked_layer.identifier)
+                    session.SetSubLayerOffset(idx, Sdf.LayerOffset(-tc))
         elif drive_timeline:
             n = len(self._st_maps)
             stage = omni.usd.get_context().get_stage()
@@ -224,21 +237,31 @@ class UVMixer:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             self._baked_paths = []
+            self._baked_layer = None
             return
-        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            for mesh_path in self._baked_paths:
-                pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                if not pxr_prim.IsValid():
-                    continue
-                st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                if st_pv and st_pv.GetAttr().IsValid():
-                    st_pv.GetAttr().Clear()
+        if UV_INTERP_MODE == 'sublayer' and self._baked_layer is not None:
+            # anonymous 레이어를 session sublayer 목록에서 제거
+            session = pxr_stage.GetSessionLayer()
+            paths = list(session.subLayerPaths)
+            if self._baked_layer.identifier in paths:
+                paths.remove(self._baked_layer.identifier)
+                session.subLayerPaths = paths
+            self._baked_layer = None
+        else:
+            with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+                for mesh_path in self._baked_paths:
+                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                    if not pxr_prim.IsValid():
+                        continue
+                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                    if st_pv and st_pv.GetAttr().IsValid():
+                        st_pv.GetAttr().Clear()
         self._baked_paths = []
 
     def _bake_timesamples(self) -> None:
         if not self._st_maps:
             return
-        # _baked_paths는 모드 무관하게 항상 설정 — _clear_baked가 직접 write 값도 정리할 수 있게.
+        # _baked_paths는 모드 무관하게 항상 설정 — _clear_baked가 어느 모드든 정리 가능하게.
         self._baked_paths = list(self._st_maps[0].keys())
         self._refresh_fvli_cache()
 
@@ -248,6 +271,27 @@ class UVMixer:
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
             return
+
+        if UV_INTERP_MODE == 'sublayer':
+            # per-mixer anonymous 레이어에 bake — global tc를 0으로 파킹
+            layer = Sdf.Layer.CreateAnonymous('uvmixer')
+            session = pxr_stage.GetSessionLayer()
+            session.subLayerPaths.insert(0, layer.identifier)
+            self._baked_layer = layer
+            omni.timeline.get_timeline_interface().set_current_time(0)
+            with Usd.EditContext(pxr_stage, layer):
+                for tc, mesh_map in enumerate(self._st_maps):
+                    for mesh_path, st_data in mesh_map.items():
+                        pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                        if not pxr_prim.IsValid():
+                            continue
+                        st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                        if st_pv and st_pv.GetAttr().IsValid():
+                            st_pv.GetAttr().Set(
+                                Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+            return
+
+        # timeline 모드: session layer에 bake
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             for tc, mesh_map in enumerate(self._st_maps):
                 for mesh_path, st_data in mesh_map.items():
