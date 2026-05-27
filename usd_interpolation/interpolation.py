@@ -251,6 +251,9 @@ class UVMixer:
 
         # timeline 모드: session layer에 bake
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+            # session layer tcps를 stage와 맞춰 timeSample 자동 스케일링 방지.
+            # (session 기본 24 vs stage 60이면 샘플이 2.5배로 늘어나 t=1이 40%에서 멈춤)
+            pxr_stage.GetSessionLayer().timeCodesPerSecond = pxr_stage.GetTimeCodesPerSecond()
             for tc, mesh_map in enumerate(self._st_maps):
                 for mesh_path, st_data in mesh_map.items():
                     pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
