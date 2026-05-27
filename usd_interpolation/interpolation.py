@@ -17,7 +17,7 @@ _FVLI_ALT = {
     "all":          "cornersPlus1",
 }
 
-_PLAY_DURATION = 1.0
+PLAY_DURATION = 1.0
 
 
 class UVMixer:
@@ -93,7 +93,7 @@ class UVMixer:
 
     # ── 위치 ─────────────────────────────────────────────────────
 
-    def set_value(self, t: float, *, _correction: bool = True, drive_timeline: bool = True) -> None:
+    def set_value(self, t: float, *, correction: bool = True, drive_timeline: bool = True) -> None:
         if not self._st_maps:
             return
         t = max(0.0, min(1.0, t))
@@ -103,7 +103,7 @@ class UVMixer:
             stage = omni.usd.get_context().get_stage()
             tps = stage.GetTimeCodesPerSecond() if stage else 24.0
             omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
-        if _correction:
+        if correction:
             self.apply_correction()
         self._notify(t)
 
@@ -257,12 +257,12 @@ class UVMixer:
             while True:
                 await omni.kit.app.get_app().next_update_async()
                 now = time.monotonic()
-                step = (now - last_time) * self._speed / _PLAY_DURATION
+                step = (now - last_time) * self._speed / PLAY_DURATION
                 last_time = now
 
                 new_t = self._t + (step if self._forward else -step)
                 new_t = max(0.0, min(1.0, new_t))
-                self.set_value(new_t, _correction=False)
+                self.set_value(new_t, correction=False)
 
                 reached_end = (self._forward and new_t >= 1.0) or \
                               (not self._forward and new_t <= 0.0)
@@ -271,7 +271,7 @@ class UVMixer:
                     self._notify(self._t)
                     if not self._loop:
                         break
-                    self.set_value(0.0 if self._forward else 1.0, _correction=False)
+                    self.set_value(0.0 if self._forward else 1.0, correction=False)
         except asyncio.CancelledError:
             self.apply_correction()
             self._notify(self._t)

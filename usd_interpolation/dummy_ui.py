@@ -1,8 +1,13 @@
+import asyncio
+import time
+
 import numpy as np
+import omni.kit.app
 import omni.usd
 import omni.ui as ui
 from pxr import Gf, Usd, UsdGeom, UsdShade, Vt
 
+from .interpolation import PLAY_DURATION
 from .interpolation_service import UVMixerService
 
 LOAD_TEST_ROOT = "/World/LoadTest"
@@ -30,6 +35,8 @@ class UsdInterpolationUI:
         self._primary_key: str | None = None
         self._load_test_keys: list[str] = []  # 복제된 테스트 prim mixer key 들
         self._src_paths: list[str] = []
+        self._play_task: asyncio.Task | None = None
+        self._current_speed: float = 1.0
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=520, height=340)
@@ -104,6 +111,9 @@ class UsdInterpolationUI:
                               clicked_fn=self._on_clear_clicked)
 
     # ── 헬퍼 ────────────────────────────────────────────
+
+    def _is_playing(self) -> bool:
+        return self._play_task is not None and not self._play_task.done()
 
     def _all_keys(self) -> list[str]:
         keys = [self._primary_key] if self._primary_key else []
@@ -200,11 +210,10 @@ class UsdInterpolationUI:
     def _on_play_clicked(self):
         if not self._primary_key:
             return
-        if UVMixerService.is_playing(self._primary_key):
-            UVMixerService.stop(self._primary_key)
-            self._btn_play.text = "Play ▶"
+        if self._is_playing():
+            self._play_task.cancel()
         else:
-            UVMixerService.play(self._primary_key)
+            self._play_task = asyncio.ensure_future(self._animate_all())
             self._btn_play.text = "Stop ■"
 
     def _on_reverse_changed(self, model):
@@ -216,15 +225,18 @@ class UsdInterpolationUI:
             UVMixerService.set_loop(self._primary_key, model.get_value_as_bool())
 
     def _on_slider_changed(self, model):
-        if self._primary_key and UVMixerService.is_playing(self._primary_key):
+        if self._is_playing():
             return
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
         if self._primary_key:
             UVMixerService.set_value(self._primary_key, t)
+            for k in self._load_test_keys:
+                UVMixerService.set_value(k, t, drive_timeline=False)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
+        self._current_speed = speed
         if self._primary_key:
             UVMixerService.set_speed(self._primary_key, speed)
         if self._speed_label:
@@ -247,18 +259,67 @@ class UsdInterpolationUI:
             self._slider.model.set_value(t)
         if self._t_label:
             self._t_label.text = f"t: {t:.3f}"
-        # primary가 이미 전역 타임라인을 옮겼으므로 follower는 타임라인을 건드리지 않고
-        # 자기 메쉬 correction + _t 동기화만 한다.
-        for k in self._load_test_keys:
-            UVMixerService.set_value(k, t, drive_timeline=False)
-        if self._btn_play and self._primary_key and not UVMixerService.is_playing(self._primary_key):
-            self._btn_play.text = "Play ▶"
+        # 재생 중에는 _animate_all이 copy를 직접 구동하므로 여기서 팬아웃하면 중복됨.
+        # 수동 seek(슬라이더 등) 시에만 copy를 동기화한다.
+        if not self._is_playing():
+            for k in self._load_test_keys:
+                UVMixerService.set_value(k, t, drive_timeline=False)
+            if self._btn_play:
+                self._btn_play.text = "Play ▶"
+
+    async def _animate_all(self) -> None:
+        """primary + 모든 copy를 동일한 보간 규칙으로 구동한다.
+        UVMixer._animate의 델타-타임 스텝·루프·경계 correction 로직을 UI 레벨에서 재구현.
+        primary만 전역 타임라인을 구동하고, copy는 drive_timeline=False로 correction만 처리."""
+        try:
+            last_time = time.monotonic()
+            while True:
+                await omni.kit.app.get_app().next_update_async()
+                now = time.monotonic()
+                step = (now - last_time) * self._current_speed / PLAY_DURATION
+                last_time = now
+
+                forward = not (self._reverse_cb.model.get_value_as_bool()
+                               if self._reverse_cb else False)
+                cur_t = UVMixerService.get_value(self._primary_key)
+                new_t = max(0.0, min(1.0, cur_t + (step if forward else -step)))
+
+                # 매 프레임: correction 없이 t만 진행
+                UVMixerService.set_value(self._primary_key, new_t, correction=False)
+                for k in self._load_test_keys:
+                    UVMixerService.set_value(k, new_t, correction=False, drive_timeline=False)
+
+                reached_end = (forward and new_t >= 1.0) or (not forward and new_t <= 0.0)
+                if reached_end:
+                    # 경계: 모든 mixer에 correction 1회
+                    UVMixerService.set_value(self._primary_key, new_t)
+                    for k in self._load_test_keys:
+                        UVMixerService.set_value(k, new_t, drive_timeline=False)
+                    loop = self._loop_cb.model.get_value_as_bool() if self._loop_cb else False
+                    if not loop:
+                        break
+                    reset_t = 0.0 if forward else 1.0
+                    UVMixerService.set_value(self._primary_key, reset_t, correction=False)
+                    for k in self._load_test_keys:
+                        UVMixerService.set_value(k, reset_t, correction=False, drive_timeline=False)
+        except asyncio.CancelledError:
+            # 수동 정지: 현재 t에서 모든 mixer correction 1회
+            t = UVMixerService.get_value(self._primary_key)
+            UVMixerService.set_value(self._primary_key, t)
+            for k in self._load_test_keys:
+                UVMixerService.set_value(k, t, drive_timeline=False)
+        finally:
+            self._play_task = None
+            if self._btn_play:
+                self._btn_play.text = "Play ▶"
 
     def _set_status(self, text: str):
         if self._status_label:
             self._status_label.text = f"Status: {text}"
 
     def destroy(self):
+        if self._play_task and not self._play_task.done():
+            self._play_task.cancel()
         if self._primary_key:
             UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
         UVMixerService.destroy_all()
