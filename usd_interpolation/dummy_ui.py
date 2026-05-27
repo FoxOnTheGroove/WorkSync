@@ -3,11 +3,12 @@ import time
 
 import numpy as np
 import omni.kit.app
+import omni.timeline
 import omni.usd
 import omni.ui as ui
 from pxr import Gf, Usd, UsdGeom, UsdShade, Vt
 
-from .interpolation import PLAY_DURATION
+from .interpolation import PLAY_DURATION, UV_INTERP_MODE
 from .interpolation_service import UVMixerService
 
 LOAD_TEST_ROOT = "/World/LoadTest"
@@ -30,11 +31,12 @@ class UsdInterpolationUI:
         self._dup_field: ui.IntField | None = None
         self._stage_field: ui.StringField | None = None
 
-        # primary가 타임라인을 구동한다; 나머지 mixer는 데이터만 baked.
+        # 모든 mixer는 동등하다. UI가 타임라인 핸들러를 단독 소유하고(_seek_timeline),
+        # 각 mixer는 t 값을 받기만 한다(drive_timeline=False). 어떤 mixer도 특별하지 않다.
         # mixer 인스턴스는 UVMixerService가 보유하고, UI는 key만 들고 있는다.
-        self._primary_key: str | None = None
-        self._load_test_keys: list[str] = []  # 복제된 테스트 prim mixer key 들
-        self._src_paths: list[str] = []
+        self._mixer_keys: list[str] = []           # 등록 순서 보존, 전부 동등
+        self._src_paths: dict[str, list[str]] = {}  # key별 소스 경로
+        self._n_frames: int = 0                    # 타임라인 핸들러용 프레임 수(=소스 개수)
         self._play_task: asyncio.Task | None = None
         self._current_speed: float = 1.0
 
@@ -115,9 +117,25 @@ class UsdInterpolationUI:
     def _is_playing(self) -> bool:
         return self._play_task is not None and not self._play_task.done()
 
-    def _all_keys(self) -> list[str]:
-        keys = [self._primary_key] if self._primary_key else []
-        return keys + self._load_test_keys
+    def _base_keys(self) -> list[str]:
+        """Load All로 등록된 mixer key들(복제 loadtest 제외)."""
+        return [k for k in self._mixer_keys if not k.startswith("loadtest_")]
+
+    def _seek_timeline(self, t: float) -> None:
+        """timeline 모드: 전역 USD 타임라인을 t(0..1) 위치로 이동.
+        mixer 개수와 무관하게 UI가 단독 소유. 프레임 수는 로드한 소스 개수(_n_frames)."""
+        if UV_INTERP_MODE != 'timeline' or self._n_frames < 2:
+            return
+        timeline = omni.timeline.get_timeline_interface()
+        tps = timeline.get_time_codes_per_second()
+        timeline.set_current_time(t * (self._n_frames - 1) / tps)
+
+    def _apply_t(self, t: float, *, correction: bool = True) -> None:
+        """타임라인 핸들러(UI)가 t를 구동하고, 모든 mixer가 동등하게 그 값을 받는다.
+        mixer에 t를 적용하는 모든 경로는 반드시 이 메서드만 경유한다."""
+        self._seek_timeline(t)                       # 전역 타임라인 (UI 담당)
+        for k in self._mixer_keys:                   # 각 mixer 동등 수신
+            UVMixerService.set_value(k, t, correction=correction, drive_timeline=False)
 
     # ── 콜백 ───────────────────────────────────────────
 
@@ -164,51 +182,41 @@ class UsdInterpolationUI:
             self._set_status("ERROR: no active stage")
             return
 
-        # load-test 정리
-        for k in self._load_test_keys:
-            UVMixerService.destroy(k)
-        self._load_test_keys = []
-
-        self._src_paths = list(paths)
         use_correction = bool(self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
 
         target_path = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else None
         target_path = target_path or None
-        key = target_path or "__primary__"
+        key = target_path or f"mixer_{len(self._mixer_keys)}"
 
-        # 타겟이 바뀌면 이전 primary 폐기, 아니면 같은 mixer 재로드(구독 유지)
-        if self._primary_key and self._primary_key != key:
-            UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
-            UVMixerService.destroy(self._primary_key)
-            self._primary_key = None
-        if self._primary_key is None:
+        # 동일 target이면 기존 mixer 재사용(load가 _clear_baked 후 재bake), 아니면 동등하게 추가.
+        if key not in self._mixer_keys:
             UVMixerService.create(target_path, key=key)
-            UVMixerService.subscribe(key, self._on_t_changed)
-            self._primary_key = key
+            self._mixer_keys.append(key)
 
         warnings = UVMixerService.load(key, *paths)
+        self._src_paths[key] = list(paths)
+        self._n_frames = len(paths)
         UVMixerService.set_correction(key, use_correction)
         self._slider.enabled = True
-        UVMixerService.set_value(key, 0.0)
+        self._apply_t(0.0)
 
         src = UVMixerService.get_instance(key)
         n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
-        status = f"1 mixer ({n_meshes} mesh(es), {len(paths)} source(s))"
+        status = f"{len(self._mixer_keys)} mixer(s) — {n_meshes} mesh(es), {len(paths)} src"
         if warnings:
             status += f" | {len(warnings)} skipped"
         self._set_status(status)
 
     def _on_correction_changed(self, model):
         enabled = bool(model.get_value_as_bool())
-        for k in self._all_keys():
+        for k in self._mixer_keys:
             UVMixerService.set_correction(k, enabled)
-        if self._primary_key:
-            UVMixerService.set_value(self._primary_key,
-                                     UVMixerService.get_value(self._primary_key))
+        if self._mixer_keys:
+            self._apply_t(self._slider.model.get_value_as_float())
 
     def _on_play_clicked(self):
-        if not self._primary_key:
+        if not self._mixer_keys:
             return
         if self._is_playing():
             self._play_task.cancel()
@@ -217,28 +225,25 @@ class UsdInterpolationUI:
             self._btn_play.text = "Stop ■"
 
     def _on_reverse_changed(self, model):
-        if self._primary_key:
-            UVMixerService.set_forward(self._primary_key, not model.get_value_as_bool())
+        for k in self._mixer_keys:
+            UVMixerService.set_forward(k, not model.get_value_as_bool())
 
     def _on_loop_changed(self, model):
-        if self._primary_key:
-            UVMixerService.set_loop(self._primary_key, model.get_value_as_bool())
+        for k in self._mixer_keys:
+            UVMixerService.set_loop(k, model.get_value_as_bool())
 
     def _on_slider_changed(self, model):
         if self._is_playing():
             return
         t = model.get_value_as_float()
         self._t_label.text = f"t: {t:.3f}"
-        if self._primary_key:
-            UVMixerService.set_value(self._primary_key, t)
-            for k in self._load_test_keys:
-                UVMixerService.set_value(k, t, drive_timeline=False)
+        self._apply_t(t)
 
     def _on_speed_changed(self, model):
         speed = model.get_value_as_float()
         self._current_speed = speed
-        if self._primary_key:
-            UVMixerService.set_speed(self._primary_key, speed)
+        for k in self._mixer_keys:
+            UVMixerService.set_speed(k, speed)
         if self._speed_label:
             self._speed_label.text = f"{speed:.1f}x"
 
@@ -254,23 +259,10 @@ class UsdInterpolationUI:
         self._clear_load_test_prims()
         self._set_status("Load test prims cleared")
 
-    def _on_t_changed(self, t: float):
-        if self._slider:
-            self._slider.model.set_value(t)
-        if self._t_label:
-            self._t_label.text = f"t: {t:.3f}"
-        # 재생 중에는 _animate_all이 copy를 직접 구동하므로 여기서 팬아웃하면 중복됨.
-        # 수동 seek(슬라이더 등) 시에만 copy를 동기화한다.
-        if not self._is_playing():
-            for k in self._load_test_keys:
-                UVMixerService.set_value(k, t, drive_timeline=False)
-            if self._btn_play:
-                self._btn_play.text = "Play ▶"
-
     async def _animate_all(self) -> None:
-        """primary + 모든 copy를 동일한 보간 규칙으로 구동한다.
-        UVMixer._animate의 델타-타임 스텝·루프·경계 correction 로직을 UI 레벨에서 재구현.
-        primary만 전역 타임라인을 구동하고, copy는 drive_timeline=False로 correction만 처리."""
+        """UI 타임라인 핸들러의 재생 루프. 매 프레임 t를 전진시켜 _apply_t로
+        전역 타임라인 seek + 모든 mixer 동등 적용. 델타-타임 스텝·루프·경계 correction 처리."""
+        cur_t = self._slider.model.get_value_as_float()
         try:
             last_time = time.monotonic()
             while True:
@@ -281,33 +273,23 @@ class UsdInterpolationUI:
 
                 forward = not (self._reverse_cb.model.get_value_as_bool()
                                if self._reverse_cb else False)
-                cur_t = UVMixerService.get_value(self._primary_key)
-                new_t = max(0.0, min(1.0, cur_t + (step if forward else -step)))
+                cur_t = max(0.0, min(1.0, cur_t + (step if forward else -step)))
 
                 # 매 프레임: correction 없이 t만 진행
-                UVMixerService.set_value(self._primary_key, new_t, correction=False)
-                for k in self._load_test_keys:
-                    UVMixerService.set_value(k, new_t, correction=False, drive_timeline=False)
+                self._apply_t(cur_t, correction=False)
+                self._slider.model.set_value(cur_t)  # 재생 중 _on_slider_changed는 early-return
+                self._t_label.text = f"t: {cur_t:.3f}"
 
-                reached_end = (forward and new_t >= 1.0) or (not forward and new_t <= 0.0)
+                reached_end = (forward and cur_t >= 1.0) or (not forward and cur_t <= 0.0)
                 if reached_end:
-                    # 경계: 모든 mixer에 correction 1회
-                    UVMixerService.set_value(self._primary_key, new_t)
-                    for k in self._load_test_keys:
-                        UVMixerService.set_value(k, new_t, drive_timeline=False)
+                    self._apply_t(cur_t)  # 경계: correction 1회
                     loop = self._loop_cb.model.get_value_as_bool() if self._loop_cb else False
                     if not loop:
                         break
-                    reset_t = 0.0 if forward else 1.0
-                    UVMixerService.set_value(self._primary_key, reset_t, correction=False)
-                    for k in self._load_test_keys:
-                        UVMixerService.set_value(k, reset_t, correction=False, drive_timeline=False)
+                    cur_t = 0.0 if forward else 1.0
+                    self._apply_t(cur_t, correction=False)
         except asyncio.CancelledError:
-            # 수동 정지: 현재 t에서 모든 mixer correction 1회
-            t = UVMixerService.get_value(self._primary_key)
-            UVMixerService.set_value(self._primary_key, t)
-            for k in self._load_test_keys:
-                UVMixerService.set_value(k, t, drive_timeline=False)
+            self._apply_t(cur_t)  # 수동 정지: 현재 t에서 correction 1회
         finally:
             self._play_task = None
             if self._btn_play:
@@ -320,11 +302,10 @@ class UsdInterpolationUI:
     def destroy(self):
         if self._play_task and not self._play_task.done():
             self._play_task.cancel()
-        if self._primary_key:
-            UVMixerService.unsubscribe(self._primary_key, self._on_t_changed)
         UVMixerService.destroy_all()
-        self._primary_key = None
-        self._load_test_keys = []
+        self._mixer_keys = []
+        self._src_paths = {}
+        self._n_frames = 0
         if self._window:
             self._window.destroy()
             self._window = None
@@ -333,9 +314,14 @@ class UsdInterpolationUI:
 
     def _duplicate_meshes(self, n: int) -> int:
         pxr_stage = omni.usd.get_context().get_stage()
-        if pxr_stage is None or not self._primary_key or not self._src_paths:
+        base_keys = self._base_keys()
+        if pxr_stage is None or not base_keys:
             return 0
-        orig_mesh_paths = UVMixerService.get_mesh_paths(self._primary_key)
+        ref_key = base_keys[-1]                      # 가장 최근 로드된 비-loadtest mixer 기준
+        ref_src_paths = self._src_paths.get(ref_key)
+        if not ref_src_paths:
+            return 0
+        orig_mesh_paths = UVMixerService.get_mesh_paths(ref_key)
         if not orig_mesh_paths:
             return 0
 
@@ -346,8 +332,8 @@ class UsdInterpolationUI:
         added = 0
 
         # load(*paths)의 _remap 결과와 경로가 일치하도록 서브구조를 보존한다.
-        # primary가 target_path로 remap됐으면 그 길이, 아니면 source root 기준으로 strip.
-        target = UVMixerService.get_target_path(self._primary_key)
+        # ref가 target_path로 remap됐으면 그 길이, 아니면 source root 기준으로 strip.
+        target = UVMixerService.get_target_path(ref_key)
 
         def _subpath(p: str) -> str:
             if target:
@@ -421,18 +407,18 @@ class UsdInterpolationUI:
                             ))
 
                 # 소스 경로를 시프트해 load → 타임코드 시프트 효과
-                shift = copy_idx % len(self._src_paths)
-                shifted = self._src_paths[shift:] + self._src_paths[:shift]
+                shift = copy_idx % len(ref_src_paths)
+                shifted = ref_src_paths[shift:] + ref_src_paths[:shift]
                 key = f"loadtest_{copy_idx:04d}"
                 UVMixerService.create(group_path, key=key)
                 UVMixerService.load(key, *shifted)
                 UVMixerService.set_correction(key, use_correction)
-                self._load_test_keys.append(key)
+                self._mixer_keys.append(key)
+                self._src_paths[key] = list(shifted)
                 added += 1
 
-        if self._primary_key:
-            UVMixerService.set_value(self._primary_key,
-                                     UVMixerService.get_value(self._primary_key))
+        # 복제 mixer도 동등 참여 — 현재 t를 전체에 재적용
+        self._apply_t(self._slider.model.get_value_as_float())
         return added
 
     def _clear_load_test_prims(self) -> None:
@@ -441,6 +427,7 @@ class UsdInterpolationUI:
             return
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
             pxr_stage.RemovePrim(LOAD_TEST_ROOT)
-        for k in self._load_test_keys:
+        for k in [k for k in self._mixer_keys if k.startswith("loadtest_")]:
             UVMixerService.destroy(k)
-        self._load_test_keys = []
+            self._mixer_keys.remove(k)
+            self._src_paths.pop(k, None)
