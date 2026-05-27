@@ -107,9 +107,9 @@ class UVMixer:
             self._write_st_direct(t)
         elif drive_timeline:
             n = len(self._st_maps)
-            stage = omni.usd.get_context().get_stage()
-            tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-            omni.timeline.get_timeline_interface().set_current_time(t * (n - 1) / tps)
+            timeline = omni.timeline.get_timeline_interface()
+            tps = timeline.get_time_codes_per_second()
+            timeline.set_current_time(t * (n - 1) / tps)
         if correction:
             self.apply_correction()
         self._notify(t)
@@ -307,6 +307,7 @@ class UVMixer:
                     if not self._loop:
                         break
                     self.set_value(0.0 if self._forward else 1.0, correction=False)
+                    self.apply_correction()  # 루프 첫 프레임 보정
         except asyncio.CancelledError:
             self.apply_correction()
             self._notify(self._t)
