@@ -25,6 +25,113 @@ PLAY_DURATION = 1.0
 UV_INTERP_MODE: str = 'timeline'
 
 
+class PlaybackClock:
+    """재생 루프와 tick 알림을 담당하는 클럭.
+    omni 의존성 없음 — seek_timeline 등 외부 동작은 콜백으로 주입한다.
+    tick 콜백 시그니처: (t: float, correction: bool)
+    stopped 콜백 시그니처: ()"""
+
+    def __init__(self) -> None:
+        self._t: float = 0.0
+        self._speed: float = 1.0
+        self._forward: bool = True
+        self._loop: bool = False
+        self._play_task: asyncio.Task | None = None
+        self._tick_cbs: list[Callable[[float, bool], None]] = []
+        self._stopped_cbs: list[Callable[[], None]] = []
+
+    # ── 재생 제어 ──────────────────────────────────────────────────────
+
+    def play(self) -> None:
+        self.stop()
+        self._play_task = asyncio.ensure_future(self._animate())
+
+    def stop(self) -> None:
+        if self._play_task and not self._play_task.done():
+            self._play_task.cancel()
+        self._play_task = None
+
+    def is_playing(self) -> bool:
+        return self._play_task is not None and not self._play_task.done()
+
+    # ── t / 설정 ───────────────────────────────────────────────────────
+
+    def set_t(self, t: float, *, correction: bool = True) -> None:
+        self._t = max(0.0, min(1.0, t))
+        self._notify_tick(self._t, correction)
+
+    def set_speed(self, v: float) -> None:
+        self._speed = max(0.1, float(v))
+
+    def set_forward(self, v: bool) -> None:
+        self._forward = bool(v)
+
+    def set_loop(self, v: bool) -> None:
+        self._loop = bool(v)
+
+    # ── 상태 복사 (sync 진입 시) ───────────────────────────────────────
+
+    def copy_from(self, other: 'PlaybackClock') -> None:
+        """다른 클럭의 t/speed/forward/loop를 복사한다. play_task는 복사하지 않는다."""
+        self._t = other._t
+        self._speed = other._speed
+        self._forward = other._forward
+        self._loop = other._loop
+
+    # ── 구독 ───────────────────────────────────────────────────────────
+
+    def subscribe_tick(self, cb: Callable[[float, bool], None]) -> None:
+        if cb not in self._tick_cbs:
+            self._tick_cbs.append(cb)
+
+    def unsubscribe_tick(self, cb: Callable[[float, bool], None]) -> None:
+        self._tick_cbs = [c for c in self._tick_cbs if c != cb]
+
+    def subscribe_stopped(self, cb: Callable[[], None]) -> None:
+        if cb not in self._stopped_cbs:
+            self._stopped_cbs.append(cb)
+
+    def unsubscribe_stopped(self, cb: Callable[[], None]) -> None:
+        self._stopped_cbs = [c for c in self._stopped_cbs if c != cb]
+
+    # ── 내부 ───────────────────────────────────────────────────────────
+
+    def _notify_tick(self, t: float, correction: bool) -> None:
+        for cb in list(self._tick_cbs):
+            cb(t, correction)
+
+    def _notify_stopped(self) -> None:
+        for cb in list(self._stopped_cbs):
+            cb()
+
+    async def _animate(self) -> None:
+        """델타-타임 스텝·루프·경계 correction. dummy_ui._animate_all을 대체한다."""
+        cur_t = self._t
+        try:
+            last = time.monotonic()
+            while True:
+                await omni.kit.app.get_app().next_update_async()
+                now = time.monotonic()
+                step = (now - last) * self._speed / PLAY_DURATION
+                last = now
+                cur_t = max(0.0, min(1.0, cur_t + (step if self._forward else -step)))
+                self._t = cur_t
+                self._notify_tick(cur_t, False)
+                reached_end = (self._forward and cur_t >= 1.0) or \
+                              (not self._forward and cur_t <= 0.0)
+                if reached_end:
+                    self._notify_tick(cur_t, True)
+                    if not self._loop:
+                        break
+                    cur_t = 0.0 if self._forward else 1.0
+                    self._notify_tick(cur_t, False)
+        except asyncio.CancelledError:
+            self._notify_tick(cur_t, True)
+        finally:
+            self._play_task = None
+            self._notify_stopped()
+
+
 class UVMixer:
     """하나의 타겟 prim 아래 있는 모든 메쉬의 UV 보간을 관리한다.
 
@@ -41,14 +148,15 @@ class UVMixer:
         inst._target_path = target_path
         inst._st_maps = []
         inst._baked_paths = []
-        inst._t = 0.0
-        inst._play_task = None
-        inst._speed = 1.0
-        inst._forward = True
-        inst._loop = False
+        inst._t = 0.0          # 마지막으로 적용된 t (get_value용 캐시)
         inst._use_correction = True
         inst._subscribers = []
         inst._fvli_cache = {}
+        # 각 mixer는 자신의 own_clock을 가진다.
+        # join_clock(shared_clock)으로 공유 클럭에 구독 전환 가능.
+        inst.own_clock: PlaybackClock = PlaybackClock()
+        inst._active_clock: PlaybackClock = inst.own_clock
+        inst.own_clock.subscribe_tick(inst._apply_t)
         return inst
 
     def load(self, *st_paths: str) -> 'list[str]':
@@ -73,7 +181,7 @@ class UVMixer:
             raise ValueError("[UVMixer] no valid meshes remain after validation")
         st_maps = [{p: frame[p] for p in valid} for frame in st_maps]
 
-        self.stop()
+        self.own_clock.stop()
         self._clear_baked()
         self._st_maps = self._remap(st_maps, self._target_path)
         self._t = 0.0
@@ -83,33 +191,31 @@ class UVMixer:
     # ── 재생 ─────────────────────────────────────────────────────
 
     def play(self) -> None:
+        """독립 재생(own_clock). 공유 클럭에 합류된 상태여도 own_clock을 따로 시작한다."""
         if not self._st_maps:
             return
-        self.stop()
-        self._play_task = asyncio.ensure_future(self._animate())
+        self.own_clock.play()
 
     def stop(self) -> None:
-        if self._play_task and not self._play_task.done():
-            self._play_task.cancel()
-            self._play_task = None
+        """own_clock 정지. 공유 클럭은 건드리지 않는다."""
+        self.own_clock.stop()
 
     def is_playing(self) -> bool:
-        return self._play_task is not None and not self._play_task.done()
+        return self.own_clock.is_playing()
 
     # ── 위치 ─────────────────────────────────────────────────────
 
-    def set_value(self, t: float, *, correction: bool = True, drive_timeline: bool = True) -> None:
+    def set_value(self, t: float, *, correction: bool = True,
+                  drive_timeline: bool = True) -> None:
+        """UV 속성을 t(0.0~1.0) 위치로 쓴다.
+        drive_timeline은 하위호환용으로 남겨두나, timeline seek는 이제
+        PlaybackClock tick 구독자(dummy_ui._on_clock_tick)가 담당한다."""
         if not self._st_maps:
             return
         t = max(0.0, min(1.0, t))
         self._t = t
         if UV_INTERP_MODE == 'direct':
             self._write_st_direct(t)
-        elif drive_timeline:
-            n = len(self._st_maps)
-            timeline = omni.timeline.get_timeline_interface()
-            tps = timeline.get_time_codes_per_second()
-            timeline.set_current_time(t * (n - 1) / tps)
         if correction:
             self.apply_correction()
         self._notify(t)
@@ -138,13 +244,13 @@ class UVMixer:
     # ── 설정 ──────────────────────────────────────────────────
 
     def set_forward(self, forward: bool) -> None:
-        self._forward = bool(forward)
+        self.own_clock.set_forward(forward)
 
     def set_loop(self, loop: bool) -> None:
-        self._loop = bool(loop)
+        self.own_clock.set_loop(loop)
 
     def set_speed(self, speed: float) -> None:
-        self._speed = max(0.1, float(speed))
+        self.own_clock.set_speed(speed)
 
     def set_correction(self, enabled: bool) -> None:
         self._use_correction = bool(enabled)
@@ -162,10 +268,37 @@ class UVMixer:
     def unsubscribe(self, callback: Callable[[float], None]) -> None:
         self._subscribers = [c for c in self._subscribers if c != callback]
 
+    # ── 클럭 구독 전환 ──────────────────────────────────────────────────
+
+    def _apply_t(self, t: float, correction: bool) -> None:
+        """PlaybackClock tick 콜백 — UV 속성 write만 담당."""
+        self.set_value(t, correction=correction, drive_timeline=False)
+
+    def join_clock(self, clock: PlaybackClock) -> None:
+        """공유 클럭에 구독 전환한다. 이전 클럭에서 unsubscribe."""
+        if self._active_clock is clock:
+            return
+        self._active_clock.unsubscribe_tick(self._apply_t)
+        self._active_clock = clock
+        clock.subscribe_tick(self._apply_t)
+
+    def leave_clock(self) -> None:
+        """own_clock으로 복귀한다. 공유 클럭의 현재 t를 이어받아 점프 없음."""
+        if self._active_clock is self.own_clock:
+            return
+        self._active_clock.unsubscribe_tick(self._apply_t)
+        self.own_clock.copy_from(self._active_clock)
+        self._active_clock = self.own_clock
+        self.own_clock.subscribe_tick(self._apply_t)
+
     # ── 라이프사이클 ────────────────────────────────────────────────────
 
     def destroy(self) -> None:
-        self.stop()
+        # 공유 클럭에 합류된 상태라면 구독 해제 (공유 클럭은 정지하지 않음)
+        if self._active_clock is not self.own_clock:
+            self._active_clock.unsubscribe_tick(self._apply_t)
+            self._active_clock = self.own_clock
+        self.own_clock.stop()
         self._subscribers.clear()
 
     # ── 내부 ─────────────────────────────────────────────────────
@@ -288,35 +421,6 @@ class UVMixer:
     def _notify(self, t: float) -> None:
         for cb in list(self._subscribers):
             cb(t)
-
-    async def _animate(self) -> None:
-        try:
-            last_time = time.monotonic()
-            while True:
-                await omni.kit.app.get_app().next_update_async()
-                now = time.monotonic()
-                step = (now - last_time) * self._speed / PLAY_DURATION
-                last_time = now
-
-                new_t = self._t + (step if self._forward else -step)
-                new_t = max(0.0, min(1.0, new_t))
-                self.set_value(new_t, correction=False)
-
-                reached_end = (self._forward and new_t >= 1.0) or \
-                              (not self._forward and new_t <= 0.0)
-                if reached_end:
-                    self.apply_correction()
-                    self._notify(self._t)
-                    if not self._loop:
-                        break
-                    self.set_value(0.0 if self._forward else 1.0, correction=False)
-                    self.apply_correction()  # 루프 첫 프레임 보정
-        except asyncio.CancelledError:
-            self.apply_correction()
-            self._notify(self._t)
-            return
-        finally:
-            self._play_task = None
 
     @staticmethod
     def _source_root(path: str) -> str:

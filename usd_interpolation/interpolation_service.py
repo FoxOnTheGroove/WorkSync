@@ -1,10 +1,11 @@
 from typing import Callable
 
-from .interpolation import UVMixer
+from .interpolation import PlaybackClock, UVMixer
 
 
 class UVMixerService:
     _instances: dict[str, UVMixer] = {}
+    _shared_clock: PlaybackClock = PlaybackClock()   # N+1 클럭 중 공유 클럭 1개
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
@@ -46,6 +47,25 @@ class UVMixerService:
         for m in list(cls._instances.values()):
             m.destroy()
         cls._instances.clear()
+
+    # ── sync ─────────────────────────────────────────────────────────
+
+    @classmethod
+    def sync(cls, reference_key: str) -> None:
+        """reference_key mixer의 t/speed/forward/loop를 shared_clock에 복사하고,
+        모든 mixer를 shared_clock에 합류시킨다."""
+        ref = cls._instances.get(reference_key)
+        if ref:
+            cls._shared_clock.copy_from(ref.own_clock)
+        for mixer in cls._instances.values():
+            mixer.join_clock(cls._shared_clock)
+
+    @classmethod
+    def unsync(cls, key: str) -> None:
+        """해당 key의 mixer를 shared_clock에서 떠나 own_clock으로 복귀시킨다."""
+        mixer = cls._instances.get(key)
+        if mixer:
+            mixer.leave_clock()
 
     # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
     @classmethod
