@@ -7,8 +7,8 @@ try:
 except ImportError:
     _hytwin_vp_wg = None
 
-OVERLAY_W = 240
-OVERLAY_H = 92
+OVERLAY_W = 260
+OVERLAY_H = 80
 _MARGIN = 8
 
 _WINDOW_FLAGS = (
@@ -37,8 +37,9 @@ def _calc_overlay_pos(vph) -> tuple[int, int]:
 
 class ViewportOverlayPanel:
 
-    def __init__(self, key: str, vph):
+    def __init__(self, key: str, vph, mgr: 'OverlayManager'):
         self._key = key
+        self._mgr = mgr
         self._in_tick = False
         self._in_sync = False
 
@@ -58,39 +59,39 @@ class ViewportOverlayPanel:
         sp.subscribe_stopped(self._on_stopped)
 
     def _build(self) -> None:
-        key = self._key
         with self._window.frame:
-            with ui.VStack(spacing=2, style={"margin": 4}):
+            with ui.VStack(spacing=1, style={"margin": 2}):
 
-                # 행1: Play/Stop | Rev | Loop | key label
-                with ui.HStack(height=20, spacing=4):
-                    btn_play = ui.Button("Play ▶", width=60, height=18,
+                # 행1: ▶/■ | R ☐ | L ☐ | key label
+                with ui.HStack(height=16, spacing=3):
+                    btn_play = ui.Button("▶", width=22, height=14,
                                          clicked_fn=self._on_play,
-                                         style={"font_size": 11})
-                    rev_cb = ui.CheckBox(width=16, height=16)
+                                         style={"font_size": 10})
+                    rev_cb = ui.CheckBox(width=14, height=14)
                     rev_cb.model.add_value_changed_fn(self._on_reverse)
-                    ui.Label("Rev", width=24, height=16,
-                             style={"font_size": 11})
-                    loop_cb = ui.CheckBox(width=16, height=16)
+                    ui.Label("R", width=12, height=14,
+                             style={"font_size": 10})
+                    loop_cb = ui.CheckBox(width=14, height=14)
                     loop_cb.model.add_value_changed_fn(self._on_loop)
-                    ui.Label("Loop", width=30, height=16,
-                             style={"font_size": 11})
+                    ui.Label("L", width=12, height=14,
+                             style={"font_size": 10})
                     ui.Spacer()
-                    ui.Label(key[-16:] if len(key) > 16 else key,
-                             height=16,
+                    key_str = self._key
+                    ui.Label(key_str[-18:] if len(key_str) > 18 else key_str,
+                             height=14,
                              style={"color": 0xFF888888, "font_size": 10})
 
                 # 행2: t 슬라이더
-                with ui.HStack(height=20, spacing=4):
-                    t_label = ui.Label("t:0.000", width=50,
-                                       style={"font_size": 11})
+                with ui.HStack(height=16, spacing=3):
+                    t_label = ui.Label("t:.000", width=42,
+                                       style={"font_size": 10})
                     slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     slider.model.add_value_changed_fn(self._on_slider)
 
                 # 행3: Speed 슬라이더
-                with ui.HStack(height=20, spacing=4):
-                    spd_label = ui.Label("spd:1.0x", width=58,
-                                          style={"font_size": 11})
+                with ui.HStack(height=16, spacing=3):
+                    spd_label = ui.Label("1.0x", width=30,
+                                          style={"font_size": 10})
                     spd_sl = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
                     spd_sl.model.set_value(1.0)
                     spd_sl.model.add_value_changed_fn(self._on_speed)
@@ -114,7 +115,7 @@ class ViewportOverlayPanel:
         self._in_tick = False
 
     def _on_stopped(self) -> None:
-        self._widgets['btn_play'].text = "Play ▶"
+        self._widgets['btn_play'].text = "▶"
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
@@ -124,7 +125,8 @@ class ViewportOverlayPanel:
             sp.stop()
         else:
             sp.play()
-            self._widgets['btn_play'].text = "Stop ■"
+            self._widgets['btn_play'].text = "■"
+            self._mgr._sync_play(self._key, playing=True)
 
     def _on_slider(self, model) -> None:
         if self._in_tick or UVMixerService._shared_player.is_playing():
@@ -134,19 +136,45 @@ class ViewportOverlayPanel:
     def _on_reverse(self, model) -> None:
         if self._in_sync:
             return
-        UVMixerService._shared_player.set_forward(not model.get_value_as_bool())
+        reverse = model.get_value_as_bool()
+        UVMixerService._shared_player.set_forward(not reverse)
+        self._mgr._sync_reverse(self._key, reverse)
 
     def _on_loop(self, model) -> None:
         if self._in_sync:
             return
-        UVMixerService._shared_player.set_loop(model.get_value_as_bool())
+        loop = model.get_value_as_bool()
+        UVMixerService._shared_player.set_loop(loop)
+        self._mgr._sync_loop(self._key, loop)
 
     def _on_speed(self, model) -> None:
         if self._in_sync:
             return
         spd = model.get_value_as_float()
         UVMixerService._shared_player.set_speed(spd)
-        self._widgets['spd_label'].text = f"spd:{spd:.1f}x"
+        self._widgets['spd_label'].text = f"{spd:.1f}x"
+        self._mgr._sync_speed(self._key, spd)
+
+    # ── 외부 sync 수신 ──────────────────────────────────────────
+
+    def sync_reverse(self, reverse: bool) -> None:
+        self._in_sync = True
+        self._widgets['rev_cb'].model.set_value(reverse)
+        self._in_sync = False
+
+    def sync_loop(self, loop: bool) -> None:
+        self._in_sync = True
+        self._widgets['loop_cb'].model.set_value(loop)
+        self._in_sync = False
+
+    def sync_speed(self, spd: float) -> None:
+        self._in_sync = True
+        self._widgets['spd_sl'].model.set_value(spd)
+        self._widgets['spd_label'].text = f"{spd:.1f}x"
+        self._in_sync = False
+
+    def sync_play(self, playing: bool) -> None:
+        self._widgets['btn_play'].text = "■" if playing else "▶"
 
     # ── 라이프사이클 ────────────────────────────────────────────
 
@@ -169,7 +197,7 @@ class OverlayManager:
         vph = _find_vph(target_path)
         if vph is None:
             return
-        self._panels[key] = ViewportOverlayPanel(key, vph)
+        self._panels[key] = ViewportOverlayPanel(key, vph, mgr=self)
 
     def on_mixer_destroyed(self, key: str) -> None:
         self._remove_panel(key)
@@ -178,6 +206,28 @@ class OverlayManager:
         panel = self._panels.pop(key, None)
         if panel:
             panel.destroy()
+
+    # ── 교차 패널 동기화 ────────────────────────────────────────
+
+    def _sync_reverse(self, src: str, reverse: bool) -> None:
+        for k, p in self._panels.items():
+            if k != src:
+                p.sync_reverse(reverse)
+
+    def _sync_loop(self, src: str, loop: bool) -> None:
+        for k, p in self._panels.items():
+            if k != src:
+                p.sync_loop(loop)
+
+    def _sync_speed(self, src: str, spd: float) -> None:
+        for k, p in self._panels.items():
+            if k != src:
+                p.sync_speed(spd)
+
+    def _sync_play(self, src: str, playing: bool) -> None:
+        for k, p in self._panels.items():
+            if k != src:
+                p.sync_play(playing)
 
     def destroy(self) -> None:
         for panel in list(self._panels.values()):
