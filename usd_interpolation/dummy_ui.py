@@ -1,4 +1,3 @@
-import omni.timeline
 import omni.usd
 import omni.ui as ui
 
@@ -23,11 +22,6 @@ class UsdInterpolationUI:
 
         self._correction_idx: int = 1   # 0=none 1=boundary 2=all, 기본=boundary
         self._in_sync_change: bool = False
-        self._n_frames: int = 0
-
-        # shared_player tick 구독 (timeline seek 전용)
-        sp = UVMixerService._shared_player
-        sp.subscribe_tick(self._on_player_tick)
 
     def build_ui(self):
         self._window = ui.Window("USD UV Interpolator", width=420, height=230)
@@ -80,14 +74,6 @@ class UsdInterpolationUI:
 
     # ── 헬퍼 ─────────────────────────────────────────────────────────
 
-    def _seek_timeline(self, t: float) -> None:
-        """timeline 모드: 전역 USD 타임라인을 t(0..1) 위치로 이동."""
-        if _uv_mod.UV_INTERP_MODE != 'timeline' or self._n_frames < 2:
-            return
-        timeline = omni.timeline.get_timeline_interface()
-        tps = timeline.get_time_codes_per_second()
-        timeline.set_current_time(t * (self._n_frames - 1) / tps)
-
     def _set_status(self, text: str) -> None:
         if self._status_label:
             self._status_label.text = f"Status: {text}"
@@ -106,11 +92,6 @@ class UsdInterpolationUI:
             self._mode_direct_btn.enabled = is_tl
         if self._sync_cb:
             self._sync_cb.enabled = not is_tl   # timeline 모드에서 sync 비활성
-
-    # ── player 콜백 ──────────────────────────────────────────────────
-
-    def _on_player_tick(self, t: float, correction: bool) -> None:
-        self._seek_timeline(t)
 
     # ── 콜백: 로드 ───────────────────────────────────────────────────
 
@@ -150,7 +131,6 @@ class UsdInterpolationUI:
             UVMixerService.apply_sync(key)
 
         warnings = UVMixerService.load(key, paths)
-        self._n_frames = len(paths)
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
         UVMixerService._shared_player.set_t(0.0)
 
@@ -218,11 +198,8 @@ class UsdInterpolationUI:
     # ── 라이프사이클 ─────────────────────────────────────────────────
 
     def destroy(self):
-        sp = UVMixerService._shared_player
-        sp.unsubscribe_tick(self._on_player_tick)
-        sp.stop()
+        UVMixerService._shared_player.stop()
         UVMixerService.destroy_all()
-        self._n_frames = 0
         if self._window:
             self._window.destroy()
             self._window = None

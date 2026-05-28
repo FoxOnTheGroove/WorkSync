@@ -2,6 +2,7 @@ from typing import Callable
 
 import numpy as np
 from pxr import Usd, UsdGeom, Vt
+import omni.timeline
 import omni.usd
 
 from .UVMixer_player import UVMixerPlayer
@@ -40,6 +41,7 @@ class UVMixer:
         inst._target_path = target_path
         inst._st_maps = []
         inst._baked_paths = []
+        inst._n_frames: int = 0
         inst._t = 0.0          # 마지막으로 적용된 t (get_value용 캐시)
         inst._use_correction = True
         inst._correction_mode: str = 'boundary'  # 'none' | 'boundary' | 'all'
@@ -58,6 +60,7 @@ class UVMixer:
         유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다."""
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
+        self._n_frames = len(st_paths)
         maps_per_file = [self.make_st_map(p) for p in st_paths]
         common = set(maps_per_file[0].keys())
         for m in maps_per_file[1:]:
@@ -100,15 +103,16 @@ class UVMixer:
 
     def set_value(self, t: float, *, correction: bool = True,
                   drive_timeline: bool = True) -> None:
-        """UV 속성을 t(0.0~1.0) 위치로 쓴다.
-        drive_timeline은 하위호환용으로 남겨두나, timeline seek는 이제
-        UVMixerPlayer tick 구독자(dummy_ui._on_player_tick)가 담당한다."""
+        """UV 속성을 t(0.0~1.0) 위치로 쓴다."""
         if not self._st_maps:
             return
         t = max(0.0, min(1.0, t))
         self._t = t
         if UV_INTERP_MODE == 'direct':
             self._write_st_direct(t)
+        elif drive_timeline and self._n_frames >= 2:
+            tl = omni.timeline.get_timeline_interface()
+            tl.set_current_time(t * (self._n_frames - 1) / tl.get_time_codes_per_second())
         if correction:
             self.apply_correction()
         self._notify(t)
@@ -169,10 +173,9 @@ class UVMixer:
     # ── 플레이어 구독 전환 ───────────────────────────────────────
 
     def _apply_t(self, t: float, correction: bool) -> None:
-        """UVMixerPlayer tick 콜백 — UV 속성 write만 담당."""
         if self._correction_mode == 'all':
             correction = True
-        self.set_value(t, correction=correction, drive_timeline=False)
+        self.set_value(t, correction=correction, drive_timeline=True)
 
     def join_player(self, player: UVMixerPlayer) -> None:
         """공유 플레이어에 구독 추가. own_player의 _apply_t는 그대로 유지한다."""
