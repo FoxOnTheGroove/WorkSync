@@ -7,15 +7,32 @@ from .UVMixer_player import UVMixerPlayer
 class UVMixerService:
     _instances: dict[str, UVMixer] = {}
     _shared_player: UVMixerPlayer = UVMixerPlayer()   # N+1 플레이어 중 공유 플레이어 1개
+    _synced: bool = True                              # sync 상태 — create()가 이를 따름
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
     def create(cls, target_path: 'str | None', key: str) -> UVMixer:
         """빈 UVMixer를 만들어 key로 등록한다. 소스는 load(key, *paths)로 주입.
-        target_path가 None이면 소스 경로를 그대로 사용(remap 없음)."""
+        target_path가 None이면 소스 경로를 그대로 사용(remap 없음).
+        _synced=True면 생성 즉시 shared_player에 합류한다."""
         mixer = UVMixer.create(target_path)
         cls._instances[key] = mixer
+        if cls._synced:
+            mixer.join_player(cls._shared_player)
         return mixer
+
+    # ── sync 제어 ────────────────────────────────────────────────
+    @classmethod
+    def set_sync_all(cls, enabled: bool) -> None:
+        """모든 mixer의 sync 상태를 일괄 전환하고 _synced 플래그를 갱신한다."""
+        cls._synced = enabled
+        if enabled:
+            keys = list(cls._instances)
+            if keys:
+                cls.sync(keys[0])
+        else:
+            for k in list(cls._instances):
+                cls.unsync(k)
 
     # ── 레지스트리 ───────────────────────────────────────────────
     @classmethod

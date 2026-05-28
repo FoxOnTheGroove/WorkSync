@@ -223,8 +223,7 @@ class UsdInterpolationUI:
             self._mixer_rows.pop(key, None)
 
         if key not in instances:
-            mixer = UVMixerService.create(target_path, key=key)
-            mixer.join_player(UVMixerService._shared_player)
+            UVMixerService.create(target_path, key=key)   # sync 상태는 service가 관리
             self._add_mixer_row(key)
 
         warnings = UVMixerService.load(key, *paths)
@@ -264,15 +263,7 @@ class UsdInterpolationUI:
     # ── 콜백: sync ───────────────────────────────────────────────────
 
     def _on_sync_changed(self, model) -> None:
-        synced = model.get_value_as_bool()
-        keys = list(UVMixerService._instances)
-        if not keys:
-            return
-        if synced:
-            UVMixerService.sync(keys[0])
-        else:
-            for k in keys:
-                UVMixerService.unsync(k)
+        UVMixerService.set_sync_all(model.get_value_as_bool())
 
     # ── 콜백: per-mixer ──────────────────────────────────────────────
 
