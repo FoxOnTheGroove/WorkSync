@@ -13,13 +13,19 @@ class UVMixerService:
     @classmethod
     def create(cls, target_path: 'str | None', key: str) -> UVMixer:
         """빈 UVMixer를 만들어 key로 등록한다. 소스는 load(key, *paths)로 주입.
-        target_path가 None이면 소스 경로를 그대로 사용(remap 없음).
-        _synced=True면 생성 즉시 shared_player에 합류한다."""
+        target_path가 None이면 소스 경로를 그대로 사용(remap 없음)."""
         mixer = UVMixer.create(target_path)
         cls._instances[key] = mixer
+        return mixer
+
+    @classmethod
+    def apply_sync(cls, key: str) -> None:
+        """현재 _synced 상태에 따라 해당 mixer를 shared_player에 합류하거나 own_player로 둔다."""
+        mixer = cls._instances.get(key)
+        if not mixer:
+            return
         if cls._synced:
             mixer.join_player(cls._shared_player)
-        return mixer
 
     # ── sync 제어 ────────────────────────────────────────────────
     @classmethod

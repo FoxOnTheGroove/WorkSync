@@ -223,7 +223,8 @@ class UsdInterpolationUI:
             self._mixer_rows.pop(key, None)
 
         if key not in instances:
-            UVMixerService.create(target_path, key=key)   # sync 상태는 service가 관리
+            UVMixerService.create(target_path, key=key)
+            UVMixerService.apply_sync(key)
             self._add_mixer_row(key)
 
         warnings = UVMixerService.load(key, *paths)
