@@ -52,7 +52,7 @@ class UVMixer:
         inst.own_player.subscribe_tick(inst._apply_t)
         return inst
 
-    def load(self, *st_paths: str) -> 'list[str]':
+    def load(self, st_paths: 'list[str]') -> 'list[str]':
         """소스 USD 파일들을 읽어 보간 데이터를 주입한다.
         재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다.
         유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다."""

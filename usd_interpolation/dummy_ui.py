@@ -149,7 +149,7 @@ class UsdInterpolationUI:
             UVMixerService.create(target_path, key=key)
             UVMixerService.apply_sync(key)
 
-        warnings = UVMixerService.load(key, *paths)
+        warnings = UVMixerService.load(key, paths)
         self._n_frames = len(paths)
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
         UVMixerService._shared_player.set_t(0.0)
