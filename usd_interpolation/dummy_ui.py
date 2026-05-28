@@ -135,8 +135,7 @@ class UsdInterpolationUI:
         if self._overlay_mgr:
             self._overlay_mgr.on_mixer_loaded(key, target_path or "")
 
-        src = UVMixerService.get_instance(key)
-        n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
+        n_meshes = len(UVMixerService.get_mesh_paths(key))
         all_keys = UVMixerService.keys()
         status = f"{len(all_keys)} mixer(s) — {n_meshes} mesh(es), {len(paths)} src"
         if warnings:
@@ -170,7 +169,7 @@ class UsdInterpolationUI:
         synced = model.get_value_as_bool()
         ref_key = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else ""
-        ok = UVMixerService.set_sync_all(synced, ref_key=ref_key or None)
+        ok = UVMixerService.set_sync_all(synced, ref_key=ref_key)
         if not ok:
             self._in_sync_change = True
             model.set_value(False)
