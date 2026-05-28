@@ -21,7 +21,7 @@ class UsdInterpolationUI:
         self._sync_cb: ui.CheckBox | None = None
         self._mixer_vstack: ui.VStack | None = None
 
-        self._overlay_mgr = None
+        self._correction_idx: int = 1   # 0=none 1=boundary 2=all, 기본=boundary
 
         # per-mixer 행 위젯 참조
         # {key: {'t_label', 'slider', 'btn_play', 'speed_label', 'speed_sl',
@@ -156,11 +156,7 @@ class UsdInterpolationUI:
             self._status_label.text = f"Status: {text}"
 
     def _current_correction_mode(self) -> str:
-        if not self._correction_combo:
-            return 'boundary'
-        item = self._correction_combo.model.get_current_item()
-        idx = self._correction_combo.model.get_item_value_model(item).get_value_as_int()
-        return _CORRECTION_MODES[idx]
+        return _CORRECTION_MODES[self._correction_idx]
 
     def _refresh_mode_buttons(self) -> None:
         """현재 모드 버튼을 시각 강조(활성=disabled 처리로 눌린 상태 표현)."""
@@ -244,6 +240,7 @@ class UsdInterpolationUI:
 
     def _on_correction_changed(self, model, item) -> None:
         idx = model.get_item_value_model(item).get_value_as_int()
+        self._correction_idx = idx
         mode = _CORRECTION_MODES[idx]
         for k in UVMixerService._instances:
             UVMixerService.set_correction_mode(k, mode)
