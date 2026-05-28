@@ -16,6 +16,7 @@ _WINDOW_FLAGS = (
     | ui.WINDOW_FLAGS_NO_RESIZE
     | ui.WINDOW_FLAGS_NO_SCROLLBAR
     | ui.WINDOW_FLAGS_NO_COLLAPSE
+    | ui.WINDOW_FLAGS_NO_MOVE
 )
 
 
@@ -40,6 +41,7 @@ class ViewportOverlayPanel:
     def __init__(self, key: str, vph, mgr: 'OverlayManager'):
         self._key = key
         self._mgr = mgr
+        self._vph = vph
         self._in_tick = False
         self._in_sync = False
 
@@ -53,6 +55,8 @@ class ViewportOverlayPanel:
         self._window.frame.style = {"background_color": 0xCC151515}
         self._widgets: dict = {}
         self._build()
+
+        vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
 
         sp = UVMixerService._shared_player
         sp.subscribe_tick(self._on_tick)
@@ -176,9 +180,20 @@ class ViewportOverlayPanel:
     def sync_play(self, playing: bool) -> None:
         self._widgets['btn_play'].text = "■" if playing else "▶"
 
+    # ── 뷰포트 리사이즈 대응 ────────────────────────────────────
+
+    def _on_viewport_resized(self) -> None:
+        if self._window and self._vph:
+            x, y = _calc_overlay_pos(self._vph)
+            self._window.position_x = x
+            self._window.position_y = y
+
     # ── 라이프사이클 ────────────────────────────────────────────
 
     def destroy(self) -> None:
+        if self._vph:
+            self._vph.frame.set_computed_content_size_changed_fn(None)
+            self._vph = None
         sp = UVMixerService._shared_player
         sp.unsubscribe_tick(self._on_tick)
         sp.unsubscribe_stopped(self._on_stopped)
