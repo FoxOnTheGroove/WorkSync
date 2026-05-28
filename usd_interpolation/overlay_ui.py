@@ -19,30 +19,30 @@ _WINDOW_FLAGS = (
 )
 
 
-def _find_viewport_api(target_path: str):
+def _find_vph(target_path: str):
     if _hytwin_vp_wg is None:
         return None
     for vph in _hytwin_vp_wg.ViewportWidgetHost.get_instances():
         if vph.prim_header_path.rstrip("/") == target_path.rstrip("/"):
-            return vph.viewport_api
+            return vph
     return None
 
 
-def _calc_overlay_pos(viewport_api) -> tuple[int, int]:
-    win = viewport_api.window
-    x = int(win.position_x + win.width  - OVERLAY_W - _MARGIN)
-    y = int(win.position_y + win.height - OVERLAY_H - _MARGIN)
+def _calc_overlay_pos(vph) -> tuple[int, int]:
+    frame = vph.frame
+    x = int(frame.screen_position_x + frame.computed_width  - OVERLAY_W - _MARGIN)
+    y = int(frame.screen_position_y + frame.computed_height - OVERLAY_H - _MARGIN)
     return x, y
 
 
 class ViewportOverlayPanel:
 
-    def __init__(self, key: str, viewport_api):
+    def __init__(self, key: str, vph):
         self._key = key
         self._in_tick = False
         self._in_sync = False
 
-        x, y = _calc_overlay_pos(viewport_api)
+        x, y = _calc_overlay_pos(vph)
         self._window = ui.Window(
             f"__overlay_{key}__",
             width=OVERLAY_W, height=OVERLAY_H,
@@ -166,10 +166,10 @@ class OverlayManager:
 
     def on_mixer_loaded(self, key: str, target_path: str) -> None:
         self._remove_panel(key)
-        vp_api = _find_viewport_api(target_path)
-        if vp_api is None:
+        vph = _find_vph(target_path)
+        if vph is None:
             return
-        self._panels[key] = ViewportOverlayPanel(key, vp_api)
+        self._panels[key] = ViewportOverlayPanel(key, vph)
 
     def on_mixer_destroyed(self, key: str) -> None:
         self._remove_panel(key)
