@@ -62,6 +62,11 @@ class ViewportOverlayPanel:
         sp.subscribe_tick(self._on_tick)
         sp.subscribe_stopped(self._on_stopped)
 
+        mixer = UVMixerService.get_instance(key)
+        if mixer:
+            mixer.own_player.subscribe_tick(self._on_own_tick)
+            mixer.own_player.subscribe_stopped(self._on_own_stopped)
+
     def _build(self) -> None:
         with self._window.frame:
             with ui.VStack(spacing=1, style={"margin": 2}):
@@ -110,54 +115,105 @@ class ViewportOverlayPanel:
             'spd_sl':   spd_sl,
         }
 
+    def _own_player(self):
+        mixer = UVMixerService.get_instance(self._key)
+        return mixer.own_player if mixer else None
+
     # ── player 콜백 ─────────────────────────────────────────────
 
     def _on_tick(self, t: float, correction: bool) -> None:
+        if not UVMixerService._synced:
+            return
+        self._in_tick = True
+        self._widgets['slider'].model.set_value(t)
+        self._widgets['t_label'].text = f"t:{t:.3f}"
+        self._in_tick = False
+
+    def _on_own_tick(self, t: float, correction: bool) -> None:
+        if UVMixerService._synced:
+            return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
         self._widgets['t_label'].text = f"t:{t:.3f}"
         self._in_tick = False
 
     def _on_stopped(self) -> None:
-        self._widgets['btn_play'].text = "▶"
+        if UVMixerService._synced:
+            self._widgets['btn_play'].text = "▶"
+
+    def _on_own_stopped(self) -> None:
+        if not UVMixerService._synced:
+            self._widgets['btn_play'].text = "▶"
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
     def _on_play(self) -> None:
-        sp = UVMixerService._shared_player
-        if sp.is_playing():
-            sp.stop()
+        if UVMixerService._synced:
+            sp = UVMixerService._shared_player
+            if sp.is_playing():
+                sp.stop()
+            else:
+                sp.play()
+                self._widgets['btn_play'].text = "■"
+                self._mgr._sync_play(self._key, playing=True)
         else:
-            sp.play()
-            self._widgets['btn_play'].text = "■"
-            self._mgr._sync_play(self._key, playing=True)
+            op = self._own_player()
+            if not op:
+                return
+            if op.is_playing():
+                op.stop()
+            else:
+                op.play()
+                self._widgets['btn_play'].text = "■"
 
     def _on_slider(self, model) -> None:
-        if self._in_tick or UVMixerService._shared_player.is_playing():
+        if self._in_tick:
             return
-        UVMixerService._shared_player.set_t(model.get_value_as_float())
+        t = model.get_value_as_float()
+        if UVMixerService._synced:
+            if not UVMixerService._shared_player.is_playing():
+                UVMixerService._shared_player.set_t(t)
+        else:
+            op = self._own_player()
+            if op and not op.is_playing():
+                op.set_t(t)
 
     def _on_reverse(self, model) -> None:
         if self._in_sync:
             return
         reverse = model.get_value_as_bool()
-        UVMixerService._shared_player.set_forward(not reverse)
-        self._mgr._sync_reverse(self._key, reverse)
+        if UVMixerService._synced:
+            UVMixerService._shared_player.set_forward(not reverse)
+            self._mgr._sync_reverse(self._key, reverse)
+        else:
+            op = self._own_player()
+            if op:
+                op.set_forward(not reverse)
 
     def _on_loop(self, model) -> None:
         if self._in_sync:
             return
         loop = model.get_value_as_bool()
-        UVMixerService._shared_player.set_loop(loop)
-        self._mgr._sync_loop(self._key, loop)
+        if UVMixerService._synced:
+            UVMixerService._shared_player.set_loop(loop)
+            self._mgr._sync_loop(self._key, loop)
+        else:
+            op = self._own_player()
+            if op:
+                op.set_loop(loop)
 
     def _on_speed(self, model) -> None:
         if self._in_sync:
             return
         spd = model.get_value_as_float()
-        UVMixerService._shared_player.set_speed(spd)
         self._widgets['spd_label'].text = f"{spd:.1f}x"
-        self._mgr._sync_speed(self._key, spd)
+        if UVMixerService._synced:
+            UVMixerService._shared_player.set_speed(spd)
+            self._mgr._sync_speed(self._key, spd)
+        else:
+            op = self._own_player()
+            if op:
+                op.set_speed(spd)
 
     # ── 외부 sync 수신 ──────────────────────────────────────────
 
@@ -197,6 +253,10 @@ class ViewportOverlayPanel:
         sp = UVMixerService._shared_player
         sp.unsubscribe_tick(self._on_tick)
         sp.unsubscribe_stopped(self._on_stopped)
+        mixer = UVMixerService.get_instance(self._key)
+        if mixer:
+            mixer.own_player.unsubscribe_tick(self._on_own_tick)
+            mixer.own_player.unsubscribe_stopped(self._on_own_stopped)
         if self._window:
             self._window.destroy()
             self._window = None
