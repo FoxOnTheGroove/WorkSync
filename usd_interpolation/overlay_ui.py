@@ -23,7 +23,7 @@ def _find_viewport_api(target_path: str):
     if _hytwin_vp_wg is None:
         return None
     for vph in _hytwin_vp_wg.ViewportWidgetHost.get_instances():
-        if vph.prim_header_path == target_path:
+        if vph.prim_header_path.rstrip("/") == target_path.rstrip("/"):
             return vph.viewport_api
     return None
 
