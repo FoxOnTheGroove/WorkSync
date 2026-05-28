@@ -215,6 +215,26 @@ class ViewportOverlayPanel:
             if op:
                 op.set_speed(spd)
 
+    # ── sync 상태 변경 시 즉각 갱신 ─────────────────────────────
+
+    def refresh_from_player(self) -> None:
+        """sync ON/OFF 토글 후 현재 활성 player 상태를 위젯에 반영한다."""
+        if UVMixerService._synced:
+            p = UVMixerService._shared_player
+        else:
+            mixer = UVMixerService.get_instance(self._key)
+            p = mixer.own_player if mixer else UVMixerService._shared_player
+        self._in_sync = True
+        self._in_tick = True
+        self._widgets['rev_cb'].model.set_value(not p._forward)
+        self._widgets['loop_cb'].model.set_value(p._loop)
+        self._widgets['spd_sl'].model.set_value(p._speed)
+        self._widgets['spd_label'].text = f"{p._speed:.1f}x"
+        self._widgets['slider'].model.set_value(p._t)
+        self._widgets['t_label'].text = f"t:{p._t:.3f}"
+        self._in_sync = False
+        self._in_tick = False
+
     # ── 외부 sync 수신 ──────────────────────────────────────────
 
     def sync_reverse(self, reverse: bool) -> None:
@@ -266,6 +286,11 @@ class OverlayManager:
 
     def __init__(self):
         self._panels: dict[str, ViewportOverlayPanel] = {}
+
+    def refresh_all(self) -> None:
+        """모든 패널을 현재 player 상태로 즉시 갱신한다 (sync ON/OFF 시 호출)."""
+        for panel in self._panels.values():
+            panel.refresh_from_player()
 
     def on_mixer_loaded(self, key: str, target_path: str) -> None:
         self._remove_panel(key)

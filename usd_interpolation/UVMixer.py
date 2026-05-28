@@ -175,21 +175,19 @@ class UVMixer:
         self.set_value(t, correction=correction, drive_timeline=False)
 
     def join_player(self, player: UVMixerPlayer) -> None:
-        """공유 플레이어에 구독 전환한다. 이전 플레이어에서 unsubscribe."""
+        """공유 플레이어에 구독 추가. own_player의 _apply_t는 그대로 유지한다."""
         if self._active_player is player:
             return
-        self._active_player.unsubscribe_tick(self._apply_t)
         self._active_player = player
         player.subscribe_tick(self._apply_t)
 
     def leave_player(self) -> None:
-        """own_player로 복귀한다. 공유 플레이어의 현재 t를 이어받아 점프 없음."""
+        """own_player로 복귀. 공유 플레이어에서만 _apply_t를 제거한다."""
         if self._active_player is self.own_player:
             return
         self._active_player.unsubscribe_tick(self._apply_t)
         self.own_player.copy_from(self._active_player)
         self._active_player = self.own_player
-        self.own_player.subscribe_tick(self._apply_t)
 
     # ── 라이프사이클 ────────────────────────────────────────────────────
 

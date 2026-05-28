@@ -296,6 +296,29 @@ class UsdInterpolationUI:
 
     def _on_sync_changed(self, model) -> None:
         UVMixerService.set_sync_all(model.get_value_as_bool())
+        self._refresh_all_rows_from_players()
+        if self._overlay_mgr:
+            self._overlay_mgr.refresh_all()
+
+    def _refresh_all_rows_from_players(self) -> None:
+        """sync 상태 변경 후 모든 row 위젯을 현재 player 상태로 즉시 갱신한다."""
+        synced = UVMixerService._synced
+        self._in_sync = True
+        self._in_tick = True
+        for key, row in self._mixer_rows.items():
+            if synced:
+                p = UVMixerService._shared_player
+            else:
+                mixer = UVMixerService.get_instance(key)
+                p = mixer.own_player if mixer else UVMixerService._shared_player
+            row['reverse_cb'].model.set_value(not p._forward)
+            row['loop_cb'].model.set_value(p._loop)
+            row['speed_sl'].model.set_value(p._speed)
+            row['speed_label'].text = f"{p._speed:.1f}x"
+            row['slider'].model.set_value(p._t)
+            row['t_label'].text = f"t: {p._t:.3f}"
+        self._in_sync = False
+        self._in_tick = False
 
     # ── 콜백: per-mixer ──────────────────────────────────────────────
 
