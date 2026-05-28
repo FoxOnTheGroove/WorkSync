@@ -19,27 +19,18 @@ class UsdInterpolationUI:
         self._mode_timeline_btn: ui.Button | None = None
         self._mode_direct_btn: ui.Button | None = None
         self._sync_cb: ui.CheckBox | None = None
-        self._mixer_vstack: ui.VStack | None = None
+        self._overlay_mgr = None
 
         self._correction_idx: int = 1   # 0=none 1=boundary 2=all, 기본=boundary
+        self._in_sync_change: bool = False
+        self._n_frames: int = 0
 
-        # per-mixer 행 위젯 참조
-        # {key: {'t_label', 'slider', 'btn_play', 'speed_label', 'speed_sl',
-        #        'reverse_cb', 'loop_cb'}}
-        self._mixer_rows: dict[str, dict] = {}
-        self._own_tick_cbs: dict[str, object] = {}     # sync OFF 시 own_player tick 구독
-        self._own_stopped_cbs: dict[str, object] = {}  # sync OFF 시 own_player stopped 구독
-        self._in_tick: bool = False          # t슬라이더 갱신 중 재진입 방지
-        self._in_sync: bool = False          # speed/reverse/loop 동기화 중 재진입 방지
-        self._n_frames: int = 0              # _seek_timeline 용
-
-        # shared_player tick/stopped 구독
+        # shared_player tick 구독 (timeline seek 전용)
         sp = UVMixerService._shared_player
         sp.subscribe_tick(self._on_player_tick)
-        sp.subscribe_stopped(self._on_player_stopped)
 
     def build_ui(self):
-        self._window = ui.Window("USD UV Interpolator", width=520, height=500)
+        self._window = ui.Window("USD UV Interpolator", width=420, height=230)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
 
@@ -72,7 +63,7 @@ class UsdInterpolationUI:
                 with ui.HStack(height=24, spacing=8):
                     ui.Label("Mode:", width=40, height=24)
                     self._mode_timeline_btn = ui.Button(
-                        "Timeline", width=72, clicked_fn=self._on_mode_timeline)
+                        "Timeline", width=86, clicked_fn=self._on_mode_timeline)
                     self._mode_direct_btn = ui.Button(
                         "Direct", width=72, clicked_fn=self._on_mode_direct)
                     ui.Spacer()
@@ -82,98 +73,10 @@ class UsdInterpolationUI:
                     ui.Label("Sync", width=36, height=20)
                 self._refresh_mode_buttons()
 
-                # ── Mixer 행 (스크롤) ─────────────────────────────────
-                ui.Label("Mixers:", height=16)
-                scroll = ui.ScrollingFrame(
-                    height=264,
-                    horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_OFF,
-                    vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
-                    style={"background_color": 0xFF1E1E1E,
-                           "border_color": 0xFF444444, "border_width": 1},
-                )
-                with scroll:
-                    self._mixer_vstack = ui.VStack(spacing=2)
+                ui.Spacer()
 
-    # ── 행 추가 ──────────────────────────────────────────────────────
-
-    def _add_mixer_row(self, key: str) -> None:
-        """_mixer_vstack 안에 mixer 한 행을 추가하고 _mixer_rows에 등록한다."""
-        with self._mixer_vstack:
-            with ui.VStack(spacing=1, style={"margin": 4, "margin_bottom": 6}):
-                # key 레이블 (구분선 역할)
-                ui.Label(f"── {key} ──", height=14,
-                         style={"color": 0xFFAAAAAA, "font_size": 11})
-
-                # Play / Reverse / Loop 행
-                with ui.HStack(height=20, spacing=6):
-                    btn_play = ui.Button("Play ▶", width=72,
-                                         clicked_fn=lambda k=key: self._on_mixer_play(k))
-                    rev_cb = ui.CheckBox(width=18, height=18)
-                    rev_cb.model.add_value_changed_fn(
-                        lambda m, k=key: self._on_mixer_reverse(m, k))
-                    ui.Label("Reverse", width=56, height=18)
-                    loop_cb = ui.CheckBox(width=18, height=18)
-                    loop_cb.model.add_value_changed_fn(
-                        lambda m, k=key: self._on_mixer_loop(m, k))
-                    ui.Label("Loop", width=36, height=18)
-
-                # t 슬라이더 행
-                with ui.HStack(height=20, spacing=6):
-                    t_label = ui.Label("t: 0.000", width=60)
-                    slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
-                    slider.model.add_value_changed_fn(
-                        lambda m, k=key: self._on_mixer_slider(m, k))
-
-                # 속도 행
-                with ui.HStack(height=20, spacing=6):
-                    ui.Label("Speed:", width=44)
-                    speed_label = ui.Label("1.0x", width=36)
-                    speed_sl = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
-                    speed_sl.model.set_value(1.0)
-                    speed_sl.model.add_value_changed_fn(
-                        lambda m, k=key: self._on_mixer_speed(m, k))
-
-        self._mixer_rows[key] = {
-            't_label':    t_label,
-            'slider':     slider,
-            'btn_play':   btn_play,
-            'speed_label': speed_label,
-            'speed_sl':   speed_sl,
-            'reverse_cb': rev_cb,
-            'loop_cb':    loop_cb,
-        }
-
-        # own_player 구독 (sync OFF 시 이 row UI 갱신용)
-        mixer = UVMixerService.get_instance(key)
-        if mixer:
-            def _make_own_tick(k):
-                def cb(t, correction):
-                    if UVMixerService._synced:
-                        return
-                    row = self._mixer_rows.get(k)
-                    if not row:
-                        return
-                    self._in_tick = True
-                    row['slider'].model.set_value(t)
-                    row['t_label'].text = f"t: {t:.3f}"
-                    self._in_tick = False
-                return cb
-
-            def _make_own_stopped(k):
-                def cb():
-                    if UVMixerService._synced:
-                        return
-                    row = self._mixer_rows.get(k)
-                    if row:
-                        row['btn_play'].text = "Play ▶"
-                return cb
-
-            tick_cb = _make_own_tick(key)
-            stopped_cb = _make_own_stopped(key)
-            self._own_tick_cbs[key] = tick_cb
-            self._own_stopped_cbs[key] = stopped_cb
-            mixer.own_player.subscribe_tick(tick_cb)
-            mixer.own_player.subscribe_stopped(stopped_cb)
+                # ── Clear ─────────────────────────────────────────────
+                ui.Button("Clear All Mixers", height=28, clicked_fn=self._on_clear)
 
     # ── 헬퍼 ─────────────────────────────────────────────────────────
 
@@ -193,11 +96,13 @@ class UsdInterpolationUI:
         return _CORRECTION_MODES[self._correction_idx]
 
     def _refresh_mode_buttons(self) -> None:
-        """현재 모드 버튼을 시각 강조(활성=disabled 처리로 눌린 상태 표현)."""
+        """현재 모드 버튼 텍스트에 ● 표시로 활성 상태를 나타낸다."""
         is_tl = (_uv_mod.UV_INTERP_MODE == 'timeline')
         if self._mode_timeline_btn:
+            self._mode_timeline_btn.text = "● Timeline" if is_tl else "Timeline"
             self._mode_timeline_btn.enabled = not is_tl
         if self._mode_direct_btn:
+            self._mode_direct_btn.text = "● Direct" if not is_tl else "Direct"
             self._mode_direct_btn.enabled = is_tl
         if self._sync_cb:
             self._sync_cb.enabled = not is_tl   # timeline 모드에서 sync 비활성
@@ -205,18 +110,7 @@ class UsdInterpolationUI:
     # ── player 콜백 ──────────────────────────────────────────────────
 
     def _on_player_tick(self, t: float, correction: bool) -> None:
-        """shared_player tick — timeline seek + 전체 행 슬라이더/레이블 갱신."""
         self._seek_timeline(t)
-        self._in_tick = True
-        for row in self._mixer_rows.values():
-            row['slider'].model.set_value(t)
-            row['t_label'].text = f"t: {t:.3f}"
-        self._in_tick = False
-
-    def _on_player_stopped(self) -> None:
-        """shared_player 재생 종료 — 전체 행 Play 버튼 리셋."""
-        for row in self._mixer_rows.values():
-            row['btn_play'].text = "Play ▶"
 
     # ── 콜백: 로드 ───────────────────────────────────────────────────
 
@@ -250,12 +144,10 @@ class UsdInterpolationUI:
             UVMixerService.destroy(key)
             if self._overlay_mgr:
                 self._overlay_mgr.on_mixer_destroyed(key)
-            self._mixer_rows.pop(key, None)
 
         if key not in instances:
             UVMixerService.create(target_path, key=key)
             UVMixerService.apply_sync(key)
-            self._add_mixer_row(key)
 
         warnings = UVMixerService.load(key, *paths)
         self._n_frames = len(paths)
@@ -295,138 +187,41 @@ class UsdInterpolationUI:
     # ── 콜백: sync ───────────────────────────────────────────────────
 
     def _on_sync_changed(self, model) -> None:
-        UVMixerService.set_sync_all(model.get_value_as_bool())
-        self._refresh_all_rows_from_players()
+        if self._in_sync_change:
+            return
+        synced = model.get_value_as_bool()
+        if synced:
+            ref_key = self._target_path_field.model.get_value_as_string().strip() \
+                if self._target_path_field else ""
+            if not ref_key or ref_key not in UVMixerService._instances:
+                # 해당 key가 없으면 체크박스를 되돌리고 no-op
+                self._in_sync_change = True
+                model.set_value(False)
+                self._in_sync_change = False
+                return
+            UVMixerService.set_sync_all(True, ref_key=ref_key)
+        else:
+            UVMixerService.set_sync_all(False)
         if self._overlay_mgr:
             self._overlay_mgr.refresh_all()
 
-    def _refresh_all_rows_from_players(self) -> None:
-        """sync 상태 변경 후 모든 row 위젯을 현재 player 상태로 즉시 갱신한다."""
-        synced = UVMixerService._synced
-        self._in_sync = True
-        self._in_tick = True
-        for key, row in self._mixer_rows.items():
-            if synced:
-                p = UVMixerService._shared_player
-            else:
-                mixer = UVMixerService.get_instance(key)
-                p = mixer.own_player if mixer else UVMixerService._shared_player
-            row['reverse_cb'].model.set_value(not p._forward)
-            row['loop_cb'].model.set_value(p._loop)
-            row['speed_sl'].model.set_value(p._speed)
-            row['speed_label'].text = f"{p._speed:.1f}x"
-            row['slider'].model.set_value(p._t)
-            row['t_label'].text = f"t: {p._t:.3f}"
-        self._in_sync = False
-        self._in_tick = False
+    # ── 콜백: clear ──────────────────────────────────────────────────
 
-    # ── 콜백: per-mixer ──────────────────────────────────────────────
-
-    def _on_mixer_play(self, key: str) -> None:
-        if UVMixerService._synced:
-            sp = UVMixerService._shared_player
-            if sp.is_playing():
-                sp.stop()
-            else:
-                sp.play()
-                for row in self._mixer_rows.values():
-                    row['btn_play'].text = "Stop ■"
-        else:
-            mixer = UVMixerService.get_instance(key)
-            if not mixer:
-                return
-            row = self._mixer_rows.get(key)
-            if mixer.own_player.is_playing():
-                mixer.own_player.stop()
-            else:
-                mixer.own_player.play()
-                if row:
-                    row['btn_play'].text = "Stop ■"
-
-    def _on_mixer_slider(self, model, key: str) -> None:
-        if self._in_tick:
-            return
-        t = model.get_value_as_float()
-        if UVMixerService._synced:
-            if not UVMixerService._shared_player.is_playing():
-                UVMixerService._shared_player.set_t(t)
-        else:
-            mixer = UVMixerService.get_instance(key)
-            if mixer and not mixer.own_player.is_playing():
-                mixer.own_player.set_t(t)
-
-    def _on_mixer_reverse(self, model, key: str) -> None:
-        if self._in_sync:
-            return
-        forward = not model.get_value_as_bool()
-        if UVMixerService._synced:
-            UVMixerService._shared_player.set_forward(forward)
-            self._in_sync = True
-            for k, row in self._mixer_rows.items():
-                if k != key:
-                    row['reverse_cb'].model.set_value(not forward)
-            self._in_sync = False
-        else:
-            mixer = UVMixerService.get_instance(key)
-            if mixer:
-                mixer.own_player.set_forward(forward)
-
-    def _on_mixer_loop(self, model, key: str) -> None:
-        if self._in_sync:
-            return
-        loop = model.get_value_as_bool()
-        if UVMixerService._synced:
-            UVMixerService._shared_player.set_loop(loop)
-            self._in_sync = True
-            for k, row in self._mixer_rows.items():
-                if k != key:
-                    row['loop_cb'].model.set_value(loop)
-            self._in_sync = False
-        else:
-            mixer = UVMixerService.get_instance(key)
-            if mixer:
-                mixer.own_player.set_loop(loop)
-
-    def _on_mixer_speed(self, model, key: str) -> None:
-        if self._in_sync:
-            return
-        speed = model.get_value_as_float()
-        if UVMixerService._synced:
-            UVMixerService._shared_player.set_speed(speed)
-            self._in_sync = True
-            for k, row in self._mixer_rows.items():
-                row['speed_label'].text = f"{speed:.1f}x"
-                if k != key:
-                    row['speed_sl'].model.set_value(speed)
-            self._in_sync = False
-        else:
-            mixer = UVMixerService.get_instance(key)
-            if mixer:
-                mixer.own_player.set_speed(speed)
-                row = self._mixer_rows.get(key)
-                if row:
-                    row['speed_label'].text = f"{speed:.1f}x"
+    def _on_clear(self) -> None:
+        UVMixerService.destroy_all()
+        UVMixerService._shared_player.reset()
+        if self._overlay_mgr:
+            self._overlay_mgr.clear_panels()
+        self._n_frames = 0
+        self._set_status("Cleared")
 
     # ── 라이프사이클 ─────────────────────────────────────────────────
 
     def destroy(self):
-        for key, cb in self._own_tick_cbs.items():
-            mixer = UVMixerService.get_instance(key)
-            if mixer:
-                mixer.own_player.unsubscribe_tick(cb)
-        for key, cb in self._own_stopped_cbs.items():
-            mixer = UVMixerService.get_instance(key)
-            if mixer:
-                mixer.own_player.unsubscribe_stopped(cb)
-        self._own_tick_cbs.clear()
-        self._own_stopped_cbs.clear()
         sp = UVMixerService._shared_player
         sp.unsubscribe_tick(self._on_player_tick)
-        sp.unsubscribe_stopped(self._on_player_stopped)
         sp.stop()
         UVMixerService.destroy_all()
-        self._mixer_rows.clear()
-        self._mixer_vstack = None
         self._n_frames = 0
         if self._window:
             self._window.destroy()

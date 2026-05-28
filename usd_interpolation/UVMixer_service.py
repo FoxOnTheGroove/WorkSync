@@ -29,13 +29,17 @@ class UVMixerService:
 
     # ── sync 제어 ────────────────────────────────────────────────
     @classmethod
-    def set_sync_all(cls, enabled: bool) -> None:
-        """모든 mixer의 sync 상태를 일괄 전환하고 _synced 플래그를 갱신한다."""
+    def set_sync_all(cls, enabled: bool, ref_key: 'str | None' = None) -> None:
+        """모든 mixer의 sync 상태를 일괄 전환하고 _synced 플래그를 갱신한다.
+        enabled=True 시 ref_key가 존재하면 해당 mixer 기준으로 shared_player를 초기화한다."""
         cls._synced = enabled
         if enabled:
-            keys = list(cls._instances)
-            if keys:
-                cls.sync(keys[0])
+            key = ref_key if ref_key and ref_key in cls._instances else None
+            if key is None:
+                keys = list(cls._instances)
+                key = keys[0] if keys else None
+            if key:
+                cls.sync(key)
         else:
             for k in list(cls._instances):
                 cls.unsync(k)

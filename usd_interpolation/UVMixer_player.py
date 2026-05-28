@@ -62,6 +62,14 @@ class UVMixerPlayer:
         self._forward = other._forward
         self._loop = other._loop
 
+    def reset(self) -> None:
+        """재생 정지 후 모든 상태를 초기값으로 리셋한다."""
+        self.stop()
+        self._t = 0.0
+        self._speed = 1.0
+        self._forward = True
+        self._loop = False
+
     # ── 구독 ───────────────────────────────────────────────────────────
 
     def subscribe_tick(self, cb: Callable[[float, bool], None]) -> None:

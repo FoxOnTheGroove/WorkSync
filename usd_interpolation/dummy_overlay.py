@@ -329,6 +329,12 @@ class OverlayManager:
             if k != src:
                 p.sync_play(playing)
 
+    def clear_panels(self) -> None:
+        """모든 패널을 destroy하고 레지스트리를 비운다 (mixer Clear 시 호출)."""
+        for panel in list(self._panels.values()):
+            panel.destroy()
+        self._panels.clear()
+
     def destroy(self) -> None:
         for panel in list(self._panels.values()):
             panel.destroy()
