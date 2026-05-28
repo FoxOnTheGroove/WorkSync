@@ -19,6 +19,8 @@ class UsdInterpolationUI:
         self._sync_cb: ui.CheckBox | None = None
         self._mixer_vstack: ui.VStack | None = None
 
+        self._overlay_mgr = None
+
         # per-mixer 행 위젯 참조
         # {key: {'t_label', 'slider', 'btn_play', 'speed_label', 'speed_sl',
         #        'reverse_cb', 'loop_cb'}}
@@ -198,6 +200,16 @@ class UsdInterpolationUI:
         instances = UVMixerService._instances
         key = target_path or f"mixer_{len(instances)}"
 
+        prim_changed = (
+            UVMixerService.get_instance(key) is not None
+            and UVMixerService.get_target_path(key) != target_path
+        )
+        if prim_changed:
+            UVMixerService.destroy(key)
+            if self._overlay_mgr:
+                self._overlay_mgr.on_mixer_destroyed(key)
+            self._mixer_rows.pop(key, None)
+
         if key not in instances:
             mixer = UVMixerService.create(target_path, key=key)
             mixer.join_player(UVMixerService._shared_player)
@@ -207,6 +219,9 @@ class UsdInterpolationUI:
         self._n_frames = len(paths)
         UVMixerService.set_correction(key, use_correction)
         UVMixerService._shared_player.set_t(0.0)
+
+        if self._overlay_mgr:
+            self._overlay_mgr.on_mixer_loaded(key, target_path or "")
 
         src = UVMixerService.get_instance(key)
         n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
