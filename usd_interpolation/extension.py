@@ -11,7 +11,7 @@ class UsdInterpolationExtension(omni.ext.IExt):
         self._overlay_mgr = None
 
         if ENABLE_OVERLAY_UI:
-            from .overlay_ui import OverlayManager
+            from .dummy_overlay import OverlayManager
             self._overlay_mgr = OverlayManager()
 
         if ENABLE_DUMMY_UI:

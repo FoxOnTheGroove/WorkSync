@@ -42,6 +42,7 @@ class UVMixer:
         inst._baked_paths = []
         inst._t = 0.0          # 마지막으로 적용된 t (get_value용 캐시)
         inst._use_correction = True
+        inst._correction_mode: str = 'boundary'  # 'none' | 'boundary' | 'all'
         inst._subscribers = []
         inst._fvli_cache = {}
         # 각 mixer는 자신의 own_player를 가진다.
@@ -145,8 +146,13 @@ class UVMixer:
         self.own_player.set_speed(speed)
 
     def set_correction(self, enabled: bool) -> None:
-        self._use_correction = bool(enabled)
-        if enabled:
+        self.set_correction_mode('boundary' if enabled else 'none')
+
+    def set_correction_mode(self, mode: str) -> None:
+        """mode: 'none' | 'boundary' | 'all'"""
+        self._correction_mode = mode
+        self._use_correction = (mode != 'none')
+        if self._use_correction:
             self._refresh_fvli_cache()
         else:
             self._fvli_cache = {}
@@ -164,6 +170,8 @@ class UVMixer:
 
     def _apply_t(self, t: float, correction: bool) -> None:
         """UVMixerPlayer tick 콜백 — UV 속성 write만 담당."""
+        if self._correction_mode == 'all':
+            correction = True
         self.set_value(t, correction=correction, drive_timeline=False)
 
     def join_player(self, player: UVMixerPlayer) -> None:

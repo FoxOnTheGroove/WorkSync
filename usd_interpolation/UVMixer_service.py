@@ -140,6 +140,13 @@ class UVMixerService:
             m.set_correction(enabled)
 
     @classmethod
+    def set_correction_mode(cls, key: str, mode: str) -> None:
+        """mode: 'none' | 'boundary' | 'all'"""
+        m = cls._instances.get(key)
+        if m:
+            m.set_correction_mode(mode)
+
+    @classmethod
     def subscribe(cls, key: str, callback: Callable[[float], None]) -> None:
         """t 변경 시 callback(t)를 호출하도록 등록한다."""
         m = cls._instances.get(key)

@@ -5,6 +5,8 @@ import omni.ui as ui
 from . import UVMixer as _uv_mod          # 모듈 참조 (UV_INTERP_MODE 런타임 변경용)
 from .UVMixer_service import UVMixerService
 
+_CORRECTION_MODES = ['none', 'boundary', 'all']
+
 
 class UsdInterpolationUI:
 
@@ -12,7 +14,7 @@ class UsdInterpolationUI:
         self._window: ui.Window | None = None
         self._status_label: ui.Label | None = None
         self._field: ui.StringField | None = None
-        self._correction_cb: ui.CheckBox | None = None
+        self._correction_combo: ui.ComboBox | None = None
         self._target_path_field: ui.StringField | None = None
         self._mode_timeline_btn: ui.Button | None = None
         self._mode_direct_btn: ui.Button | None = None
@@ -53,10 +55,13 @@ class UsdInterpolationUI:
                 with ui.HStack(height=24, spacing=4):
                     ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
                     ui.Spacer(width=8)
-                    self._correction_cb = ui.CheckBox(width=20, height=20)
-                    self._correction_cb.model.set_value(True)
-                    self._correction_cb.model.add_value_changed_fn(self._on_correction_changed)
-                    ui.Label("Correction", width=100, height=20)
+                    ui.Label("Correction:", width=70, height=24)
+                    self._correction_combo = ui.ComboBox(
+                        1, "None", "Boundary", "All",
+                        width=90, height=24,
+                    )
+                    self._correction_combo.model.add_item_changed_fn(
+                        self._on_correction_changed)
 
                 # ── Status ────────────────────────────────────────────
                 self._status_label = ui.Label("Status: Not loaded", height=20)
@@ -70,7 +75,8 @@ class UsdInterpolationUI:
                         "Direct", width=72, clicked_fn=self._on_mode_direct)
                     ui.Spacer()
                     self._sync_cb = ui.CheckBox(width=20, height=20)
-                    self._sync_cb.model.set_value(True)   # 껍데기 — 내부 구현 없음
+                    self._sync_cb.model.set_value(True)
+                    self._sync_cb.model.add_value_changed_fn(self._on_sync_changed)
                     ui.Label("Sync", width=36, height=20)
                 self._refresh_mode_buttons()
 
@@ -149,6 +155,13 @@ class UsdInterpolationUI:
         if self._status_label:
             self._status_label.text = f"Status: {text}"
 
+    def _current_correction_mode(self) -> str:
+        if not self._correction_combo:
+            return 'boundary'
+        item = self._correction_combo.model.get_current_item()
+        idx = self._correction_combo.model.get_item_value_model(item).get_value_as_int()
+        return _CORRECTION_MODES[idx]
+
     def _refresh_mode_buttons(self) -> None:
         """현재 모드 버튼을 시각 강조(활성=disabled 처리로 눌린 상태 표현)."""
         is_tl = (_uv_mod.UV_INTERP_MODE == 'timeline')
@@ -156,6 +169,8 @@ class UsdInterpolationUI:
             self._mode_timeline_btn.enabled = not is_tl
         if self._mode_direct_btn:
             self._mode_direct_btn.enabled = is_tl
+        if self._sync_cb:
+            self._sync_cb.enabled = not is_tl   # timeline 모드에서 sync 비활성
 
     # ── player 콜백 ──────────────────────────────────────────────────
 
@@ -190,9 +205,6 @@ class UsdInterpolationUI:
             self._set_status("ERROR: no active stage")
             return
 
-        use_correction = bool(
-            self._correction_cb.model.get_value_as_bool()) if self._correction_cb else True
-
         target_path = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else None
         target_path = target_path or None
@@ -217,7 +229,7 @@ class UsdInterpolationUI:
 
         warnings = UVMixerService.load(key, *paths)
         self._n_frames = len(paths)
-        UVMixerService.set_correction(key, use_correction)
+        UVMixerService.set_correction_mode(key, self._current_correction_mode())
         UVMixerService._shared_player.set_t(0.0)
 
         if self._overlay_mgr:
@@ -230,10 +242,11 @@ class UsdInterpolationUI:
             status += f" | {len(warnings)} skipped"
         self._set_status(status)
 
-    def _on_correction_changed(self, model):
-        enabled = bool(model.get_value_as_bool())
+    def _on_correction_changed(self, model, item) -> None:
+        idx = model.get_item_value_model(item).get_value_as_int()
+        mode = _CORRECTION_MODES[idx]
         for k in UVMixerService._instances:
-            UVMixerService.set_correction(k, enabled)
+            UVMixerService.set_correction_mode(k, mode)
         if UVMixerService._instances:
             t = UVMixerService._shared_player._t
             UVMixerService._shared_player.set_t(t)
@@ -247,6 +260,19 @@ class UsdInterpolationUI:
     def _on_mode_direct(self) -> None:
         _uv_mod.UV_INTERP_MODE = 'direct'
         self._refresh_mode_buttons()
+
+    # ── 콜백: sync ───────────────────────────────────────────────────
+
+    def _on_sync_changed(self, model) -> None:
+        synced = model.get_value_as_bool()
+        keys = list(UVMixerService._instances)
+        if not keys:
+            return
+        if synced:
+            UVMixerService.sync(keys[0])
+        else:
+            for k in keys:
+                UVMixerService.unsync(k)
 
     # ── 콜백: per-mixer ──────────────────────────────────────────────
 
