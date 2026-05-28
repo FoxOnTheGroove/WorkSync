@@ -6,13 +6,13 @@ from .UVMixer_player import UVMixerPlayer
 
 class UVMixerService:
     _instances: dict[str, UVMixer] = {}
-    _shared_player: UVMixerPlayer = UVMixerPlayer()   # N+1 플레이어 중 공유 플레이어 1개
-    _synced: bool = True                              # sync 상태 — create()가 이를 따름
+    shared_player: UVMixerPlayer = UVMixerPlayer()  # N+1 플레이어 중 공유 플레이어 1개
+    _synced: bool = True                            # sync 상태
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
     def create(cls, target_path: 'str | None', key: str) -> UVMixer:
-        """빈 UVMixer를 만들어 key로 등록한다. 소스는 load(key, *paths)로 주입.
+        """빈 UVMixer를 만들어 key로 등록한다. 소스는 load(key, paths)로 주입.
         target_path가 None이면 소스 경로를 그대로 사용(remap 없음)."""
         mixer = UVMixer.create(target_path)
         cls._instances[key] = mixer
@@ -20,18 +20,20 @@ class UVMixerService:
 
     @classmethod
     def apply_sync(cls, key: str) -> None:
-        """현재 _synced 상태에 따라 해당 mixer를 shared_player에 합류하거나 own_player로 둔다."""
+        """현재 sync 상태에 따라 해당 mixer를 shared_player에 합류하거나 own_player로 둔다."""
         mixer = cls._instances.get(key)
         if not mixer:
             return
         if cls._synced:
-            mixer.join_player(cls._shared_player)
+            mixer.join_player(cls.shared_player)
 
     # ── sync 제어 ────────────────────────────────────────────────
     @classmethod
-    def set_sync_all(cls, enabled: bool, ref_key: 'str | None' = None) -> None:
-        """모든 mixer의 sync 상태를 일괄 전환하고 _synced 플래그를 갱신한다.
-        enabled=True 시 ref_key가 존재하면 해당 mixer 기준으로 shared_player를 초기화한다."""
+    def set_sync_all(cls, enabled: bool, ref_key: 'str | None' = None) -> bool:
+        """모든 mixer의 sync 상태를 일괄 전환한다.
+        enabled=True 이고 ref_key가 등록되지 않은 key면 변경 없이 False 반환."""
+        if enabled and ref_key is not None and ref_key not in cls._instances:
+            return False
         cls._synced = enabled
         if enabled:
             key = ref_key if ref_key and ref_key in cls._instances else None
@@ -43,8 +45,19 @@ class UVMixerService:
         else:
             for k in list(cls._instances):
                 cls.unsync(k)
+        return True
+
+    @classmethod
+    def is_synced(cls) -> bool:
+        """현재 sync 상태를 반환한다."""
+        return cls._synced
 
     # ── 레지스트리 ───────────────────────────────────────────────
+    @classmethod
+    def keys(cls) -> 'list[str]':
+        """등록된 모든 mixer key 목록을 반환한다."""
+        return list(cls._instances)
+
     @classmethod
     def get_instance(cls, key: str) -> 'UVMixer | None':
         """key에 해당하는 mixer를 반환한다(없으면 None)."""
@@ -76,17 +89,27 @@ class UVMixerService:
             m.destroy()
         cls._instances.clear()
 
-    # ── sync ─────────────────────────────────────────────────────────
+    # ── shared_player 제어 ───────────────────────────────────────
+    @classmethod
+    def reapply(cls) -> None:
+        """shared_player의 현재 t를 다시 적용한다 (correction 모드 변경 후 갱신용)."""
+        cls.shared_player.set_t(cls.shared_player.t)
 
+    @classmethod
+    def reset(cls) -> None:
+        """shared_player를 초기 상태(t=0, speed=1, forward, no-loop)로 리셋한다."""
+        cls.shared_player.reset()
+
+    # ── sync ─────────────────────────────────────────────────────────
     @classmethod
     def sync(cls, reference_key: str) -> None:
         """reference_key mixer의 t/speed/forward/loop를 shared_player에 복사하고,
         모든 mixer를 shared_player에 합류시킨다."""
         ref = cls._instances.get(reference_key)
         if ref:
-            cls._shared_player.copy_from(ref.own_player)
+            cls.shared_player.copy_from(ref.own_player)
         for mixer in cls._instances.values():
-            mixer.join_player(cls._shared_player)
+            mixer.join_player(cls.shared_player)
 
     @classmethod
     def unsync(cls, key: str) -> None:
@@ -125,9 +148,7 @@ class UVMixerService:
     @classmethod
     def set_value(cls, key: str, t: float, *,
                   correction: bool = True, drive_timeline: bool = True) -> None:
-        """보간 위치 t(0.0~1.0)를 설정한다.
-        correction=False면 fvli 보정을 건너뛴다(매 프레임 호출 시 성능 절약).
-        drive_timeline=False면 전역 타임라인은 건드리지 않는다."""
+        """보간 위치 t(0.0~1.0)를 설정한다."""
         m = cls._instances.get(key)
         if m:
             m.set_value(t, correction=correction, drive_timeline=drive_timeline)
@@ -140,28 +161,24 @@ class UVMixerService:
 
     @classmethod
     def set_forward(cls, key: str, forward: bool) -> None:
-        """재생 방향을 설정한다(True=정방향)."""
         m = cls._instances.get(key)
         if m:
             m.set_forward(forward)
 
     @classmethod
     def set_loop(cls, key: str, loop: bool) -> None:
-        """재생 루프 여부를 설정한다."""
         m = cls._instances.get(key)
         if m:
             m.set_loop(loop)
 
     @classmethod
     def set_speed(cls, key: str, speed: float) -> None:
-        """재생 속도 배율을 설정한다."""
         m = cls._instances.get(key)
         if m:
             m.set_speed(speed)
 
     @classmethod
     def set_correction(cls, key: str, enabled: bool) -> None:
-        """UV 보정 on/off (rebake 없이 fvli 캐시만 갱신)."""
         m = cls._instances.get(key)
         if m:
             m.set_correction(enabled)
@@ -175,14 +192,12 @@ class UVMixerService:
 
     @classmethod
     def subscribe(cls, key: str, callback: Callable[[float], None]) -> None:
-        """t 변경 시 callback(t)를 호출하도록 등록한다."""
         m = cls._instances.get(key)
         if m:
             m.subscribe(callback)
 
     @classmethod
     def unsubscribe(cls, key: str, callback: Callable[[float], None]) -> None:
-        """등록된 콜백을 제거한다."""
         m = cls._instances.get(key)
         if m:
             m.unsubscribe(callback)

@@ -58,7 +58,7 @@ class ViewportOverlayPanel:
 
         vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
 
-        sp = UVMixerService._shared_player
+        sp = UVMixerService.shared_player
         sp.subscribe_tick(self._on_tick)
         sp.subscribe_stopped(self._on_stopped)
 
@@ -122,7 +122,7 @@ class ViewportOverlayPanel:
     # ── player 콜백 ─────────────────────────────────────────────
 
     def _on_tick(self, t: float, correction: bool) -> None:
-        if not UVMixerService._synced:
+        if not UVMixerService.is_synced():
             return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
@@ -130,7 +130,7 @@ class ViewportOverlayPanel:
         self._in_tick = False
 
     def _on_own_tick(self, t: float, correction: bool) -> None:
-        if UVMixerService._synced:
+        if UVMixerService.is_synced():
             return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
@@ -138,18 +138,18 @@ class ViewportOverlayPanel:
         self._in_tick = False
 
     def _on_stopped(self) -> None:
-        if UVMixerService._synced:
+        if UVMixerService.is_synced():
             self._widgets['btn_play'].text = "▶"
 
     def _on_own_stopped(self) -> None:
-        if not UVMixerService._synced:
+        if not UVMixerService.is_synced():
             self._widgets['btn_play'].text = "▶"
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
     def _on_play(self) -> None:
-        if UVMixerService._synced:
-            sp = UVMixerService._shared_player
+        if UVMixerService.is_synced():
+            sp = UVMixerService.shared_player
             if sp.is_playing():
                 sp.stop()
             else:
@@ -170,9 +170,10 @@ class ViewportOverlayPanel:
         if self._in_tick:
             return
         t = model.get_value_as_float()
-        if UVMixerService._synced:
-            if not UVMixerService._shared_player.is_playing():
-                UVMixerService._shared_player.set_t(t)
+        if UVMixerService.is_synced():
+            sp = UVMixerService.shared_player
+            if not sp.is_playing():
+                sp.set_t(t)
         else:
             op = self._own_player()
             if op and not op.is_playing():
@@ -182,8 +183,8 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         reverse = model.get_value_as_bool()
-        if UVMixerService._synced:
-            UVMixerService._shared_player.set_forward(not reverse)
+        if UVMixerService.is_synced():
+            UVMixerService.shared_player.set_forward(not reverse)
             self._mgr._sync_reverse(self._key, reverse)
         else:
             op = self._own_player()
@@ -194,8 +195,8 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         loop = model.get_value_as_bool()
-        if UVMixerService._synced:
-            UVMixerService._shared_player.set_loop(loop)
+        if UVMixerService.is_synced():
+            UVMixerService.shared_player.set_loop(loop)
             self._mgr._sync_loop(self._key, loop)
         else:
             op = self._own_player()
@@ -207,8 +208,8 @@ class ViewportOverlayPanel:
             return
         spd = model.get_value_as_float()
         self._widgets['spd_label'].text = f"{spd:.1f}x"
-        if UVMixerService._synced:
-            UVMixerService._shared_player.set_speed(spd)
+        if UVMixerService.is_synced():
+            UVMixerService.shared_player.set_speed(spd)
             self._mgr._sync_speed(self._key, spd)
         else:
             op = self._own_player()
@@ -219,19 +220,19 @@ class ViewportOverlayPanel:
 
     def refresh_from_player(self) -> None:
         """sync ON/OFF 토글 후 현재 활성 player 상태를 위젯에 반영한다."""
-        if UVMixerService._synced:
-            p = UVMixerService._shared_player
+        if UVMixerService.is_synced():
+            p = UVMixerService.shared_player
         else:
             mixer = UVMixerService.get_instance(self._key)
-            p = mixer.own_player if mixer else UVMixerService._shared_player
+            p = mixer.own_player if mixer else UVMixerService.shared_player
         self._in_sync = True
         self._in_tick = True
-        self._widgets['rev_cb'].model.set_value(not p._forward)
-        self._widgets['loop_cb'].model.set_value(p._loop)
-        self._widgets['spd_sl'].model.set_value(p._speed)
-        self._widgets['spd_label'].text = f"{p._speed:.1f}x"
-        self._widgets['slider'].model.set_value(p._t)
-        self._widgets['t_label'].text = f"t:{p._t:.3f}"
+        self._widgets['rev_cb'].model.set_value(not p.forward)
+        self._widgets['loop_cb'].model.set_value(p.loop)
+        self._widgets['spd_sl'].model.set_value(p.speed)
+        self._widgets['spd_label'].text = f"{p.speed:.1f}x"
+        self._widgets['slider'].model.set_value(p.t)
+        self._widgets['t_label'].text = f"t:{p.t:.3f}"
         self._in_sync = False
         self._in_tick = False
 
@@ -270,7 +271,7 @@ class ViewportOverlayPanel:
         if self._vph:
             self._vph.frame.set_computed_content_size_changed_fn(None)
             self._vph = None
-        sp = UVMixerService._shared_player
+        sp = UVMixerService.shared_player
         sp.unsubscribe_tick(self._on_tick)
         sp.unsubscribe_stopped(self._on_stopped)
         mixer = UVMixerService.get_instance(self._key)
@@ -288,7 +289,6 @@ class OverlayManager:
         self._panels: dict[str, ViewportOverlayPanel] = {}
 
     def refresh_all(self) -> None:
-        """모든 패널을 현재 player 상태로 즉시 갱신한다 (sync ON/OFF 시 호출)."""
         for panel in self._panels.values():
             panel.refresh_from_player()
 

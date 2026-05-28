@@ -1,7 +1,7 @@
 import omni.usd
 import omni.ui as ui
 
-from . import UVMixer as _uv_mod          # 모듈 참조 (UV_INTERP_MODE 런타임 변경용)
+from . import UVMixer as _uv_mod
 from .UVMixer_service import UVMixerService
 
 _CORRECTION_MODES = ['none', 'boundary', 'all']
@@ -82,7 +82,6 @@ class UsdInterpolationUI:
         return _CORRECTION_MODES[self._correction_idx]
 
     def _refresh_mode_buttons(self) -> None:
-        """현재 모드 버튼 텍스트에 ● 표시로 활성 상태를 나타낸다."""
         is_tl = (_uv_mod.UV_INTERP_MODE == 'timeline')
         if self._mode_timeline_btn:
             self._mode_timeline_btn.text = "● Timeline" if is_tl else "Timeline"
@@ -91,7 +90,7 @@ class UsdInterpolationUI:
             self._mode_direct_btn.text = "● Direct" if not is_tl else "Direct"
             self._mode_direct_btn.enabled = is_tl
         if self._sync_cb:
-            self._sync_cb.enabled = not is_tl   # timeline 모드에서 sync 비활성
+            self._sync_cb.enabled = not is_tl
 
     # ── 콜백: 로드 ───────────────────────────────────────────────────
 
@@ -114,8 +113,7 @@ class UsdInterpolationUI:
             if self._target_path_field else None
         target_path = target_path or None
 
-        instances = UVMixerService._instances
-        key = target_path or f"mixer_{len(instances)}"
+        key = target_path or f"mixer_{len(UVMixerService.keys())}"
 
         prim_changed = (
             UVMixerService.get_instance(key) is not None
@@ -126,20 +124,21 @@ class UsdInterpolationUI:
             if self._overlay_mgr:
                 self._overlay_mgr.on_mixer_destroyed(key)
 
-        if key not in instances:
+        if UVMixerService.get_instance(key) is None:
             UVMixerService.create(target_path, key=key)
             UVMixerService.apply_sync(key)
 
         warnings = UVMixerService.load(key, paths)
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
-        UVMixerService._shared_player.set_t(0.0)
+        UVMixerService.shared_player.set_t(0.0)
 
         if self._overlay_mgr:
             self._overlay_mgr.on_mixer_loaded(key, target_path or "")
 
         src = UVMixerService.get_instance(key)
         n_meshes = len(src._st_maps[0]) if src and src._st_maps else 0
-        status = f"{len(instances)} mixer(s) — {n_meshes} mesh(es), {len(paths)} src"
+        all_keys = UVMixerService.keys()
+        status = f"{len(all_keys)} mixer(s) — {n_meshes} mesh(es), {len(paths)} src"
         if warnings:
             status += f" | {len(warnings)} skipped"
         self._set_status(status)
@@ -148,11 +147,10 @@ class UsdInterpolationUI:
         idx = model.get_item_value_model(item).get_value_as_int()
         self._correction_idx = idx
         mode = _CORRECTION_MODES[idx]
-        for k in UVMixerService._instances:
+        for k in UVMixerService.keys():
             UVMixerService.set_correction_mode(k, mode)
-        if UVMixerService._instances:
-            t = UVMixerService._shared_player._t
-            UVMixerService._shared_player.set_t(t)
+        if UVMixerService.keys():
+            UVMixerService.reapply()
 
     # ── 콜백: 모드 ───────────────────────────────────────────────────
 
@@ -170,18 +168,14 @@ class UsdInterpolationUI:
         if self._in_sync_change:
             return
         synced = model.get_value_as_bool()
-        if synced:
-            ref_key = self._target_path_field.model.get_value_as_string().strip() \
-                if self._target_path_field else ""
-            if not ref_key or ref_key not in UVMixerService._instances:
-                # 해당 key가 없으면 체크박스를 되돌리고 no-op
-                self._in_sync_change = True
-                model.set_value(False)
-                self._in_sync_change = False
-                return
-            UVMixerService.set_sync_all(True, ref_key=ref_key)
-        else:
-            UVMixerService.set_sync_all(False)
+        ref_key = self._target_path_field.model.get_value_as_string().strip() \
+            if self._target_path_field else ""
+        ok = UVMixerService.set_sync_all(synced, ref_key=ref_key or None)
+        if not ok:
+            self._in_sync_change = True
+            model.set_value(False)
+            self._in_sync_change = False
+            return
         if self._overlay_mgr:
             self._overlay_mgr.refresh_all()
 
@@ -189,16 +183,15 @@ class UsdInterpolationUI:
 
     def _on_clear(self) -> None:
         UVMixerService.destroy_all()
-        UVMixerService._shared_player.reset()
+        UVMixerService.reset()
         if self._overlay_mgr:
             self._overlay_mgr.clear_panels()
-        self._n_frames = 0
         self._set_status("Cleared")
 
     # ── 라이프사이클 ─────────────────────────────────────────────────
 
     def destroy(self):
-        UVMixerService._shared_player.stop()
+        UVMixerService.shared_player.stop()
         UVMixerService.destroy_all()
         if self._window:
             self._window.destroy()

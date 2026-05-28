@@ -53,6 +53,24 @@ class UVMixerPlayer:
     def set_loop(self, v: bool) -> None:
         self._loop = bool(v)
 
+    # ── 상태 조회 ──────────────────────────────────────────────────────
+
+    @property
+    def t(self) -> float:
+        return self._t
+
+    @property
+    def speed(self) -> float:
+        return self._speed
+
+    @property
+    def forward(self) -> bool:
+        return self._forward
+
+    @property
+    def loop(self) -> bool:
+        return self._loop
+
     # ── 상태 복사 (sync 진입 시) ───────────────────────────────────────
 
     def copy_from(self, other: 'UVMixerPlayer') -> None:
