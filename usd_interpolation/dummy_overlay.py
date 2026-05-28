@@ -8,7 +8,7 @@ except ImportError:
     _hytwin_vp_wg = None
 
 OVERLAY_W = 260
-OVERLAY_H = 80
+OVERLAY_H = 105
 _MARGIN = 8
 
 _WINDOW_FLAGS = (
@@ -78,16 +78,14 @@ class ViewportOverlayPanel:
                                          style={"font_size": 10})
                     rev_cb = ui.CheckBox(width=14, height=14)
                     rev_cb.model.add_value_changed_fn(self._on_reverse)
-                    ui.Label("R", width=12, height=14,
+                    ui.Label("Reverse", width=46, height=14,
                              style={"font_size": 10})
                     loop_cb = ui.CheckBox(width=14, height=14)
                     loop_cb.model.add_value_changed_fn(self._on_loop)
-                    ui.Label("L", width=12, height=14,
+                    ui.Label("Loop", width=30, height=14,
                              style={"font_size": 10})
                     ui.Spacer()
-                    key_str = self._key
-                    ui.Label(key_str[-18:] if len(key_str) > 18 else key_str,
-                             height=14,
+                    ui.Label(self._key, height=14,
                              style={"color": 0xFF888888, "font_size": 10})
 
                 # 행2: t 슬라이더
