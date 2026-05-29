@@ -46,6 +46,9 @@ class UVMixerService:
             if key:
                 cls.sync(key)
         else:
+            cls.shared_player.stop()
+            for mixer in cls._instances.values():
+                mixer.own_player.stop()
             for k in list(cls._instances):
                 cls.unsync(k)
         return True
