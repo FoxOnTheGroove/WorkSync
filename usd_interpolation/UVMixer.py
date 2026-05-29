@@ -112,7 +112,7 @@ class UVMixer:
             self._write_st_direct(t)
         elif drive_timeline and self._n_frames >= 2:
             tl = omni.timeline.get_timeline_interface()
-            tl.set_current_time(t * (self._n_frames - 1) / tl.get_time_codes_per_second())
+            tl.set_current_time(t / tl.get_time_codes_per_second())
         if correction:
             self.apply_correction()
         self._notify(t)
@@ -195,11 +195,11 @@ class UVMixer:
     # ── 라이프사이클 ────────────────────────────────────────────────────
 
     def destroy(self) -> None:
-        # 공유 플레이어에 합류된 상태라면 구독 해제 (공유 플레이어는 정지하지 않음)
         if self._active_player is not self.own_player:
             self._active_player.unsubscribe_tick(self._apply_t)
             self._active_player = self.own_player
         self.own_player.stop()
+        self._clear_baked()
         self._subscribers.clear()
 
     # ── 내부 ─────────────────────────────────────────────────────
@@ -284,10 +284,12 @@ class UVMixer:
             return
 
         # timeline 모드: session layer에 bake
+        # timecode를 0~1 정규화값으로 bake → 다른 n_frames mixer와 timeline을 공유 가능
+        n = len(self._st_maps)
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            # session layer tcps를 stage와 맞춰 timeSample 자동 스케일링 방지.
             pxr_stage.GetSessionLayer().timeCodesPerSecond = pxr_stage.GetTimeCodesPerSecond()
-            for tc, mesh_map in enumerate(self._st_maps):
+            for i, mesh_map in enumerate(self._st_maps):
+                tc = i / (n - 1) if n > 1 else 0.0
                 for mesh_path, st_data in mesh_map.items():
                     pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
                     if not pxr_prim.IsValid():
