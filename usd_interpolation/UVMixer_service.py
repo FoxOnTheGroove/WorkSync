@@ -95,6 +95,15 @@ class UVMixerService:
             m.destroy()
         cls._instances.clear()
 
+    @classmethod
+    def shutdown(cls) -> None:
+        """익스텐션 종료 시 호출. 모든 mixer 해제 후 클래스 상태를 초기값으로 복원한다."""
+        cls.destroy_all()
+        cls.shared_player.reset()
+        cls.shared_player._tick_cbs.clear()
+        cls.shared_player._stopped_cbs.clear()
+        cls._synced = True
+
     # ── shared_player 제어 ───────────────────────────────────────
     @classmethod
     def reapply(cls) -> None:

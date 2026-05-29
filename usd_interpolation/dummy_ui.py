@@ -190,8 +190,7 @@ class UsdInterpolationUI:
     # ── 라이프사이클 ─────────────────────────────────────────────────
 
     def destroy(self):
-        UVMixerService.shared_player.stop()
-        UVMixerService.destroy_all()
+        UVMixerService.shutdown()
         if self._window:
             self._window.destroy()
             self._window = None

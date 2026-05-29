@@ -21,9 +21,9 @@ class UsdInterpolationExtension(omni.ext.IExt):
             self._ui.build_ui()
 
     def on_shutdown(self):
-        if self._ui:
-            self._ui.destroy()
-            self._ui = None
         if self._overlay_mgr:
             self._overlay_mgr.destroy()
             self._overlay_mgr = None
+        if self._ui:
+            self._ui.destroy()
+            self._ui = None

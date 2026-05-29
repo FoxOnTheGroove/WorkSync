@@ -198,6 +198,7 @@ class UVMixer:
         if self._active_player is not self.own_player:
             self._active_player.unsubscribe_tick(self._apply_t)
             self._active_player = self.own_player
+        self.own_player.unsubscribe_tick(self._apply_t)
         self.own_player.stop()
         self._clear_baked()
         self._subscribers.clear()
