@@ -114,21 +114,27 @@ class ViewportOverlayPanel:
         mixer = UVMixerService.get_instance(self._key)
         return mixer.own_player if mixer else None
 
+    def _player(self):
+        """현재 활성 player — synced면 shared, 아니면 own_player(없으면 None)."""
+        if UVMixerService.is_synced():
+            return UVMixerService.shared_player
+        return self._own_player()
+
+    def _set_slider(self, t: float) -> None:
+        self._in_tick = True
+        self._widgets['slider'].model.set_value(t)
+        self._in_tick = False
+
     # ── player 콜백 ─────────────────────────────────────────────
+    # tick/stopped는 shared·own 양쪽에 구독되어 있고, 활성 상태일 때만 반영한다.
 
     def _on_tick(self, t: float, correction: bool) -> None:
-        if not UVMixerService.is_synced():
-            return
-        self._in_tick = True
-        self._widgets['slider'].model.set_value(t)
-        self._in_tick = False
+        if UVMixerService.is_synced():
+            self._set_slider(t)
 
     def _on_own_tick(self, t: float, correction: bool) -> None:
-        if UVMixerService.is_synced():
-            return
-        self._in_tick = True
-        self._widgets['slider'].model.set_value(t)
-        self._in_tick = False
+        if not UVMixerService.is_synced():
+            self._set_slider(t)
 
     def _on_stopped(self) -> None:
         if UVMixerService.is_synced():
@@ -141,82 +147,59 @@ class ViewportOverlayPanel:
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
     def _on_play(self) -> None:
-        if UVMixerService.is_synced():
-            sp = UVMixerService.shared_player
-            if sp.is_playing():
-                sp.stop()
-            else:
-                sp.play()
-                self._widgets['btn_play'].text = "■"
-                self._mgr._sync_play(self._key, playing=True)
+        p = self._player()
+        if not p:
+            return
+        if p.is_playing():
+            p.stop()
         else:
-            op = self._own_player()
-            if not op:
-                return
-            if op.is_playing():
-                op.stop()
-            else:
-                op.play()
-                self._widgets['btn_play'].text = "■"
+            p.play()
+            self._widgets['btn_play'].text = "■"
+            if UVMixerService.is_synced():
+                self._mgr._sync_play(self._key, playing=True)
 
     def _on_slider(self, model) -> None:
         if self._in_tick:
             return
-        t = model.get_value_as_float()
-        if UVMixerService.is_synced():
-            sp = UVMixerService.shared_player
-            if not sp.is_playing():
-                sp.set_t(t)
-        else:
-            op = self._own_player()
-            if op and not op.is_playing():
-                op.set_t(t)
+        p = self._player()
+        if p and not p.is_playing():
+            p.set_t(model.get_value_as_float())
 
     def _on_reverse(self, model) -> None:
         if self._in_sync:
             return
         reverse = model.get_value_as_bool()
+        p = self._player()
+        if p:
+            p.set_forward(not reverse)
         if UVMixerService.is_synced():
-            UVMixerService.shared_player.set_forward(not reverse)
             self._mgr._sync_reverse(self._key, reverse)
-        else:
-            op = self._own_player()
-            if op:
-                op.set_forward(not reverse)
 
     def _on_loop(self, model) -> None:
         if self._in_sync:
             return
         loop = model.get_value_as_bool()
+        p = self._player()
+        if p:
+            p.set_loop(loop)
         if UVMixerService.is_synced():
-            UVMixerService.shared_player.set_loop(loop)
             self._mgr._sync_loop(self._key, loop)
-        else:
-            op = self._own_player()
-            if op:
-                op.set_loop(loop)
 
     def _on_speed(self, model) -> None:
         if self._in_sync:
             return
         spd = model.get_value_as_float()
+        p = self._player()
+        if p:
+            p.set_speed(spd)
         if UVMixerService.is_synced():
-            UVMixerService.shared_player.set_speed(spd)
             self._mgr._sync_speed(self._key, spd)
-        else:
-            op = self._own_player()
-            if op:
-                op.set_speed(spd)
 
     # ── sync 상태 변경 시 즉각 갱신 ─────────────────────────────
 
     def refresh_from_player(self) -> None:
         """sync ON/OFF 토글 후 현재 활성 player 상태를 위젯에 반영한다."""
-        if UVMixerService.is_synced():
-            p = UVMixerService.shared_player
-        else:
-            mixer = UVMixerService.get_instance(self._key)
-            p = mixer.own_player if mixer else UVMixerService.shared_player
+        p = self._player() or UVMixerService.shared_player
         self._in_sync = True
         self._in_tick = True
         self._widgets['rev_cb'].model.set_value(not p.forward)
