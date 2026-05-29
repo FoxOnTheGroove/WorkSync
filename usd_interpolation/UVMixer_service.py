@@ -36,6 +36,9 @@ class UVMixerService:
             return False
         cls._synced = enabled
         if enabled:
+            cls.shared_player.stop()
+            for mixer in cls._instances.values():
+                mixer.own_player.stop()
             key = ref_key if ref_key and ref_key in cls._instances else None
             if key is None:
                 keys = list(cls._instances)

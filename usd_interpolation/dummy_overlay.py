@@ -71,7 +71,7 @@ class ViewportOverlayPanel:
         with self._window.frame:
             with ui.VStack(spacing=1, style={"margin": 2}):
 
-                # 행1: ▶/■ | R ☐ | L ☐ | key label
+                # 행1: ▶/■ | Reverse ☐ | Loop ☐ | key label
                 with ui.HStack(height=16, spacing=3):
                     btn_play = ui.Button("▶", width=22, height=14,
                                          clicked_fn=self._on_play,
@@ -84,21 +84,20 @@ class ViewportOverlayPanel:
                     loop_cb.model.add_value_changed_fn(self._on_loop)
                     ui.Label("Loop", width=30, height=14,
                              style={"font_size": 10})
-                    ui.Spacer()
                     ui.Label(self._key, height=14,
                              style={"color": 0xFF888888, "font_size": 10})
 
-                # 행2: t 슬라이더
+                # 행2: Weight 슬라이더
                 with ui.HStack(height=16, spacing=3):
-                    t_label = ui.Label("t:.000", width=42,
-                                       style={"font_size": 10})
+                    ui.Label("Weight", width=42, height=14,
+                             style={"font_size": 10})
                     slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                     slider.model.add_value_changed_fn(self._on_slider)
 
                 # 행3: Speed 슬라이더
                 with ui.HStack(height=16, spacing=3):
-                    spd_label = ui.Label("1.0x", width=30,
-                                          style={"font_size": 10})
+                    ui.Label("Speed ", width=42, height=14,
+                             style={"font_size": 10})
                     spd_sl = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
                     spd_sl.model.set_value(1.0)
                     spd_sl.model.add_value_changed_fn(self._on_speed)
@@ -107,9 +106,7 @@ class ViewportOverlayPanel:
             'btn_play': btn_play,
             'rev_cb':   rev_cb,
             'loop_cb':  loop_cb,
-            't_label':  t_label,
             'slider':   slider,
-            'spd_label': spd_label,
             'spd_sl':   spd_sl,
         }
 
@@ -124,7 +121,6 @@ class ViewportOverlayPanel:
             return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
-        self._widgets['t_label'].text = f"t:{t:.3f}"
         self._in_tick = False
 
     def _on_own_tick(self, t: float, correction: bool) -> None:
@@ -132,7 +128,6 @@ class ViewportOverlayPanel:
             return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
-        self._widgets['t_label'].text = f"t:{t:.3f}"
         self._in_tick = False
 
     def _on_stopped(self) -> None:
@@ -205,7 +200,6 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         spd = model.get_value_as_float()
-        self._widgets['spd_label'].text = f"{spd:.1f}x"
         if UVMixerService.is_synced():
             UVMixerService.shared_player.set_speed(spd)
             self._mgr._sync_speed(self._key, spd)
@@ -228,9 +222,7 @@ class ViewportOverlayPanel:
         self._widgets['rev_cb'].model.set_value(not p.forward)
         self._widgets['loop_cb'].model.set_value(p.loop)
         self._widgets['spd_sl'].model.set_value(p.speed)
-        self._widgets['spd_label'].text = f"{p.speed:.1f}x"
         self._widgets['slider'].model.set_value(p.t)
-        self._widgets['t_label'].text = f"t:{p.t:.3f}"
         self._in_sync = False
         self._in_tick = False
 
@@ -249,7 +241,6 @@ class ViewportOverlayPanel:
     def sync_speed(self, spd: float) -> None:
         self._in_sync = True
         self._widgets['spd_sl'].model.set_value(spd)
-        self._widgets['spd_label'].text = f"{spd:.1f}x"
         self._in_sync = False
 
     def sync_play(self, playing: bool) -> None:
