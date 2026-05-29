@@ -27,3 +27,6 @@ class UsdInterpolationExtension(omni.ext.IExt):
         if self._ui:
             self._ui.destroy()
             self._ui = None
+
+        from .UVMixer_service import UVMixerService
+        UVMixerService.shutdown()

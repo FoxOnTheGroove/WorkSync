@@ -190,7 +190,7 @@ class UsdInterpolationUI:
     # ── 라이프사이클 ─────────────────────────────────────────────────
 
     def destroy(self):
-        UVMixerService.shutdown()
+        # 서비스 라이프사이클은 extension이 책임진다. UI는 자기 윈도우만 정리.
         if self._window:
             self._window.destroy()
             self._window = None
