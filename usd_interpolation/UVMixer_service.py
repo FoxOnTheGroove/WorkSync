@@ -8,6 +8,7 @@ class UVMixerService:
     _instances: dict[str, UVMixer] = {}
     shared_player: UVMixerPlayer = UVMixerPlayer()  # N+1 플레이어 중 공유 플레이어 1개
     _synced: bool = True                            # sync 상태
+    _panel_mgr = None                               # UVMixer_overlay.OverlayManager | None (lazy)
 
     # ── 팩토리 ──────────────────────────────────────────────────
     @classmethod
@@ -51,12 +52,48 @@ class UVMixerService:
                 mixer.own_player.stop()
             for k in list(cls._instances):
                 cls.unsync(k)
+        if cls._panel_mgr is not None:
+            cls._panel_mgr.refresh_all()
         return True
 
     @classmethod
     def is_synced(cls) -> bool:
         """현재 sync 상태를 반환한다."""
         return cls._synced
+
+    # ── 패널 제어 (뷰포트 HUD) ───────────────────────────────────
+    @classmethod
+    def _get_panel_mgr(cls):
+        """OverlayManager를 lazy 생성한다. omni.ui 부재(헤드리스) 시 None."""
+        if cls._panel_mgr is None:
+            try:
+                from .UVMixer_overlay import OverlayManager
+            except Exception:
+                return None
+            cls._panel_mgr = OverlayManager()
+        return cls._panel_mgr
+
+    @classmethod
+    def panel_on(cls, key: str) -> bool:
+        """key mixer의 타겟 뷰포트에 HUD 패널을 띄운다. 성공 시 True."""
+        if not cls.has_instance(key):
+            return False
+        mgr = cls._get_panel_mgr()
+        if mgr is None:
+            return False
+        mgr.on_mixer_loaded(key, cls.get_target_path(key) or "")
+        return mgr.is_on(key)
+
+    @classmethod
+    def panel_off(cls, key: str) -> None:
+        """key mixer의 HUD 패널을 제거한다."""
+        if cls._panel_mgr is not None:
+            cls._panel_mgr.on_mixer_destroyed(key)
+
+    @classmethod
+    def panel_is_on(cls, key: str) -> bool:
+        """key mixer의 HUD 패널이 떠 있으면 True."""
+        return cls._panel_mgr is not None and cls._panel_mgr.is_on(key)
 
     # ── 레지스트리 ───────────────────────────────────────────────
     @classmethod
@@ -88,22 +125,28 @@ class UVMixerService:
 
     @classmethod
     def destroy(cls, key: str) -> None:
-        """key의 mixer를 정지·해제하고 레지스트리에서 제거한다."""
+        """key의 mixer를 정지·해제하고 레지스트리에서 제거한다(패널 동반 제거)."""
         mixer = cls._instances.pop(key, None)
         if mixer is not None:
             mixer.destroy()
+        cls.panel_off(key)
 
     @classmethod
     def destroy_all(cls) -> None:
-        """모든 mixer를 해제하고 레지스트리를 비운다."""
+        """모든 mixer를 해제하고 레지스트리를 비운다(서비스 패널 동반 제거)."""
         for m in list(cls._instances.values()):
             m.destroy()
         cls._instances.clear()
+        if cls._panel_mgr is not None:
+            cls._panel_mgr.clear_panels()
 
     @classmethod
     def shutdown(cls) -> None:
         """익스텐션 종료 시 호출. 모든 mixer 해제 후 클래스 상태를 초기값으로 복원한다."""
         cls.destroy_all()
+        if cls._panel_mgr is not None:
+            cls._panel_mgr.destroy()
+            cls._panel_mgr = None
         cls.shared_player.reset()
         cls.shared_player._tick_cbs.clear()
         cls.shared_player._stopped_cbs.clear()
