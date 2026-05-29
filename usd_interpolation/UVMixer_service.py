@@ -70,6 +70,11 @@ class UVMixerService:
         return cls._instances.get(key)
 
     @classmethod
+    def has_instance(cls, key: str) -> bool:
+        """key에 해당하는 mixer가 등록되어 있으면 True."""
+        return key in cls._instances
+
+    @classmethod
     def get_mesh_paths(cls, key: str) -> 'list[str]':
         """로드된 메쉬 경로 목록을 정렬해 반환한다(미로드 시 빈 리스트)."""
         m = cls._instances.get(key)
