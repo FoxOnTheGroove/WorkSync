@@ -18,9 +18,8 @@ class UsdInterpolationUI:
         self._mode_timeline_btn: ui.Button | None = None
         self._mode_direct_btn: ui.Button | None = None
         self._sync_cb: ui.CheckBox | None = None
-        self._overlay_mgr = None
 
-        self._correction_idx: int = 1   # 0=none 1=boundary 2=all, 기본=boundary
+        self._correction_idx: int = 1
         self._in_sync_change: bool = False
 
     def build_ui(self):
@@ -121,8 +120,6 @@ class UsdInterpolationUI:
         )
         if prim_changed:
             UVMixerService.destroy(key)
-            if self._overlay_mgr:
-                self._overlay_mgr.on_mixer_destroyed(key)
 
         if UVMixerService.get_instance(key) is None:
             UVMixerService.create(target_path, key=key)
@@ -132,8 +129,7 @@ class UsdInterpolationUI:
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
         UVMixerService.shared_player.set_t(0.0)
 
-        if self._overlay_mgr:
-            self._overlay_mgr.on_mixer_loaded(key, target_path or "")
+        UVMixerService.panel_on(key)
 
         n_meshes = len(UVMixerService.get_mesh_paths(key))
         all_keys = UVMixerService.keys()
@@ -174,17 +170,12 @@ class UsdInterpolationUI:
             self._in_sync_change = True
             model.set_value(False)
             self._in_sync_change = False
-            return
-        if self._overlay_mgr:
-            self._overlay_mgr.refresh_all()
 
     # ── 콜백: clear ──────────────────────────────────────────────────
 
     def _on_clear(self) -> None:
         UVMixerService.destroy_all()
         UVMixerService.reset()
-        if self._overlay_mgr:
-            self._overlay_mgr.clear_panels()
         self._set_status("Cleared")
 
     # ── 라이프사이클 ─────────────────────────────────────────────────
