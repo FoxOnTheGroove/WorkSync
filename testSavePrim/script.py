@@ -1,4 +1,4 @@
-from pxr import Usd, Sdf, UsdUtils, Ar
+from pxr import Usd, Sdf, UsdUtils
 import omni.usd, omni.client
 import zipfile, os, tempfile
 
@@ -39,34 +39,40 @@ main_layer = next(os.path.join(unpack, n) for n in names
                   if n.endswith((".usd", ".usdc", ".usda")))
 print("메인 레이어:", main_layer)
 
-# 5) 풀린 원본을 열고, 현재 stage의 변형(오버라이드)을 덮어씌움
+# 5) 현재 stage의 flatten에서 prim 오버라이드를 unpack 레이어에 in-place 복사
+flat = stage.Flatten()
 src_stage = Usd.Stage.Open(main_layer)
 
-# 현재 stage에서 해당 프림의 오버라이드만 추출
-flat = stage.Flatten()
-
-# 풀린 stage의 루트 프림 경로 확인
 src_default = src_stage.GetDefaultPrim()
 src_root_path = src_default.GetPath() if src_default else next(
     p.GetPath() for p in src_stage.GetPseudoRoot().GetChildren())
 
-# 현재 프림의 합성 결과를 풀린 stage 위에 복사 (변형 반영)
-Sdf.CopySpec(flat, prim_path, src_stage.GetRootLayer(), src_root_path)
+Sdf.CopySpec(flat, Sdf.Path(prim_path), src_stage.GetRootLayer(), src_root_path)
 
-# 6) 독립 .usd로 export (텍스처는 unpack 폴더의 일반 파일 상대경로)
-usd_path = os.path.join(work, f"{base}.usd")
-src_stage.GetRootLayer().Export(usd_path)
+# 6) unpack 폴더 안에서 in-place Save → 텍스처 상대경로 유지
+src_stage.GetRootLayer().Save()
+print("수정 저장:", main_layer)
 
-# 7) 텍스처까지 묶어 최종 폴더로 localize
-resolver = Ar.GetResolver()
-ctx = resolver.CreateDefaultContextForAsset(usd_path)
-with Ar.ResolverContextBinder(ctx):
-    UsdUtils.LocalizeAsset(Sdf.AssetPath(usd_path), os.path.join(work, "final"))
+# 7) unpack 폴더를 그대로 재압축 → usdz 내부 경로 유지
+# usdz 스펙: 내부 파일은 반드시 ZIP_STORED (압축 금지)
+out_usdz = os.path.join(work, f"{base}.usdz")
+with zipfile.ZipFile(out_usdz, 'w', zipfile.ZIP_STORED) as zf:
+    for root, dirs, files in os.walk(unpack):
+        for f in files:
+            abs_path = os.path.join(root, f)
+            arcname = os.path.relpath(abs_path, unpack)  # 아카이브 내 상대경로 유지
+            zf.write(abs_path, arcname)
+print("usdz 생성:", out_usdz)
 
-print("결과 폴더:", os.path.join(work, "final"))
+# 8) 독립 .usd 폴더로도 export (선택)
+# main_layer가 unpack 안에 있으므로 텍스처 상대경로 정상
+final_dir = os.path.join(work, "final")
+UsdUtils.LocalizeAsset(main_layer, final_dir)
+print("usd 결과 폴더:", final_dir)
 
-# 8) Nucleus 출력 폴더로 업로드 (선택)
-final = os.path.join(work, "final")
-for f in os.listdir(final):
-    omni.client.copy(os.path.join(final, f), f"{out_dir}/{f}",
+# 9) Nucleus로 업로드 (선택)
+omni.client.copy(out_usdz, f"{out_dir}/{base}.usdz",
+                 behavior=omni.client.CopyBehavior.OVERWRITE)
+for f in os.listdir(final_dir):
+    omni.client.copy(os.path.join(final_dir, f), f"{out_dir}/{f}",
                      behavior=omni.client.CopyBehavior.OVERWRITE)
