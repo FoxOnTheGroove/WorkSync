@@ -62,6 +62,17 @@ class UVMixer:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
         self._n_frames = len(st_paths)
         maps_per_file = [self.make_st_map(p) for p in st_paths]
+        if maps_per_file and maps_per_file[0]:
+            ref_root = self._source_root(next(iter(maps_per_file[0])))
+            normed = []
+            for m in maps_per_file:
+                if m:
+                    file_root = self._source_root(next(iter(m)))
+                    if file_root != ref_root:
+                        m = {ref_root + path[len(file_root):]: arr
+                             for path, arr in m.items()}
+                normed.append(m)
+            maps_per_file = normed
         common = set(maps_per_file[0].keys())
         for m in maps_per_file[1:]:
             common &= set(m.keys())
