@@ -1,6 +1,6 @@
-from pxr import Usd, Sdf, UsdUtils
+from pxr import Usd, Sdf
 import omni.usd, omni.client
-import zipfile, os, tempfile
+import zipfile, os, tempfile, shutil
 
 stage = omni.usd.get_context().get_stage()
 prim_path = "/World/MyPrim"
@@ -20,9 +20,7 @@ print("원본 usdz:", src_usdz)
 work = tempfile.mkdtemp()
 if src_usdz.startswith("omniverse://"):
     local_usdz = os.path.join(work, "src.usdz")
-    res = omni.client.copy(src_usdz, local_usdz,
-                           behavior=omni.client.CopyBehavior.OVERWRITE)
-    print("download:", res)
+    omni.client.copy(src_usdz, local_usdz, behavior=omni.client.CopyBehavior.OVERWRITE)
 else:
     local_usdz = src_usdz
 
@@ -34,45 +32,70 @@ with zipfile.ZipFile(local_usdz) as z:
     names = z.namelist()
 print("내용물:", names)
 
-# 4) 풀린 메인 레이어 찾기 (보통 첫 .usd/.usdc/.usda)
-main_layer = next(os.path.join(unpack, n) for n in names
-                  if n.endswith((".usd", ".usdc", ".usda")))
-print("메인 레이어:", main_layer)
+# 4) 메인 레이어 찾기
+main_layer_name = next(n for n in names if n.endswith((".usd", ".usdc", ".usda")))
+main_layer_path = os.path.join(unpack, main_layer_name)
+print("메인 레이어:", main_layer_path)
 
-# 5) 현재 stage의 flatten에서 prim 오버라이드를 unpack 레이어에 in-place 복사
-flat = stage.Flatten()
-src_stage = Usd.Stage.Open(main_layer)
-
+# 5) 씨의 루트 레이어 오버라이드만 언팩 레이어에 병합
+# Flatten 사용 안 함 → 텍스처 경로를 절대경로로 곹쓰는 문제 방지
+scene_root = stage.GetRootLayer()
+src_stage = Usd.Stage.Open(main_layer_path)
 src_default = src_stage.GetDefaultPrim()
 src_root_path = src_default.GetPath() if src_default else next(
     p.GetPath() for p in src_stage.GetPseudoRoot().GetChildren())
 
-Sdf.CopySpec(flat, Sdf.Path(prim_path), src_stage.GetRootLayer(), src_root_path)
+def merge_overrides(src_layer, src_sdf_path, dst_layer, dst_sdf_path):
+    src_spec = src_layer.GetObjectAtPath(src_sdf_path)
+    if not isinstance(src_spec, Sdf.PrimSpec):
+        return
+    dst_spec = dst_layer.GetObjectAtPath(dst_sdf_path)
+    if not dst_spec:
+        return
+    # 속성 오버라이드만 복사 (원본 텍스처 경로 유지)
+    for attr_name, attr_spec in src_spec.attributes.items():
+        if attr_spec.HasDefaultValue():
+            dst_attr = dst_spec.attributes.get(attr_name)
+            if dst_attr:
+                dst_attr.default = attr_spec.default
+            else:
+                new_attr = Sdf.AttributeSpec(dst_spec, attr_name, attr_spec.typeName)
+                new_attr.default = attr_spec.default
+    # 자식 프림 재귀
+    for child_name in list(src_spec.nameChildren.keys()):
+        merge_overrides(
+            src_layer, src_sdf_path.AppendChild(child_name),
+            dst_layer, dst_sdf_path.AppendChild(child_name)
+        )
 
-# 6) unpack 폴더 안에서 in-place Save → 텍스처 상대경로 유지
+merge_overrides(scene_root, Sdf.Path(prim_path),
+                src_stage.GetRootLayer(), src_root_path)
+print("오버라이드 병합 완료")
+
+# 6) unpack 폴더 안에서 in-place Save
 src_stage.GetRootLayer().Save()
-print("수정 저장:", main_layer)
 
-# 7) unpack 폴더를 그대로 재압축 → usdz 내부 경로 유지
-# usdz 스펙: 내부 파일은 반드시 ZIP_STORED (압축 금지)
+# 7) usdz 재압축 (ZIP_STORED: usdz 스펙상 압축 금지)
 out_usdz = os.path.join(work, f"{base}.usdz")
 with zipfile.ZipFile(out_usdz, 'w', zipfile.ZIP_STORED) as zf:
     for root, dirs, files in os.walk(unpack):
         for f in files:
             abs_path = os.path.join(root, f)
-            arcname = os.path.relpath(abs_path, unpack)  # 아카이브 내 상대경로 유지
+            arcname = os.path.relpath(abs_path, unpack)
             zf.write(abs_path, arcname)
-print("usdz 생성:", out_usdz)
+print("usdz:", out_usdz)
 
-# 8) 독립 .usd 폴더로도 export (선택)
-# main_layer가 unpack 안에 있으므로 텍스처 상대경로 정상
+# 8) 독립 usd 폴더 (unpack 그대로 복사 → 텍스처 상대경로 이미 정상)
 final_dir = os.path.join(work, "final")
-UsdUtils.LocalizeAsset(main_layer, final_dir)
-print("usd 결과 폴더:", final_dir)
+shutil.copytree(unpack, final_dir)
+print("usd 폴더:", final_dir)
 
-# 9) Nucleus로 업로드 (선택)
+# 9) Nucleus 업로드
 omni.client.copy(out_usdz, f"{out_dir}/{base}.usdz",
                  behavior=omni.client.CopyBehavior.OVERWRITE)
-for f in os.listdir(final_dir):
-    omni.client.copy(os.path.join(final_dir, f), f"{out_dir}/{f}",
-                     behavior=omni.client.CopyBehavior.OVERWRITE)
+for root, dirs, files in os.walk(final_dir):
+    for f in files:
+        abs_path = os.path.join(root, f)
+        rel = os.path.relpath(abs_path, final_dir)
+        omni.client.copy(abs_path, f"{out_dir}/{base}/{rel}",
+                         behavior=omni.client.CopyBehavior.OVERWRITE)
