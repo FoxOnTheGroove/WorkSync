@@ -14,6 +14,9 @@ for layer in stage.GetUsedLayers():
     if ident.endswith(".usdz") or ".usdz[" in ident:
         src_usdz = ident.split(".usdz[")[0] + ".usdz" if ".usdz[" in ident else ident
         break
+
+if not src_usdz:
+    raise RuntimeError("이 스크립트는 .usdz 레퍼만 처리합니다. 대상이 .usd면 별도 처리 필요.")
 print("원본 usdz:", src_usdz)
 
 # 2) Nucleus면 로컬로 다운로드
@@ -81,7 +84,7 @@ with zipfile.ZipFile(out_usdz, 'w', zipfile.ZIP_STORED) as zf:
     for root, dirs, files in os.walk(unpack):
         for f in files:
             abs_path = os.path.join(root, f)
-            arcname = os.path.relpath(abs_path, unpack)
+            arcname = os.path.relpath(abs_path, unpack).replace(os.sep, "/")
             zf.write(abs_path, arcname)
 print("usdz:", out_usdz)
 
@@ -91,11 +94,11 @@ shutil.copytree(unpack, final_dir)
 print("usd 폴더:", final_dir)
 
 # 9) Nucleus 업로드
+# usdz: 단일 파일
 omni.client.copy(out_usdz, f"{out_dir}/{base}.usdz",
                  behavior=omni.client.CopyBehavior.OVERWRITE)
-for root, dirs, files in os.walk(final_dir):
-    for f in files:
-        abs_path = os.path.join(root, f)
-        rel = os.path.relpath(abs_path, final_dir)
-        omni.client.copy(abs_path, f"{out_dir}/{base}/{rel}",
-                         behavior=omni.client.CopyBehavior.OVERWRITE)
+# usd 폴더: 폴더 통째로 복사 → omni.client가 경로 구분자를 네이티브로 처리
+# (파일별 복사 시 Windows '\\' 가 그대로 들어가 'parts\\texture' 같은 이상 폴더 생성됨)
+omni.client.copy(final_dir, f"{out_dir}/{base}",
+                 behavior=omni.client.CopyBehavior.OVERWRITE)
+print("업로드 완료:", out_dir)
