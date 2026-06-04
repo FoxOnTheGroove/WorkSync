@@ -1,4 +1,3 @@
-import asyncio
 from typing import Callable
 
 import numpy as np
@@ -55,14 +54,12 @@ class UVMixer:
         inst.own_player.subscribe_tick(inst._apply_t)
         return inst
 
-    async def load(self, st_paths: 'list[str]') -> 'list[str]':
+    def load(self, st_paths: 'list[str]') -> 'list[str]':
         """소스 USD 파일들을 읽어 보간 데이터를 주입한다.
         재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다.
-        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다.
-        각 소스가 접근 가능해질 때까지 비동기로 대기한 뒤 읽는다."""
+        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다."""
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
-        await self._await_accessible(st_paths)
         self._n_frames = len(st_paths)
         maps_per_file = [self.make_st_map(p) for p in st_paths]
         if maps_per_file and maps_per_file[0]:
@@ -354,28 +351,6 @@ class UVMixer:
             {target_path + src[len(source_root):]: arr for src, arr in frame.items()}
             for frame in st_maps
         ]
-
-    @staticmethod
-    async def _await_accessible(paths: 'list[str]',
-                                timeout: float = 30.0,
-                                interval: float = 0.2) -> None:
-        """각 소스가 서버에서 stat OK가 될 때까지 메인 스레드를 양보하며 대기한다.
-        omni.client 부재(헤드리스/로컬) 시 즉시 통과한다."""
-        try:
-            import omni.client
-        except Exception:
-            return
-        for url in paths:
-            elapsed = 0.0
-            while True:
-                res, _ = await omni.client.stat_async(url)
-                if res == omni.client.Result.OK:
-                    break
-                if elapsed >= timeout:
-                    print(f"[UVMixer] timeout waiting for source: {url}")
-                    break
-                await asyncio.sleep(interval)
-                elapsed += interval
 
     @staticmethod
     def make_st_map(file_path: str) -> 'dict[str, np.ndarray]':

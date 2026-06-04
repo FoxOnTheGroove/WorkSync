@@ -1,5 +1,3 @@
-import asyncio
-
 import omni.usd
 import omni.ui as ui
 
@@ -126,15 +124,7 @@ class UsdInterpolationUI:
         if UVMixerService.get_instance(key) is None:
             UVMixerService.create(target_path, key=key)
 
-        self._set_status("Loading…")
-        asyncio.ensure_future(self._load_async(key, paths))
-
-    async def _load_async(self, key: str, paths: 'list[str]') -> None:
-        try:
-            warnings = await UVMixerService.load(key, paths, panel_on=True)
-        except Exception as e:
-            self._set_status(f"ERROR: {e}")
-            return
+        warnings = UVMixerService.load(key, paths, panel_on=True)
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
         UVMixerService.shared_player.set_t(0.0)
 
