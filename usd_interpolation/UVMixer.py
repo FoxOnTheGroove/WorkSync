@@ -1,7 +1,7 @@
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, Vt, Sdf
 import omni.timeline
 import omni.usd
 
@@ -355,6 +355,11 @@ class UVMixer:
     @staticmethod
     def make_st_map(file_path: str) -> 'dict[str, np.ndarray]':
         """USD 파일을 한 번 열어 모든 메쉬의 {prim_path: st_array}를 반환한다."""
+        # 이 프로세스에서 막 저장돼 메모리에 상주 중인 레이어면 디스크 기준으로 갱신.
+        # (방금 생성·save한 파일을 즉시 Open하면 상주 레이어 재사용으로 freeze가 발생)
+        existing = Sdf.Layer.Find(file_path)
+        if existing is not None:
+            existing.Reload(force=True)
         stage = Usd.Stage.Open(file_path)
         if not stage:
             print(f"[UVMixer] failed to open: {file_path}")
