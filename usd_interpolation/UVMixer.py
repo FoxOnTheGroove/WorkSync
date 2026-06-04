@@ -1,7 +1,7 @@
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom, Vt, Sdf
+from pxr import Usd, UsdGeom, Vt, Sdf, Ar
 import omni.timeline
 import omni.usd
 
@@ -362,23 +362,27 @@ class UVMixer:
         if not layer:
             print(f"[UVMixer] failed to open: {file_path}")
             return {}
-        stage = Usd.Stage.Open(layer)
-        if not stage:
-            print(f"[UVMixer] failed to open: {file_path}")
-            return {}
+        # anonymous 레이어는 원본 경로 앵커를 잃어 상대경로 reference/payload가
+        # 해석되지 않는다. 원본 파일 기준 resolver context를 바인딩해 참조를 살린다.
+        ctx = Ar.GetResolver().CreateDefaultContextForAsset(file_path)
         result: dict = {}
-        for prim in stage.Traverse():
-            if not prim.IsA(UsdGeom.Mesh):
-                continue
-            st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-            if not st_pv or not st_pv.GetAttr().IsValid():
-                continue
-            st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
-            if st_raw is None:
-                samples = st_pv.GetTimeSamples()
-                if samples:
-                    st_raw = st_pv.ComputeFlattened(samples[0])
-            if st_raw is None:
-                continue
-            result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
+        with Ar.ResolverContextBinder(ctx):
+            stage = Usd.Stage.Open(layer)
+            if not stage:
+                print(f"[UVMixer] failed to open: {file_path}")
+                return {}
+            for prim in stage.Traverse():
+                if not prim.IsA(UsdGeom.Mesh):
+                    continue
+                st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+                if not st_pv or not st_pv.GetAttr().IsValid():
+                    continue
+                st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
+                if st_raw is None:
+                    samples = st_pv.GetTimeSamples()
+                    if samples:
+                        st_raw = st_pv.ComputeFlattened(samples[0])
+                if st_raw is None:
+                    continue
+                result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
         return result
