@@ -178,16 +178,16 @@ class UVMixerService:
     # ── 인스턴스 위임 (key 기반) ─────────────────────────────────
     @classmethod
     async def load(cls, key: str, st_paths: 'list[str]', *,
-                   panel: bool = False,
+                   panel_on: bool = True,
                    on_done: 'Callable[[list[str]], None] | None' = None
                    ) -> 'list[str]':
         """소스 USD 파일들을 mixer에 주입한다(재호출 시 재로드). 경고 목록을 반환한다.
         소스가 접근 가능해질 때까지 비동기 대기 후 로드한다.
-        panel=True면 로드 완료 후 HUD 패널을 띄운다.
+        panel_on=True면 로드 완료 후 같은 key(viewport id)로 HUD 패널을 띄운다.
         on_done이 주어지면 로드 완료 시 경고 목록을 인자로 호출한다."""
         m = cls._instances.get(key)
         warnings = await m.load(st_paths) if m else []
-        if panel:
+        if panel_on:
             cls.panel_on(key)
         if on_done is not None:
             on_done(warnings)

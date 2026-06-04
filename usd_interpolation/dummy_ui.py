@@ -131,7 +131,7 @@ class UsdInterpolationUI:
 
     async def _load_async(self, key: str, paths: 'list[str]') -> None:
         try:
-            warnings = await UVMixerService.load(key, paths, panel=True)
+            warnings = await UVMixerService.load(key, paths, panel_on=True)
         except Exception as e:
             self._set_status(f"ERROR: {e}")
             return
