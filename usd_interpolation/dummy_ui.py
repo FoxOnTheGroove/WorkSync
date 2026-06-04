@@ -123,7 +123,6 @@ class UsdInterpolationUI:
 
         if UVMixerService.get_instance(key) is None:
             UVMixerService.create(target_path, key=key)
-            UVMixerService.apply_sync(key)
 
         warnings = UVMixerService.load(key, paths)
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
