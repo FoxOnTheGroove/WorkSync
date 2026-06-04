@@ -1,7 +1,8 @@
+import asyncio
 from typing import Callable
 
 import numpy as np
-from pxr import Usd, UsdGeom, Vt, Sdf, Ar
+from pxr import Usd, UsdGeom, Vt
 import omni.timeline
 import omni.usd
 
@@ -54,12 +55,14 @@ class UVMixer:
         inst.own_player.subscribe_tick(inst._apply_t)
         return inst
 
-    def load(self, st_paths: 'list[str]') -> 'list[str]':
+    async def load(self, st_paths: 'list[str]') -> 'list[str]':
         """소스 USD 파일들을 읽어 보간 데이터를 주입한다.
         재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다.
-        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다."""
+        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다.
+        각 소스가 접근 가능해질 때까지 비동기로 대기한 뒤 읽는다."""
         if len(st_paths) < 2:
             raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
+        await self._await_accessible(st_paths)
         self._n_frames = len(st_paths)
         maps_per_file = [self.make_st_map(p) for p in st_paths]
         if maps_per_file and maps_per_file[0]:
@@ -353,36 +356,47 @@ class UVMixer:
         ]
 
     @staticmethod
+    async def _await_accessible(paths: 'list[str]',
+                                timeout: float = 30.0,
+                                interval: float = 0.2) -> None:
+        """각 소스가 서버에서 stat OK가 될 때까지 메인 스레드를 양보하며 대기한다.
+        omni.client 부재(헤드리스/로컬) 시 즉시 통과한다."""
+        try:
+            import omni.client
+        except Exception:
+            return
+        for url in paths:
+            elapsed = 0.0
+            while True:
+                res, _ = await omni.client.stat_async(url)
+                if res == omni.client.Result.OK:
+                    break
+                if elapsed >= timeout:
+                    print(f"[UVMixer] timeout waiting for source: {url}")
+                    break
+                await asyncio.sleep(interval)
+                elapsed += interval
+
+    @staticmethod
     def make_st_map(file_path: str) -> 'dict[str, np.ndarray]':
         """USD 파일을 한 번 열어 모든 메쉬의 {prim_path: st_array}를 반환한다."""
-        # 레이어 레지스트리를 거치지 않고 독립(anonymous) 사본으로 연다.
-        # 방금 생성·save된 파일을 Usd.Stage.Open으로 바로 열면 live 스테이지와
-        # 레이어/락을 공유해 영구 freeze(데드락)가 발생하므로, 분리 사본으로 회피한다.
-        layer = Sdf.Layer.OpenAsAnonymous(file_path)
-        if not layer:
+        stage = Usd.Stage.Open(file_path)
+        if not stage:
             print(f"[UVMixer] failed to open: {file_path}")
             return {}
-        # anonymous 레이어는 원본 경로 앵커를 잃어 상대경로 reference/payload가
-        # 해석되지 않는다. 원본 파일 기준 resolver context를 바인딩해 참조를 살린다.
-        ctx = Ar.GetResolver().CreateDefaultContextForAsset(file_path)
         result: dict = {}
-        with Ar.ResolverContextBinder(ctx):
-            stage = Usd.Stage.Open(layer)
-            if not stage:
-                print(f"[UVMixer] failed to open: {file_path}")
-                return {}
-            for prim in stage.Traverse():
-                if not prim.IsA(UsdGeom.Mesh):
-                    continue
-                st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-                if not st_pv or not st_pv.GetAttr().IsValid():
-                    continue
-                st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
-                if st_raw is None:
-                    samples = st_pv.GetTimeSamples()
-                    if samples:
-                        st_raw = st_pv.ComputeFlattened(samples[0])
-                if st_raw is None:
-                    continue
-                result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
+        for prim in stage.Traverse():
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
+            if not st_pv or not st_pv.GetAttr().IsValid():
+                continue
+            st_raw = st_pv.ComputeFlattened(Usd.TimeCode.Default())
+            if st_raw is None:
+                samples = st_pv.GetTimeSamples()
+                if samples:
+                    st_raw = st_pv.ComputeFlattened(samples[0])
+            if st_raw is None:
+                continue
+            result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
         return result
