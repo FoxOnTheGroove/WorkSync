@@ -131,14 +131,12 @@ class UsdInterpolationUI:
 
     async def _load_async(self, key: str, paths: 'list[str]') -> None:
         try:
-            warnings = await UVMixerService.load(key, paths)
+            warnings = await UVMixerService.load(key, paths, panel=True)
         except Exception as e:
             self._set_status(f"ERROR: {e}")
             return
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
         UVMixerService.shared_player.set_t(0.0)
-
-        UVMixerService.panel_on(key)
 
         n_meshes = len(UVMixerService.get_mesh_paths(key))
         all_keys = UVMixerService.keys()
