@@ -127,13 +127,13 @@ class PartsManagerServiceUI:
             btn.text = "v" if now_expanded else ">"
 
     def _on_vis_toggle(self, key: str):
-        node = PartsManagerService._node_map.get(key)
+        node = PartsManagerService.get_node_map().get(key)
         if node is None:
             return
         PartsManagerService.set_visibility(key, not node.is_visible)
 
         for k, btn in self._vis_buttons.items():
-            n = PartsManagerService._node_map.get(k)
+            n = PartsManagerService.get_node_map().get(k)
             if n:
                 btn.text = "O" if n.is_visible else "-"
                 btn.style = {} if n.is_visible else {"color": 0xFF666666}
