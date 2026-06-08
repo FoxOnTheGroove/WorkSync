@@ -1,5 +1,5 @@
 import omni.ui as ui
-from .parts_manager import PartsManager
+from .parts_manager_service import PartsManagerServiceService
 
 _SCROLL_STYLE = {
     "background_color": 0xFF1E1E1E,
@@ -16,7 +16,7 @@ _PART_FRAME_STYLE = {
 }
 
 
-class PartsManagerUI:
+class PartsManagerServiceUI:
 
     def __init__(self):
         self._window = None
@@ -38,7 +38,7 @@ class PartsManagerUI:
                     ui.Label("sync", width=32, style={"font_size": 12, "color": 0xFFAAAAAA})
                     cb = ui.CheckBox(width=20)
                     cb.model.add_value_changed_fn(
-                        lambda m: PartsManager.set_sync(m.get_value_as_bool())
+                        lambda m: PartsManagerService.set_sync(m.get_value_as_bool())
                     )
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
@@ -53,8 +53,8 @@ class PartsManagerUI:
         self._expand_buttons = {}
         self._vis_buttons = {}
         self._children_stacks = {}
-        PartsManager.make_tree()
-        self._tree = PartsManager.get_prim_tree()
+        PartsManagerService.make_tree()
+        self._tree = PartsManagerService.get_prim_tree()
 
         with self._list_stack:
             if self._tree is None:
@@ -127,13 +127,13 @@ class PartsManagerUI:
             btn.text = "v" if now_expanded else ">"
 
     def _on_vis_toggle(self, key: str):
-        node = PartsManager._node_map.get(key)
+        node = PartsManagerService._node_map.get(key)
         if node is None:
             return
-        PartsManager.set_visibility(key, not node.is_visible)
+        PartsManagerService.set_visibility(key, not node.is_visible)
 
         for k, btn in self._vis_buttons.items():
-            n = PartsManager._node_map.get(k)
+            n = PartsManagerService._node_map.get(k)
             if n:
                 btn.text = "O" if n.is_visible else "-"
                 btn.style = {} if n.is_visible else {"color": 0xFF666666}
