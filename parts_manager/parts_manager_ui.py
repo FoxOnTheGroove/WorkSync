@@ -55,6 +55,8 @@ class PartsManagerServiceUI:
         self._children_stacks = {}
         PartsManagerService.make_tree()
         self._tree = PartsManagerService.get_prim_tree()
+        if self._tree:
+            self._collapsed[self._tree["index_key"]] = False
 
         with self._list_stack:
             if self._tree is None:
