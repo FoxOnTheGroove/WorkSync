@@ -59,10 +59,14 @@ class UVMixerService:
         return tab_ctx.shared_player
 
     @classmethod
-    def on_tab_changed(cls, leaving_tab_id: 'str | None', entering_tab_id: str) -> None:
-        """탭 전환 진입점.
+    def on_tab_changed(cls, entering_tab_id: str) -> None:
+        """탭 전환 진입점. 외부 on_change_tab 콜백에서 새 tab_id 하나만 받아 호출한다.
+        직전 탭은 내부 `_active_tab`에서 자동으로 가져온다.
         leaving 탭: 모든 mixer의 own_player/shared_player를 정지하고 패널을 숨긴다.
         entering 탭: 패널을 보이고, shared_player의 현재 t를 재적용해 타임라인을 복원한다."""
+        leaving_tab_id = cls._active_tab
+        if leaving_tab_id == entering_tab_id:
+            leaving_tab_id = None
         leaving = cls._tab_contexts.get(leaving_tab_id) if leaving_tab_id else None
         if leaving is not None:
             for k in leaving.keys:
