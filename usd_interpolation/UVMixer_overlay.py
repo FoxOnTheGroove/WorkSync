@@ -38,10 +38,11 @@ def _calc_overlay_pos(vph) -> tuple[int, int]:
 
 class ViewportOverlayPanel:
 
-    def __init__(self, key: str, vph, mgr: 'OverlayManager'):
+    def __init__(self, key: str, vph, mgr: 'OverlayManager', tab_id: 'str | None'):
         self._key = key
         self._mgr = mgr
         self._vph = vph
+        self._tab_id = tab_id
         self._in_tick = False
         self._in_sync = False
 
@@ -58,7 +59,7 @@ class ViewportOverlayPanel:
 
         vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
 
-        sp = UVMixerService.shared_player
+        sp = UVMixerService.get_shared_player(self._tab_id)
         sp.subscribe_tick(self._on_tick)
         sp.subscribe_stopped(self._on_stopped)
 
@@ -117,32 +118,32 @@ class ViewportOverlayPanel:
     # ── player 콜백 ─────────────────────────────────────────────
 
     def _on_tick(self, t: float, correction: bool) -> None:
-        if not UVMixerService.is_synced():
+        if not UVMixerService.is_synced(self._tab_id):
             return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
         self._in_tick = False
 
     def _on_own_tick(self, t: float, correction: bool) -> None:
-        if UVMixerService.is_synced():
+        if UVMixerService.is_synced(self._tab_id):
             return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
         self._in_tick = False
 
     def _on_stopped(self) -> None:
-        if UVMixerService.is_synced():
+        if UVMixerService.is_synced(self._tab_id):
             self._widgets['btn_play'].text = "▶"
 
     def _on_own_stopped(self) -> None:
-        if not UVMixerService.is_synced():
+        if not UVMixerService.is_synced(self._tab_id):
             self._widgets['btn_play'].text = "▶"
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
     def _on_play(self) -> None:
-        if UVMixerService.is_synced():
-            sp = UVMixerService.shared_player
+        if UVMixerService.is_synced(self._tab_id):
+            sp = UVMixerService.get_shared_player(self._tab_id)
             if sp.is_playing():
                 sp.stop()
             else:
@@ -163,8 +164,8 @@ class ViewportOverlayPanel:
         if self._in_tick:
             return
         t = model.get_value_as_float()
-        if UVMixerService.is_synced():
-            sp = UVMixerService.shared_player
+        if UVMixerService.is_synced(self._tab_id):
+            sp = UVMixerService.get_shared_player(self._tab_id)
             if not sp.is_playing():
                 sp.set_t(t)
         else:
@@ -176,8 +177,8 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         reverse = model.get_value_as_bool()
-        if UVMixerService.is_synced():
-            UVMixerService.shared_player.set_forward(not reverse)
+        if UVMixerService.is_synced(self._tab_id):
+            UVMixerService.get_shared_player(self._tab_id).set_forward(not reverse)
             self._mgr._sync_reverse(self._key, reverse)
         else:
             op = self._own_player()
@@ -188,8 +189,8 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         loop = model.get_value_as_bool()
-        if UVMixerService.is_synced():
-            UVMixerService.shared_player.set_loop(loop)
+        if UVMixerService.is_synced(self._tab_id):
+            UVMixerService.get_shared_player(self._tab_id).set_loop(loop)
             self._mgr._sync_loop(self._key, loop)
         else:
             op = self._own_player()
@@ -200,8 +201,8 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         spd = model.get_value_as_float()
-        if UVMixerService.is_synced():
-            UVMixerService.shared_player.set_speed(spd)
+        if UVMixerService.is_synced(self._tab_id):
+            UVMixerService.get_shared_player(self._tab_id).set_speed(spd)
             self._mgr._sync_speed(self._key, spd)
         else:
             op = self._own_player()
@@ -212,11 +213,11 @@ class ViewportOverlayPanel:
 
     def refresh_from_player(self) -> None:
         """sync ON/OFF 토글 후 현재 활성 player 상태를 위젯에 반영한다."""
-        if UVMixerService.is_synced():
-            p = UVMixerService.shared_player
+        if UVMixerService.is_synced(self._tab_id):
+            p = UVMixerService.get_shared_player(self._tab_id)
         else:
             mixer = UVMixerService.get_instance(self._key)
-            p = mixer.own_player if mixer else UVMixerService.shared_player
+            p = mixer.own_player if mixer else UVMixerService.get_shared_player(self._tab_id)
         self._in_sync = True
         self._in_tick = True
         self._widgets['rev_cb'].model.set_value(not p.forward)
@@ -260,7 +261,7 @@ class ViewportOverlayPanel:
         if self._vph:
             self._vph.frame.set_computed_content_size_changed_fn(None)
             self._vph = None
-        sp = UVMixerService.shared_player
+        sp = UVMixerService.get_shared_player(self._tab_id)
         sp.unsubscribe_tick(self._on_tick)
         sp.unsubscribe_stopped(self._on_stopped)
         mixer = UVMixerService.get_instance(self._key)
@@ -284,15 +285,29 @@ class OverlayManager:
         for panel in self._panels.values():
             panel.refresh_from_player()
 
-    def on_mixer_loaded(self, key: str, target_path: str) -> None:
+    def on_mixer_loaded(self, key: str, target_path: str, tab_id: 'str | None',
+                        *, visible: bool = True) -> None:
         self._remove_panel(key)
         vph = _find_vph(target_path)
         if vph is None:
             return
-        self._panels[key] = ViewportOverlayPanel(key, vph, mgr=self)
+        panel = ViewportOverlayPanel(key, vph, mgr=self, tab_id=tab_id)
+        if not visible:
+            panel._window.visible = False
+        self._panels[key] = panel
 
     def on_mixer_destroyed(self, key: str) -> None:
         self._remove_panel(key)
+
+    def show(self, key: str) -> None:
+        panel = self._panels.get(key)
+        if panel and panel._window:
+            panel._window.visible = True
+
+    def hide(self, key: str) -> None:
+        panel = self._panels.get(key)
+        if panel and panel._window:
+            panel._window.visible = False
 
     def _remove_panel(self, key: str) -> None:
         panel = self._panels.pop(key, None)

@@ -15,6 +15,7 @@ class UsdInterpolationUI:
         self._field: ui.StringField | None = None
         self._correction_combo: ui.ComboBox | None = None
         self._target_path_field: ui.StringField | None = None
+        self._tab_id_field: ui.StringField | None = None
         self._mode_timeline_btn: ui.Button | None = None
         self._mode_direct_btn: ui.Button | None = None
         self._sync_cb: ui.CheckBox | None = None
@@ -31,6 +32,11 @@ class UsdInterpolationUI:
                 ui.Label("Target Path:", height=18)
                 self._target_path_field = ui.StringField(height=24)
                 self._target_path_field.model.set_value("")
+
+                # ── Tab ID ────────────────────────────────────────────
+                ui.Label("Tab ID:", height=18)
+                self._tab_id_field = ui.StringField(height=24)
+                self._tab_id_field.model.set_value("default")
 
                 # ── UV Paths ──────────────────────────────────────────
                 ui.Label("UV Paths (space or newline separated):", height=18)
@@ -112,21 +118,26 @@ class UsdInterpolationUI:
             if self._target_path_field else None
         target_path = target_path or None
 
+        tab_id = self._tab_id_field.model.get_value_as_string().strip() \
+            if self._tab_id_field else ""
+        tab_id = tab_id or "default"
+
         key = target_path or f"mixer_{len(UVMixerService.keys())}"
 
         prim_changed = (
             UVMixerService.get_instance(key) is not None
-            and UVMixerService.get_target_path(key) != target_path
+            and (UVMixerService.get_target_path(key) != target_path
+                 or UVMixerService.get_tab_id(key) != tab_id)
         )
         if prim_changed:
             UVMixerService.destroy(key)
 
         if UVMixerService.get_instance(key) is None:
-            UVMixerService.create(target_path, key=key)
+            UVMixerService.create(target_path, key=key, tab_id=tab_id)
 
         warnings = UVMixerService.load(key, paths, panel_on=True)
         UVMixerService.set_correction_mode(key, self._current_correction_mode())
-        UVMixerService.shared_player.set_t(0.0)
+        UVMixerService.get_shared_player(tab_id).set_t(0.0)
 
         n_meshes = len(UVMixerService.get_mesh_paths(key))
         all_keys = UVMixerService.keys()
@@ -139,10 +150,13 @@ class UsdInterpolationUI:
         idx = model.get_item_value_model(item).get_value_as_int()
         self._correction_idx = idx
         mode = _CORRECTION_MODES[idx]
+        tab_ids = set()
         for k in UVMixerService.keys():
             UVMixerService.set_correction_mode(k, mode)
-        if UVMixerService.keys():
-            UVMixerService.reapply()
+            tab_ids.add(UVMixerService.get_tab_id(k))
+        for tab_id in tab_ids:
+            if tab_id is not None:
+                UVMixerService.reapply(tab_id)
 
     # ── 콜백: 모드 ───────────────────────────────────────────────────
 
@@ -160,9 +174,12 @@ class UsdInterpolationUI:
         if self._in_sync_change:
             return
         synced = model.get_value_as_bool()
+        tab_id = self._tab_id_field.model.get_value_as_string().strip() \
+            if self._tab_id_field else ""
+        tab_id = tab_id or "default"
         ref_key = self._target_path_field.model.get_value_as_string().strip() \
             if self._target_path_field else ""
-        ok = UVMixerService.set_sync_all(synced, ref_key=ref_key)
+        ok = UVMixerService.set_sync(tab_id, synced, ref_key=ref_key)
         if not ok:
             self._in_sync_change = True
             model.set_value(False)
@@ -172,7 +189,6 @@ class UsdInterpolationUI:
 
     def _on_clear(self) -> None:
         UVMixerService.destroy_all()
-        UVMixerService.reset()
         self._set_status("Cleared")
 
     # ── 라이프사이클 ─────────────────────────────────────────────────
