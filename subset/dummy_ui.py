@@ -1,5 +1,8 @@
+import asyncio
+
 import omni.ui as ui
 import omni.usd
+import omni.kit.app
 from pxr import UsdGeom
 from .subset import Subset
 from .viewport_pick import ViewportPicker
@@ -192,10 +195,15 @@ class DummyUI:
                     ui.Label(f"{len(group)} faces", width=70, alignment=ui.Alignment.RIGHT_CENTER)
 
     def _refresh_row(self, i: int):
-        if 0 <= i < len(self._row_frames):
-            self._build_row_content(self._row_frames[i], i)
-        if self._selected_index == i:
-            self._build_row_content(self._selected_row_frame, i, is_selected_slot=True)
+        # 클릭 이벤트를 처리 중인 프레임 자체를 같은 틱에 clear()하면 크래시하므로
+        # 다음 프레임으로 재구성을 미룬다.
+        async def _do_refresh():
+            await omni.kit.app.get_app().next_update_async()
+            if 0 <= i < len(self._row_frames):
+                self._build_row_content(self._row_frames[i], i)
+            if self._selected_index == i:
+                self._build_row_content(self._selected_row_frame, i, is_selected_slot=True)
+        asyncio.ensure_future(_do_refresh())
 
     def _select_row(self, index: int):
         """뷰포트 피킹/리스트 선택 시 해당 그룹을 빨강으로 강조하고 'Selected' 영역에 표시."""
