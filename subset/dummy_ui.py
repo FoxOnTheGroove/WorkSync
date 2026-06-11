@@ -12,14 +12,7 @@ _SCROLL_STYLE = {
     "padding":          4,
 }
 
-_ROW_BG_NORMAL = 0x00000000
-_ROW_BG_SELECTED = 0x40_3030FF  # 연한 빨강 오버레이 (AABBGGRR)
-
-
-def _to_ui_color(rgb: tuple[float, float, float]) -> int:
-    # omni.ui 색상은 0xAABBGGRR
-    r, g, b = (int(c * 255) for c in rgb)
-    return 0xFF000000 | (b << 16) | (g << 8) | r
+_TRANSPARENT_BTN_STYLE = {"Button": {"background_color": 0x00000000, "border_width": 0}}
 
 
 class DummyUI:
@@ -30,13 +23,14 @@ class DummyUI:
         self._mesh_label = None
         self._threshold_model = None
         self._min_faces_model = None
-        self._color_checkbox = None
         self._result_stack = None
         self._mesh_prim = None
         self._result_prims: list = []
         self._result_groups: list = []
         self._row_frames: list = []
         self._selected_index: "int | None" = None
+        self._selected_section_frame = None
+        self._selected_row_frame = None
         self._picker = ViewportPicker(lambda: self._mesh_prim, self._on_pick)
 
     def build_ui(self):
@@ -62,10 +56,6 @@ class DummyUI:
                     field = ui.IntField(width=60)
                     field.model.set_value(1)
                     self._min_faces_model = field.model
-                    ui.Spacer(width=12)
-                    ui.Label("Color", width=40)
-                    self._color_checkbox = ui.CheckBox(width=20)
-                    self._color_checkbox.model.set_value(True)
 
                 with ui.HStack(spacing=4, height=24):
                     ui.Label("Subset Pick (viewport)", width=160)
@@ -78,6 +68,13 @@ class DummyUI:
                 with ui.HStack(spacing=4, height=26):
                     ui.Button("Generate Subsets", clicked_fn=self._on_generate)
                     ui.Button("Clear", clicked_fn=self._on_clear, width=70)
+
+                self._selected_section_frame = ui.Frame(height=44)
+                with self._selected_section_frame:
+                    with ui.VStack(spacing=2):
+                        ui.Label("Selected", style={"color": 0xFF888888}, height=16)
+                        self._selected_row_frame = ui.Frame(height=24)
+                self._selected_section_frame.visible = False
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
                     self._result_stack = ui.VStack(spacing=2)
@@ -117,11 +114,7 @@ class DummyUI:
             self._set_status("[FAIL] 분류 실패")
             return
 
-        if self._color_checkbox.model.get_value_as_bool():
-            Subset.apply_group_colors(self._mesh_prim, groups)
-        else:
-            Subset.clear_group_colors(self._mesh_prim)
-
+        Subset.clear_group_colors(self._mesh_prim)
         self._set_status(f"[OK] {len(prims)}개 생성")
         self._refresh_results(prims, groups)
 
@@ -135,6 +128,7 @@ class DummyUI:
         self._result_groups = []
         self._row_frames = []
         self._selected_index = None
+        self._selected_section_frame.visible = False
         self._set_status("[OK] 제거 완료")
 
     # ------------------------------------------------------------------ 내부
@@ -172,50 +166,46 @@ class DummyUI:
         self._result_groups = list(groups)
         self._row_frames = []
         self._selected_index = None
-        colors = Subset.group_colors(len(groups))
+        self._selected_section_frame.visible = False
 
         with self._result_stack:
-            for i, (prim, group) in enumerate(zip(self._result_prims, self._result_groups)):
-                row_frame = ui.Frame(style={"background_color": _ROW_BG_NORMAL})
+            for i in range(len(self._result_prims)):
+                row_frame = ui.Frame(height=24)
                 self._row_frames.append(row_frame)
-                with row_frame:
-                    with ui.VStack(spacing=2, height=46):
-                        with ui.HStack(spacing=4, height=22):
-                            ui.Rectangle(
-                                width=14, height=14,
-                                style={"background_color": _to_ui_color(colors[i]),
-                                       "border_radius": 2},
-                            )
-                            select_btn = ui.Button(
-                                f"{prim.GetName()}  ({len(group)} faces)",
-                                clicked_fn=self._make_select_cb(i),
-                                width=ui.Fraction(1),
-                                style={"Button": {"alignment": ui.Alignment.LEFT}},
-                            )
-                            hide_btn = ui.Button(
-                                "Show" if Subset.is_hidden(prim) else "Hide",
-                                width=50,
-                            )
-                            hide_btn.set_clicked_fn(self._make_hide_cb(i, hide_btn))
+                self._build_row_content(row_frame, i)
 
-                        with ui.HStack(spacing=4, height=20):
-                            name_field = ui.StringField(width=ui.Fraction(1))
-                            name_field.model.set_value(prim.GetName())
-                            rename_btn = ui.Button("Rename", width=55)
-                            rename_btn.set_clicked_fn(
-                                self._make_rename_cb(i, name_field, select_btn)
-                            )
+    def _build_row_content(self, frame, i: int, is_selected_slot: bool = False):
+        prim = self._result_prims[i]
+        group = self._result_groups[i]
+        frame.clear()
+        with frame:
+            with ui.ZStack(height=24):
+                if not is_selected_slot:
+                    ui.Button("", clicked_fn=self._make_select_cb(i), style=_TRANSPARENT_BTN_STYLE)
+                with ui.HStack(spacing=4, height=24):
+                    hide_btn = ui.Button("Show" if Subset.is_hidden(prim) else "Hide", width=50)
+                    hide_btn.set_clicked_fn(self._make_hide_cb(i))
+                    name_field = ui.StringField(width=ui.Fraction(1))
+                    name_field.model.set_value(prim.GetName())
+                    rename_btn = ui.Button("Rename", width=55)
+                    rename_btn.set_clicked_fn(self._make_rename_cb(i, name_field))
+                    ui.Label(f"{len(group)} faces", width=70, alignment=ui.Alignment.RIGHT_CENTER)
+
+    def _refresh_row(self, i: int):
+        if 0 <= i < len(self._row_frames):
+            self._build_row_content(self._row_frames[i], i)
+        if self._selected_index == i:
+            self._build_row_content(self._selected_row_frame, i, is_selected_slot=True)
 
     def _select_row(self, index: int):
-        """뷰포트 피킹/리스트 선택 시 해당 그룹을 연한 빨강으로 강조하고 행을 표시."""
+        """뷰포트 피킹/리스트 선택 시 해당 그룹을 빨강으로 강조하고 'Selected' 영역에 표시."""
         if not (0 <= index < len(self._result_groups)):
             return
-        if self._color_checkbox.model.get_value_as_bool():
-            Subset.highlight_group(self._mesh_prim, self._result_groups, index)
+        Subset.highlight_selected(self._mesh_prim, self._result_groups, index)
 
         self._selected_index = index
-        for i, frame in enumerate(self._row_frames):
-            frame.style = {"background_color": _ROW_BG_SELECTED if i == index else _ROW_BG_NORMAL}
+        self._selected_section_frame.visible = True
+        self._build_row_content(self._selected_row_frame, index, is_selected_slot=True)
 
     # ------------------------------------------------------------------ 행 콜백
 
@@ -230,16 +220,16 @@ class DummyUI:
             self._set_status(f"[Pick] {prim.GetName()} 선택됨")
         return _cb
 
-    def _make_hide_cb(self, i, hide_btn):
+    def _make_hide_cb(self, i):
         def _cb():
             prim = self._result_prims[i]
             if not prim or not prim.IsValid():
                 return
-            hidden = Subset.toggle_hidden(prim)
-            hide_btn.text = "Show" if hidden else "Hide"
+            Subset.toggle_hidden(prim)
+            self._refresh_row(i)
         return _cb
 
-    def _make_rename_cb(self, i, name_field, select_btn):
+    def _make_rename_cb(self, i, name_field):
         def _cb():
             prim = self._result_prims[i]
             if not prim or not prim.IsValid():
@@ -248,9 +238,8 @@ class DummyUI:
             new_prim = Subset.rename_subset(prim, new_name)
             if new_prim:
                 self._result_prims[i] = new_prim
-                select_btn.text = f"{new_prim.GetName()}  ({len(self._result_groups[i])} faces)"
-                name_field.model.set_value(new_prim.GetName())
                 self._set_status(f"[OK] renamed -> {new_prim.GetName()}")
+                self._refresh_row(i)
             else:
                 self._set_status("[FAIL] rename 실패 (이름 중복/유효하지 않음)")
         return _cb

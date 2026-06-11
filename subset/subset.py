@@ -1,5 +1,4 @@
 import math
-import colorsys
 from collections import defaultdict, deque
 
 from pxr import Usd, UsdGeom, UsdShade, Vt, Gf, Sdf, Tf
@@ -386,37 +385,10 @@ class Subset:
         t = f * Gf.Dot(edge2, q)
         return t if t > eps else None
 
-    # ------------------------------------------------------------------ 디버그 색상
+    # ------------------------------------------------------------------ 선택 강조 색상
 
-    @staticmethod
-    def group_colors(count: int) -> list[tuple[float, float, float]]:
-        # 황금비 간격 hue → 그룹 수와 무관하게 서로 구분되는 색
-        colors = []
-        for i in range(count):
-            hue = (i * 0.61803398875) % 1.0
-            colors.append(colorsys.hsv_to_rgb(hue, 0.75, 0.95))
-        return colors
-
-    @classmethod
-    def apply_group_colors(cls, mesh_prim: Usd.Prim, groups: list[list[int]]) -> None:
-        """그룹별 색을 per-face displayColor primvar로 기록 (시각 확인용)."""
-        data = cls._get_mesh_data(mesh_prim)
-        if data is None or not groups:
-            return
-        num_faces = len(data[1])
-
-        colors = cls.group_colors(len(groups))
-        face_colors = [Gf.Vec3f(0.5, 0.5, 0.5)] * num_faces
-        for gi, group in enumerate(groups):
-            c = Gf.Vec3f(*colors[gi])
-            for f in group:
-                face_colors[f] = c
-
-        primvars = UsdGeom.PrimvarsAPI(mesh_prim)
-        pv = primvars.CreatePrimvar(
-            "displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.uniform
-        )
-        pv.Set(Vt.Vec3fArray(face_colors))
+    _BASE_COLOR = (0.18, 0.18, 0.18)  # UsdPreviewSurface 기본 diffuse와 동일
+    _HIGHLIGHT_COLOR = (1.0, 0.2, 0.2)
 
     @classmethod
     def clear_group_colors(cls, mesh_prim: Usd.Prim) -> None:
@@ -425,25 +397,24 @@ class Subset:
         mesh_prim.RemoveProperty("primvars:displayColor")
 
     @classmethod
-    def highlight_group(
+    def highlight_selected(
         cls,
         mesh_prim: Usd.Prim,
         groups: list[list[int]],
-        group_index: int,
-        highlight_color: tuple[float, float, float] = (1.0, 0.45, 0.45),
+        group_index: "int | None",
     ) -> None:
-        """groups[group_index]의 face만 highlight_color로, 나머지는 group_colors로 표시 (피킹 시각 피드백용)."""
+        """groups[group_index]의 face만 빨강으로, 나머지는 기본색으로 표시."""
         data = cls._get_mesh_data(mesh_prim)
-        if data is None or not groups:
+        if data is None:
             return
         num_faces = len(data[1])
 
-        colors = cls.group_colors(len(groups))
-        face_colors = [Gf.Vec3f(0.5, 0.5, 0.5)] * num_faces
-        for gi, group in enumerate(groups):
-            c = Gf.Vec3f(*highlight_color) if gi == group_index else Gf.Vec3f(*colors[gi])
-            for f in group:
-                face_colors[f] = c
+        base = Gf.Vec3f(*cls._BASE_COLOR)
+        face_colors = [base] * num_faces
+        if groups and group_index is not None and 0 <= group_index < len(groups):
+            highlight = Gf.Vec3f(*cls._HIGHLIGHT_COLOR)
+            for f in groups[group_index]:
+                face_colors[f] = highlight
 
         primvars = UsdGeom.PrimvarsAPI(mesh_prim)
         pv = primvars.CreatePrimvar(
