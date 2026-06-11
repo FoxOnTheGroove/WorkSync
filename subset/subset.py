@@ -244,9 +244,11 @@ class Subset:
             print(f"[Subset] '{safe_name}' 이름이 이미 존재합니다.")
             return None
 
-        success, _ = omni.kit.commands.execute(
-            "MovePrim", path_from=str(old_path), path_to=str(new_path)
-        )
+        # 여러 단계로 나뉜 namespace edit 알림을 하나로 묶어 뷰포트 깜빡임을 줄인다.
+        with Sdf.ChangeBlock():
+            success, _ = omni.kit.commands.execute(
+                "MovePrim", path_from=str(old_path), path_to=str(new_path)
+            )
         if not success:
             print(f"[Subset] '{old_path}' -> '{new_path}' 이름 변경 실패.")
             return None
@@ -428,7 +430,7 @@ class Subset:
         mesh_prim: Usd.Prim,
         groups: list[list[int]],
         group_index: int,
-        highlight_color: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        highlight_color: tuple[float, float, float] = (1.0, 0.45, 0.45),
     ) -> None:
         """groups[group_index]의 face만 highlight_color로, 나머지는 group_colors로 표시 (피킹 시각 피드백용)."""
         data = cls._get_mesh_data(mesh_prim)

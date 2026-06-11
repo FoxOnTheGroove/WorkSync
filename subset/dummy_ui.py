@@ -12,6 +12,9 @@ _SCROLL_STYLE = {
     "padding":          4,
 }
 
+_ROW_BG_NORMAL = 0x00000000
+_ROW_BG_SELECTED = 0x40_3030FF  # 연한 빨강 오버레이 (AABBGGRR)
+
 
 def _to_ui_color(rgb: tuple[float, float, float]) -> int:
     # omni.ui 색상은 0xAABBGGRR
@@ -32,6 +35,8 @@ class DummyUI:
         self._mesh_prim = None
         self._result_prims: list = []
         self._result_groups: list = []
+        self._row_frames: list = []
+        self._selected_index: "int | None" = None
         self._picker = ViewportPicker(lambda: self._mesh_prim, self._on_pick)
 
     def build_ui(self):
@@ -95,7 +100,7 @@ class DummyUI:
         if face_index is not None and self._result_groups:
             for gi, group in enumerate(self._result_groups):
                 if face_index in group:
-                    Subset.highlight_group(self._mesh_prim, self._result_groups, gi)
+                    self._select_row(gi)
                     if gi < len(self._result_prims):
                         name = self._result_prims[gi].GetName()
                     break
@@ -128,6 +133,8 @@ class DummyUI:
         self._result_stack.clear()
         self._result_prims = []
         self._result_groups = []
+        self._row_frames = []
+        self._selected_index = None
         self._set_status("[OK] 제거 완료")
 
     # ------------------------------------------------------------------ 내부
@@ -163,36 +170,52 @@ class DummyUI:
         self._result_stack.clear()
         self._result_prims = list(prims)
         self._result_groups = list(groups)
+        self._row_frames = []
+        self._selected_index = None
         colors = Subset.group_colors(len(groups))
 
         with self._result_stack:
             for i, (prim, group) in enumerate(zip(self._result_prims, self._result_groups)):
-                with ui.VStack(spacing=2, height=46):
-                    with ui.HStack(spacing=4, height=22):
-                        ui.Rectangle(
-                            width=14, height=14,
-                            style={"background_color": _to_ui_color(colors[i]),
-                                   "border_radius": 2},
-                        )
-                        select_btn = ui.Button(
-                            f"{prim.GetName()}  ({len(group)} faces)",
-                            clicked_fn=self._make_select_cb(i),
-                            width=ui.Fraction(1),
-                            style={"Button": {"alignment": ui.Alignment.LEFT}},
-                        )
-                        hide_btn = ui.Button(
-                            "Show" if Subset.is_hidden(prim) else "Hide",
-                            width=50,
-                        )
-                        hide_btn.set_clicked_fn(self._make_hide_cb(i, hide_btn))
+                row_frame = ui.Frame(style={"background_color": _ROW_BG_NORMAL})
+                self._row_frames.append(row_frame)
+                with row_frame:
+                    with ui.VStack(spacing=2, height=46):
+                        with ui.HStack(spacing=4, height=22):
+                            ui.Rectangle(
+                                width=14, height=14,
+                                style={"background_color": _to_ui_color(colors[i]),
+                                       "border_radius": 2},
+                            )
+                            select_btn = ui.Button(
+                                f"{prim.GetName()}  ({len(group)} faces)",
+                                clicked_fn=self._make_select_cb(i),
+                                width=ui.Fraction(1),
+                                style={"Button": {"alignment": ui.Alignment.LEFT}},
+                            )
+                            hide_btn = ui.Button(
+                                "Show" if Subset.is_hidden(prim) else "Hide",
+                                width=50,
+                            )
+                            hide_btn.set_clicked_fn(self._make_hide_cb(i, hide_btn))
 
-                    with ui.HStack(spacing=4, height=20):
-                        name_field = ui.StringField(width=ui.Fraction(1))
-                        name_field.model.set_value(prim.GetName())
-                        rename_btn = ui.Button("Rename", width=55)
-                        rename_btn.set_clicked_fn(
-                            self._make_rename_cb(i, name_field, select_btn)
-                        )
+                        with ui.HStack(spacing=4, height=20):
+                            name_field = ui.StringField(width=ui.Fraction(1))
+                            name_field.model.set_value(prim.GetName())
+                            rename_btn = ui.Button("Rename", width=55)
+                            rename_btn.set_clicked_fn(
+                                self._make_rename_cb(i, name_field, select_btn)
+                            )
+
+    def _select_row(self, index: int):
+        """뷰포트 피킹/리스트 선택 시 해당 그룹을 연한 빨강으로 강조하고 행을 표시."""
+        if not (0 <= index < len(self._result_groups)):
+            return
+        if self._color_checkbox.model.get_value_as_bool():
+            Subset.highlight_group(self._mesh_prim, self._result_groups, index)
+
+        self._selected_index = index
+        for i, frame in enumerate(self._row_frames):
+            frame.style = {"background_color": _ROW_BG_SELECTED if i == index else _ROW_BG_NORMAL}
 
     # ------------------------------------------------------------------ 행 콜백
 
@@ -203,6 +226,8 @@ class DummyUI:
                 omni.usd.get_context().get_selection().set_selected_prim_paths(
                     [str(prim.GetPath())], True
                 )
+            self._select_row(i)
+            self._set_status(f"[Pick] {prim.GetName()} 선택됨")
         return _cb
 
     def _make_hide_cb(self, i, hide_btn):
