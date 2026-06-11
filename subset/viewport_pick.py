@@ -82,15 +82,16 @@ class ViewportPicker:
             import omni.kit.raycast.query
         return omni.kit.raycast.query.acquire_raycast_query_interface()
 
-    def _on_click(self, gesture) -> None:
+    def _on_click(self, sender) -> None:
         try:
-            self._handle_click(gesture)
+            self._handle_click(sender)
         except Exception:
             _log("_on_click 예외:")
             traceback.print_exc()
 
-    def _handle_click(self, gesture) -> None:
-        _log(f"클릭 감지: state={gesture.state}")
+    def _handle_click(self, sender) -> None:
+        payload = sender.gesture_payload
+        _log(f"클릭 감지, payload attrs={[a for a in dir(payload) if not a.startswith('_')]}")
 
         mesh_prim = self._get_mesh_prim()
         if not mesh_prim or not mesh_prim.IsValid():
@@ -102,7 +103,7 @@ class ViewportPicker:
             _log("active viewport 없음 -> 무시")
             return
 
-        ndc_x, ndc_y = gesture.sender.gesture_payload.mouse
+        ndc_x, ndc_y = payload.mouse
         _log(f"클릭 NDC=({ndc_x}, {ndc_y})")
 
         origin, direction = self._compute_ray(viewport_api, ndc_x, ndc_y)
