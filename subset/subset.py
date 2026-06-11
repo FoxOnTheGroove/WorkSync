@@ -72,11 +72,14 @@ class Subset:
         mesh_prim: Usd.Prim,
         threshold_deg: float = 30.0,
         min_faces: int = 1,
+        merge_by_normal: bool = False,
     ) -> list[list[int]]:
         """이웃 면 간 법선 각도 차이 기반 region growing으로 면 그룹 분류.
 
         직육면체 → 6그룹, 꼭짓점 잘린 박스 → 7그룹, 원기둥 → 3그룹.
         min_faces 미만인 그룹은 가장 많이 맞닿은 이웃 그룹에 병합.
+        merge_by_normal이 True면, 서로 떨어져 있어도 평균 법선이 threshold
+        이내로 같은 방향을 보는 그룹들을 하나로 합친다.
         """
         data = cls._get_mesh_data(mesh_prim)
         if data is None:
@@ -112,6 +115,9 @@ class Subset:
         if min_faces > 1:
             groups = cls._merge_small_groups(groups, adjacency, min_faces)
 
+        if merge_by_normal:
+            groups = cls._merge_groups_by_normal(groups, normals, cos_threshold)
+
         groups.sort(key=len, reverse=True)
         return groups
 
@@ -121,9 +127,10 @@ class Subset:
         mesh_prim: Usd.Prim,
         threshold_deg: float = 30.0,
         min_faces: int = 1,
+        merge_by_normal: bool = False,
     ) -> "tuple[list[Usd.Prim], list[list[int]]]":
         """면 분류 후 그룹별 GeomSubset 생성. 기존 자동 생성분은 제거."""
-        groups = cls.classify_faces(mesh_prim, threshold_deg, min_faces)
+        groups = cls.classify_faces(mesh_prim, threshold_deg, min_faces, merge_by_normal)
         if not groups:
             return [], []
 
@@ -513,3 +520,37 @@ class Subset:
             groups[gi] = []
 
         return [g for g in groups if g]
+
+    @staticmethod
+    def _merge_groups_by_normal(
+        groups: list[list[int]], normals: list[Gf.Vec3d], cos_threshold: float
+    ) -> list[list[int]]:
+        """서로 떨어져 있어도 평균 법선이 cos_threshold 이내로 같은 방향이면 병합."""
+        n = len(groups)
+        avg_normals = []
+        for group in groups:
+            total = Gf.Vec3d(0, 0, 0)
+            for f in group:
+                total += normals[f]
+            length = total.GetLength()
+            avg_normals.append(total / length if length > 1e-9 else Gf.Vec3d(0, 0, 1))
+
+        parent = list(range(n))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if Gf.Dot(avg_normals[i], avg_normals[j]) >= cos_threshold:
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[ri] = rj
+
+        merged: dict[int, list[int]] = defaultdict(list)
+        for i, group in enumerate(groups):
+            merged[find(i)].extend(group)
+        return list(merged.values())

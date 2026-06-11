@@ -26,6 +26,7 @@ class DummyUI:
         self._mesh_label = None
         self._threshold_model = None
         self._min_faces_model = None
+        self._merge_by_normal_model = None
         self._result_stack = None
         self._mesh_prim = None
         self._result_prims: list = []
@@ -59,6 +60,11 @@ class DummyUI:
                     field = ui.IntField(width=60)
                     field.model.set_value(1)
                     self._min_faces_model = field.model
+                    ui.Spacer(width=12)
+                    ui.Label("Merge by Normal", width=110)
+                    merge_checkbox = ui.CheckBox(width=20)
+                    merge_checkbox.model.set_value(False)
+                    self._merge_by_normal_model = merge_checkbox.model
 
                 with ui.HStack(spacing=4, height=24):
                     ui.Label("Subset Pick (viewport)", width=160)
@@ -111,8 +117,9 @@ class DummyUI:
             return
         threshold = self._threshold_model.get_value_as_float()
         min_faces = max(1, self._min_faces_model.get_value_as_int())
+        merge_by_normal = self._merge_by_normal_model.get_value_as_bool()
 
-        prims, groups = Subset.generate_subsets(self._mesh_prim, threshold, min_faces)
+        prims, groups = Subset.generate_subsets(self._mesh_prim, threshold, min_faces, merge_by_normal)
         if not prims:
             self._set_status("[FAIL] 분류 실패")
             return
