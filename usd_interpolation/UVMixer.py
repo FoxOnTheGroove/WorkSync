@@ -31,17 +31,7 @@ class UVMixer:
     join_player(shared_player)로 공유 플레이어에 구독 전환 가능 (sync).
     """
 
-    _TPS_CACHE: 'float | None' = None  # 확장 시작 시 prime_tps_cache()로 1회 캐싱
-
     # ── 팩토리 ──────────────────────────────────────────────────────
-
-    @classmethod
-    def prime_tps_cache(cls) -> None:
-        """확장 시작 시 1회 호출. stage.GetTimeCodesPerSecond()를 미리 캐싱해
-        _bake_timesamples가 워커의 save 직후 같은 레이어 메타데이터를 다시 읽지 않게 한다."""
-        stage = omni.usd.get_context().get_stage()
-        if stage is not None:
-            cls._TPS_CACHE = stage.GetTimeCodesPerSecond()
 
     @classmethod
     def create(cls, target_path: 'str | None') -> 'UVMixer':
@@ -309,8 +299,7 @@ class UVMixer:
         # timecode를 0~1 정규화값으로 bake → 다른 n_frames mixer와 timeline을 공유 가능
         n = len(self._st_maps)
         with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            if self._TPS_CACHE is not None:
-                pxr_stage.GetSessionLayer().timeCodesPerSecond = self._TPS_CACHE
+            pxr_stage.GetSessionLayer().timeCodesPerSecond = pxr_stage.GetTimeCodesPerSecond()
             for i, mesh_map in enumerate(self._st_maps):
                 tc = i / (n - 1) if n > 1 else 0.0
                 for mesh_path, st_data in mesh_map.items():
