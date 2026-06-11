@@ -90,8 +90,15 @@ class DummyUI:
             self._mesh_label.style = {"color": 0xFF888888}
             self._set_status("[FAIL] Mesh를 선택하세요")
 
-    def _on_pick(self, prim_path: str):
+    def _on_pick(self, prim_path: str, face_index: "int | None"):
         name = prim_path.rstrip("/").rsplit("/", 1)[-1]
+        if face_index is not None and self._result_groups:
+            for gi, group in enumerate(self._result_groups):
+                if face_index in group:
+                    Subset.highlight_group(self._mesh_prim, self._result_groups, gi)
+                    if gi < len(self._result_prims):
+                        name = self._result_prims[gi].GetName()
+                    break
         self._set_status(f"[Pick] {name} 선택됨")
 
     def _on_generate(self):

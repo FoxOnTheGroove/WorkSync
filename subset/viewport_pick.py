@@ -5,7 +5,7 @@ import omni.ui.scene as sc
 import omni.kit.app
 import omni.usd
 from pxr import Gf
-from omni.kit.viewport.utility import get_active_viewport, get_active_viewport_window
+from omni.kit.viewport.utility import disable_selection, get_active_viewport, get_active_viewport_window
 
 from .subset import Subset
 
@@ -32,6 +32,7 @@ class ViewportPicker:
         self._frame = None
         self._scene_view = None
         self._pending_path = None
+        self._disable_selection = None
 
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -51,9 +52,13 @@ class ViewportPicker:
             self._raycast = self._acquire_raycast_interface()
 
             viewport_window = get_active_viewport_window()
-            if not viewport_window:
+            viewport_api = get_active_viewport()
+            if not viewport_window or not viewport_api:
                 _log("active viewport window 없음 -> 구독 실패")
                 return
+
+            # 기본 클릭-선택을 꺼서 우리가 고른 subset이 곧바로 덮어써지지 않게 한다.
+            self._disable_selection = disable_selection(viewport_api, disable_click=True)
 
             self._frame = viewport_window.get_frame("subset_pick_overlay")
             with self._frame:
@@ -73,6 +78,7 @@ class ViewportPicker:
             _log("구독 해제")
         self._frame = None
         self._scene_view = None
+        self._disable_selection = None  # 핸들 해제 -> 기본 클릭-선택 복원
 
     @staticmethod
     def _acquire_raycast_interface():
@@ -138,12 +144,12 @@ class ViewportPicker:
 
         if not hit_path.startswith(str(mesh_prim.GetPath())):
             _log(f"대상 메시({mesh_prim.GetPath()})와 불일치 -> 클릭된 prim 선택: {hit_path}")
-            self._select(hit_path)
+            self._select(hit_path, None)
             return
 
-        # primitive_id가 곧 USD face index (fan-triangulation 인덱스가 아님)
-        face_index = primitive_id if primitive_id >= 0 else None
-        if face_index is None and hit_position is not None:
+        # primitive_id는 신뢰할 수 없어(0/1만 관측됨) 히트 위치 기반 최근접 면으로 역산.
+        face_index = None
+        if hit_position is not None:
             hit_point = Gf.Vec3d(*hit_position)
             face_index = Subset.face_at_point(mesh_prim, hit_point)
             _log(f"face_at_point({hit_point}) -> {face_index}")
@@ -155,14 +161,14 @@ class ViewportPicker:
             _log(f"face {face_index} -> subset {subset_path}")
 
         target_path = subset_path or hit_path
-        self._select(target_path)
+        self._select(target_path, face_index)
 
-    def _select(self, path: str) -> None:
+    def _select(self, path: str, face_index: "int | None") -> None:
         self._pending_path = path
         omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
         _log(f"선택 변경 -> {path}")
         if self._on_pick:
-            self._on_pick(path)
+            self._on_pick(path, face_index)
         asyncio.ensure_future(self._reassert_selection(path))
 
     async def _reassert_selection(self, path: str) -> None:

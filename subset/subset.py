@@ -422,6 +422,33 @@ class Subset:
             return
         mesh_prim.RemoveProperty("primvars:displayColor")
 
+    @classmethod
+    def highlight_group(
+        cls,
+        mesh_prim: Usd.Prim,
+        groups: list[list[int]],
+        group_index: int,
+        highlight_color: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    ) -> None:
+        """groups[group_index]의 face만 highlight_color로, 나머지는 group_colors로 표시 (피킹 시각 피드백용)."""
+        data = cls._get_mesh_data(mesh_prim)
+        if data is None or not groups:
+            return
+        num_faces = len(data[1])
+
+        colors = cls.group_colors(len(groups))
+        face_colors = [Gf.Vec3f(0.5, 0.5, 0.5)] * num_faces
+        for gi, group in enumerate(groups):
+            c = Gf.Vec3f(*highlight_color) if gi == group_index else Gf.Vec3f(*colors[gi])
+            for f in group:
+                face_colors[f] = c
+
+        primvars = UsdGeom.PrimvarsAPI(mesh_prim)
+        pv = primvars.CreatePrimvar(
+            "displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.uniform
+        )
+        pv.Set(Vt.Vec3fArray(face_colors))
+
     # ------------------------------------------------------------------ 내부 메서드
 
     @classmethod
