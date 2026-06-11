@@ -103,8 +103,11 @@ class ViewportPicker:
             if not hit_path.startswith(str(mesh_prim.GetPath())):
                 return  # 다른 프림을 클릭
 
-            hit_point = Gf.Vec3d(*result.hit_position)
-            face_index = Subset.face_at_point(mesh_prim, hit_point)
+            primitive_id = getattr(result, "primitive_id", -1)
+            face_index = Subset.face_from_primitive_id(mesh_prim, primitive_id)
+            if face_index is None:
+                hit_point = Gf.Vec3d(*result.hit_position)
+                face_index = Subset.face_at_point(mesh_prim, hit_point)
             if face_index is None:
                 return
 
