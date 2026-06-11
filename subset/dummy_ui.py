@@ -29,6 +29,8 @@ class DummyUI:
         self._color_checkbox = None
         self._result_stack = None
         self._mesh_prim = None
+        self._result_prims: list = []
+        self._result_groups: list = []
 
     def build_ui(self):
         self._window = ui.Window("Subset", width=360, height=520)
@@ -103,6 +105,8 @@ class DummyUI:
         Subset.remove_generated_subsets(self._mesh_prim)
         Subset.clear_group_colors(self._mesh_prim)
         self._result_stack.clear()
+        self._result_prims = []
+        self._result_groups = []
         self._set_status("[OK] 제거 완료")
 
     # ------------------------------------------------------------------ 내부
@@ -136,30 +140,74 @@ class DummyUI:
 
     def _refresh_results(self, prims, groups):
         self._result_stack.clear()
+        self._result_prims = list(prims)
+        self._result_groups = list(groups)
         colors = Subset.group_colors(len(groups))
 
         with self._result_stack:
-            for i, (prim, group) in enumerate(zip(prims, groups)):
-                path = str(prim.GetPath())
-                with ui.HStack(spacing=4, height=22):
-                    ui.Rectangle(
-                        width=14, height=14,
-                        style={"background_color": _to_ui_color(colors[i]),
-                               "border_radius": 2},
-                    )
+            for i, (prim, group) in enumerate(zip(self._result_prims, self._result_groups)):
+                with ui.VStack(spacing=2, height=46):
+                    with ui.HStack(spacing=4, height=22):
+                        ui.Rectangle(
+                            width=14, height=14,
+                            style={"background_color": _to_ui_color(colors[i]),
+                                   "border_radius": 2},
+                        )
+                        select_btn = ui.Button(
+                            f"{prim.GetName()}  ({len(group)} faces)",
+                            clicked_fn=self._make_select_cb(i),
+                            width=ui.Fraction(1),
+                            style={"Button": {"alignment": ui.Alignment.LEFT}},
+                        )
+                        hide_btn = ui.Button(
+                            "Show" if Subset.is_hidden(prim) else "Hide",
+                            width=50,
+                        )
+                        hide_btn.set_clicked_fn(self._make_hide_cb(i, hide_btn))
 
-                    def make_cb(p=path):
-                        def _cb():
-                            omni.usd.get_context().get_selection().set_selected_prim_paths(
-                                [p], True
-                            )
-                        return _cb
+                    with ui.HStack(spacing=4, height=20):
+                        name_field = ui.StringField(width=ui.Fraction(1))
+                        name_field.model.set_value(prim.GetName())
+                        rename_btn = ui.Button("Rename", width=55)
+                        rename_btn.set_clicked_fn(
+                            self._make_rename_cb(i, name_field, select_btn)
+                        )
 
-                    ui.Button(
-                        f"{prim.GetName()}  ({len(group)} faces)",
-                        clicked_fn=make_cb(),
-                        style={"Button": {"alignment": ui.Alignment.LEFT}},
-                    )
+    # ------------------------------------------------------------------ 행 콜백
+
+    def _make_select_cb(self, i):
+        def _cb():
+            prim = self._result_prims[i]
+            if prim and prim.IsValid():
+                omni.usd.get_context().get_selection().set_selected_prim_paths(
+                    [str(prim.GetPath())], True
+                )
+        return _cb
+
+    def _make_hide_cb(self, i, hide_btn):
+        def _cb():
+            prim = self._result_prims[i]
+            if not prim or not prim.IsValid():
+                return
+            hidden = Subset.toggle_hidden(prim)
+            hide_btn.text = "Show" if hidden else "Hide"
+        return _cb
+
+    def _make_rename_cb(self, i, name_field, select_btn):
+        def _cb():
+            prim = self._result_prims[i]
+            if not prim or not prim.IsValid():
+                return
+            new_name = name_field.model.get_value_as_string()
+            new_prim = Subset.rename_subset(prim, new_name)
+            if new_prim:
+                self._result_prims[i] = new_prim
+                select_btn.text = f"{new_prim.GetName()}  ({len(self._result_groups[i])} faces)"
+                name_field.model.set_value(new_prim.GetName())
+                self._set_status(f"[OK] renamed -> {new_prim.GetName()}")
+            else:
+                self._set_status("[FAIL] rename 실패 (이름 중복/유효하지 않음)")
+        return _cb
 
     def destroy(self):
         if self._window:

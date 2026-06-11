@@ -2,8 +2,9 @@ import math
 import colorsys
 from collections import defaultdict, deque
 
-from pxr import Usd, UsdGeom, Vt, Gf, Sdf
+from pxr import Usd, UsdGeom, UsdShade, Vt, Gf, Sdf, Tf
 import omni.usd
+import omni.kit.commands
 
 
 class Subset:
@@ -11,6 +12,10 @@ class Subset:
     _initialized: bool = False
 
     FAMILY_NAME = "surfaces"   # 자동 생성 subset들의 familyName
+
+    HIDE_MAT_NAME = "_SubsetHideMat"
+    SAVED_MATERIAL_ATTR = "subset:savedMaterial"
+    NO_BINDING_SENTINEL = "__none__"
 
     # ------------------------------------------------------------------ 공개 API
 
@@ -147,6 +152,104 @@ class Subset:
             family = UsdGeom.Subset(child).GetFamilyNameAttr().Get()
             if family == cls.FAMILY_NAME:
                 stage.RemovePrim(child.GetPath())
+
+    # ------------------------------------------------------------------ Hide / Show
+
+    @classmethod
+    def _get_or_create_hide_material(cls, mesh_prim: Usd.Prim) -> UsdShade.Material:
+        stage = cls._get_stage()
+        mat_path = mesh_prim.GetPath().AppendPath(f"Looks/{cls.HIDE_MAT_NAME}")
+
+        existing = stage.GetPrimAtPath(mat_path)
+        if existing.IsValid() and existing.IsA(UsdShade.Material):
+            return UsdShade.Material(existing)
+
+        material = UsdShade.Material.Define(stage, mat_path)
+        shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("Shader"))
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.0)
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        return material
+
+    @classmethod
+    def is_hidden(cls, subset_prim: Usd.Prim) -> bool:
+        if not subset_prim or not subset_prim.IsValid():
+            return False
+        return subset_prim.HasAttribute(cls.SAVED_MATERIAL_ATTR)
+
+    @classmethod
+    def toggle_hidden(cls, subset_prim: Usd.Prim) -> bool:
+        """subset의 표시 상태를 반전. 반환값은 변경 후의 hidden 여부.
+
+        실제 visibility 속성 대신, 불투명도 0인 머티리얼을 바인딩해 면을
+        숨긴다(Hydra/RTX에서 GeomSubset visibility의 face culling이
+        보장되지 않기 때문).
+        """
+        if not subset_prim or not subset_prim.IsValid() or not subset_prim.IsA(UsdGeom.Subset):
+            print("[Subset] 유효하지 않은 subset prim.")
+            return False
+
+        binding_api = UsdShade.MaterialBindingAPI.Apply(subset_prim)
+        stage = cls._get_stage()
+
+        if cls.is_hidden(subset_prim):
+            saved = subset_prim.GetAttribute(cls.SAVED_MATERIAL_ATTR).Get()
+            if saved and saved != cls.NO_BINDING_SENTINEL:
+                orig_prim = stage.GetPrimAtPath(saved)
+                if orig_prim.IsValid() and orig_prim.IsA(UsdShade.Material):
+                    binding_api.Bind(UsdShade.Material(orig_prim))
+                else:
+                    binding_api.UnbindDirectBinding()
+            else:
+                binding_api.UnbindDirectBinding()
+            subset_prim.RemoveProperty(cls.SAVED_MATERIAL_ATTR)
+            return False
+
+        rel = binding_api.GetDirectBindingRel()
+        targets = rel.GetTargets() if rel else []
+        saved_value = str(targets[0]) if targets else cls.NO_BINDING_SENTINEL
+        subset_prim.CreateAttribute(
+            cls.SAVED_MATERIAL_ATTR, Sdf.ValueTypeNames.String, custom=True
+        ).Set(saved_value)
+
+        hide_material = cls._get_or_create_hide_material(subset_prim.GetParent())
+        binding_api.Bind(hide_material)
+        return True
+
+    # ------------------------------------------------------------------ 이름 변경
+
+    @classmethod
+    def rename_subset(cls, subset_prim: Usd.Prim, new_name: str) -> "Usd.Prim | None":
+        if not subset_prim or not subset_prim.IsValid() or not subset_prim.IsA(UsdGeom.Subset):
+            print("[Subset] 유효하지 않은 subset prim.")
+            return None
+
+        new_name = new_name.strip()
+        if not new_name:
+            print("[Subset] 이름이 비어 있습니다.")
+            return None
+
+        safe_name = Tf.MakeValidIdentifier(new_name)
+        if not safe_name:
+            safe_name = "subset"
+
+        old_path = subset_prim.GetPath()
+        new_path = old_path.GetParentPath().AppendChild(safe_name)
+        if new_path == old_path:
+            return subset_prim
+
+        stage = cls._get_stage()
+        if stage.GetPrimAtPath(new_path).IsValid():
+            print(f"[Subset] '{safe_name}' 이름이 이미 존재합니다.")
+            return None
+
+        success, _ = omni.kit.commands.execute(
+            "MovePrim", path_from=str(old_path), path_to=str(new_path)
+        )
+        if not success:
+            print(f"[Subset] '{old_path}' -> '{new_path}' 이름 변경 실패.")
+            return None
+        return stage.GetPrimAtPath(new_path)
 
     # ------------------------------------------------------------------ 디버그 색상
 
