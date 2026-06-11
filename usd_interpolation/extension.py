@@ -8,6 +8,9 @@ class UsdInterpolationExtension(omni.ext.IExt):
     def on_startup(self, ext_id):
         self._ui = None
 
+        from .UVMixer import UVMixer
+        UVMixer.prime_tps_cache()
+
         if ENABLE_DUMMY_UI:
             from .dummy_ui import UsdInterpolationUI
             self._ui = UsdInterpolationUI()
