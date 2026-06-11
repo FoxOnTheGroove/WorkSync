@@ -168,6 +168,7 @@ class Subset:
         shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("Shader"))
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.0)
+        shader.CreateInput("opacityThreshold", Sdf.ValueTypeNames.Float).Set(1.0)
         material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
         return material
 
