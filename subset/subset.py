@@ -251,6 +251,69 @@ class Subset:
             return None
         return stage.GetPrimAtPath(new_path)
 
+    # ------------------------------------------------------------------ 뷰포트 피킹
+
+    @classmethod
+    def build_face_subset_map(cls, mesh_prim: Usd.Prim) -> dict:
+        """face index -> subset prim path. 여러 subset에 속하면 먼저 찾은 것 우선."""
+        face_map: dict = {}
+        for child in cls.list_subsets(mesh_prim):
+            indices = UsdGeom.Subset(child).GetIndicesAttr().Get()
+            if not indices:
+                continue
+            path = str(child.GetPath())
+            for face in indices:
+                face_map.setdefault(face, path)
+        return face_map
+
+    @classmethod
+    def raycast_face(cls, mesh_prim: Usd.Prim, ray_origin: Gf.Vec3d, ray_dir: Gf.Vec3d) -> "int | None":
+        """월드 좌표 레이와 메시의 각 면을 직접 교차 검사해 가장 가까운 face index 반환."""
+        data = cls._get_mesh_data(mesh_prim)
+        if data is None:
+            return None
+        points, counts, indices = data
+
+        xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        world_points = [xform.Transform(Gf.Vec3d(p)) for p in points]
+
+        closest_face = None
+        closest_t = None
+        offset = 0
+        for face, count in enumerate(counts):
+            for i in range(1, count - 1):
+                v0 = world_points[indices[offset]]
+                v1 = world_points[indices[offset + i]]
+                v2 = world_points[indices[offset + i + 1]]
+                t = cls._ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2)
+                if t is not None and (closest_t is None or t < closest_t):
+                    closest_t = t
+                    closest_face = face
+            offset += count
+        return closest_face
+
+    @staticmethod
+    def _ray_triangle_intersect(origin, direction, v0, v1, v2) -> "float | None":
+        """Möller-Trumbore 알고리즘. 교차하면 origin에서의 거리(t), 아니면 None."""
+        eps = 1e-9
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        h = Gf.Cross(direction, edge2)
+        a = Gf.Dot(edge1, h)
+        if -eps < a < eps:
+            return None
+        f = 1.0 / a
+        s = origin - v0
+        u = f * Gf.Dot(s, h)
+        if u < 0.0 or u > 1.0:
+            return None
+        q = Gf.Cross(s, edge1)
+        v = f * Gf.Dot(direction, q)
+        if v < 0.0 or u + v > 1.0:
+            return None
+        t = f * Gf.Dot(edge2, q)
+        return t if t > eps else None
+
     # ------------------------------------------------------------------ 디버그 색상
 
     @staticmethod

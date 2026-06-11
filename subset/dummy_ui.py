@@ -2,6 +2,7 @@ import omni.ui as ui
 import omni.usd
 from pxr import UsdGeom
 from .subset import Subset
+from .viewport_pick import ViewportPicker
 
 _SCROLL_STYLE = {
     "background_color": 0xFF1E1E1E,
@@ -31,6 +32,7 @@ class DummyUI:
         self._mesh_prim = None
         self._result_prims: list = []
         self._result_groups: list = []
+        self._picker = ViewportPicker(lambda: self._mesh_prim)
 
     def build_ui(self):
         self._window = ui.Window("Subset", width=360, height=520)
@@ -59,6 +61,14 @@ class DummyUI:
                     ui.Label("Color", width=40)
                     self._color_checkbox = ui.CheckBox(width=20)
                     self._color_checkbox.model.set_value(True)
+
+                with ui.HStack(spacing=4, height=24):
+                    ui.Label("Subset Pick (viewport)", width=160)
+                    pick_checkbox = ui.CheckBox(width=20)
+                    pick_checkbox.model.set_value(False)
+                    pick_checkbox.model.add_value_changed_fn(
+                        lambda m: self._picker.set_enabled(m.get_value_as_bool())
+                    )
 
                 with ui.HStack(spacing=4, height=26):
                     ui.Button("Generate Subsets", clicked_fn=self._on_generate)
@@ -210,6 +220,7 @@ class DummyUI:
         return _cb
 
     def destroy(self):
+        self._picker.destroy()
         if self._window:
             self._window.destroy()
             self._window = None
