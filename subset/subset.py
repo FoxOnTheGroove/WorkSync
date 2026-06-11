@@ -268,24 +268,6 @@ class Subset:
         return face_map
 
     @classmethod
-    def face_from_primitive_id(cls, mesh_prim: Usd.Prim, primitive_id: int) -> "int | None":
-        """RTX 레이캐스트의 primitive_id(삼각형 인덱스, fan 분할 기준)를 face index로 변환."""
-        if primitive_id is None or primitive_id < 0:
-            return None
-        data = cls._get_mesh_data(mesh_prim)
-        if data is None:
-            return None
-        _, counts, _ = data
-
-        remaining = primitive_id
-        for face, count in enumerate(counts):
-            tris = max(count - 2, 0)
-            if remaining < tris:
-                return face
-            remaining -= tris
-        return None
-
-    @classmethod
     def raycast_face(cls, mesh_prim: Usd.Prim, ray_origin: Gf.Vec3d, ray_dir: Gf.Vec3d) -> "int | None":
         """월드 좌표 레이와 메시의 각 면을 직접 교차 검사해 가장 가까운 face index 반환."""
         data = cls._get_mesh_data(mesh_prim)

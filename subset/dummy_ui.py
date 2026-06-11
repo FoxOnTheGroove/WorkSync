@@ -32,7 +32,7 @@ class DummyUI:
         self._mesh_prim = None
         self._result_prims: list = []
         self._result_groups: list = []
-        self._picker = ViewportPicker(lambda: self._mesh_prim)
+        self._picker = ViewportPicker(lambda: self._mesh_prim, self._on_pick)
 
     def build_ui(self):
         self._window = ui.Window("Subset", width=360, height=520)
@@ -89,6 +89,10 @@ class DummyUI:
             self._mesh_label.text = "(no mesh)"
             self._mesh_label.style = {"color": 0xFF888888}
             self._set_status("[FAIL] Mesh를 선택하세요")
+
+    def _on_pick(self, prim_path: str):
+        name = prim_path.rstrip("/").rsplit("/", 1)[-1]
+        self._set_status(f"[Pick] {name} 선택됨")
 
     def _on_generate(self):
         if not self._valid_mesh():

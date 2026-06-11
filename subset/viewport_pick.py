@@ -1,4 +1,5 @@
 import traceback
+import asyncio
 
 import omni.ui.scene as sc
 import omni.kit.app
@@ -24,11 +25,13 @@ class ViewportPicker:
     기존 뷰포트 클릭 동작을 흉내낸다.
     """
 
-    def __init__(self, get_mesh_prim):
+    def __init__(self, get_mesh_prim, on_pick=None):
         self._get_mesh_prim = get_mesh_prim
+        self._on_pick = on_pick
         self._raycast = None
         self._frame = None
         self._scene_view = None
+        self._pending_path = None
 
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -129,19 +132,17 @@ class ViewportPicker:
             return
 
         hit_path = str(result.get_target_usd_path())
-        primitive_id = getattr(result, "primitive_id", -1)
+        primitive_id = int(getattr(result, "primitive_id", -1))
         hit_position = getattr(result, "hit_position", None)
         _log(f"히트: path={hit_path} primitive_id={primitive_id} pos={hit_position}")
 
-        selection = omni.usd.get_context().get_selection()
-
         if not hit_path.startswith(str(mesh_prim.GetPath())):
             _log(f"대상 메시({mesh_prim.GetPath()})와 불일치 -> 클릭된 prim 선택: {hit_path}")
-            selection.set_selected_prim_paths([hit_path], True)
+            self._select(hit_path)
             return
 
-        face_index = Subset.face_from_primitive_id(mesh_prim, primitive_id)
-        _log(f"face_from_primitive_id({primitive_id}) -> {face_index}")
+        # primitive_id가 곧 USD face index (fan-triangulation 인덱스가 아님)
+        face_index = primitive_id if primitive_id >= 0 else None
         if face_index is None and hit_position is not None:
             hit_point = Gf.Vec3d(*hit_position)
             face_index = Subset.face_at_point(mesh_prim, hit_point)
@@ -154,8 +155,28 @@ class ViewportPicker:
             _log(f"face {face_index} -> subset {subset_path}")
 
         target_path = subset_path or hit_path
-        selection.set_selected_prim_paths([target_path], True)
-        _log(f"선택 변경 -> {target_path}")
+        self._select(target_path)
+
+    def _select(self, path: str) -> None:
+        self._pending_path = path
+        omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
+        _log(f"선택 변경 -> {path}")
+        if self._on_pick:
+            self._on_pick(path)
+        asyncio.ensure_future(self._reassert_selection(path))
+
+    async def _reassert_selection(self, path: str) -> None:
+        """뷰포트 자체의 클릭-선택이 비동기로 한 박자 늦게 끼어들어 우리가 고른
+        prim을 덮어쓰는 경우가 있어, 몇 프레임 동안 선택을 다시 강제한다."""
+        app = omni.kit.app.get_app()
+        selection = omni.usd.get_context().get_selection()
+        for _ in range(5):
+            await app.next_update_async()
+            if self._pending_path != path:
+                return
+            if list(selection.get_selected_prim_paths()) != [path]:
+                _log(f"선택이 덮어써짐 -> 재적용: {path}")
+                selection.set_selected_prim_paths([path], True)
 
     @staticmethod
     def _compute_ray(viewport_api, ndc_x: float, ndc_y: float):
