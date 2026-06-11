@@ -1,7 +1,6 @@
 import traceback
 
-import carb.input
-import omni.appwindow
+import omni.ui.scene as sc
 import omni.kit.app
 import omni.usd
 from pxr import Gf
@@ -17,18 +16,19 @@ def _log(msg: str) -> None:
 class ViewportPicker:
     """체크박스 ON 시, 뷰포트 클릭 위치의 면이 속한 subset을 우선 선택.
 
+    뷰포트 위에 투명한 omni.ui.scene Screen을 덮고 ClickGesture로 클릭을 받는다
+    (carb.input의 device-level 마우스 구독은 omni.ui 위젯 위에서는 호출되지 않음).
     레이 교차는 omni.kit.raycast.query(RTX 기반, 콜라이더 불필요)로 수행하고,
     히트 위치를 face index로 역산해 subset을 찾는다.
-    클릭한 면이 어떤 subset에도 속하지 않으면 아무것도 하지 않고
-    기존 뷰포트 클릭 동작(메시 전체 선택)을 그대로 둔다.
+    클릭한 면이 어떤 subset에도 속하지 않으면, 클릭된 prim을 그대로 선택해
+    기존 뷰포트 클릭 동작을 흉내낸다.
     """
 
     def __init__(self, get_mesh_prim):
         self._get_mesh_prim = get_mesh_prim
-        self._input_iface = None
-        self._mouse = None
-        self._sub = None
         self._raycast = None
+        self._frame = None
+        self._scene_view = None
 
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -42,26 +42,34 @@ class ViewportPicker:
     # ------------------------------------------------------------------ 내부
 
     def _subscribe(self) -> None:
-        if self._sub:
+        if self._scene_view:
             return
         try:
             self._raycast = self._acquire_raycast_interface()
-            app_window = omni.appwindow.get_default_app_window()
-            self._mouse = app_window.get_mouse()
-            self._input_iface = carb.input.acquire_input_interface()
-            self._sub = self._input_iface.subscribe_to_mouse_events(
-                self._mouse, self._on_mouse_event
-            )
-            _log("구독 시작")
-        except Exception as e:
-            print(f"[Subset] 뷰포트 피킹 구독 실패: {e}")
-            self._sub = None
+
+            viewport_window = get_active_viewport_window()
+            if not viewport_window:
+                _log("active viewport window 없음 -> 구독 실패")
+                return
+
+            self._frame = viewport_window.get_frame("subset_pick_overlay")
+            with self._frame:
+                self._scene_view = sc.SceneView()
+                with self._scene_view.scene:
+                    sc.Screen(gesture=sc.ClickGesture(self._on_click))
+            _log("구독 시작 (ClickGesture)")
+        except Exception:
+            _log("구독 실패:")
+            traceback.print_exc()
+            self._scene_view = None
+            self._frame = None
 
     def _unsubscribe(self) -> None:
-        if self._sub and self._input_iface and self._mouse:
-            self._input_iface.unsubscribe_to_mouse_events(self._mouse, self._sub)
+        if self._frame:
+            self._frame.clear()
             _log("구독 해제")
-        self._sub = None
+        self._frame = None
+        self._scene_view = None
 
     @staticmethod
     def _acquire_raycast_interface():
@@ -74,39 +82,28 @@ class ViewportPicker:
             import omni.kit.raycast.query
         return omni.kit.raycast.query.acquire_raycast_query_interface()
 
-    def _on_mouse_event(self, event) -> None:
+    def _on_click(self, gesture) -> None:
         try:
-            self._handle_mouse_event(event)
+            self._handle_click(gesture)
         except Exception:
-            _log("_on_mouse_event 예외:")
+            _log("_on_click 예외:")
             traceback.print_exc()
 
-    def _handle_mouse_event(self, event) -> None:
-        if event.type != carb.input.MouseEventType.LEFT_BUTTON_UP:
-            return
-        _log(f"LEFT_BUTTON_UP 수신: {event.type}")
+    def _handle_click(self, gesture) -> None:
+        _log(f"클릭 감지: state={gesture.state}")
 
         mesh_prim = self._get_mesh_prim()
         if not mesh_prim or not mesh_prim.IsValid():
             _log("mesh_prim 없음 -> 무시")
             return
 
-        viewport_window = get_active_viewport_window()
         viewport_api = get_active_viewport()
-        if not viewport_window or not viewport_api:
+        if not viewport_api:
             _log("active viewport 없음 -> 무시")
             return
 
-        coords = self._input_iface.get_mouse_coords_pixel(self._mouse)
-        frame = viewport_window.frame
-        local_x = coords[0] - frame.screen_position_x
-        local_y = coords[1] - frame.screen_position_y
-        if not (0 <= local_x <= frame.computed_width and 0 <= local_y <= frame.computed_height):
-            _log(f"뷰포트 밖 클릭: local=({local_x}, {local_y})")
-            return  # 뷰포트 밖 클릭
-
-        ndc_x = (local_x / frame.computed_width) * 2.0 - 1.0
-        ndc_y = 1.0 - (local_y / frame.computed_height) * 2.0
+        ndc_x, ndc_y = gesture.sender.gesture_payload.mouse
+        _log(f"클릭 NDC=({ndc_x}, {ndc_y})")
 
         origin, direction = self._compute_ray(viewport_api, ndc_x, ndc_y)
         _log(f"ray origin={tuple(origin)} dir={tuple(direction)}")
@@ -135,9 +132,12 @@ class ViewportPicker:
         hit_position = getattr(result, "hit_position", None)
         _log(f"히트: path={hit_path} primitive_id={primitive_id} pos={hit_position}")
 
+        selection = omni.usd.get_context().get_selection()
+
         if not hit_path.startswith(str(mesh_prim.GetPath())):
-            _log(f"대상 메시({mesh_prim.GetPath()})와 불일치 -> 무시")
-            return  # 다른 프림을 클릭
+            _log(f"대상 메시({mesh_prim.GetPath()})와 불일치 -> 클릭된 prim 선택: {hit_path}")
+            selection.set_selected_prim_paths([hit_path], True)
+            return
 
         face_index = Subset.face_from_primitive_id(mesh_prim, primitive_id)
         _log(f"face_from_primitive_id({primitive_id}) -> {face_index}")
@@ -145,20 +145,16 @@ class ViewportPicker:
             hit_point = Gf.Vec3d(*hit_position)
             face_index = Subset.face_at_point(mesh_prim, hit_point)
             _log(f"face_at_point({hit_point}) -> {face_index}")
-        if face_index is None:
-            _log("face_index 결정 실패 -> 무시")
-            return
 
-        face_map = Subset.build_face_subset_map(mesh_prim)
-        subset_path = face_map.get(face_index)
-        _log(f"face {face_index} -> subset {subset_path}")
-        if subset_path:
-            omni.usd.get_context().get_selection().set_selected_prim_paths(
-                [subset_path], True
-            )
-            _log(f"선택 변경 -> {subset_path}")
-        else:
-            _log(f"face {face_index}는 어떤 subset에도 속하지 않음")
+        subset_path = None
+        if face_index is not None:
+            face_map = Subset.build_face_subset_map(mesh_prim)
+            subset_path = face_map.get(face_index)
+            _log(f"face {face_index} -> subset {subset_path}")
+
+        target_path = subset_path or hit_path
+        selection.set_selected_prim_paths([target_path], True)
+        _log(f"선택 변경 -> {target_path}")
 
     @staticmethod
     def _compute_ray(viewport_api, ndc_x: float, ndc_y: float):
