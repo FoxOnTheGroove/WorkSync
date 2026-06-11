@@ -293,6 +293,75 @@ class Subset:
             offset += count
         return closest_face
 
+    @classmethod
+    def face_at_point(cls, mesh_prim: Usd.Prim, world_point: Gf.Vec3d) -> "int | None":
+        """월드 좌표 점(RTX 레이캐스트 히트 위치)에 가장 가까운 face index 반환."""
+        data = cls._get_mesh_data(mesh_prim)
+        if data is None:
+            return None
+        points, counts, indices = data
+
+        xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        world_points = [xform.Transform(Gf.Vec3d(p)) for p in points]
+
+        best_face = None
+        best_dist = None
+        offset = 0
+        for face, count in enumerate(counts):
+            for i in range(1, count - 1):
+                v0 = world_points[indices[offset]]
+                v1 = world_points[indices[offset + i]]
+                v2 = world_points[indices[offset + i + 1]]
+                d = cls._point_triangle_distance(world_point, v0, v1, v2)
+                if best_dist is None or d < best_dist:
+                    best_dist = d
+                    best_face = face
+            offset += count
+        return best_face
+
+    @staticmethod
+    def _point_triangle_distance(p, v0, v1, v2) -> float:
+        """점-삼각형 최단거리 (Ericson, Real-Time Collision Detection)."""
+        ab = v1 - v0
+        ac = v2 - v0
+        ap = p - v0
+        d1 = Gf.Dot(ab, ap)
+        d2 = Gf.Dot(ac, ap)
+        if d1 <= 0.0 and d2 <= 0.0:
+            return (p - v0).GetLength()
+
+        bp = p - v1
+        d3 = Gf.Dot(ab, bp)
+        d4 = Gf.Dot(ac, bp)
+        if d3 >= 0.0 and d4 <= d3:
+            return (p - v1).GetLength()
+
+        vc = d1 * d4 - d3 * d2
+        if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+            t = d1 / (d1 - d3)
+            return (p - (v0 + ab * t)).GetLength()
+
+        cp = p - v2
+        d5 = Gf.Dot(ab, cp)
+        d6 = Gf.Dot(ac, cp)
+        if d6 >= 0.0 and d5 <= d6:
+            return (p - v2).GetLength()
+
+        vb = d5 * d2 - d1 * d6
+        if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+            t = d2 / (d2 - d6)
+            return (p - (v0 + ac * t)).GetLength()
+
+        va = d3 * d6 - d5 * d4
+        if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+            t = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+            return (p - (v1 + (v2 - v1) * t)).GetLength()
+
+        denom = 1.0 / (va + vb + vc)
+        v = vb * denom
+        w = vc * denom
+        return (p - (v0 + ab * v + ac * w)).GetLength()
+
     @staticmethod
     def _ray_triangle_intersect(origin, direction, v0, v1, v2) -> "float | None":
         """Möller-Trumbore 알고리즘. 교차하면 origin에서의 거리(t), 아니면 None."""
