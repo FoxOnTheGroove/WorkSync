@@ -237,12 +237,27 @@ class ViewportPicker:
             traceback.print_exc()
 
     def _update_rect(self, start, current) -> None:
-        """드래그 중인 선택 사각형을 NDC 평면에 그린다."""
+        """드래그 중인 선택 사각형을 NDC 평면에 그린다.
+
+        gesture_payload.mouse는 위젯의 가로/세로 픽셀 크기를 기준으로 각각
+        -1~1로 정규화되지만, SceneView의 기본 투영 공간은 가로(-1~1) 기준이고
+        세로는 (height/width) 비율로 압축되어 있다. 그대로 그리면 가로/세로
+        비율이 1:1이 아닌 뷰포트에서 세로 방향으로만 어긋나 보이므로, 위젯의
+        실제 가로/세로 비율로 y를 보정한다.
+        """
         if not self._rect_transform:
             return
         self._rect_transform.clear()
-        x0, y0 = start
-        x1, y1 = current
+
+        aspect = 1.0
+        if self._frame:
+            w = self._frame.computed_width
+            h = self._frame.computed_height
+            if w and h:
+                aspect = h / w
+
+        x0, y0 = start[0], start[1] * aspect
+        x1, y1 = current[0], current[1] * aspect
         corners = [(x0, y0, 0), (x1, y0, 0), (x1, y1, 0), (x0, y1, 0)]
         with self._rect_transform:
             for a, b in zip(corners, corners[1:] + corners[:1]):
