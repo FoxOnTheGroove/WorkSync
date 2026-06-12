@@ -15,23 +15,29 @@ def _log(msg: str) -> None:
 
 
 class ViewportPicker:
-    """체크박스 ON 시, 뷰포트 클릭 위치의 면이 속한 subset을 우선 선택.
+    """체크박스 ON 시 뷰포트에서 subset을 선택.
 
-    뷰포트 위에 투명한 omni.ui.scene Screen을 덮고 ClickGesture로 클릭을 받는다
-    (carb.input의 device-level 마우스 구독은 omni.ui 위젯 위에서는 호출되지 않음).
-    레이 교차는 omni.kit.raycast.query(RTX 기반, 콜라이더 불필요)로 수행하고,
-    히트 위치를 face index로 역산해 subset을 찾는다.
+    - 클릭: 클릭 위치의 면이 속한 subset 하나를 선택.
+    - 드래그: 사각형 안에 면 중심이 들어오는 subset들을 모두 선택.
+
+    뷰포트 위에 투명한 omni.ui.scene Screen을 덮고 ClickGesture/DragGesture로
+    입력을 받는다 (carb.input의 device-level 마우스 구독은 omni.ui 위젯 위에서는
+    호출되지 않음). 레이 교차는 omni.kit.raycast.query(RTX 기반, 콜라이더 불필요)로
+    수행하고, 히트 위치를 face index로 역산해 subset을 찾는다.
     클릭한 면이 어떤 subset에도 속하지 않으면, 클릭된 prim을 그대로 선택해
     기존 뷰포트 클릭 동작을 흉내낸다.
     """
 
-    def __init__(self, get_mesh_prim, on_pick=None):
+    def __init__(self, get_mesh_prim, on_pick=None, on_pick_multi=None):
         self._get_mesh_prim = get_mesh_prim
         self._on_pick = on_pick
+        self._on_pick_multi = on_pick_multi
         self._raycast = None
         self._frame = None
         self._scene_view = None
-        self._pending_path = None
+        self._rect_transform = None
+        self._drag_start = None
+        self._pending_paths: list = []
         self._disable_selection = None
 
     def set_enabled(self, enabled: bool) -> None:
@@ -64,8 +70,16 @@ class ViewportPicker:
             with self._frame:
                 self._scene_view = sc.SceneView()
                 with self._scene_view.scene:
-                    sc.Screen(gesture=sc.ClickGesture(self._on_click))
-            _log("구독 시작 (ClickGesture)")
+                    sc.Screen(gestures=[
+                        sc.ClickGesture(self._on_click),
+                        sc.DragGesture(
+                            on_began_fn=self._on_drag_began,
+                            on_changed_fn=self._on_drag_changed,
+                            on_ended_fn=self._on_drag_ended,
+                        ),
+                    ])
+                    self._rect_transform = sc.Transform()
+            _log("구독 시작 (Click + Drag Gesture)")
         except Exception:
             _log("구독 실패:")
             traceback.print_exc()
@@ -78,6 +92,8 @@ class ViewportPicker:
             _log("구독 해제")
         self._frame = None
         self._scene_view = None
+        self._rect_transform = None
+        self._drag_start = None
         self._disable_selection = None  # 핸들 해제 -> 기본 클릭-선택 복원
 
     @staticmethod
@@ -91,6 +107,8 @@ class ViewportPicker:
             import omni.kit.raycast.query
         return omni.kit.raycast.query.acquire_raycast_query_interface()
 
+    # ------------------------------------------------------------------ 클릭 (단일 선택)
+
     def _on_click(self, sender) -> None:
         try:
             self._handle_click(sender)
@@ -100,7 +118,6 @@ class ViewportPicker:
 
     def _handle_click(self, sender) -> None:
         payload = sender.gesture_payload
-        _log(f"클릭 감지, payload attrs={[a for a in dir(payload) if not a.startswith('_')]}")
 
         mesh_prim = self._get_mesh_prim()
         if not mesh_prim or not mesh_prim.IsValid():
@@ -138,9 +155,8 @@ class ViewportPicker:
             return
 
         hit_path = str(result.get_target_usd_path())
-        primitive_id = int(getattr(result, "primitive_id", -1))
         hit_position = getattr(result, "hit_position", None)
-        _log(f"히트: path={hit_path} primitive_id={primitive_id} pos={hit_position}")
+        _log(f"히트: path={hit_path} pos={hit_position}")
 
         if not hit_path.startswith(str(mesh_prim.GetPath())):
             _log(f"대상 메시({mesh_prim.GetPath()})와 불일치 -> 클릭된 prim 선택: {hit_path}")
@@ -163,26 +179,121 @@ class ViewportPicker:
         target_path = subset_path or hit_path
         self._select(target_path, face_index)
 
+    # ------------------------------------------------------------------ 드래그 (다중 선택)
+
+    def _on_drag_began(self, sender) -> None:
+        try:
+            self._drag_start = tuple(sender.gesture_payload.mouse)
+        except Exception:
+            _log("_on_drag_began 예외:")
+            traceback.print_exc()
+
+    def _on_drag_changed(self, sender) -> None:
+        try:
+            if self._drag_start is None:
+                return
+            self._update_rect(self._drag_start, tuple(sender.gesture_payload.mouse))
+        except Exception:
+            _log("_on_drag_changed 예외:")
+            traceback.print_exc()
+
+    def _on_drag_ended(self, sender) -> None:
+        try:
+            start = self._drag_start
+            self._drag_start = None
+            if self._rect_transform:
+                self._rect_transform.clear()
+            if start is None:
+                return
+            self._handle_drag_select(start, tuple(sender.gesture_payload.mouse))
+        except Exception:
+            _log("_on_drag_ended 예외:")
+            traceback.print_exc()
+
+    def _update_rect(self, start, current) -> None:
+        """드래그 중인 선택 사각형을 NDC 평면에 그린다."""
+        if not self._rect_transform:
+            return
+        self._rect_transform.clear()
+        x0, y0 = start
+        x1, y1 = current
+        corners = [(x0, y0, 0), (x1, y0, 0), (x1, y1, 0), (x0, y1, 0)]
+        with self._rect_transform:
+            for a, b in zip(corners, corners[1:] + corners[:1]):
+                sc.Line(a, b, color=0xFF4040FF, thickness=1)
+
+    def _handle_drag_select(self, start, end) -> None:
+        mesh_prim = self._get_mesh_prim()
+        if not mesh_prim or not mesh_prim.IsValid():
+            _log("mesh_prim 없음 -> 드래그 무시")
+            return
+
+        viewport_api = get_active_viewport()
+        if not viewport_api:
+            _log("active viewport 없음 -> 드래그 무시")
+            return
+
+        x0, x1 = sorted((start[0], end[0]))
+        y0, y1 = sorted((start[1], end[1]))
+        _log(f"드래그 rect NDC=({x0:.3f},{y0:.3f})~({x1:.3f},{y1:.3f})")
+
+        world_to_cam = viewport_api.transform.GetInverse()
+        proj = viewport_api.projection
+
+        faces_in_rect = []
+        for fi, center in enumerate(Subset.face_centers_world(mesh_prim)):
+            cam_pt = world_to_cam.Transform(center)
+            if cam_pt[2] >= 0:  # 카메라 뒤
+                continue
+            ndc = proj.Transform(cam_pt)
+            if x0 <= ndc[0] <= x1 and y0 <= ndc[1] <= y1:
+                faces_in_rect.append(fi)
+
+        if not faces_in_rect:
+            _log("rect 안에 면 없음")
+            return
+
+        face_map = Subset.build_face_subset_map(mesh_prim)
+        paths: list = []
+        for fi in faces_in_rect:
+            p = face_map.get(fi)
+            if p and p not in paths:
+                paths.append(p)
+
+        if not paths:
+            _log("rect 안의 면이 속한 subset 없음")
+            return
+
+        _log(f"드래그 선택: face {len(faces_in_rect)}개 -> subset {len(paths)}개")
+        self._select_paths(paths)
+        if self._on_pick_multi:
+            self._on_pick_multi(paths)
+
+    # ------------------------------------------------------------------ 선택 적용
+
     def _select(self, path: str, face_index: "int | None") -> None:
-        self._pending_path = path
-        omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
-        _log(f"선택 변경 -> {path}")
+        self._select_paths([path])
         if self._on_pick:
             self._on_pick(path, face_index)
-        asyncio.ensure_future(self._reassert_selection(path))
 
-    async def _reassert_selection(self, path: str) -> None:
+    def _select_paths(self, paths: list) -> None:
+        self._pending_paths = list(paths)
+        omni.usd.get_context().get_selection().set_selected_prim_paths(list(paths), True)
+        _log(f"선택 변경 -> {paths}")
+        asyncio.ensure_future(self._reassert_selection(list(paths)))
+
+    async def _reassert_selection(self, paths: list) -> None:
         """뷰포트 자체의 클릭-선택이 비동기로 한 박자 늦게 끼어들어 우리가 고른
         prim을 덮어쓰는 경우가 있어, 몇 프레임 동안 선택을 다시 강제한다."""
         app = omni.kit.app.get_app()
         selection = omni.usd.get_context().get_selection()
         for _ in range(5):
             await app.next_update_async()
-            if self._pending_path != path:
+            if self._pending_paths != paths:
                 return
-            if list(selection.get_selected_prim_paths()) != [path]:
-                _log(f"선택이 덮어써짐 -> 재적용: {path}")
-                selection.set_selected_prim_paths([path], True)
+            if sorted(selection.get_selected_prim_paths()) != sorted(paths):
+                _log(f"선택이 덮어써짐 -> 재적용: {paths}")
+                selection.set_selected_prim_paths(list(paths), True)
 
     @staticmethod
     def _compute_ray(viewport_api, ndc_x: float, ndc_y: float):

@@ -32,10 +32,9 @@ class DummyUI:
         self._result_prims: list = []
         self._result_groups: list = []
         self._row_frames: list = []
-        self._selected_index: "int | None" = None
+        self._selected_indices: list = []
         self._selected_section_frame = None
-        self._selected_row_frame = None
-        self._picker = ViewportPicker(lambda: self._mesh_prim, self._on_pick)
+        self._picker = ViewportPicker(lambda: self._mesh_prim, self._on_pick, self._on_pick_multi)
 
     def build_ui(self):
         self._window = ui.Window("Subset", width=360, height=520)
@@ -78,11 +77,7 @@ class DummyUI:
                     ui.Button("Generate Subsets", clicked_fn=self._on_generate)
                     ui.Button("Clear", clicked_fn=self._on_clear, width=70)
 
-                self._selected_section_frame = ui.Frame(height=44)
-                with self._selected_section_frame:
-                    with ui.VStack(spacing=2):
-                        ui.Label("Selected", style={"color": 0xFF888888}, height=16)
-                        self._selected_row_frame = ui.Frame(height=24)
+                self._selected_section_frame = ui.Frame()
                 self._selected_section_frame.visible = False
 
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=_SCROLL_STYLE):
@@ -106,11 +101,23 @@ class DummyUI:
         if face_index is not None and self._result_groups:
             for gi, group in enumerate(self._result_groups):
                 if face_index in group:
-                    self._select_row(gi)
+                    self._select_rows([gi])
                     if gi < len(self._result_prims):
                         name = self._result_prims[gi].GetName()
                     break
         self._set_status(f"[Pick] {name} 선택됨")
+
+    def _on_pick_multi(self, prim_paths: list):
+        indices = []
+        for path in prim_paths:
+            for i, prim in enumerate(self._result_prims):
+                if prim and prim.IsValid() and str(prim.GetPath()) == path:
+                    indices.append(i)
+                    break
+        if not indices:
+            return
+        self._select_rows(indices)
+        self._set_status(f"[Pick] {len(indices)}개 subset 선택됨")
 
     def _on_generate(self):
         if not self._valid_mesh():
@@ -137,9 +144,46 @@ class DummyUI:
         self._result_prims = []
         self._result_groups = []
         self._row_frames = []
-        self._selected_index = None
+        self._selected_indices = []
+        self._selected_section_frame.clear()
         self._selected_section_frame.visible = False
         self._set_status("[OK] 제거 완료")
+
+    def _on_merge_selected(self):
+        idxs = sorted(set(self._selected_indices))
+        if len(idxs) < 2:
+            self._set_status("[FAIL] 2개 이상 선택 후 병합하세요")
+            return
+        prims = [self._result_prims[i] for i in idxs]
+        merged_prim = Subset.merge_subsets(self._mesh_prim, prims)
+        if not merged_prim:
+            self._set_status("[FAIL] 병합 실패")
+            return
+
+        merged_group: list = []
+        for i in idxs:
+            merged_group.extend(self._result_groups[i])
+
+        keep = idxs[0]
+        new_prims, new_groups = [], []
+        for i, (p, g) in enumerate(zip(self._result_prims, self._result_groups)):
+            if i == keep:
+                new_prims.append(merged_prim)
+                new_groups.append(sorted(merged_group))
+            elif i in idxs:
+                continue
+            else:
+                new_prims.append(p)
+                new_groups.append(g)
+
+        self._set_status(f"[OK] {len(idxs)}개 병합 -> {merged_prim.GetName()}")
+
+        # Merge 버튼 자신이 들어있는 selected 섹션을 같은 틱에 clear하면 크래시.
+        async def _do_refresh():
+            await omni.kit.app.get_app().next_update_async()
+            self._refresh_results(new_prims, new_groups)
+            self._select_rows([new_prims.index(merged_prim)])
+        asyncio.ensure_future(_do_refresh())
 
     # ------------------------------------------------------------------ 내부
 
@@ -175,7 +219,8 @@ class DummyUI:
         self._result_prims = list(prims)
         self._result_groups = list(groups)
         self._row_frames = []
-        self._selected_index = None
+        self._selected_indices = []
+        self._selected_section_frame.clear()
         self._selected_section_frame.visible = False
 
         with self._result_stack:
@@ -201,6 +246,25 @@ class DummyUI:
                     rename_btn.set_clicked_fn(self._make_rename_cb(i, name_field))
                     ui.Label(f"{len(group)} faces", width=70, alignment=ui.Alignment.RIGHT_CENTER)
 
+    def _rebuild_selected_section(self):
+        frame = self._selected_section_frame
+        frame.clear()
+        if not self._selected_indices:
+            frame.visible = False
+            return
+        frame.visible = True
+
+        row_frames = []
+        with frame:
+            with ui.VStack(spacing=2):
+                ui.Label("Selected", style={"color": 0xFF888888}, height=16)
+                for i in self._selected_indices:
+                    row_frames.append((ui.Frame(height=24), i))
+                if len(self._selected_indices) >= 2:
+                    ui.Button("Merge Selected", height=24, clicked_fn=self._on_merge_selected)
+        for row, i in row_frames:
+            self._build_row_content(row, i, is_selected_slot=True)
+
     def _refresh_row(self, i: int):
         # 클릭 이벤트를 처리 중인 프레임 자체를 같은 틱에 clear()하면 크래시하므로
         # 다음 프레임으로 재구성을 미룬다.
@@ -208,19 +272,23 @@ class DummyUI:
             await omni.kit.app.get_app().next_update_async()
             if 0 <= i < len(self._row_frames):
                 self._build_row_content(self._row_frames[i], i)
-            if self._selected_index == i:
-                self._build_row_content(self._selected_row_frame, i, is_selected_slot=True)
+            if i in self._selected_indices:
+                self._rebuild_selected_section()
         asyncio.ensure_future(_do_refresh())
 
-    def _select_row(self, index: int):
-        """뷰포트 피킹/리스트 선택 시 해당 그룹을 빨강으로 강조하고 'Selected' 영역에 표시."""
-        if not (0 <= index < len(self._result_groups)):
+    def _select_rows(self, indices: list):
+        """선택된 그룹들을 빨강으로 강조하고 'Selected' 영역에 표시."""
+        indices = [i for i in indices if 0 <= i < len(self._result_groups)]
+        if not indices:
             return
-        Subset.highlight_selected(self._mesh_prim, self._result_groups, index)
+        Subset.highlight_selected(self._mesh_prim, self._result_groups, indices)
+        self._selected_indices = indices
 
-        self._selected_index = index
-        self._selected_section_frame.visible = True
-        self._build_row_content(self._selected_row_frame, index, is_selected_slot=True)
+        # 뷰포트 제스처/리스트 클릭 콜백 안에서 섹션을 바로 clear하면 위험하므로 미룬다.
+        async def _do_rebuild():
+            await omni.kit.app.get_app().next_update_async()
+            self._rebuild_selected_section()
+        asyncio.ensure_future(_do_rebuild())
 
     # ------------------------------------------------------------------ 행 콜백
 
@@ -231,7 +299,7 @@ class DummyUI:
                 omni.usd.get_context().get_selection().set_selected_prim_paths(
                     [str(prim.GetPath())], True
                 )
-            self._select_row(i)
+            self._select_rows([i])
             self._set_status(f"[Pick] {prim.GetName()} 선택됨")
         return _cb
 
