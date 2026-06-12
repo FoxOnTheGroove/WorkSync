@@ -27,6 +27,7 @@ class DummyUI:
         self._threshold_model = None
         self._min_faces_model = None
         self._merge_by_normal_model = None
+        self._multi_select_model = None
         self._result_stack = None
         self._mesh_prim = None
         self._result_prims: list = []
@@ -66,12 +67,19 @@ class DummyUI:
                     self._merge_by_normal_model = merge_checkbox.model
 
                 with ui.HStack(spacing=4, height=24):
-                    ui.Label("Subset Pick (viewport)", width=160)
+                    ui.Label("Subset Pick (viewport)", width=130)
                     pick_checkbox = ui.CheckBox(width=20)
                     pick_checkbox.model.set_value(False)
                     pick_checkbox.model.add_value_changed_fn(
                         lambda m: self._picker.set_enabled(m.get_value_as_bool())
                     )
+                    ui.Spacer(width=8)
+                    ui.Label("Multi Select", width=80)
+                    multi_checkbox = ui.CheckBox(width=20)
+                    multi_checkbox.model.set_value(False)
+                    self._multi_select_model = multi_checkbox.model
+                    ui.Spacer(width=8)
+                    ui.Button("Merge Selected", clicked_fn=self._on_merge_selected, width=ui.Fraction(1))
 
                 with ui.HStack(spacing=4, height=26):
                     ui.Button("Generate Subsets", clicked_fn=self._on_generate)
@@ -101,7 +109,10 @@ class DummyUI:
         if face_index is not None and self._result_groups:
             for gi, group in enumerate(self._result_groups):
                 if face_index in group:
-                    self._select_rows([gi])
+                    if self._multi_select_model.get_value_as_bool():
+                        self._toggle_row(gi)
+                    else:
+                        self._select_rows([gi])
                     if gi < len(self._result_prims):
                         name = self._result_prims[gi].GetName()
                     break
@@ -116,6 +127,12 @@ class DummyUI:
                     break
         if not indices:
             return
+        if self._multi_select_model.get_value_as_bool():
+            merged = list(self._selected_indices)
+            for i in indices:
+                if i not in merged:
+                    merged.append(i)
+            indices = merged
         self._select_rows(indices)
         self._set_status(f"[Pick] {len(indices)}개 subset 선택됨")
 
@@ -260,8 +277,6 @@ class DummyUI:
                 ui.Label("Selected", style={"color": 0xFF888888}, height=16)
                 for i in self._selected_indices:
                     row_frames.append((ui.Frame(height=24), i))
-                if len(self._selected_indices) >= 2:
-                    ui.Button("Merge Selected", height=24, clicked_fn=self._on_merge_selected)
         for row, i in row_frames:
             self._build_row_content(row, i, is_selected_slot=True)
 
@@ -276,13 +291,21 @@ class DummyUI:
                 self._rebuild_selected_section()
         asyncio.ensure_future(_do_refresh())
 
-    def _select_rows(self, indices: list):
-        """선택된 그룹들을 빨강으로 강조하고 'Selected' 영역에 표시."""
-        indices = [i for i in indices if 0 <= i < len(self._result_groups)]
-        if not indices:
-            return
-        Subset.highlight_selected(self._mesh_prim, self._result_groups, indices)
-        self._selected_indices = indices
+    def _apply_selection(self, indices: list):
+        """선택된 그룹들을 빨강으로 강조하고 USD 선택 및 'Selected' 영역을 갱신."""
+        seen: list = []
+        for i in indices:
+            if 0 <= i < len(self._result_groups) and i not in seen:
+                seen.append(i)
+        self._selected_indices = seen
+        Subset.highlight_selected(self._mesh_prim, self._result_groups, seen)
+
+        paths = [
+            str(self._result_prims[i].GetPath())
+            for i in seen if self._result_prims[i] and self._result_prims[i].IsValid()
+        ]
+        omni.usd.get_context().get_selection().set_selected_prim_paths(paths, True)
+        self._picker.note_external_selection(paths)
 
         # 뷰포트 제스처/리스트 클릭 콜백 안에서 섹션을 바로 clear하면 위험하므로 미룬다.
         async def _do_rebuild():
@@ -290,16 +313,26 @@ class DummyUI:
             self._rebuild_selected_section()
         asyncio.ensure_future(_do_rebuild())
 
+    def _select_rows(self, indices: list):
+        self._apply_selection(indices)
+
+    def _toggle_row(self, index: int):
+        """ctrl+클릭처럼: 이미 선택된 항목이면 선택 해제, 아니면 선택에 추가."""
+        if index in self._selected_indices:
+            new_indices = [i for i in self._selected_indices if i != index]
+        else:
+            new_indices = self._selected_indices + [index]
+        self._apply_selection(new_indices)
+
     # ------------------------------------------------------------------ 행 콜백
 
     def _make_select_cb(self, i):
         def _cb():
+            if self._multi_select_model.get_value_as_bool():
+                self._toggle_row(i)
+            else:
+                self._select_rows([i])
             prim = self._result_prims[i]
-            if prim and prim.IsValid():
-                omni.usd.get_context().get_selection().set_selected_prim_paths(
-                    [str(prim.GetPath())], True
-                )
-            self._select_rows([i])
             self._set_status(f"[Pick] {prim.GetName()} 선택됨")
         return _cb
 

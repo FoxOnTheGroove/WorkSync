@@ -349,6 +349,24 @@ class Subset:
         return centers
 
     @classmethod
+    def face_normals_world(cls, mesh_prim: Usd.Prim) -> list:
+        """면별 법선(월드 좌표, 정규화) 목록. 후면 판별용."""
+        data = cls._get_mesh_data(mesh_prim)
+        if data is None:
+            return []
+        points, counts, indices = data
+        normals = cls._compute_face_normals(points, counts, indices)
+
+        xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        origin = xform.Transform(Gf.Vec3d(0, 0, 0))
+        world_normals = []
+        for n in normals:
+            wn = xform.Transform(Gf.Vec3d(n)) - origin
+            length = wn.GetLength()
+            world_normals.append(wn / length if length > 1e-9 else Gf.Vec3d(0, 0, 1))
+        return world_normals
+
+    @classmethod
     def face_at_point(cls, mesh_prim: Usd.Prim, world_point: Gf.Vec3d) -> "int | None":
         """월드 좌표 점(RTX 레이캐스트 히트 위치)에 가장 가까운 face index 반환."""
         data = cls._get_mesh_data(mesh_prim)

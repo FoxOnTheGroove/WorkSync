@@ -239,15 +239,24 @@ class ViewportPicker:
 
         world_to_cam = viewport_api.transform.GetInverse()
         proj = viewport_api.projection
+        camera_pos = Gf.Vec3d(viewport_api.transform.ExtractTranslation())
+
+        centers = Subset.face_centers_world(mesh_prim)
+        normals = Subset.face_normals_world(mesh_prim)
 
         faces_in_rect = []
-        for fi, center in enumerate(Subset.face_centers_world(mesh_prim)):
+        for fi, center in enumerate(centers):
             cam_pt = world_to_cam.Transform(center)
             if cam_pt[2] >= 0:  # 카메라 뒤
                 continue
             ndc = proj.Transform(cam_pt)
-            if x0 <= ndc[0] <= x1 and y0 <= ndc[1] <= y1:
-                faces_in_rect.append(fi)
+            if not (x0 <= ndc[0] <= x1 and y0 <= ndc[1] <= y1):
+                continue
+            # 뒷면(카메라 반대쪽을 향한 면)은 화면에서 가려져 있으므로 제외
+            view_dir = (center - camera_pos).GetNormalized()
+            if Gf.Dot(normals[fi], view_dir) >= 0:
+                continue
+            faces_in_rect.append(fi)
 
         if not faces_in_rect:
             _log("rect 안에 면 없음")
@@ -270,6 +279,11 @@ class ViewportPicker:
             self._on_pick_multi(paths)
 
     # ------------------------------------------------------------------ 선택 적용
+
+    def note_external_selection(self, paths: list) -> None:
+        """다중 선택 토글 등 UI 쪽에서 선택을 직접 바꿨을 때, 진행 중인
+        재적용 루프가 이를 덮어쓰지 않도록 기준값을 갱신한다."""
+        self._pending_paths = list(paths)
 
     def _select(self, path: str, face_index: "int | None") -> None:
         self._select_paths([path])
