@@ -36,6 +36,9 @@ class DummyUI:
         self._selected_indices: list = []
         self._selected_section_frame = None
         self._picker = ViewportPicker(lambda: self._mesh_prim, self._on_pick, self._on_pick_multi)
+        self._selection_sub = omni.usd.get_context().get_stage_event_stream().create_subscription_to_pop(
+            self._on_stage_event, name="subset_selection_watch"
+        )
 
     def build_ui(self):
         self._window = ui.Window("Subset", width=360, height=520)
@@ -317,6 +320,30 @@ class DummyUI:
     def _select_rows(self, indices: list):
         self._apply_selection(indices)
 
+    def _on_stage_event(self, event) -> None:
+        """Subset Pick이 꺼진 상태에서 다른 prim/빈 공간을 선택하면 강조(빨강)를 해제."""
+        if event.type != int(omni.usd.StageEventType.SELECTION_CHANGED):
+            return
+        if not self._selected_indices:
+            return
+        if self._picker.is_enabled():
+            return
+
+        expected = {
+            str(self._result_prims[i].GetPath())
+            for i in self._selected_indices
+            if 0 <= i < len(self._result_prims) and self._result_prims[i] and self._result_prims[i].IsValid()
+        }
+        current = set(omni.usd.get_context().get_selection().get_selected_prim_paths())
+        if current != expected:
+            self._clear_highlight()
+
+    def _clear_highlight(self) -> None:
+        self._selected_indices = []
+        if self._mesh_prim and self._mesh_prim.IsValid():
+            Subset.highlight_selected(self._mesh_prim, self._result_groups, None)
+        self._rebuild_selected_section()
+
     def _toggle_row(self, index: int):
         """ctrl+클릭처럼: 이미 선택된 항목이면 선택 해제, 아니면 선택에 추가."""
         if index in self._selected_indices:
@@ -363,6 +390,7 @@ class DummyUI:
         return _cb
 
     def destroy(self):
+        self._selection_sub = None
         self._picker.destroy()
         if self._window:
             self._window.destroy()

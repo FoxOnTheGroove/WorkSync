@@ -40,6 +40,10 @@ class ViewportPicker:
         self._pending_paths: list = []
         self._disable_selection = None
         self._face_subset_map: "dict | None" = None
+        self._spatial_index: "dict | None" = None
+
+    def is_enabled(self) -> bool:
+        return self._scene_view is not None
 
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -51,8 +55,9 @@ class ViewportPicker:
         self._unsubscribe()
 
     def invalidate_face_subset_cache(self) -> None:
-        """subset 목록/이름이 바뀌었을 때(생성/삭제/머지/이름변경) 캐시를 비운다."""
+        """subset 목록/이름/메시 형태가 바뀌었을 때(생성/삭제/머지/이름변경) 캐시를 비운다."""
         self._face_subset_map = None
+        self._spatial_index = None
 
     # ------------------------------------------------------------------ 내부
 
@@ -172,7 +177,8 @@ class ViewportPicker:
         face_index = None
         if hit_position is not None:
             hit_point = Gf.Vec3d(*hit_position)
-            face_index = Subset.face_at_point(mesh_prim, hit_point)
+            spatial_index = self._get_spatial_index(mesh_prim)
+            face_index = Subset.face_at_point(mesh_prim, hit_point, spatial_index)
             _log(f"face_at_point({hit_point}) -> {face_index}")
 
         subset_path = None
@@ -188,6 +194,11 @@ class ViewportPicker:
         if self._face_subset_map is None:
             self._face_subset_map = Subset.build_face_subset_map(mesh_prim)
         return self._face_subset_map
+
+    def _get_spatial_index(self, mesh_prim) -> "dict | None":
+        if self._spatial_index is None:
+            self._spatial_index = Subset.build_face_spatial_index(mesh_prim)
+        return self._spatial_index
 
     # ------------------------------------------------------------------ 드래그 (다중 선택)
 

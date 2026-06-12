@@ -367,8 +367,13 @@ class Subset:
         return world_normals
 
     @classmethod
-    def face_at_point(cls, mesh_prim: Usd.Prim, world_point: Gf.Vec3d) -> "int | None":
-        """월드 좌표 점(RTX 레이캐스트 히트 위치)에 가장 가까운 face index 반환."""
+    def face_at_point(cls, mesh_prim: Usd.Prim, world_point: Gf.Vec3d, spatial_index: "dict | None" = None) -> "int | None":
+        """월드 좌표 점(RTX 레이캐스트 히트 위치)에 가장 가까운 face index 반환.
+
+        spatial_index가 주어지면(build_face_spatial_index) 점 주변 셀의 face만
+        검사해 큰 메시에서도 빠르게 동작한다. 주변 셀에 face가 없으면 전체 검색으로
+        폴백한다.
+        """
         data = cls._get_mesh_data(mesh_prim)
         if data is None:
             return None
@@ -377,10 +382,19 @@ class Subset:
         xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
         world_points = [xform.Transform(Gf.Vec3d(p)) for p in points]
 
+        candidate_faces = None
+        if spatial_index:
+            candidate_faces = cls._nearby_faces(world_point, spatial_index)
+        if candidate_faces is None:
+            candidate_faces = range(len(counts))
+
+        offsets = cls._face_offsets(counts)
+
         best_face = None
         best_dist = None
-        offset = 0
-        for face, count in enumerate(counts):
+        for face in candidate_faces:
+            count = counts[face]
+            offset = offsets[face]
             for i in range(1, count - 1):
                 v0 = world_points[indices[offset]]
                 v1 = world_points[indices[offset + i]]
@@ -389,8 +403,71 @@ class Subset:
                 if best_dist is None or d < best_dist:
                     best_dist = d
                     best_face = face
-            offset += count
+
+        if best_face is None and spatial_index:
+            # 주변 셀에서 못 찾으면(드물게 그리드 경계 오차 등) 전체 검색으로 재시도.
+            return cls.face_at_point(mesh_prim, world_point, spatial_index=None)
         return best_face
+
+    @staticmethod
+    def _face_offsets(counts) -> list:
+        offsets = []
+        offset = 0
+        for c in counts:
+            offsets.append(offset)
+            offset += c
+        return offsets
+
+    @classmethod
+    def build_face_spatial_index(cls, mesh_prim: Usd.Prim) -> "dict | None":
+        """face 중심점 기반 uniform grid. face_at_point 가속용(클릭 피킹).
+
+        face 수에 맞춰 셀 크기를 정해, 점 주변 3x3x3 셀만 검사하면 되도록 한다.
+        """
+        centers = cls.face_centers_world(mesh_prim)
+        if not centers:
+            return None
+
+        min_b = Gf.Vec3d(centers[0])
+        max_b = Gf.Vec3d(centers[0])
+        for c in centers[1:]:
+            for axis in range(3):
+                min_b[axis] = min(min_b[axis], c[axis])
+                max_b[axis] = max(max_b[axis], c[axis])
+
+        diag = (max_b - min_b).GetLength()
+        if diag < 1e-9:
+            diag = 1.0
+        cell_size = diag / max(1.0, len(centers) ** (1 / 3))
+        if cell_size < 1e-9:
+            cell_size = diag
+
+        cells: dict = {}
+        for fi, c in enumerate(centers):
+            key = cls._cell_key(c, cell_size)
+            cells.setdefault(key, []).append(fi)
+
+        return {"cell_size": cell_size, "cells": cells}
+
+    @staticmethod
+    def _cell_key(point, cell_size) -> tuple:
+        return (
+            int(math.floor(point[0] / cell_size)),
+            int(math.floor(point[1] / cell_size)),
+            int(math.floor(point[2] / cell_size)),
+        )
+
+    @staticmethod
+    def _nearby_faces(point, spatial_index) -> "list | None":
+        cell_size = spatial_index["cell_size"]
+        cells = spatial_index["cells"]
+        cx, cy, cz = Subset._cell_key(point, cell_size)
+        faces: list = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    faces.extend(cells.get((cx + dx, cy + dy, cz + dz), ()))
+        return faces or None
 
     @staticmethod
     def _point_triangle_distance(p, v0, v1, v2) -> float:
