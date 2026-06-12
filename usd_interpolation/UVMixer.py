@@ -1,4 +1,5 @@
 from typing import Callable
+import threading
 
 import numpy as np
 from pxr import Usd, UsdGeom, Vt
@@ -298,18 +299,39 @@ class UVMixer:
         # timeline 모드: session layer에 bake
         # timecode를 0~1 정규화값으로 bake → 다른 n_frames mixer와 timeline을 공유 가능
         n = len(self._st_maps)
-        with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
-            pxr_stage.GetSessionLayer().timeCodesPerSecond = pxr_stage.GetTimeCodesPerSecond()
-            for i, mesh_map in enumerate(self._st_maps):
-                tc = i / (n - 1) if n > 1 else 0.0
-                for mesh_path, st_data in mesh_map.items():
-                    pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
-                    if not pxr_prim.IsValid():
-                        continue
-                    st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
-                    if st_pv and st_pv.GetAttr().IsValid():
-                        st_pv.GetAttr().Set(
-                            Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+
+        def _do_bake() -> None:
+            with Usd.EditContext(pxr_stage, pxr_stage.GetSessionLayer()):
+                pxr_stage.GetSessionLayer().timeCodesPerSecond = pxr_stage.GetTimeCodesPerSecond()
+                for i, mesh_map in enumerate(self._st_maps):
+                    tc = i / (n - 1) if n > 1 else 0.0
+                    for mesh_path, st_data in mesh_map.items():
+                        pxr_prim = pxr_stage.GetPrimAtPath(mesh_path)
+                        if not pxr_prim.IsValid():
+                            continue
+                        st_pv = UsdGeom.PrimvarsAPI(pxr_prim).GetPrimvar("st")
+                        if st_pv and st_pv.GetAttr().IsValid():
+                            st_pv.GetAttr().Set(
+                                Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(st_data)), tc)
+
+        # 측정용: 워커의 save 직후 session layer edit이 일시적으로 멈춰있을 수 있어
+        # 별도 스레드 + timeout으로 재시도하며 실제로 풀리는 시점을 로그로 확인한다.
+        _RETRY_INTERVAL = 0.5
+        _MAX_ATTEMPTS = 10
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            t = threading.Thread(target=_do_bake, daemon=True)
+            t.start()
+            t.join(timeout=_RETRY_INTERVAL)
+            if not t.is_alive():
+                if attempt > 1:
+                    print(f"[UVMixer] _bake_timesamples succeeded on attempt {attempt} "
+                          f"(~{attempt * _RETRY_INTERVAL:.1f}s)")
+                break
+            print(f"[UVMixer] _bake_timesamples blocked, attempt {attempt}/{_MAX_ATTEMPTS} "
+                  f"(~{attempt * _RETRY_INTERVAL:.1f}s elapsed)")
+        else:
+            print(f"[UVMixer] _bake_timesamples gave up after {_MAX_ATTEMPTS} attempts "
+                  f"(~{_MAX_ATTEMPTS * _RETRY_INTERVAL:.1f}s)")
 
     def _write_st_direct(self, t: float) -> None:
         """direct 모드 전용: t 위치의 UV를 Python lerp로 계산해 st primvar에 직접 쓴다."""
