@@ -239,6 +239,7 @@ class DummyUI:
         self._selected_indices = []
         self._selected_section_frame.clear()
         self._selected_section_frame.visible = False
+        self._picker.invalidate_face_subset_cache()
 
         with self._result_stack:
             for i in range(len(self._result_prims)):
@@ -354,6 +355,7 @@ class DummyUI:
             new_prim = Subset.rename_subset(prim, new_name)
             if new_prim:
                 self._result_prims[i] = new_prim
+                self._picker.invalidate_face_subset_cache()
                 self._set_status(f"[OK] renamed -> {new_prim.GetName()}")
                 self._refresh_row(i)
             else:

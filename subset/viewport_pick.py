@@ -39,6 +39,7 @@ class ViewportPicker:
         self._drag_start = None
         self._pending_paths: list = []
         self._disable_selection = None
+        self._face_subset_map: "dict | None" = None
 
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -48,6 +49,10 @@ class ViewportPicker:
 
     def destroy(self) -> None:
         self._unsubscribe()
+
+    def invalidate_face_subset_cache(self) -> None:
+        """subset 목록/이름이 바뀌었을 때(생성/삭제/머지/이름변경) 캐시를 비운다."""
+        self._face_subset_map = None
 
     # ------------------------------------------------------------------ 내부
 
@@ -172,12 +177,17 @@ class ViewportPicker:
 
         subset_path = None
         if face_index is not None:
-            face_map = Subset.build_face_subset_map(mesh_prim)
+            face_map = self._get_face_subset_map(mesh_prim)
             subset_path = face_map.get(face_index)
             _log(f"face {face_index} -> subset {subset_path}")
 
         target_path = subset_path or hit_path
         self._select(target_path, face_index)
+
+    def _get_face_subset_map(self, mesh_prim) -> dict:
+        if self._face_subset_map is None:
+            self._face_subset_map = Subset.build_face_subset_map(mesh_prim)
+        return self._face_subset_map
 
     # ------------------------------------------------------------------ 드래그 (다중 선택)
 
@@ -205,7 +215,9 @@ class ViewportPicker:
                 self._rect_transform.clear()
             if start is None:
                 return
-            self._handle_drag_select(start, tuple(sender.gesture_payload.mouse))
+            asyncio.ensure_future(
+                self._handle_drag_select_async(start, tuple(sender.gesture_payload.mouse))
+            )
         except Exception:
             _log("_on_drag_ended 예외:")
             traceback.print_exc()
@@ -222,61 +234,132 @@ class ViewportPicker:
             for a, b in zip(corners, corners[1:] + corners[:1]):
                 sc.Line(a, b, color=0xFF4040FF, thickness=1)
 
-    def _handle_drag_select(self, start, end) -> None:
-        mesh_prim = self._get_mesh_prim()
-        if not mesh_prim or not mesh_prim.IsValid():
-            _log("mesh_prim 없음 -> 드래그 무시")
-            return
+    async def _handle_drag_select_async(self, start, end) -> None:
+        try:
+            mesh_prim = self._get_mesh_prim()
+            if not mesh_prim or not mesh_prim.IsValid():
+                _log("mesh_prim 없음 -> 드래그 무시")
+                return
 
-        viewport_api = get_active_viewport()
-        if not viewport_api:
-            _log("active viewport 없음 -> 드래그 무시")
-            return
+            viewport_api = get_active_viewport()
+            if not viewport_api:
+                _log("active viewport 없음 -> 드래그 무시")
+                return
 
-        x0, x1 = sorted((start[0], end[0]))
-        y0, y1 = sorted((start[1], end[1]))
-        _log(f"드래그 rect NDC=({x0:.3f},{y0:.3f})~({x1:.3f},{y1:.3f})")
+            x0, x1 = sorted((start[0], end[0]))
+            y0, y1 = sorted((start[1], end[1]))
+            _log(f"드래그 rect NDC=({x0:.3f},{y0:.3f})~({x1:.3f},{y1:.3f})")
 
-        world_to_cam = viewport_api.transform.GetInverse()
-        proj = viewport_api.projection
-        camera_pos = Gf.Vec3d(viewport_api.transform.ExtractTranslation())
+            world_to_cam = viewport_api.transform.GetInverse()
+            proj = viewport_api.projection
+            camera_pos = Gf.Vec3d(viewport_api.transform.ExtractTranslation())
 
-        centers = Subset.face_centers_world(mesh_prim)
-        normals = Subset.face_normals_world(mesh_prim)
+            centers = Subset.face_centers_world(mesh_prim)
+            normals = Subset.face_normals_world(mesh_prim)
 
-        faces_in_rect = []
-        for fi, center in enumerate(centers):
-            cam_pt = world_to_cam.Transform(center)
-            if cam_pt[2] >= 0:  # 카메라 뒤
-                continue
-            ndc = proj.Transform(cam_pt)
-            if not (x0 <= ndc[0] <= x1 and y0 <= ndc[1] <= y1):
-                continue
-            # 뒷면(카메라 반대쪽을 향한 면)은 화면에서 가려져 있으므로 제외
-            view_dir = (center - camera_pos).GetNormalized()
-            if Gf.Dot(normals[fi], view_dir) >= 0:
-                continue
-            faces_in_rect.append(fi)
+            faces_in_rect = []
+            for fi, center in enumerate(centers):
+                cam_pt = world_to_cam.Transform(center)
+                if cam_pt[2] >= 0:  # 카메라 뒤
+                    continue
+                ndc = proj.Transform(cam_pt)
+                if not (x0 <= ndc[0] <= x1 and y0 <= ndc[1] <= y1):
+                    continue
+                # 뒷면(카메라 반대쪽을 향한 면)은 화면에서 가려져 있으므로 제외
+                view_dir = (center - camera_pos).GetNormalized()
+                if Gf.Dot(normals[fi], view_dir) >= 0:
+                    continue
+                faces_in_rect.append(fi)
 
-        if not faces_in_rect:
-            _log("rect 안에 면 없음")
-            return
+            if not faces_in_rect:
+                _log("rect 안에 면 없음")
+                return
 
-        face_map = Subset.build_face_subset_map(mesh_prim)
-        paths: list = []
-        for fi in faces_in_rect:
-            p = face_map.get(fi)
-            if p and p not in paths:
-                paths.append(p)
+            face_map = self._get_face_subset_map(mesh_prim)
+            faces_by_path: dict = {}
+            for fi in faces_in_rect:
+                p = face_map.get(fi)
+                if p:
+                    faces_by_path.setdefault(p, []).append(fi)
 
-        if not paths:
-            _log("rect 안의 면이 속한 subset 없음")
-            return
+            if not faces_by_path:
+                _log("rect 안의 면이 속한 subset 없음")
+                return
 
-        _log(f"드래그 선택: face {len(faces_in_rect)}개 -> subset {len(paths)}개")
-        self._select_paths(paths)
-        if self._on_pick_multi:
-            self._on_pick_multi(paths)
+            # subset당 최대 SAMPLE_COUNT개 면만 골라 다른 오브젝트에 가려졌는지
+            # 레이캐스트로 확인한다 (subset의 face 수가 2개든 10000개든 비용 고정).
+            paths = await self._filter_visible_paths(mesh_prim, camera_pos, centers, faces_by_path)
+
+            if not paths:
+                _log("rect 안의 면이 모두 다른 오브젝트에 가려짐")
+                return
+
+            _log(f"드래그 선택: 후보 subset {len(faces_by_path)}개 -> 보이는 subset {len(paths)}개")
+            self._select_paths(paths)
+            if self._on_pick_multi:
+                self._on_pick_multi(paths)
+        except Exception:
+            _log("_handle_drag_select_async 예외:")
+            traceback.print_exc()
+
+    _OCCLUSION_SAMPLE_COUNT = 5
+
+    async def _filter_visible_paths(self, mesh_prim, camera_pos, centers, faces_by_path) -> list:
+        """각 subset에서 일부 면을 샘플링해, 다른 오브젝트에 가려지지 않고
+        보이는 면이 하나라도 있는 subset만 남긴다."""
+        paths = list(faces_by_path.keys())
+        sample_lists = []
+        for path in paths:
+            faces = faces_by_path[path]
+            if len(faces) <= self._OCCLUSION_SAMPLE_COUNT:
+                samples = faces
+            else:
+                step = len(faces) / self._OCCLUSION_SAMPLE_COUNT
+                samples = [faces[int(i * step)] for i in range(self._OCCLUSION_SAMPLE_COUNT)]
+            sample_lists.append(samples)
+
+        visibility = await asyncio.gather(*[
+            asyncio.gather(*[
+                self._is_face_visible(mesh_prim, camera_pos, centers[fi]) for fi in samples
+            ])
+            for samples in sample_lists
+        ])
+
+        return [path for path, results in zip(paths, visibility) if any(results)]
+
+    async def _is_face_visible(self, mesh_prim, camera_pos, face_center) -> bool:
+        """카메라 -> 면 중심으로 레이캐스트해, 첫 히트가 이 메시 자신이고 거리가
+        면 중심까지의 거리와 거의 같으면(다른 오브젝트에 가려지지 않음) True."""
+        offset = face_center - camera_pos
+        distance = offset.GetLength()
+        if distance < 1e-9:
+            return True
+        direction = offset / distance
+
+        import omni.kit.raycast.query as rq
+        ray = rq.Ray(tuple(camera_pos), tuple(direction))
+
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+
+        def _on_hit(ray, result) -> None:
+            if not future.done():
+                future.set_result(result)
+
+        self._raycast.submit_raycast_query(ray, _on_hit)
+        result = await future
+
+        if not result.valid:
+            return False
+        hit_path = str(result.get_target_usd_path())
+        if not hit_path.startswith(str(mesh_prim.GetPath())):
+            return False
+
+        hit_position = getattr(result, "hit_position", None)
+        if hit_position is None:
+            return True
+        hit_distance = (Gf.Vec3d(*hit_position) - camera_pos).GetLength()
+        return abs(hit_distance - distance) <= max(1e-3 * distance, 1e-4)
 
     # ------------------------------------------------------------------ 선택 적용
 
@@ -301,7 +384,7 @@ class ViewportPicker:
         prim을 덮어쓰는 경우가 있어, 몇 프레임 동안 선택을 다시 강제한다."""
         app = omni.kit.app.get_app()
         selection = omni.usd.get_context().get_selection()
-        for _ in range(5):
+        for _ in range(2):
             await app.next_update_async()
             if self._pending_paths != paths:
                 return
