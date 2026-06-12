@@ -107,11 +107,18 @@ class DummyUI:
             self._mesh_label.style = {"color": 0xFF888888}
             self._set_status("[FAIL] Mesh를 선택하세요")
 
-    def _on_pick(self, prim_path: str, face_index: "int | None"):
+    def _on_pick(self, prim_path: "str | None", face_index: "int | None"):
+        if prim_path is None:
+            self._clear_highlight()
+            self._set_status("[Pick] 선택 해제")
+            return
+
         name = prim_path.rstrip("/").rsplit("/", 1)[-1]
+        matched = False
         if face_index is not None and self._result_groups:
             for gi, group in enumerate(self._result_groups):
                 if face_index in group:
+                    matched = True
                     if self._multi_select_model.get_value_as_bool():
                         self._toggle_row(gi)
                     else:
@@ -119,6 +126,8 @@ class DummyUI:
                     if gi < len(self._result_prims):
                         name = self._result_prims[gi].GetName()
                     break
+        if not matched:
+            self._clear_highlight()
         self._set_status(f"[Pick] {name} 선택됨")
 
     def _on_pick_multi(self, prim_paths: list):
@@ -342,7 +351,11 @@ class DummyUI:
         self._selected_indices = []
         if self._mesh_prim and self._mesh_prim.IsValid():
             Subset.highlight_selected(self._mesh_prim, self._result_groups, None)
-        self._rebuild_selected_section()
+
+        async def _do_rebuild():
+            await omni.kit.app.get_app().next_update_async()
+            self._rebuild_selected_section()
+        asyncio.ensure_future(_do_rebuild())
 
     def _toggle_row(self, index: int):
         """ctrl+클릭처럼: 이미 선택된 항목이면 선택 해제, 아니면 선택에 추가."""

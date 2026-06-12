@@ -161,7 +161,10 @@ class ViewportPicker:
 
     def _handle_hit(self, mesh_prim, result) -> None:
         if not result.valid:
-            _log("히트 없음 (result.valid == False)")
+            _log("히트 없음 (result.valid == False) -> 선택 해제")
+            self._select_paths([])
+            if self._on_pick:
+                self._on_pick(None, None)
             return
 
         hit_path = str(result.get_target_usd_path())
