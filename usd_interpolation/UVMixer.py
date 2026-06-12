@@ -2,6 +2,8 @@ from typing import Callable
 
 import numpy as np
 from pxr import Usd, UsdGeom, Vt
+import omni.kit.app
+import omni.kit.async_engine
 import omni.timeline
 import omni.usd
 
@@ -47,6 +49,7 @@ class UVMixer:
         inst._correction_mode: str = 'boundary'  # 'none' | 'boundary' | 'all'
         inst._subscribers = []
         inst._fvli_cache = {}
+        inst._bake_task = None
         # 각 mixer는 자신의 own_player를 가진다.
         # join_player(shared_player)로 공유 플레이어에 구독 전환 가능.
         inst.own_player: UVMixerPlayer = UVMixerPlayer()
@@ -213,6 +216,9 @@ class UVMixer:
         self.own_player.stop()
         self._clear_baked()
         self._subscribers.clear()
+        if self._bake_task is not None and not self._bake_task.done():
+            self._bake_task.cancel()
+            self._bake_task = None
 
     # ── 내부 ─────────────────────────────────────────────────────
 
@@ -290,6 +296,17 @@ class UVMixer:
 
         if UV_INTERP_MODE == 'direct':
             return  # direct 모드는 bake 없이 set_value마다 직접 write
+
+        # 워커가 USD 저장(Save) 직후 호출되면 session layer write가 멈추는 문제 회피:
+        # 몇 프레임 늦춰서 워커 스레드에게 GIL을 양보한 뒤 시도한다.
+        if self._bake_task is not None and not self._bake_task.done():
+            self._bake_task.cancel()
+        self._bake_task = omni.kit.async_engine.run_coroutine(self._bake_timesamples_async())
+
+    async def _bake_timesamples_async(self, delay_frames: int = 3) -> None:
+        app = omni.kit.app.get_app()
+        for _ in range(delay_frames):
+            await app.next_update_async()
 
         pxr_stage = omni.usd.get_context().get_stage()
         if pxr_stage is None:
