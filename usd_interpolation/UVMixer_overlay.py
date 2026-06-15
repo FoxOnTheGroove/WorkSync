@@ -292,6 +292,7 @@ class OverlayManager:
         if vph is None:
             return
         panel = ViewportOverlayPanel(key, vph, mgr=self, tab_id=tab_id)
+        panel.refresh_from_player()
         if not visible:
             panel._window.visible = False
         self._panels[key] = panel
