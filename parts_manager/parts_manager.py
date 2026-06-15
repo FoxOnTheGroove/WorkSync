@@ -1,4 +1,4 @@
-from pxr import Usd, UsdGeom, Sdf
+from pxr import Usd, UsdGeom
 import omni.usd
 import omni.kit.app
 import carb.events
@@ -161,12 +161,13 @@ class PartsManager:
     def get_node_by_path(cls, path: str) -> "PrimNode | None":
         """path에 해당하는 노드를 트리에서 찾아 반환. 없으면 가장 가까운 조상 노드를 반환."""
         nodes_by_path = {node.path: node for node in cls._node_map.values()}
-        p = Sdf.Path(path)
-        while True:
-            node = nodes_by_path.get(str(p))
+        p = path
+        while p:
+            node = nodes_by_path.get(p)
             if node is not None:
                 return node
-            p = p.GetParentPath()
+            p = p.rsplit("/", 1)[0]
+        return None
 
     @classmethod
     def get_load_prim_paths(cls) -> list[str]:
