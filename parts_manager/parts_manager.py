@@ -74,22 +74,6 @@ class PartsManager:
                 continue
             vid = str(vph.viewport.viewport_api.id)
             node = cls._build_subtree(prim, depth=0, sibling_index=vid, parent_key="")
-
-            # 단일 mesh-child 체인을 따라 내려가다 멈춘 target의 mesh-children이
-            # 10개 이상이면 트리에서 제거해 부모(target)로만 관리되게 한다.
-            target = node
-            while True:
-                mesh_children = [
-                    c for c in target.children
-                    if any(p.GetTypeName() == "Mesh" for p in Usd.PrimRange(c.prim))
-                ]
-                if len(mesh_children) != 1:
-                    break
-                target = mesh_children[0]
-            if len(mesh_children) >= 10:
-                target.children = [c for c in target.children if c not in mesh_children]
-                target.is_leaf = not target.children
-
             cls._trees[vid] = [node]
             cls._viewport_key_map[vid] = node.index_key
             all_roots.append(node)
@@ -119,7 +103,12 @@ class PartsManager:
             if len(mesh_children) != 1:
                 break
             target = mesh_children[0]
-        return cls._to_payload(target, depth_offset=target.depth)
+        payload = cls._to_payload(target, depth_offset=target.depth)
+        if len(mesh_children) >= 10:
+            # (임시) 자식이 너무 많으면 트리에 펼치지 않고 target만 노출
+            payload["children"] = []
+            payload["is_leaf"] = True
+        return payload
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
