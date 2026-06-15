@@ -84,6 +84,25 @@ class UVMixerService:
                 cls.panel_show(k)
             entering.shared_player.set_t(entering.shared_player.t)
 
+    @classmethod
+    def on_tab_tiled(cls, tab_id: str, viewport_key: str, to_tile: bool) -> None:
+        """뷰포트 타일/풀스크린 전환. to_tile=False면 viewport_key 뷰포트만 남기고
+        나머지 패널을 끄고(풀스크린), True면 끈 패널을 모두 다시 켠다(타일 복귀).
+        tab_id가 현재 active 탭이 아니거나 viewport_key가 해당 탭에 없으면 무시."""
+        if tab_id != cls._active_tab:
+            return
+        tab_ctx = cls._tab_contexts.get(tab_id)
+        if tab_ctx is None or viewport_key not in tab_ctx.keys:
+            return
+
+        if to_tile:
+            for k in tab_ctx.keys:
+                cls.panel_show(k)
+        else:
+            for k in tab_ctx.keys:
+                if k != viewport_key:
+                    cls.panel_hide(k)
+
     # ── sync 제어 ────────────────────────────────────────────────
     @classmethod
     def set_sync(cls, tab_id: str, enabled: bool, ref_key: 'str | None' = None) -> bool:
