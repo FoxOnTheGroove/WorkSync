@@ -93,12 +93,14 @@ class UVMixerService:
         """뷰포트 타일/풀스크린 전환. to_tile=False면 viewport_key 뷰포트만 남기고
         나머지 패널을 끄고(풀스크린), True면 끈 패널을 모두 다시 켠다(타일 복귀).
         탭의 fullscreen 상태로 저장되어, 이후 새로 로드되는 패널에도 반영된다.
-        tab_id가 현재 active 탭이 아니거나 viewport_key가 해당 탭에 없으면 무시."""
+        viewport_key가 아직 로드되지 않았어도 상태는 저장된다(이후 panel_on이 반영).
+        tab_id가 현재 active 탭이 아니면 무시."""
         if tab_id != cls._active_tab:
             return
         tab_ctx = cls._tab_contexts.get(tab_id)
-        if tab_ctx is None or viewport_key not in tab_ctx.keys:
-            return
+        if tab_ctx is None:
+            tab_ctx = TabContext(tab_id)
+            cls._tab_contexts[tab_id] = tab_ctx
 
         if to_tile:
             tab_ctx.fullscreen_key = None
