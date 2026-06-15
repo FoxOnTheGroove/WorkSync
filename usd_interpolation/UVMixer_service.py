@@ -12,6 +12,7 @@ class TabContext:
         self.sync: bool = True
         self.shared_player: UVMixerPlayer = UVMixerPlayer()
         self.keys: list[str] = []
+        self.fullscreen_key: 'str | None' = None        # 풀스크린 중인 viewport key (None이면 타일 모드)
 
 
 class UVMixerService:
@@ -81,13 +82,17 @@ class UVMixerService:
         entering = cls._tab_contexts.get(entering_tab_id)
         if entering is not None:
             for k in entering.keys:
-                cls.panel_show(k)
+                if entering.fullscreen_key is not None and k != entering.fullscreen_key:
+                    cls.panel_hide(k)
+                else:
+                    cls.panel_show(k)
             entering.shared_player.set_t(entering.shared_player.t)
 
     @classmethod
     def on_tab_tiled(cls, tab_id: str, viewport_key: str, to_tile: bool) -> None:
         """뷰포트 타일/풀스크린 전환. to_tile=False면 viewport_key 뷰포트만 남기고
         나머지 패널을 끄고(풀스크린), True면 끈 패널을 모두 다시 켠다(타일 복귀).
+        탭의 fullscreen 상태로 저장되어, 이후 새로 로드되는 패널에도 반영된다.
         tab_id가 현재 active 탭이 아니거나 viewport_key가 해당 탭에 없으면 무시."""
         if tab_id != cls._active_tab:
             return
@@ -96,9 +101,11 @@ class UVMixerService:
             return
 
         if to_tile:
+            tab_ctx.fullscreen_key = None
             for k in tab_ctx.keys:
                 cls.panel_show(k)
         else:
+            tab_ctx.fullscreen_key = viewport_key
             for k in tab_ctx.keys:
                 if k != viewport_key:
                     cls.panel_hide(k)
@@ -158,7 +165,8 @@ class UVMixerService:
     @classmethod
     def panel_on(cls, key: str) -> bool:
         """key mixer의 타겟 뷰포트에 HUD 패널을 띄운다. 성공 시 True.
-        key의 소속 탭이 현재 active 탭이 아니면 visible=False로 생성한다."""
+        key의 소속 탭이 현재 active 탭이 아니면, 또는 탭이 풀스크린 중이고
+        key가 그 대상이 아니면 visible=False로 생성한다."""
         if not cls.has_instance(key):
             return False
         mgr = cls._get_panel_mgr()
@@ -166,6 +174,11 @@ class UVMixerService:
             return False
         tab_id = cls._key_tab.get(key)
         visible = cls._active_tab is None or tab_id == cls._active_tab
+        if visible:
+            tab_ctx = cls._tab_contexts.get(tab_id) if tab_id is not None else None
+            if tab_ctx is not None and tab_ctx.fullscreen_key is not None \
+                    and tab_ctx.fullscreen_key != key:
+                visible = False
         mgr.on_mixer_loaded(key, cls.get_target_path(key) or "", tab_id, visible=visible)
         return mgr.is_on(key)
 
