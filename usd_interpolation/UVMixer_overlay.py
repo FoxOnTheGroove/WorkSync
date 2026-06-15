@@ -303,6 +303,7 @@ class OverlayManager:
     def show(self, key: str) -> None:
         panel = self._panels.get(key)
         if panel and panel._window:
+            panel._on_viewport_resized()
             panel._window.visible = True
 
     def hide(self, key: str) -> None:
