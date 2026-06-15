@@ -86,6 +86,7 @@ class DummyUI:
 
                 with ui.HStack(spacing=4, height=26):
                     ui.Button("Generate Subsets", clicked_fn=self._on_generate)
+                    ui.Button("Load", clicked_fn=self._on_load, width=60)
                     ui.Button("Clear", clicked_fn=self._on_clear, width=70)
 
                 self._selected_section_frame = ui.Frame()
@@ -162,6 +163,18 @@ class DummyUI:
 
         Subset.clear_group_colors(self._mesh_prim)
         self._set_status(f"[OK] {len(prims)}개 생성")
+        self._refresh_results(prims, groups)
+
+    def _on_load(self):
+        if not self._valid_mesh():
+            return
+        prims, groups = Subset.load_existing_subsets(self._mesh_prim)
+        if not prims:
+            self._set_status("[FAIL] 이 메시에 기존 subset이 없습니다")
+            return
+
+        Subset.clear_group_colors(self._mesh_prim)
+        self._set_status(f"[OK] 기존 subset {len(prims)}개 불러옴")
         self._refresh_results(prims, groups)
 
     def _on_clear(self):

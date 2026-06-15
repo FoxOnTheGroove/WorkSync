@@ -304,6 +304,24 @@ class Subset:
         return face_map
 
     @classmethod
+    def load_existing_subsets(cls, mesh_prim: Usd.Prim) -> "tuple[list[Usd.Prim], list[list[int]]]":
+        """메시에 이미 존재하는 subset들을 (prims, groups) 형태로 읽어온다.
+
+        이전에 Generate/Merge/Rename으로 만들어둔 subset들을 다시 UI 목록에
+        불러올 때 사용. indices가 비어있는 subset은 건너뛴다.
+        """
+        prims: list = []
+        groups: list = []
+        for child in cls.list_subsets(mesh_prim):
+            indices = UsdGeom.Subset(child).GetIndicesAttr().Get()
+            if not indices:
+                continue
+            prims.append(child)
+            groups.append([int(i) for i in indices])
+        return prims, groups
+
+
+    @classmethod
     def raycast_face(cls, mesh_prim: Usd.Prim, ray_origin: Gf.Vec3d, ray_dir: Gf.Vec3d) -> "int | None":
         """월드 좌표 레이와 메시의 각 면을 직접 교차 검사해 가장 가까운 face index 반환."""
         data = cls._get_mesh_data(mesh_prim)
