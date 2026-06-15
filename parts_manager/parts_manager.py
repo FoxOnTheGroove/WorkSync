@@ -103,7 +103,12 @@ class PartsManager:
             if len(mesh_children) != 1:
                 break
             target = mesh_children[0]
-        return cls._to_payload(target, depth_offset=target.depth)
+        payload = cls._to_payload(target, depth_offset=target.depth)
+        if len(mesh_children) >= 10:
+            # (임시) 자식이 너무 많으면 트리에 펼치지 않고 target만 노출
+            payload["children"] = []
+            payload["is_leaf"] = True
+        return payload
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
