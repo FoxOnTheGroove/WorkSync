@@ -94,12 +94,15 @@ class PartsManager:
         nodes = cls._trees.get(str(vp_id), [])
         if not nodes:
             return None
-        root = nodes[0]
-        mesh_children = [
-            c for c in root.children
-            if any(p.GetTypeName() == "Mesh" for p in Usd.PrimRange(c.prim))
-        ]
-        target = mesh_children[0] if len(mesh_children) == 1 else root
+        target = nodes[0]
+        while True:
+            mesh_children = [
+                c for c in target.children
+                if any(p.GetTypeName() == "Mesh" for p in Usd.PrimRange(c.prim))
+            ]
+            if len(mesh_children) != 1:
+                break
+            target = mesh_children[0]
         return cls._to_payload(target, depth_offset=target.depth)
 
     @classmethod
