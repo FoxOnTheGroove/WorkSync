@@ -87,14 +87,20 @@ class PartsManager:
 
     @classmethod
     def get_prim_tree_by_id(cls, vp_id) -> "dict | None":
-        """viewport_id 최상위 프림의 자식 노드 페이로드 반환. 없으면 None."""
+        """viewport_id 최상위 프림 기준 페이로드 반환.
+        하부에 메시가 있는 자식이 정확히 1개면 그 자식을, 그 외(0개/여러개)면 최상위 프림을 반환."""
         if vp_id is None:
             return None
         nodes = cls._trees.get(str(vp_id), [])
-        if not nodes or not nodes[0].children:
+        if not nodes:
             return None
-        child = nodes[0].children[0]
-        return cls._to_payload(child, depth_offset=child.depth)
+        root = nodes[0]
+        mesh_children = [
+            c for c in root.children
+            if any(p.GetTypeName() == "Mesh" for p in Usd.PrimRange(c.prim))
+        ]
+        target = mesh_children[0] if len(mesh_children) == 1 else root
+        return cls._to_payload(target, depth_offset=target.depth)
 
     @classmethod
     def get_visibility(cls, index_key: str) -> bool:
