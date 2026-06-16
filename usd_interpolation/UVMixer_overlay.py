@@ -1,4 +1,6 @@
 import omni.ui as ui
+import omni.kit.app
+import omni.kit.async_engine
 
 from .UVMixer_service import UVMixerService
 
@@ -45,6 +47,7 @@ class ViewportOverlayPanel:
         self._tab_id = tab_id
         self._in_tick = False
         self._in_sync = False
+        self._reposition_task = None
 
         x, y = _calc_overlay_pos(vph)
         self._window = ui.Window(
@@ -255,9 +258,27 @@ class ViewportOverlayPanel:
             self._window.position_x = x
             self._window.position_y = y
 
+    def reposition_deferred(self, frames: int = 2) -> None:
+        """show 직후 frame이 새 레이아웃을 반영하기 전이라 위치가 stale할 수 있다.
+        computed-size 콜백이 매번 울린다는 보장이 없으므로, 몇 프레임 뒤
+        레이아웃이 적용된 시점에 위치를 강제로 재계산한다."""
+        if self._reposition_task is not None and not self._reposition_task.done():
+            self._reposition_task.cancel()
+        self._reposition_task = omni.kit.async_engine.run_coroutine(
+            self._reposition_async(frames))
+
+    async def _reposition_async(self, frames: int) -> None:
+        app = omni.kit.app.get_app()
+        for _ in range(frames):
+            await app.next_update_async()
+        self._on_viewport_resized()
+
     # ── 라이프사이클 ────────────────────────────────────────────
 
     def destroy(self) -> None:
+        if self._reposition_task is not None and not self._reposition_task.done():
+            self._reposition_task.cancel()
+            self._reposition_task = None
         if self._vph:
             self._vph.frame.set_computed_content_size_changed_fn(None)
             self._vph = None
@@ -303,8 +324,9 @@ class OverlayManager:
     def show(self, key: str) -> None:
         panel = self._panels.get(key)
         if panel and panel._window:
-            panel._on_viewport_resized()
             panel._window.visible = True
+            panel._on_viewport_resized()
+            panel.reposition_deferred()
 
     def hide(self, key: str) -> None:
         panel = self._panels.get(key)
