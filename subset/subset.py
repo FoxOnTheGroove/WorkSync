@@ -389,24 +389,28 @@ class Subset:
         """월드 좌표 점(RTX 레이캐스트 히트 위치)에 가장 가까운 face index 반환.
 
         spatial_index가 주어지면(build_face_spatial_index) 점 주변 셀의 face만
-        검사해 큰 메시에서도 빠르게 동작한다. 주변 셀에 face가 없으면 전체 검색으로
-        폴백한다.
+        검사하고, 정점 변환 결과도 캐시에서 꺼내 쓴다. 클릭 한 번에 모든 정점을
+        변환하는 반복을 없애는 것이 핵심이다.
         """
-        data = cls._get_mesh_data(mesh_prim)
-        if data is None:
-            return None
-        points, counts, indices = data
-
-        xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-        world_points = [xform.Transform(Gf.Vec3d(p)) for p in points]
+        if spatial_index and "world_points" in spatial_index:
+            world_points = spatial_index["world_points"]
+            counts       = spatial_index["counts"]
+            indices      = spatial_index["indices"]
+            offsets      = spatial_index["offsets"]
+        else:
+            data = cls._get_mesh_data(mesh_prim)
+            if data is None:
+                return None
+            points, counts, indices = data
+            xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            world_points = [xform.Transform(Gf.Vec3d(p)) for p in points]
+            offsets = cls._face_offsets(counts)
 
         candidate_faces = None
         if spatial_index:
             candidate_faces = cls._nearby_faces(world_point, spatial_index)
         if candidate_faces is None:
             candidate_faces = range(len(counts))
-
-        offsets = cls._face_offsets(counts)
 
         best_face = None
         best_dist = None
@@ -423,7 +427,6 @@ class Subset:
                     best_face = face
 
         if best_face is None and spatial_index:
-            # 주변 셀에서 못 찾으면(드물게 그리드 경계 오차 등) 전체 검색으로 재시도.
             return cls.face_at_point(mesh_prim, world_point, spatial_index=None)
         return best_face
 
@@ -438,11 +441,29 @@ class Subset:
 
     @classmethod
     def build_face_spatial_index(cls, mesh_prim: Usd.Prim) -> "dict | None":
-        """face 중심점 기반 uniform grid. face_at_point 가속용(클릭 피킹).
+        """face 중심점 기반 uniform grid + 변환된 정점 캐시.
 
-        face 수에 맞춰 셀 크기를 정해, 점 주변 3x3x3 셀만 검사하면 되도록 한다.
+        face_at_point 가속용. world_points/counts/indices/offsets를 함께 저장해,
+        클릭할 때마다 모든 정점을 변환하는 반복을 없앤다.
         """
-        centers = cls.face_centers_world(mesh_prim)
+        data = cls._get_mesh_data(mesh_prim)
+        if data is None:
+            return None
+        points, counts, indices = data
+
+        xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        world_points = [xform.Transform(Gf.Vec3d(p)) for p in points]
+        offsets = cls._face_offsets(counts)
+
+        # face 중심점 계산 (world_points 재사용)
+        centers = []
+        for fi, count in enumerate(counts):
+            c = Gf.Vec3d(0, 0, 0)
+            off = offsets[fi]
+            for j in range(count):
+                c += world_points[indices[off + j]]
+            centers.append(c / count)
+
         if not centers:
             return None
 
@@ -465,7 +486,14 @@ class Subset:
             key = cls._cell_key(c, cell_size)
             cells.setdefault(key, []).append(fi)
 
-        return {"cell_size": cell_size, "cells": cells}
+        return {
+            "cell_size":   cell_size,
+            "cells":       cells,
+            "world_points": world_points,
+            "counts":      counts,
+            "indices":     indices,
+            "offsets":     offsets,
+        }
 
     @staticmethod
     def _cell_key(point, cell_size) -> tuple:
