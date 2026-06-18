@@ -25,6 +25,7 @@ class PrimNode:
 class PartsManager:
 
     _sync_enabled: bool = False
+    _MAX_DEPTH: int = 3
     _trees: dict = {}              # viewport_id(str) -> list[PrimNode]
     _node_map: dict = {}           # index_key -> PrimNode
     _viewport_key_map: dict = {}   # viewport_id(str) -> index_key(str)
@@ -205,7 +206,7 @@ class PartsManager:
     def _build_subtree(cls, prim: Usd.Prim, depth: int, sibling_index, parent_key: str = "") -> PrimNode:
         key = f"{parent_key}_{sibling_index}" if parent_key else str(sibling_index)
         path = str(prim.GetPath())
-        eligible = [c for c in prim.GetChildren() if not cls._is_excluded(c)]
+        eligible = [] if depth >= cls._MAX_DEPTH else [c for c in prim.GetChildren() if not cls._is_excluded(c)]
         children = [
             cls._build_subtree(child, depth + 1, i, key)
             for i, child in enumerate(eligible)
