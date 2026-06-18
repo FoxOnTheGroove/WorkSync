@@ -191,7 +191,7 @@ class PartsManager:
     def _get_stage(cls) -> Usd.Stage:
         return omni.usd.get_context().get_stage()
 
-    _EXCLUDED_TYPES = {"Material", "Shader", "NodeGraph", "GeomSubset"}
+    _EXCLUDED_TYPES = {"Material", "Shader", "NodeGraph", "GeomSubset", "LineRenderer"}
 
     @classmethod
     def _is_excluded(cls, prim: Usd.Prim) -> bool:
