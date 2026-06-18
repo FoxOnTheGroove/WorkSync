@@ -114,8 +114,11 @@ class PartsManagerServiceUI:
                 current = PartsManagerService.get_material(key) or ""
                 field = ui.StringField(width=80)
                 field.model.set_value(current)
-                field.model.add_value_changed_fn(
-                    lambda m, k=key: PartsManagerService.set_material(k, m.get_value_as_string() or None)
+                ui.Button(
+                    "acc", width=32,
+                    clicked_fn=lambda k=key, f=field: PartsManagerService.set_material(
+                        k, f.model.get_value_as_string() or None
+                    ),
                 )
 
         if not node["is_leaf"]:
