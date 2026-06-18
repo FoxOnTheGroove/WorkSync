@@ -1,4 +1,4 @@
-from pxr import Usd, UsdGeom
+from pxr import Usd, UsdGeom, UsdShade, Tf
 import omni.usd
 import omni.kit.app
 import carb.events
@@ -20,6 +20,7 @@ class PrimNode:
     is_leaf: bool
     index_key: str  # 구조 기반 위치 키 (예: "vid", "vid_2", "vid_0_1")
     is_visible: bool = True
+    material_key: "str | None" = None
 
 
 class PartsManager:
@@ -129,6 +130,40 @@ class PartsManager:
                 node.is_visible = visible
 
     @classmethod
+    def get_material(cls, index_key: str) -> "str | None":
+        """index_key 노드에 적용된 material_key를 반환."""
+        node = cls._node_map.get(index_key)
+        return node.material_key if node else None
+
+    @classmethod
+    def set_material(cls, index_key: str, key: "str | None") -> None:
+        """index_key 노드에 마테리얼을 적용하고 material_key를 기록.
+        노드 이하(재귀) 모든 Mesh에 동일 마테리얼을 바인딩한다."""
+        node = cls._node_map.get(index_key)
+        if node is None:
+            return
+        node.material_key = key
+        stage = cls._get_stage()
+        if stage is None:
+            return
+        meshes = [p for p in Usd.PrimRange(node.prim) if p.GetTypeName() == "Mesh"]
+        if not meshes:
+            return
+        if key is None:
+            for prim in meshes:
+                UsdShade.MaterialBindingAPI(prim).UnbindAllBindings()
+            return
+        url = cls._get_material_url(key)
+        mtl_path = f"{node.path}/Looks/{Tf.MakeValidIdentifier(key)}"
+        mtl_prim = stage.GetPrimAtPath(mtl_path)
+        if not mtl_prim.IsValid():
+            mtl_prim = stage.DefinePrim(mtl_path, "Material")
+            mtl_prim.GetReferences().AddReference(url)
+        material = UsdShade.Material(mtl_prim)
+        for prim in meshes:
+            UsdShade.MaterialBindingAPI(prim).Bind(material)
+
+    @classmethod
     def set_sync(cls, enabled: bool) -> None:
         """sync 활성화 여부 설정. True 시 _active_viewport_id 기준으로 즉시 동기화."""
         cls._sync_enabled = enabled
@@ -190,6 +225,11 @@ class PartsManager:
     @classmethod
     def _get_stage(cls) -> Usd.Stage:
         return omni.usd.get_context().get_stage()
+
+    @classmethod
+    def _get_material_url(cls, key: str) -> str:
+        """material_key로부터 Nucleus 상의 .usd URL을 반환. (직접 구현 예정)"""
+        raise NotImplementedError
 
     _EXCLUDED_TYPES = {"Material", "Shader", "NodeGraph", "GeomSubset", "LineRenderer"}
 
