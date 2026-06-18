@@ -170,35 +170,41 @@ class PartsManager:
             UsdShade.MaterialBindingAPI(prim).Bind(material)
 
     @classmethod
-    def save_material_eqp(cls, index_key: str) -> None:
-        """index_key 노드의 마테리얼 적용 상태를 원본 .usd에 author 후 저장(덮어쓰기).
-        작업 스테이지와 무관하게, _get_origin_url(node)로 원본을 별도로 열어 적용한다."""
-        node = cls._node_map.get(index_key)
-        if node is None or node.material_key is None:
-            return
-        src_stage = Usd.Stage.Open(cls._get_origin_url(node))
-        if src_stage is None:
-            return
-        default = src_stage.GetDefaultPrim()
-        if not default:
-            return
-        # 작업 스테이지 뷰포트 루트 경로 → 원본 defaultPrim 으로 상대 변환
-        vid = node.index_key.split("_")[0]
-        root_node = cls._trees[vid][0]
-        rel = node.path[len(root_node.path):]          # "" 또는 "/Sub/Mesh..."
-        dst_node = src_stage.GetPrimAtPath(str(default.GetPath()) + rel)
-        if not dst_node.IsValid():
-            return
-        mtl_path = f"{dst_node.GetPath()}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
-        mtl_prim = src_stage.GetPrimAtPath(mtl_path)
-        if not mtl_prim.IsValid():
-            mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
-            mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
-        material = UsdShade.Material(mtl_prim)
-        for prim in Usd.PrimRange(dst_node):
-            if prim.GetTypeName() == "Mesh":
-                UsdShade.MaterialBindingAPI(prim).Bind(material)
-        src_stage.GetRootLayer().Save()
+    def save_material_eqp(cls) -> None:
+        """material_key가 있는 모든 노드를 원본 .usd별로 묶어, 원본을 URL당 한 번만 열어
+        전부 적용 후 저장(덮어쓰기)한다. 작업 스테이지와 무관."""
+        # 원본 URL별 노드 그루핑
+        groups: dict = {}
+        for node in cls._node_map.values():
+            if node.material_key:
+                groups.setdefault(cls._get_origin_url(node), []).append(node)
+
+        for url, nodes in groups.items():
+            src_stage = Usd.Stage.Open(url)
+            if src_stage is None:
+                continue
+            default = src_stage.GetDefaultPrim()
+            if not default:
+                continue
+            dst_root = str(default.GetPath())
+            for node in nodes:
+                # 작업 스테이지 뷰포트 루트 경로 → 원본 defaultPrim 으로 상대 변환
+                vid = node.index_key.split("_")[0]
+                root_node = cls._trees[vid][0]
+                rel = node.path[len(root_node.path):]      # "" 또는 "/Sub/Mesh..."
+                dst_node = src_stage.GetPrimAtPath(dst_root + rel)
+                if not dst_node.IsValid():
+                    continue
+                mtl_path = f"{dst_node.GetPath()}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
+                mtl_prim = src_stage.GetPrimAtPath(mtl_path)
+                if not mtl_prim.IsValid():
+                    mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
+                    mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
+                material = UsdShade.Material(mtl_prim)
+                for prim in Usd.PrimRange(dst_node):
+                    if prim.GetTypeName() == "Mesh":
+                        UsdShade.MaterialBindingAPI(prim).Bind(material)
+            src_stage.GetRootLayer().Save()
 
     @classmethod
     def set_sync(cls, enabled: bool) -> None:

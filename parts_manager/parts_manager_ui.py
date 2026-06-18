@@ -53,9 +53,7 @@ class PartsManagerServiceUI:
         self._refresh_list()
 
     def _on_save(self):
-        for k, n in PartsManagerService.get_node_map().items():
-            if n.material_key:
-                PartsManagerService.save_material_eqp(k)
+        PartsManagerService.save_material_eqp()
 
     def _refresh_list(self):
         self._list_stack.clear()
