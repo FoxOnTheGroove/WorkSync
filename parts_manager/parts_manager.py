@@ -142,10 +142,16 @@ class PartsManager:
         node = cls._node_map.get(index_key)
         if node is None:
             return
-        node.material_key = key
         stage = cls._get_stage()
         if stage is None:
             return
+        # 이전 마테리얼 prim 제거
+        if node.material_key is not None:
+            old_mtl_path = f"{node.path}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
+            old_mtl_prim = stage.GetPrimAtPath(old_mtl_path)
+            if old_mtl_prim.IsValid():
+                stage.RemovePrim(old_mtl_prim.GetPath())
+        node.material_key = key
         meshes = [p for p in Usd.PrimRange(node.prim) if p.GetTypeName() == "Mesh"]
         if not meshes:
             return
