@@ -36,6 +36,8 @@ class PartsManagerServiceUI:
                 with ui.HStack(height=24):
                     ui.Label("Parts Manager", style={"font_size": 15})
                     ui.Spacer()
+                    if self.prim_type == "eqp":
+                        ui.Button("save", width=40, height=22, clicked_fn=self._on_save)
                     ui.Button("find", width=40, height=22, clicked_fn=self._on_refresh)
                     ui.Label("sync", width=32, style={"font_size": 12, "color": 0xFFAAAAAA})
                     cb = ui.CheckBox(width=20)
@@ -49,6 +51,11 @@ class PartsManagerServiceUI:
 
     def _on_refresh(self):
         self._refresh_list()
+
+    def _on_save(self):
+        for k, n in PartsManagerService.get_node_map().items():
+            if n.material_key:
+                PartsManagerService.save_material_eqp(k)
 
     def _refresh_list(self):
         self._list_stack.clear()
