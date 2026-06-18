@@ -18,6 +18,8 @@ _PART_FRAME_STYLE = {
 
 class PartsManagerServiceUI:
 
+    prim_type: str = ""
+
     def __init__(self):
         self._window = None
         self._tree: list = []
@@ -107,6 +109,14 @@ class PartsManagerServiceUI:
             else:
                 label_style = {"font_size": 13, "color": 0xFFAAAAAA}
             ui.Label(node["name"], style=label_style)
+
+            if node["is_leaf"] and self.prim_type == "eqp":
+                current = PartsManagerService.get_material(key) or ""
+                field = ui.StringField(width=80)
+                field.model.set_value(current)
+                field.model.add_value_changed_fn(
+                    lambda m, k=key: PartsManagerService.set_material(k, m.get_value_as_string() or None)
+                )
 
         if not node["is_leaf"]:
             children_stack = ui.VStack(spacing=0)
