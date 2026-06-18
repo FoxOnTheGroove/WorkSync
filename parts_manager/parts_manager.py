@@ -211,6 +211,8 @@ class PartsManager:
             cls._build_subtree(child, depth + 1, i, key)
             for i, child in enumerate(eligible)
         ]
+        if len(children) == 1:
+            children = []
         return PrimNode(
             prim=prim,
             path=path,
