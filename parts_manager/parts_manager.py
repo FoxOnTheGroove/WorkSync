@@ -143,6 +143,11 @@ class PartsManager:
         node = cls._node_map.get(index_key)
         if node is None:
             return
+        if not node.is_leaf:
+            prefix = index_key + "_"
+            for k in [k for k, n in cls._node_map.items() if n.is_leaf and k.startswith(prefix)]:
+                cls.set_material(k, key)
+            return
         stage = cls._get_stage()
         if stage is None:
             return
