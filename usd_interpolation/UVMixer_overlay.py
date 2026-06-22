@@ -11,7 +11,8 @@ except ImportError:
 
 OVERLAY_W = 260
 OVERLAY_H = 105
-OVERLAY_H_MIN = 22          # 최소화 시 높이 (행1만 노출)
+OVERLAY_W_MIN = 20          # 최소화 시 너비 (버튼만)
+OVERLAY_H_MIN = 20          # 최소화 시 높이 (버튼만)
 _MARGIN = 8
 
 _WINDOW_FLAGS = (
@@ -32,10 +33,11 @@ def _find_vph(target_path: str):
     return None
 
 
-def _calc_overlay_pos(vph, height: int = OVERLAY_H) -> tuple[int, int]:
+def _calc_overlay_pos(vph, width: int = OVERLAY_W, height: int = OVERLAY_H,
+                      extra_margin_y: int = 0) -> tuple[int, int]:
     frame = vph.frame
-    x = int(frame.screen_position_x + frame.computed_width  - OVERLAY_W - _MARGIN)
-    y = int(frame.screen_position_y + frame.computed_height - height - _MARGIN)
+    x = int(frame.screen_position_x + frame.computed_width  - width - _MARGIN)
+    y = int(frame.screen_position_y + frame.computed_height - height - _MARGIN - extra_margin_y)
     return x, y
 
 
@@ -77,25 +79,26 @@ class ViewportOverlayPanel:
         with self._window.frame:
             with ui.VStack(spacing=1, style={"margin": 2}):
 
-                # 행1: ▶/■ | Reverse ☐ | Loop ☐ | key label | ▼(최소화)
+                # 행1: 최소화 버튼 + 나머지(최소화 시 숨김)
                 with ui.HStack(height=16, spacing=3):
-                    btn_play = ui.Button("▶", width=22, height=14,
-                                         clicked_fn=self._on_play,
-                                         style={"font_size": 10})
-                    rev_cb = ui.CheckBox(width=14, height=14)
-                    rev_cb.model.add_value_changed_fn(self._on_reverse)
-                    ui.Label("Reverse", width=46, height=14,
-                             style={"font_size": 10})
-                    loop_cb = ui.CheckBox(width=14, height=14)
-                    loop_cb.model.add_value_changed_fn(self._on_loop)
-                    ui.Label("Loop", width=30, height=14,
-                             style={"font_size": 10})
-                    ui.Label(self._key, height=14,
-                             style={"color": 0xFF888888, "font_size": 10})
-                    ui.Spacer()
                     btn_min = ui.Button("▼", width=16, height=14,
                                         clicked_fn=self._on_toggle_minimize,
                                         style={"font_size": 10})
+                    row1_content = ui.HStack(spacing=3)
+                    with row1_content:
+                        btn_play = ui.Button("▶", width=22, height=14,
+                                             clicked_fn=self._on_play,
+                                             style={"font_size": 10})
+                        rev_cb = ui.CheckBox(width=14, height=14)
+                        rev_cb.model.add_value_changed_fn(self._on_reverse)
+                        ui.Label("Reverse", width=46, height=14,
+                                 style={"font_size": 10})
+                        loop_cb = ui.CheckBox(width=14, height=14)
+                        loop_cb.model.add_value_changed_fn(self._on_loop)
+                        ui.Label("Loop", width=30, height=14,
+                                 style={"font_size": 10})
+                        ui.Label(self._key, height=14,
+                                 style={"color": 0xFF888888, "font_size": 10})
 
                 # 본문(행2·행3): 최소화 시 숨김
                 body = ui.VStack(spacing=1)
@@ -116,6 +119,7 @@ class ViewportOverlayPanel:
                         spd_sl.model.add_value_changed_fn(self._on_speed)
 
         self._body = body
+        self._row1_content = row1_content
         self._widgets = {
             'btn_play': btn_play,
             'btn_min':  btn_min,
@@ -265,15 +269,26 @@ class ViewportOverlayPanel:
 
     def _on_toggle_minimize(self) -> None:
         self._minimized = not self._minimized
+        self._row1_content.visible = not self._minimized
         self._body.visible = not self._minimized
         self._widgets['btn_min'].text = "▲" if self._minimized else "▼"
-        self._window.height = OVERLAY_H_MIN if self._minimized else OVERLAY_H
+        if self._minimized:
+            self._window.width = OVERLAY_W_MIN
+            self._window.height = OVERLAY_H_MIN
+        else:
+            self._window.width = OVERLAY_W
+            self._window.height = OVERLAY_H
         self._on_viewport_resized()
 
     def _on_viewport_resized(self) -> None:
         if self._window and self._vph:
-            h = OVERLAY_H_MIN if self._minimized else OVERLAY_H
-            x, y = _calc_overlay_pos(self._vph, h)
+            if self._minimized:
+                x, y = _calc_overlay_pos(self._vph,
+                                         width=OVERLAY_W_MIN,
+                                         height=OVERLAY_H_MIN,
+                                         extra_margin_y=_MARGIN)
+            else:
+                x, y = _calc_overlay_pos(self._vph)
             self._window.position_x = x
             self._window.position_y = y
 
