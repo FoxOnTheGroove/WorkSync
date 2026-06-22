@@ -79,11 +79,8 @@ class ViewportOverlayPanel:
         with self._window.frame:
             with ui.VStack(spacing=1, style={"margin": 2}):
 
-                # 행1: 최소화 버튼 + 나머지(최소화 시 숨김)
+                # 행1: 나머지(최소화 시 숨김) + 최소화 버튼(우상단 고정)
                 with ui.HStack(height=16, spacing=3):
-                    btn_min = ui.Button("▼", width=16, height=14,
-                                        clicked_fn=self._on_toggle_minimize,
-                                        style={"font_size": 10})
                     row1_content = ui.HStack(spacing=3)
                     with row1_content:
                         btn_play = ui.Button("▶", width=22, height=14,
@@ -99,6 +96,9 @@ class ViewportOverlayPanel:
                                  style={"font_size": 10})
                         ui.Label(self._key, height=14,
                                  style={"color": 0xFF888888, "font_size": 10})
+                    btn_min = ui.Button("▼", width=16, height=14,
+                                        clicked_fn=self._on_toggle_minimize,
+                                        style={"font_size": 10})
 
                 # 본문(행2·행3): 최소화 시 숨김
                 body = ui.VStack(spacing=1)
