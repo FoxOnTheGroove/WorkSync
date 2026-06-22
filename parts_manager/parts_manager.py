@@ -145,12 +145,12 @@ class PartsManager:
         stage = cls._get_stage()
         if stage is None:
             return
-        # 이전 마테리얼 prim 제거
-        if node.material_key is not None:
-            old_mtl_path = f"{node.path}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
-            old_mtl_prim = stage.GetPrimAtPath(old_mtl_path)
-            if old_mtl_prim.IsValid():
-                stage.RemovePrim(old_mtl_prim.GetPath())
+        # 이전 마테리얼 prim 제거 (reference 소스면 RemovePrim 실패 → SetActive(False) fallback)
+        looks = stage.GetPrimAtPath(f"{node.path}/Looks")
+        if looks.IsValid():
+            for child in looks.GetChildren():
+                if not stage.RemovePrim(child.GetPath()):
+                    child.SetActive(False)
         node.material_key = key
         meshes = [p for p in Usd.PrimRange(node.prim) if p.GetTypeName() == "Mesh"]
         if not meshes:
@@ -195,11 +195,14 @@ class PartsManager:
                 dst_node = src_stage.GetPrimAtPath(dst_root + rel)
                 if not dst_node.IsValid():
                     continue
+                # 원본은 root layer이므로 RemovePrim으로 기존 Looks 자식 전체 제거
+                looks_prim = src_stage.GetPrimAtPath(f"{dst_node.GetPath()}/Looks")
+                if looks_prim.IsValid():
+                    for child in looks_prim.GetChildren():
+                        src_stage.RemovePrim(child.GetPath())
                 mtl_path = f"{dst_node.GetPath()}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
-                mtl_prim = src_stage.GetPrimAtPath(mtl_path)
-                if not mtl_prim.IsValid():
-                    mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
-                    mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
+                mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
+                mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
                 material = UsdShade.Material(mtl_prim)
                 for prim in Usd.PrimRange(dst_node):
                     if prim.GetTypeName() == "Mesh":
