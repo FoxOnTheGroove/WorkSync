@@ -33,6 +33,7 @@ class PartsManager:
     _active_viewport_id = None
     _on_orbit_event_click = None
     _on_orbit_event_drag_start = None
+    _dirty_keys: set = set()          # 저장이 필요한 index_key 집합
 
     # ── 공개 API ─────────────────────────────────────────────────────────────
 
@@ -152,6 +153,7 @@ class PartsManager:
                 if not stage.RemovePrim(child.GetPath()):
                     child.SetActive(False)
         node.material_key = key
+        cls._dirty_keys.add(index_key)
         meshes = [p for p in Usd.PrimRange(node.prim) if p.GetTypeName() == "Mesh"]
         if not meshes:
             return
@@ -173,10 +175,10 @@ class PartsManager:
     def save_material_eqp(cls) -> None:
         """material_key가 있는 모든 노드를 원본 .usd별로 묶어, 원본을 URL당 한 번만 열어
         전부 적용 후 저장(덮어쓰기)한다. 작업 스테이지와 무관."""
-        # 원본 URL별 노드 그루핑
+        # set_material로 변경된 노드만 원본 URL별 그루핑
         groups: dict = {}
         for node in cls._node_map.values():
-            if node.material_key:
+            if node.index_key in cls._dirty_keys:
                 groups.setdefault(cls._get_origin_url(node), []).append(node)
 
         for url, nodes in groups.items():
@@ -200,14 +202,20 @@ class PartsManager:
                 if looks_prim.IsValid():
                     for child in looks_prim.GetChildren():
                         src_stage.RemovePrim(child.GetPath())
-                mtl_path = f"{dst_node.GetPath()}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
-                mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
-                mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
-                material = UsdShade.Material(mtl_prim)
-                for prim in Usd.PrimRange(dst_node):
-                    if prim.GetTypeName() == "Mesh":
-                        UsdShade.MaterialBindingAPI(prim).Bind(material)
+                if node.material_key:
+                    mtl_path = f"{dst_node.GetPath()}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
+                    mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
+                    mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
+                    material = UsdShade.Material(mtl_prim)
+                    for prim in Usd.PrimRange(dst_node):
+                        if prim.GetTypeName() == "Mesh":
+                            UsdShade.MaterialBindingAPI(prim).Bind(material)
+                else:
+                    for prim in Usd.PrimRange(dst_node):
+                        if prim.GetTypeName() == "Mesh":
+                            UsdShade.MaterialBindingAPI(prim).UnbindAllBindings()
             src_stage.GetRootLayer().Save()
+        cls._dirty_keys.clear()
 
     @classmethod
     def set_sync(cls, enabled: bool) -> None:
