@@ -166,12 +166,12 @@ class PartsManager:
             for prim in meshes:
                 UsdShade.MaterialBindingAPI(prim).UnbindAllBindings()
             return
-        url = cls._get_material_url(key)
         mtl_path = f"{node.path}/Looks/{Tf.MakeValidIdentifier(key)}"
         mtl_prim = stage.GetPrimAtPath(mtl_path)
         if not mtl_prim.IsValid():
             mtl_prim = stage.DefinePrim(mtl_path, "Material")
-            mtl_prim.GetReferences().AddReference(url)
+            mtl_prim.GetReferences().AddReference(key)
+            mtl_prim.SetCustomDataByKey("url", key)
         material = UsdShade.Material(mtl_prim)
         for prim in meshes:
             UsdShade.MaterialBindingAPI(prim).Bind(material)
@@ -210,7 +210,8 @@ class PartsManager:
                 if node.material_key:
                     mtl_path = f"{dst_node.GetPath()}/Looks/{Tf.MakeValidIdentifier(node.material_key)}"
                     mtl_prim = src_stage.DefinePrim(mtl_path, "Material")
-                    mtl_prim.GetReferences().AddReference(cls._get_material_url(node.material_key))
+                    mtl_prim.GetReferences().AddReference(node.material_key)
+                    mtl_prim.SetCustomDataByKey("url", node.material_key)
                     material = UsdShade.Material(mtl_prim)
                     for prim in Usd.PrimRange(dst_node):
                         if prim.GetTypeName() == "Mesh":
@@ -286,11 +287,6 @@ class PartsManager:
         return omni.usd.get_context().get_stage()
 
     @classmethod
-    def _get_material_url(cls, key: str) -> str:
-        """material_key로부터 Nucleus 상의 .usd URL을 반환. (직접 구현 예정)"""
-        raise NotImplementedError
-
-    @classmethod
     def _get_origin_url(cls, node: "PrimNode") -> str:
         """노드의 원본 .usd Nucleus URL을 반환. (직접 구현 예정, 일단 하드코딩)"""
         raise NotImplementedError
@@ -317,9 +313,13 @@ class PartsManager:
         ]
         if len(children) == 1 and children[0].is_leaf:
             children = []
-        # 저장된 마테리얼 복원: Looks 자식이 있으면 그 이름을 material_key로
+        # 저장된 마테리얼 복원: Looks 자식의 customData["url"]에서 URL 복원
         looks = prim.GetChild("Looks")
-        material_key = looks.GetChildren()[0].GetName() if looks.IsValid() and looks.GetChildren() else None
+        if looks.IsValid() and looks.GetChildren():
+            url_val = looks.GetChildren()[0].GetCustomDataByKey("url")
+            material_key = url_val if isinstance(url_val, str) else None
+        else:
+            material_key = None
         return PrimNode(
             prim=prim,
             path=path,
