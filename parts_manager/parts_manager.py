@@ -301,6 +301,9 @@ class PartsManager:
         ]
         if len(children) == 1 and children[0].is_leaf:
             children = []
+        # 저장된 마테리얼 복원: Looks 자식이 있으면 그 이름을 material_key로
+        looks = prim.GetChild("Looks")
+        material_key = looks.GetChildren()[0].GetName() if looks.IsValid() and looks.GetChildren() else None
         return PrimNode(
             prim=prim,
             path=path,
@@ -311,6 +314,7 @@ class PartsManager:
             is_leaf=(len(children) == 0),
             index_key=key,
             is_visible=cls._compute_visibility(path),
+            material_key=material_key,
         )
 
     @classmethod
