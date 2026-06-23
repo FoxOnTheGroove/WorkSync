@@ -348,6 +348,40 @@ class Subset:
         return closest_face
 
     @classmethod
+    def raycast_face_cached(
+        cls,
+        spatial_index: dict,
+        ray_origin: Gf.Vec3d,
+        ray_dir: Gf.Vec3d,
+    ) -> "int | None":
+        """build_face_spatial_index의 캐시를 사용해 CPU에서 즉시 레이캐스트.
+
+        RTX async raycast 없이 같은 프레임에 face를 찾는다. 클릭 피킹 전용.
+        spatial_index에 world_points가 없으면(캐시 미완성) None 반환.
+        """
+        world_points = spatial_index.get("world_points")
+        counts       = spatial_index.get("counts")
+        indices      = spatial_index.get("indices")
+        offsets      = spatial_index.get("offsets")
+        if world_points is None or counts is None:
+            return None
+
+        closest_face = None
+        closest_t    = None
+        for face, count in enumerate(counts):
+            offset = offsets[face]
+            for i in range(1, count - 1):
+                v0 = world_points[indices[offset]]
+                v1 = world_points[indices[offset + i]]
+                v2 = world_points[indices[offset + i + 1]]
+                t = cls._ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2)
+                if t is not None and (closest_t is None or t < closest_t):
+                    closest_t = t
+                    closest_face = face
+        return closest_face
+
+
+    @classmethod
     def face_centers_world(cls, mesh_prim: Usd.Prim) -> list:
         """면별 중심점(월드 좌표) 목록. 드래그 사각형 다중 선택용."""
         data = cls._get_mesh_data(mesh_prim)

@@ -127,6 +127,10 @@ class ViewportPicker:
             traceback.print_exc()
 
     def _handle_click(self, sender) -> None:
+        # RTX async raycast 대신 CPU에서 같은 프레임에 즉시 처리.
+        # submit_raycast_query는 렌더 파이프라인 콜백을 기다리는 고정 지연이 있어
+        # 클릭 응답이 체감상 느리게 느껴졌다. 캐싱된 world_points로 직접 레이-삼각형
+        # 교차를 계산해 그 지연을 없앤다.
         payload = sender.gesture_payload
 
         mesh_prim = self._get_mesh_prim()
@@ -143,54 +147,27 @@ class ViewportPicker:
         _log(f"클릭 NDC=({ndc_x}, {ndc_y})")
 
         origin, direction = self._compute_ray(viewport_api, ndc_x, ndc_y)
-        _log(f"ray origin={tuple(origin)} dir={tuple(direction)}")
 
-        import omni.kit.raycast.query as rq
-        ray = rq.Ray(tuple(origin), tuple(direction))
-        self._raycast.submit_raycast_query(ray, self._make_on_hit(mesh_prim))
-        _log("raycast 쿼리 제출")
+        spatial_index = self._get_spatial_index(mesh_prim)
+        if not spatial_index:
+            _log("spatial_index 없음 -> 무시")
+            return
 
-    def _make_on_hit(self, mesh_prim):
-        def _on_hit(ray, result) -> None:
-            try:
-                self._handle_hit(mesh_prim, result)
-            except Exception:
-                _log("_on_hit 예외:")
-                traceback.print_exc()
-        return _on_hit
+        face_index = Subset.raycast_face_cached(spatial_index, origin, direction)
+        _log(f"CPU raycast -> face {face_index}")
 
-    def _handle_hit(self, mesh_prim, result) -> None:
-        if not result.valid:
-            _log("히트 없음 (result.valid == False) -> 선택 해제")
+        if face_index is None:
+            _log("메시에 히트 없음 -> 선택 해제")
             self._select_paths([])
             if self._on_pick:
                 self._on_pick(None, None)
             return
 
-        hit_path = str(result.get_target_usd_path())
-        hit_position = getattr(result, "hit_position", None)
-        _log(f"히트: path={hit_path} pos={hit_position}")
+        face_map = self._get_face_subset_map(mesh_prim)
+        subset_path = face_map.get(face_index)
+        _log(f"face {face_index} -> subset {subset_path}")
 
-        if not hit_path.startswith(str(mesh_prim.GetPath())):
-            _log(f"대상 메시({mesh_prim.GetPath()})와 불일치 -> 클릭된 prim 선택: {hit_path}")
-            self._select(hit_path, None)
-            return
-
-        # primitive_id는 신뢰할 수 없어(0/1만 관측됨) 히트 위치 기반 최근접 면으로 역산.
-        face_index = None
-        if hit_position is not None:
-            hit_point = Gf.Vec3d(*hit_position)
-            spatial_index = self._get_spatial_index(mesh_prim)
-            face_index = Subset.face_at_point(mesh_prim, hit_point, spatial_index)
-            _log(f"face_at_point({hit_point}) -> {face_index}")
-
-        subset_path = None
-        if face_index is not None:
-            face_map = self._get_face_subset_map(mesh_prim)
-            subset_path = face_map.get(face_index)
-            _log(f"face {face_index} -> subset {subset_path}")
-
-        target_path = subset_path or hit_path
+        target_path = subset_path or str(mesh_prim.GetPath())
         self._select(target_path, face_index)
 
     def _get_face_subset_map(self, mesh_prim) -> dict:
@@ -413,7 +390,7 @@ class ViewportPicker:
         prim을 덮어쓰는 경우가 있어, 몇 프레임 동안 선택을 다시 강제한다."""
         app = omni.kit.app.get_app()
         selection = omni.usd.get_context().get_selection()
-        for _ in range(2):
+        for _ in range(1):
             await app.next_update_async()
             if self._pending_paths != paths:
                 return
