@@ -24,8 +24,9 @@ CONVERT_OPTIONS = {
 
 async def _convert():
     converter = hoops_mod.get_instance()
-    result = converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
-    print("[결과]", result)
+    task = converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+    success = await task.wait_until_finished()
+    print("[결과]", success)
 
 
 omni.kit.async_engine.run_coroutine(_convert())
