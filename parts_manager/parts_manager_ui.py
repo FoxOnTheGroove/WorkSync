@@ -1,3 +1,4 @@
+import asyncio
 import omni.ui as ui
 from .parts_manager_service import PartsManagerServiceService
 
@@ -121,8 +122,10 @@ class PartsManagerServiceUI:
                 field.model.set_value(current)
                 ui.Button(
                     "acc", width=32,
-                    clicked_fn=lambda k=key, f=field: PartsManagerService.set_material(
-                        k, f.model.get_value_as_string() or None
+                    clicked_fn=lambda k=key, f=field: asyncio.ensure_future(
+                        PartsManagerService.set_material(
+                            k, f.model.get_value_as_string() or None
+                        )
                     ),
                 )
 

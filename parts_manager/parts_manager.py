@@ -137,20 +137,21 @@ class PartsManager:
         return node.material_key if node else None
 
     @classmethod
-    def set_material(cls, index_key: str, key: "str | None") -> None:
+    async def set_material(cls, index_key: str, key: "str | None") -> bool:
         """index_key 노드에 마테리얼을 적용하고 material_key를 기록.
-        노드 이하(재귀) 모든 Mesh에 동일 마테리얼을 바인딩한다."""
+        노드 이하(재귀) 모든 Mesh에 동일 마테리얼을 바인딩한다.
+        레퍼런스 .usd + 텍스처 로딩이 끝나 렌더에 반영되면 True를 반환한다."""
         node = cls._node_map.get(index_key)
         if node is None:
-            return
+            return False
         if not node.is_leaf:
             prefix = index_key + "_"
             for k in [k for k, n in cls._node_map.items() if n.is_leaf and k.startswith(prefix)]:
-                cls.set_material(k, key)
-            return
+                await cls.set_material(k, key)
+            return True
         stage = cls._get_stage()
         if stage is None:
-            return
+            return False
         # 이전 마테리얼 prim 제거 (reference 소스면 RemovePrim 실패 → SetActive(False) fallback)
         looks = stage.GetPrimAtPath(f"{node.path}/Looks")
         if looks.IsValid():
@@ -161,11 +162,11 @@ class PartsManager:
         cls._dirty_keys.add(index_key)
         meshes = [p for p in Usd.PrimRange(node.prim) if p.GetTypeName() == "Mesh"]
         if not meshes:
-            return
+            return True
         if key is None:
             for prim in meshes:
                 UsdShade.MaterialBindingAPI(prim).UnbindAllBindings()
-            return
+            return True
         mtl_path = f"{node.path}/Looks/{Tf.MakeValidIdentifier(key)}"
         mtl_prim = stage.GetPrimAtPath(mtl_path)
         if not mtl_prim.IsValid():
@@ -175,6 +176,16 @@ class PartsManager:
         material = UsdShade.Material(mtl_prim)
         for prim in meshes:
             UsdShade.MaterialBindingAPI(prim).Bind(material)
+        # 레퍼런스 .usd + 텍스처 로딩이 끝날 때까지 대기 (최대 600프레임 ≈ 10초 캡)
+        app = omni.kit.app.get_app()
+        ctx = omni.usd.get_context()
+        await app.next_update_async()  # 새 레퍼런스 로딩이 등록될 프레임 확보
+        for _ in range(600):
+            _, loaded, total = ctx.get_stage_loading_status()
+            if loaded >= total:
+                break
+            await app.next_update_async()
+        return True
 
     @classmethod
     def save_material_eqp(cls) -> None:
