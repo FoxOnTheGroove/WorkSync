@@ -5,6 +5,7 @@ Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사�
 """
 
 import asyncio
+import omni.kit.app
 import omni.kit.converter.hoops_core as hoops_mod
 
 
@@ -24,8 +25,13 @@ CONVERT_OPTIONS = {
 
 async def _convert():
     converter = hoops_mod.get_instance()
-    result = await converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
-    print("[결과]", result)
+    task = converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+
+    # Kit 업데이트 루프에 양보하면서 완료 대기
+    while not task.finished():
+        await omni.kit.app.get_app().next_update_async()
+
+    print("[결과]", task.get_result())
 
 
 asyncio.ensure_future(_convert())
