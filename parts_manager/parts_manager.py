@@ -176,10 +176,17 @@ class PartsManager:
         material = UsdShade.Material(mtl_prim)
         for prim in meshes:
             UsdShade.MaterialBindingAPI(prim).Bind(material)
-        # 레퍼런스 .usd + 텍스처 로딩이 끝날 때까지 대기 (최대 600프레임 ≈ 10초 캡)
+        # 레퍼런스 .usd + 텍스처 로딩이 끝날 때까지 대기
         app = omni.kit.app.get_app()
         ctx = omni.usd.get_context()
-        await app.next_update_async()  # 새 레퍼런스 로딩이 등록될 프레임 확보
+        await app.next_update_async()
+        # 1단계: 로딩이 시작될 때까지 대기 (최대 30프레임)
+        for _ in range(30):
+            _, loaded, total = ctx.get_stage_loading_status()
+            if total > loaded:
+                break
+            await app.next_update_async()
+        # 2단계: 로딩이 끝날 때까지 대기 (최대 600프레임 ≈ 10초 캡)
         for _ in range(600):
             _, loaded, total = ctx.get_stage_loading_status()
             if loaded >= total:
