@@ -1,5 +1,5 @@
 import omni.ui as ui
-from .capture import Capture
+from . import capture_service
 
 
 class CaptureUI:
@@ -17,7 +17,7 @@ class CaptureUI:
                 self._status_label = ui.Label("", style={"color": 0xFF888888})
 
     def _on_capture(self):
-        ok = Capture.capture_to_file("capture.png")
+        ok = capture_service.capture_to_file("capture.png")
         if self._status_label:
             self._status_label.text = "[OK] Captured" if ok else "[TODO] Not implemented"
 
