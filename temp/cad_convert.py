@@ -16,9 +16,10 @@ DEST_PATH   = r"C:/data/out/model.usd"
 
 # file_format_args 는 dict[str, str] - 값 전부 문자열
 CONVERT_OPTIONS = {
-    "upAxis"         : "1",   # 0=default, 1=Y-up, 2=Z-up
-    "tessLOD"        : "2",   # 0=ExtraLow ~ 4=ExtraHigh
-    "instancingStyle": "1",
+    "upAxis"         : "1",      # 1=Y-up
+    "tessLOD"        : "4",      # 4=ExtraHigh (원본에 가장 가깝게)
+    "instancingStyle": "0",      # 0=None (인스턴싱 없음)
+    "useMaterials"   : "false",  # 재질 없음
     "dMetersPerUnit" : "1.0",
 }
 
