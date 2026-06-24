@@ -145,6 +145,7 @@ class Subset:
                 family_name=cls.FAMILY_NAME,
             )
             if prim:
+                cls.save_subset_midpoint(mesh_prim, prim)
                 prims.append(prim)
         print(f"[Subset] subset {len(prims)}개 생성 (threshold={threshold_deg}°).")
         return prims, groups
@@ -291,7 +292,61 @@ class Subset:
         return keep
 
     @classmethod
-    def build_face_subset_map(cls, mesh_prim: Usd.Prim) -> dict:
+    def compute_subset_midpoint(
+        cls, mesh_prim: Usd.Prim, subset_prim: Usd.Prim
+    ) -> "tuple[Gf.Vec3d | None, Gf.Vec3d | None]":
+        """서브셋 면들의 면적 가중 centroid를 (로컬, 월드) 좌표 쌍으로 반환.
+
+        단순 면 중심 평균이 아닌 면적 가중 평균이라, 테셀레이션 편향 없이 정확하다.
+        """
+        data = cls._get_mesh_data(mesh_prim)
+        if data is None:
+            return None, None
+        points, counts, face_indices = data
+
+        subset_faces = UsdGeom.Subset(subset_prim).GetIndicesAttr().Get()
+        if not subset_faces:
+            return None, None
+
+        offsets = cls._face_offsets(counts)
+
+        total_area = 0.0
+        weighted = Gf.Vec3d(0, 0, 0)
+        for fi in subset_faces:
+            count = counts[fi]
+            off = offsets[fi]
+            v0 = Gf.Vec3d(points[face_indices[off]])
+            for k in range(1, count - 1):
+                v1 = Gf.Vec3d(points[face_indices[off + k]])
+                v2 = Gf.Vec3d(points[face_indices[off + k + 1]])
+                center = (v0 + v1 + v2) / 3.0
+                area = 0.5 * Gf.Cross(v1 - v0, v2 - v0).GetLength()
+                weighted += center * area
+                total_area += area
+
+        if total_area < 1e-12:
+            return None, None
+
+        local_center = weighted / total_area
+        xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        world_center = xform.Transform(local_center)
+        return local_center, world_center
+
+    @classmethod
+    def save_subset_midpoint(cls, mesh_prim: Usd.Prim, subset_prim: Usd.Prim) -> bool:
+        """midpoint를 계산해 subset prim에 subset:midpoint_local/world 어트리뷰트로 저장."""
+        local, world = cls.compute_subset_midpoint(mesh_prim, subset_prim)
+        if local is None:
+            return False
+        subset_prim.CreateAttribute(
+            "subset:midpoint_local", Sdf.ValueTypeNames.Double3, custom=True
+        ).Set(local)
+        subset_prim.CreateAttribute(
+            "subset:midpoint_world", Sdf.ValueTypeNames.Double3, custom=True
+        ).Set(world)
+        return True
+
+
         """face index -> subset prim path. 여러 subset에 속하면 먼저 찾은 것 우선."""
         face_map: dict = {}
         for child in cls.list_subsets(mesh_prim):

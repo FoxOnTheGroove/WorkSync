@@ -174,6 +174,9 @@ class DummyUI:
             return
 
         Subset.clear_group_colors(self._mesh_prim)
+        for prim in prims:
+            if not prim.HasAttribute("subset:midpoint_local"):
+                Subset.save_subset_midpoint(self._mesh_prim, prim)
         self._set_status(f"[OK] 기존 subset {len(prims)}개 불러옴")
         self._refresh_results(prims, groups)
 
