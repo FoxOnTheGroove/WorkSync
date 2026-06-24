@@ -10,6 +10,7 @@ import omni.renderer_capture
 
 class Capture:
     _prefix = "capture"
+    _index = 0
 
     @classmethod
     def set_prefix(cls, prefix):
@@ -32,8 +33,11 @@ class Capture:
 
         os.makedirs(folder_path, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        file_name = f"{cls._prefix}_{timestamp}.png"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 초 뒤에 00~99 순환 인덱스를 붙여 같은 초 내 충돌 방지
+        index = cls._index
+        cls._index = (cls._index + 1) % 100
+        file_name = f"{cls._prefix}_{timestamp}_{index:02d}.png"
         file_path = os.path.join(folder_path, file_name)
 
         asyncio.ensure_future(cls._capture_async(window, file_path))
