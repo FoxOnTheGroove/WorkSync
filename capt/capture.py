@@ -7,35 +7,24 @@ import omni.renderer_capture
 
 
 class Capture:
-    """Capture a ui.Window's on-screen region and export it to an image file."""
 
-    @staticmethod
-    def get_window():
-        # Implemented by the user: return the target ui.Window to capture.
+    @classmethod
+    def get_window(cls):
         return None
 
-    @staticmethod
-    def capture_to_file(file_path):
-        """Capture the window returned by get_window() to file_path.
-
-        Returns True if the capture was scheduled, False if there is no window.
-        The image is written asynchronously a couple of frames later.
-        """
-        window = Capture.get_window()
+    @classmethod
+    def capture_to_file(cls, file_path):
+        window = cls.get_window()
         if window is None:
             print("[capt] capture_to_file: no window")
             return False
 
-        asyncio.ensure_future(Capture._capture_async(window, file_path))
+        asyncio.ensure_future(cls._capture_async(window, file_path))
         return True
 
-    @staticmethod
-    def _window_rect_px(window):
-        """Window rectangle in framebuffer pixels: (left, top, width, height).
-
-        Window position/size are in UI points, so scale by the DPI to get the
-        actual pixel rectangle inside the swapchain image.
-        """
+    @classmethod
+    def _window_rect_px(cls, window):
+        # 창 좌표/크기는 UI 포인트 단위 → DPI를 곱해 실제 픽셀 사각형으로 변환
         dpi = ui.Workspace.get_dpi_scale()
         left = int(window.position_x * dpi)
         top = int(window.position_y * dpi)
@@ -43,22 +32,21 @@ class Capture:
         height = int(window.height * dpi)
         return left, top, width, height
 
-    @staticmethod
-    async def _capture_async(window, file_path):
+    @classmethod
+    async def _capture_async(cls, window, file_path):
         full_path = file_path + ".full.png"
         capture_iface = omni.renderer_capture.acquire_renderer_capture_interface()
         app = omni.kit.app.get_app()
 
-        # Let one frame render so the window layout is up to date.
+        # 레이아웃 갱신을 위해 한 프레임 대기
         await app.next_update_async()
 
-        # Grab the whole app window (swapchain) on the next rendered frame.
+        # 앱 창 전체(스왑체인)를 다음 프레임에 캡처
         capture_iface.capture_next_frame_swapchain(full_path)
         await app.next_update_async()
         capture_iface.wait_async_capture()
 
-        # Crop the swapchain image down to the window's rectangle.
-        left, top, width, height = Capture._window_rect_px(window)
+        left, top, width, height = cls._window_rect_px(window)
 
         try:
             from PIL import Image
@@ -70,7 +58,7 @@ class Capture:
         img = Image.open(full_path)
         img_w, img_h = img.size
 
-        # Clamp to image bounds in case the window is partly off-screen.
+        # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
         l = max(0, min(left, img_w))
         t = max(0, min(top, img_h))
         r = max(l, min(left + width, img_w))
