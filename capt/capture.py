@@ -1,6 +1,6 @@
 import os
+import ctypes
 import asyncio
-import tempfile
 from datetime import datetime
 
 import omni.ui as ui
@@ -35,11 +35,8 @@ class Capture:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         file_name = f"{cls._prefix}_{timestamp}.png"
         file_path = os.path.join(folder_path, file_name)
-        # 시스템 임시 디렉토리에 스왑체인 전체 캡처 저장
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
-        os.close(tmp_fd)
 
-        asyncio.ensure_future(cls._capture_async(window, file_path, tmp_path))
+        asyncio.ensure_future(cls._capture_async(window, file_path))
         return True
 
     @classmethod
@@ -53,48 +50,48 @@ class Capture:
         return left, top, width, height
 
     @classmethod
-    async def _capture_async(cls, window, file_path, tmp_path):
+    async def _capture_async(cls, window, file_path):
         capture_iface = omni.renderer_capture.acquire_renderer_capture_interface()
         app = omni.kit.app.get_app()
 
         # 레이아웃 갱신을 위해 한 프레임 대기
         await app.next_update_async()
 
-        # 앱 창 전체(스왑체인)를 캡처, 콜백으로 파일 쓰기 완료 확인
         loop = asyncio.get_event_loop()
         future = loop.create_future()
+        result = {}
 
-        def _on_done():
+        # 콜백은 파일 경로가 아니라 스왑체인 픽셀 버퍼를 직접 전달함
+        def _on_capture(buffer, buffer_size, width, height, format_):
+            try:
+                ptr = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte * buffer_size))
+                result["data"] = bytes(ptr.contents)
+                result["size"] = (width, height)
+            except Exception as exc:
+                result["error"] = exc
             loop.call_soon_threadsafe(future.set_result, None)
 
-        capture_iface.capture_next_frame_swapchain_callback(tmp_path, _on_done)
+        capture_iface.capture_next_frame_swapchain_callback(_on_capture)
         await future
 
-        left, top, width, height = cls._window_rect_px(window)
-
-        try:
-            from PIL import Image
-        except ImportError:
-            print("[capt] PIL not available; saved full swapchain instead")
-            os.replace(tmp_path, file_path)
+        if "data" not in result:
+            print(f"[capt] capture failed: {result.get('error')}")
             return
 
-        img = Image.open(tmp_path)
-        img_w, img_h = img.size
+        from PIL import Image
 
+        w, h = result["size"]
+        img = Image.frombytes("RGBA", (w, h), result["data"])
+
+        left, top, rw, rh = cls._window_rect_px(window)
         # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
-        l = max(0, min(left, img_w))
-        t = max(0, min(top, img_h))
-        r = max(l, min(left + width, img_w))
-        b = max(t, min(top + height, img_h))
+        l = max(0, min(left, w))
+        t = max(0, min(top, h))
+        r = max(l, min(left + rw, w))
+        b = max(t, min(top + rh, h))
 
         cropped = img.crop((l, t, r, b))
         cropped.save(file_path)
         img.close()
-
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
 
         print(f"[capt] captured -> {file_path}")
