@@ -1,6 +1,6 @@
 import os
-import ctypes
 import asyncio
+import tempfile
 from datetime import datetime
 
 import omni.ui as ui
@@ -57,41 +57,41 @@ class Capture:
         # 레이아웃 갱신을 위해 한 프레임 대기
         await app.next_update_async()
 
-        loop = asyncio.get_event_loop()
-        future = loop.create_future()
-        result = {}
+        # 시스템 임시 경로 (Kit이 직접 생성하도록 mkstemp 사용 안 함)
+        tmp_dir = tempfile.gettempdir()
+        tmp_path = os.path.join(tmp_dir, f"capt_swapchain_{os.getpid()}.png")
 
-        # 콜백은 파일 경로가 아니라 스왑체인 픽셀 버퍼를 직접 전달함
-        def _on_capture(buffer, buffer_size, width, height, format_):
-            try:
-                ptr = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte * buffer_size))
-                result["data"] = bytes(ptr.contents)
-                result["size"] = (width, height)
-            except Exception as exc:
-                result["error"] = exc
-            loop.call_soon_threadsafe(future.set_result, None)
+        capture_iface.capture_next_frame_swapchain(tmp_path)
 
-        capture_iface.capture_next_frame_swapchain_callback(_on_capture)
-        await future
-
-        if "data" not in result:
-            print(f"[capt] capture failed: {result.get('error')}")
+        # 파일이 실제로 기록될 때까지 프레임마다 확인 (최대 60프레임)
+        for _ in range(60):
+            await app.next_update_async()
+            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                break
+        else:
+            print("[capt] 캡처 타임아웃: 스왑체인 파일이 생성되지 않음")
             return
+
+        left, top, width, height = cls._window_rect_px(window)
 
         from PIL import Image
 
-        w, h = result["size"]
-        img = Image.frombytes("RGBA", (w, h), result["data"])
+        img = Image.open(tmp_path)
+        img_w, img_h = img.size
 
-        left, top, rw, rh = cls._window_rect_px(window)
         # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
-        l = max(0, min(left, w))
-        t = max(0, min(top, h))
-        r = max(l, min(left + rw, w))
-        b = max(t, min(top + rh, h))
+        l = max(0, min(left, img_w))
+        t = max(0, min(top, img_h))
+        r = max(l, min(left + width, img_w))
+        b = max(t, min(top + height, img_h))
 
         cropped = img.crop((l, t, r, b))
         cropped.save(file_path)
         img.close()
+
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
         print(f"[capt] captured -> {file_path}")
