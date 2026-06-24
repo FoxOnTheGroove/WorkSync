@@ -1,5 +1,7 @@
 import os
 import asyncio
+import uuid
+from datetime import datetime
 
 import omni.ui as ui
 import omni.kit.app
@@ -7,19 +9,31 @@ import omni.renderer_capture
 
 
 class Capture:
+    _prefix = "capture"
+
+    @classmethod
+    def set_prefix(cls, prefix):
+        cls._prefix = prefix
 
     @classmethod
     def get_window(cls):
         return None
 
     @classmethod
-    def capture_to_file(cls, file_path):
+    def capture_to_folder(cls, folder_path):
         window = cls.get_window()
         if window is None:
-            print("[capt] capture_to_file: no window")
+            print("[capt] capture_to_folder: no window")
             return False
 
-        asyncio.ensure_future(cls._capture_async(window, file_path))
+        os.makedirs(folder_path, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        file_name = f"{cls._prefix}_{timestamp}.png"
+        file_path = os.path.join(folder_path, file_name)
+        tmp_path = os.path.join(folder_path, f"_tmp_{uuid.uuid4().hex}.png")
+
+        asyncio.ensure_future(cls._capture_async(window, file_path, tmp_path))
         return True
 
     @classmethod
@@ -33,8 +47,7 @@ class Capture:
         return left, top, width, height
 
     @classmethod
-    async def _capture_async(cls, window, file_path):
-        full_path = file_path + ".full.png"
+    async def _capture_async(cls, window, file_path, tmp_path):
         capture_iface = omni.renderer_capture.acquire_renderer_capture_interface()
         app = omni.kit.app.get_app()
 
@@ -48,7 +61,7 @@ class Capture:
         def _on_done():
             loop.call_soon_threadsafe(future.set_result, None)
 
-        capture_iface.capture_next_frame_swapchain_callback(full_path, _on_done)
+        capture_iface.capture_next_frame_swapchain_callback(tmp_path, _on_done)
         await future
 
         left, top, width, height = cls._window_rect_px(window)
@@ -57,10 +70,10 @@ class Capture:
             from PIL import Image
         except ImportError:
             print("[capt] PIL not available; saved full swapchain instead")
-            os.replace(full_path, file_path)
+            os.replace(tmp_path, file_path)
             return
 
-        img = Image.open(full_path)
+        img = Image.open(tmp_path)
         img_w, img_h = img.size
 
         # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
@@ -74,8 +87,8 @@ class Capture:
         img.close()
 
         try:
-            os.remove(full_path)
+            os.remove(tmp_path)
         except OSError:
             pass
 
-        print(f"[capt] captured window -> {file_path}")
+        print(f"[capt] captured -> {file_path}")

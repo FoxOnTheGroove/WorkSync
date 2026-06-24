@@ -6,20 +6,20 @@ class CaptureUI:
 
     def __init__(self):
         self._window = None
-        self._path_model = None
+        self._folder_model = None
 
     def build_ui(self):
         self._window = ui.Window("Capt", width=360, height=90)
 
         with self._window.frame:
             with ui.VStack(spacing=4):
-                self._path_model = ui.StringField().model
-                self._path_model.set_value("capture.png")
+                self._folder_model = ui.StringField().model
+                self._folder_model.set_value("")
                 ui.Button("Capture", clicked_fn=self._on_capture, height=32)
 
     def _on_capture(self):
-        file_path = self._path_model.get_value_as_string()
-        CaptureService.capture_to_file(file_path)
+        folder_path = self._folder_model.get_value_as_string()
+        CaptureService.capture_to_folder(folder_path)
 
     def destroy(self):
         if self._window:
