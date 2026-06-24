@@ -1,6 +1,6 @@
 import os
 import asyncio
-import uuid
+import tempfile
 from datetime import datetime
 
 import omni.ui as ui
@@ -35,7 +35,9 @@ class Capture:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         file_name = f"{cls._prefix}_{timestamp}.png"
         file_path = os.path.join(folder_path, file_name)
-        tmp_path = os.path.join(folder_path, f"_tmp_{uuid.uuid4().hex}.png")
+        # 시스템 임시 디렉토리에 스왑체인 전체 캡처 저장
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
+        os.close(tmp_fd)
 
         asyncio.ensure_future(cls._capture_async(window, file_path, tmp_path))
         return True
