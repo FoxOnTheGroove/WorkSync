@@ -284,6 +284,7 @@ class Subset:
 
         keep = valid[0]
         UsdGeom.Subset(keep).GetIndicesAttr().Set(Vt.IntArray(sorted(merged)))
+        cls.save_subset_midpoint(mesh_prim, keep)  # 면이 바뀌었으니 midpoint 재계산
 
         stage = cls._get_stage()
         for prim in valid[1:]:
@@ -346,7 +347,8 @@ class Subset:
         ).Set(world)
         return True
 
-
+    @classmethod
+    def build_face_subset_map(cls, mesh_prim: Usd.Prim) -> dict:
         """face index -> subset prim path. 여러 subset에 속하면 먼저 찾은 것 우선."""
         face_map: dict = {}
         for child in cls.list_subsets(mesh_prim):

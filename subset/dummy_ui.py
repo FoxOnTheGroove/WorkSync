@@ -336,6 +336,15 @@ class DummyUI:
         omni.usd.get_context().get_selection().set_selected_prim_paths(paths, True)
         self._picker.note_external_selection(paths)
 
+        midpoints = []
+        for i in seen:
+            prim = self._result_prims[i]
+            if prim and prim.IsValid():
+                attr = prim.GetAttribute("subset:midpoint_world")
+                if attr and attr.HasValue():
+                    midpoints.append(attr.Get())
+        self._picker.show_midpoints(midpoints)
+
         # 뷰포트 제스처/리스트 클릭 콜백 안에서 섹션을 바로 clear하면 위험하므로 미룬다.
         async def _do_rebuild():
             await omni.kit.app.get_app().next_update_async()
@@ -367,6 +376,7 @@ class DummyUI:
         self._selected_indices = []
         if self._mesh_prim and self._mesh_prim.IsValid():
             Subset.highlight_selected(self._mesh_prim, self._result_groups, None)
+        self._picker.show_midpoints([])
 
         async def _do_rebuild():
             await omni.kit.app.get_app().next_update_async()

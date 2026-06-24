@@ -41,6 +41,9 @@ class ViewportPicker:
         self._disable_selection = None
         self._face_subset_map: "dict | None" = None
         self._spatial_index: "dict | None" = None
+        self._midpoint_transform = None
+        self._midpoint_world: list = []
+        self._update_sub = None
 
     def is_enabled(self) -> bool:
         return self._scene_view is not None
@@ -89,6 +92,14 @@ class ViewportPicker:
                         ),
                     ])
                     self._rect_transform = sc.Transform()
+                    self._midpoint_transform = sc.Transform()
+            # 선택된 subset의 midpoint를 매 프레임 화면에 다시 투영해 그린다
+            # (카메라가 움직여도 점이 따라오도록).
+            self._update_sub = (
+                omni.kit.app.get_app()
+                .get_update_event_stream()
+                .create_subscription_to_pop(self._on_update, name="subset_midpoint_draw")
+            )
             _log("구독 시작 (Click + Drag Gesture)")
         except Exception:
             _log("구독 실패:")
@@ -103,6 +114,9 @@ class ViewportPicker:
         self._frame = None
         self._scene_view = None
         self._rect_transform = None
+        self._midpoint_transform = None
+        self._midpoint_world = []
+        self._update_sub = None
         self._drag_start = None
         self._disable_selection = None  # 핸들 해제 -> 기본 클릭-선택 복원
 
@@ -373,6 +387,48 @@ class ViewportPicker:
         """다중 선택 토글 등 UI 쪽에서 선택을 직접 바꿨을 때, 진행 중인
         재적용 루프가 이를 덮어쓰지 않도록 기준값을 갱신한다."""
         self._pending_paths = list(paths)
+
+    # ------------------------------------------------------------------ midpoint 표시
+
+    def show_midpoints(self, world_points: list) -> None:
+        """선택된 subset의 midpoint(월드 좌표) 목록을 화면에 표시. 빈 목록이면 끈다.
+
+        오버레이(Subset Pick)가 꺼져 있으면 그릴 대상이 없으므로 무시한다.
+        """
+        self._midpoint_world = [Gf.Vec3d(*p) for p in world_points] if world_points else []
+        if self._midpoint_transform and not self._midpoint_world:
+            self._midpoint_transform.clear()
+
+    def _on_update(self, _event) -> None:
+        if not self._midpoint_transform:
+            return
+        self._midpoint_transform.clear()
+        if not self._midpoint_world:
+            return
+        viewport_api = get_active_viewport()
+        if not viewport_api:
+            return
+
+        aspect = 1.0
+        if self._frame and self._frame.computed_width and self._frame.computed_height:
+            aspect = self._frame.computed_height / self._frame.computed_width
+
+        world_to_cam = viewport_api.transform.GetInverse()
+        proj = viewport_api.projection
+
+        positions, colors, sizes = [], [], []
+        for wp in self._midpoint_world:
+            cam_pt = world_to_cam.Transform(wp)
+            if cam_pt[2] >= 0:  # 카메라 뒤 -> 표시 안 함
+                continue
+            ndc = proj.Transform(cam_pt)
+            positions.append((ndc[0], ndc[1] * aspect, 0))
+            colors.append(0xFF00FF00)  # 초록
+            sizes.append(12)
+
+        if positions:
+            with self._midpoint_transform:
+                sc.Points(positions, colors=colors, sizes=sizes)
 
     def _select(self, path: str, face_index: "int | None") -> None:
         self._select_paths([path])
