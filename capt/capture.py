@@ -20,11 +20,15 @@ class Capture:
         return None
 
     @classmethod
-    def capture_to_folder(cls, folder_path):
+    def capture_to_folder(cls, folder_path=None):
         window = cls.get_window()
         if window is None:
             print("[capt] capture_to_folder: no window")
             return False
+
+        # 경로가 없으면 사용자 다운로드 폴더로 저장
+        if not folder_path:
+            folder_path = os.path.join(os.path.expanduser("~"), "Downloads")
 
         os.makedirs(folder_path, exist_ok=True)
 

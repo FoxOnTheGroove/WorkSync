@@ -12,5 +12,5 @@ class CaptureService:
         return Capture.get_window()
 
     @classmethod
-    def capture_to_folder(cls, folder_path):
+    def capture_to_folder(cls, folder_path=None):
         return Capture.capture_to_folder(folder_path)
