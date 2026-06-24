@@ -11,6 +11,7 @@ import omni.renderer_capture
 class Capture:
     _prefix = "capture"
     _index = 0
+    _last_second = ""
 
     @classmethod
     def set_prefix(cls, prefix):
@@ -34,7 +35,10 @@ class Capture:
         os.makedirs(folder_path, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # 초 뒤에 00~99 순환 인덱스를 붙여 같은 초 내 충돌 방지
+        # 초가 바뀌면 인덱스 리셋, 같은 초 안에서는 00~99 증가
+        if timestamp != cls._last_second:
+            cls._last_second = timestamp
+            cls._index = 0
         index = cls._index
         cls._index = (cls._index + 1) % 100
         file_name = f"{cls._prefix}_{timestamp}_{index:02d}.png"
