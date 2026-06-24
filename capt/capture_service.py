@@ -1,15 +1,17 @@
 from .capture import Capture
 
-"""Public API for the capt extension.
 
-External callers should import from here, not from capture.py.
-capture.py holds the implementation; this module is the stable surface.
-"""
+class CaptureService:
+    """Public API for the capt extension.
 
-
-def capture_to_file(file_path):
-    """Capture the active viewport and export it to file_path.
-
-    Returns True on success, False otherwise.
+    External callers should use CaptureService, not capture.py directly.
+    capture.py holds the implementation; this class is the stable surface.
     """
-    return Capture.capture_to_file(file_path)
+
+    @staticmethod
+    def capture_to_file(file_path):
+        """Capture the active viewport and export it to file_path.
+
+        Returns True on success, False otherwise.
+        """
+        return Capture.capture_to_file(file_path)
