@@ -61,6 +61,10 @@ class Capture:
         tmp_dir = tempfile.gettempdir()
         tmp_path = os.path.join(tmp_dir, f"capt_swapchain_{os.getpid()}.png")
 
+        # 이전 실행이 남긴 파일을 지워야 폴링이 새 캡처를 기다림
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
         capture_iface.capture_next_frame_swapchain(tmp_path)
 
         # 파일이 실제로 기록될 때까지 프레임마다 확인 (최대 60프레임)
