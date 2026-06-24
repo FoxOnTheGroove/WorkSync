@@ -6,20 +6,20 @@ class CaptureUI:
 
     def __init__(self):
         self._window = None
-        self._status_label = None
+        self._path_model = None
 
     def build_ui(self):
-        self._window = ui.Window("Capt", width=300, height=120)
+        self._window = ui.Window("Capt", width=360, height=90)
 
         with self._window.frame:
             with ui.VStack(spacing=4):
-                ui.Button("Capture", clicked_fn=self._on_capture, height=40)
-                self._status_label = ui.Label("", style={"color": 0xFF888888})
+                self._path_model = ui.StringField().model
+                self._path_model.set_value("capture.png")
+                ui.Button("Capture", clicked_fn=self._on_capture, height=32)
 
     def _on_capture(self):
-        ok = CaptureService.capture_to_file("capture.png")
-        if self._status_label:
-            self._status_label.text = "[OK] Captured" if ok else "[TODO] Not implemented"
+        file_path = self._path_model.get_value_as_string()
+        CaptureService.capture_to_file(file_path)
 
     def destroy(self):
         if self._window:
