@@ -41,10 +41,15 @@ class Capture:
         # 레이아웃 갱신을 위해 한 프레임 대기
         await app.next_update_async()
 
-        # 앱 창 전체(스왑체인)를 다음 프레임에 캡처
-        capture_iface.capture_next_frame_swapchain(full_path)
-        await app.next_update_async()
-        capture_iface.wait_async_capture()
+        # 앱 창 전체(스왑체인)를 캡처, 콜백으로 파일 쓰기 완료 확인
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+
+        def _on_done():
+            loop.call_soon_threadsafe(future.set_result, None)
+
+        capture_iface.capture_next_frame_swapchain_callback(full_path, _on_done)
+        await future
 
         left, top, width, height = cls._window_rect_px(window)
 
