@@ -27,11 +27,12 @@ class ScreenCaptureUI:
                     ui.Button("캡처", clicked_fn=self._on_capture, width=70)
 
                 # 미리보기: 남는 공간을 모두 차지
-                preview = ui.ImageWithProvider(
+                # ImageWithProvider는 FillPolicy가 아니라 IwpFillPolicy를 사용
+                ui.ImageWithProvider(
                     self._preview_provider,
+                    fill_policy=ui.IwpFillPolicy.PRESERVE_ASPECT_FIT,
                     height=ui.Fraction(1),
                 )
-                preview.fill_policy = ui.FillPolicy.PRESERVE_ASPECT_FIT
 
                 # 하단 한 줄: 저장 버튼들 (항상 보이게 고정)
                 with ui.HStack(spacing=4, height=32):
