@@ -12,6 +12,7 @@ class Capture:
     _prefix = "capture"
     _index = 0
     _last_second = ""
+    _sem = asyncio.Semaphore(1)
 
     @classmethod
     def set_prefix(cls, prefix):
@@ -59,6 +60,12 @@ class Capture:
 
     @classmethod
     async def _capture_async(cls, window, file_path):
+        # 캡처가 진행 중이면 끝날 때까지 대기 후 순서대로 실행
+        async with cls._sem:
+            await cls._do_capture(window, file_path)
+
+    @classmethod
+    async def _do_capture(cls, window, file_path):
         capture_iface = omni.renderer_capture.acquire_renderer_capture_interface()
         app = omni.kit.app.get_app()
 
