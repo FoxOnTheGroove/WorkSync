@@ -110,19 +110,24 @@ class TabManagerWindow(ui.Window):
 
             for v in range(tab.viewport_count):
                 selected = (v == tab.selected_viewport)
+                # When maximized, only the selected viewport stays active;
+                # the rest are disabled.
+                vp_enabled = (not tab.maximized) or selected
                 with ui.CollapsableFrame(
                     "viewport {}{}".format(v + 1, " *" if selected else "")
                 ):
-                    with ui.VStack(spacing=4):
+                    with ui.VStack(spacing=4, enabled=vp_enabled):
                         ui.Button(
                             "select",
                             height=28,
+                            enabled=vp_enabled,
                             clicked_fn=lambda vi=v: self._select_viewport(vi),
                         )
                         with ui.HStack(height=28, spacing=4):
                             for load_type in LOAD_TYPES:
                                 ui.Button(
                                     LOAD_LABELS[load_type],
+                                    enabled=vp_enabled,
                                     clicked_fn=lambda vi=v, lt=load_type: self._on_load(vi, lt),
                                 )
 
