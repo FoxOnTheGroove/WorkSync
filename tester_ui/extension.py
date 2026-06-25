@@ -1,12 +1,12 @@
 import omni.ext
-from .dummy_ui import DummyDebugWindow
+from .tab_ui import TabManagerWindow
 
 
 class TesterUIExtension(omni.ext.IExt):
 
     def on_startup(self, ext_id):
         print("[tester_ui] startup")
-        self._window = DummyDebugWindow()
+        self._window = TabManagerWindow()
 
     def on_shutdown(self):
         print("[tester_ui] shutdown")
