@@ -70,17 +70,20 @@ class TabManagerWindow(ui.Window):
                     ui.Button("remove tab", clicked_fn=self._remove_all_tabs)
 
                 # Tab bar: one selectable button per tab.
-                self._tab_bar = ui.HStack(height=28, spacing=2)
+                # Frames rebuild on the next frame, so a button's own
+                # clicked_fn can safely trigger a rebuild of its container.
+                self._tab_bar = ui.Frame(height=28)
+                self._tab_bar.set_build_fn(self._build_tab_bar)
 
                 # Body: active-tab controls + per-viewport load buttons.
-                self._content = ui.VStack(spacing=6)
-
-        self._refresh_tab_bar()
-        self._refresh_content()
+                self._content = ui.Frame()
+                self._content.set_build_fn(self._build_content)
 
     def _refresh_tab_bar(self):
-        self._tab_bar.clear()
-        with self._tab_bar:
+        self._tab_bar.rebuild()
+
+    def _build_tab_bar(self):
+        with ui.HStack(height=28, spacing=2):
             if not self._tabs:
                 ui.Label("(no tabs)", height=24)
                 return
@@ -93,9 +96,11 @@ class TabManagerWindow(ui.Window):
                 )
 
     def _refresh_content(self):
-        self._content.clear()
+        self._content.rebuild()
+
+    def _build_content(self):
         tab = self.active_tab()
-        with self._content:
+        with ui.VStack(spacing=6):
             if tab is None:
                 ui.Label("Create a tab to begin.", height=24)
                 return
