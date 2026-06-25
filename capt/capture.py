@@ -31,7 +31,7 @@ class Capture:
     @classmethod
     def _make_folder(cls, folder_path):
         if cls._is_nucleus(folder_path):
-            omni.client.make_folder(folder_path)
+            omni.client.create_folder(folder_path)
         else:
             os.makedirs(folder_path, exist_ok=True)
 
