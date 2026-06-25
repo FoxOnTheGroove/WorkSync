@@ -83,8 +83,18 @@ class ScreenCapture:
             return None
 
         left, top, width, height = cls._window_rect_px()
-        img = Image.open(tmp_path)
-        img_w, img_h = img.size
+
+        # Kit이 파일 핸들을 닫기 전에 열면 Windows에서 PermissionError 발생 → 재시도
+        for _ in range(10):
+            try:
+                img = Image.open(tmp_path)
+                img.load()
+                break
+            except PermissionError:
+                await app.next_update_async()
+        else:
+            print("[capt] 파일 접근 실패: 렌더러가 파일을 잠그고 있음")
+            return None
 
         # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
         l = max(0, min(left, img_w))
