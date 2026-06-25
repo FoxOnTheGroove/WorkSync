@@ -67,6 +67,7 @@ class TabManagerWindow(ui.Window):
                     ui.Button("New Tab (1)", clicked_fn=lambda: self._create_tab(1))
                     ui.Button("New Tab (2)", clicked_fn=lambda: self._create_tab(2))
                     ui.Button("New Tab (4)", clicked_fn=lambda: self._create_tab(4))
+                    ui.Button("remove tab", clicked_fn=self._remove_all_tabs)
 
                 # Tab bar: one selectable button per tab.
                 self._tab_bar = ui.HStack(height=28, spacing=2)
@@ -137,6 +138,7 @@ class TabManagerWindow(ui.Window):
 
     def _build_viewport(self, tab, v):
         selected = (v == tab.selected_viewport)
+        loaded   = tab.viewports[v]
         with ui.CollapsableFrame(
             "viewport {}{}".format(v + 1, " *" if selected else "")
         ):
@@ -147,11 +149,17 @@ class TabManagerWindow(ui.Window):
                     clicked_fn=lambda: self._select_viewport(v),
                 )
                 with ui.HStack(height=28, spacing=4):
-                    for load_type in LOAD_TYPES:
-                        ui.Button(
-                            LOAD_LABELS[load_type],
-                            clicked_fn=lambda lt=load_type: self._on_load(v, lt),
-                        )
+                    if loaded is None:
+                        # Nothing loaded: offer the four load buttons.
+                        for load_type in LOAD_TYPES:
+                            ui.Button(
+                                LOAD_LABELS[load_type],
+                                clicked_fn=lambda lt=load_type: self._on_load(v, lt),
+                            )
+                    else:
+                        # Loaded: show what's loaded + a remove button.
+                        ui.Label(LOAD_LABELS[loaded])
+                        ui.Button("remove", clicked_fn=lambda: self._on_remove(v))
 
     # ── Tab logic ───────────────────────────────────────────────────────────────
     def _create_tab(self, viewport_count):
@@ -162,6 +170,18 @@ class TabManagerWindow(ui.Window):
         self._refresh_tab_bar()
         self._refresh_content()
         print("[tester_ui] created {} with {} viewport(s)".format(name, viewport_count))
+
+    def _remove_all_tabs(self):
+        """Remove every tab.
+
+        TODO: tear down any per-tab resources before clearing.
+        """
+        self._tabs = []
+        self._active_index = -1
+        self._tab_counter = 0
+        self._refresh_tab_bar()
+        self._refresh_content()
+        print("[tester_ui] removed all tabs")
 
     def _activate_tab(self, index):
         if 0 <= index < len(self._tabs):
@@ -231,7 +251,22 @@ class TabManagerWindow(ui.Window):
                 LOAD_LABELS[load_type], tab.name, viewport_index + 1, path
             )
         )
-        # tab.viewports[viewport_index] = ...  # store result here
+        # Mark the viewport as loaded so the UI swaps to the remove button.
+        tab.viewports[viewport_index] = load_type
+        self._refresh_content()
+
+    def _on_remove(self, viewport_index):
+        """Remove the loaded content from `viewport_index` of the active tab.
+
+        TODO: implement the actual unload here.
+        """
+        tab = self.active_tab()
+        if tab is None or not (0 <= viewport_index < tab.viewport_count):
+            return
+        print("[tester_ui] remove from {} viewport {}".format(
+            tab.name, viewport_index + 1))
+        tab.viewports[viewport_index] = None
+        self._refresh_content()
 
     def destroy(self):
         self._tabs.clear()
