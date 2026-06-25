@@ -1,7 +1,10 @@
+import io
 import os
 import asyncio
 import tempfile
+from datetime import datetime
 
+import omni.client
 import omni.ui as ui
 import omni.kit.app
 import omni.renderer_capture
@@ -11,6 +14,13 @@ from PIL import Image
 class ScreenCapture:
     _current_window = None
     _sem = asyncio.Semaphore(1)
+    _prefix = "capture"
+    _index = 0
+    _last_second = ""
+
+    @classmethod
+    def set_prefix(cls, prefix):
+        cls._prefix = prefix
 
     @classmethod
     def _window_rect_px(cls):
@@ -76,3 +86,26 @@ class ScreenCapture:
             pass
 
         return cropped
+
+    @classmethod
+    def save_to_nucleus(cls, img, folder_path):
+        if img is None:
+            print("[capt] 저장할 이미지가 없음")
+            return False
+
+        # 초가 바뀌면 인덱스 리셋, 같은 초 안에서는 00~99 증가
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if timestamp != cls._last_second:
+            cls._last_second = timestamp
+            cls._index = 0
+        index = cls._index
+        cls._index = (cls._index + 1) % 100
+
+        file_name = f"{cls._prefix}_{timestamp}_{index:02d}.png"
+        file_path = folder_path.rstrip("/") + "/" + file_name
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        omni.client.write_file(file_path, memoryview(buf.getvalue()))
+        print(f"[capt] nucleus 저장 -> {file_path}")
+        return True
