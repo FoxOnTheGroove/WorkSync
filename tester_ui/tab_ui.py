@@ -108,28 +108,50 @@ class TabManagerWindow(ui.Window):
                 ui.Button("Maximize", width=90, clicked_fn=self._maximize_tab)
                 ui.Button("Minimize", width=90, clicked_fn=self._minimize_tab)
 
-            for v in range(tab.viewport_count):
-                selected = (v == tab.selected_viewport)
-                # When maximized, only the selected viewport stays active;
-                # the rest are disabled.
-                vp_enabled = (not tab.maximized) or selected
-                with ui.CollapsableFrame(
-                    "viewport {}{}".format(v + 1, " *" if selected else "")
-                ):
-                    with ui.VStack(spacing=4, enabled=vp_enabled):
+            self._build_viewport_grid(tab)
+
+    def _build_viewport_grid(self, tab):
+        # Maximized: show only the selected viewport, full size.
+        if tab.maximized:
+            self._build_viewport(tab, tab.selected_viewport)
+            return
+
+        n = tab.viewport_count
+        if n == 2:
+            # x | x
+            with ui.HStack(spacing=4):
+                self._build_viewport(tab, 0)
+                self._build_viewport(tab, 1)
+        elif n == 4:
+            # 2 x 2
+            with ui.VStack(spacing=4):
+                with ui.HStack(spacing=4):
+                    self._build_viewport(tab, 0)
+                    self._build_viewport(tab, 1)
+                with ui.HStack(spacing=4):
+                    self._build_viewport(tab, 2)
+                    self._build_viewport(tab, 3)
+        else:
+            # single viewport
+            self._build_viewport(tab, 0)
+
+    def _build_viewport(self, tab, v):
+        selected = (v == tab.selected_viewport)
+        with ui.CollapsableFrame(
+            "viewport {}{}".format(v + 1, " *" if selected else "")
+        ):
+            with ui.VStack(spacing=4):
+                ui.Button(
+                    "select",
+                    height=28,
+                    clicked_fn=lambda: self._select_viewport(v),
+                )
+                with ui.HStack(height=28, spacing=4):
+                    for load_type in LOAD_TYPES:
                         ui.Button(
-                            "select",
-                            height=28,
-                            enabled=vp_enabled,
-                            clicked_fn=lambda vi=v: self._select_viewport(vi),
+                            LOAD_LABELS[load_type],
+                            clicked_fn=lambda lt=load_type: self._on_load(v, lt),
                         )
-                        with ui.HStack(height=28, spacing=4):
-                            for load_type in LOAD_TYPES:
-                                ui.Button(
-                                    LOAD_LABELS[load_type],
-                                    enabled=vp_enabled,
-                                    clicked_fn=lambda vi=v, lt=load_type: self._on_load(vi, lt),
-                                )
 
     # ── Tab logic ───────────────────────────────────────────────────────────────
     def _create_tab(self, viewport_count):
