@@ -20,18 +20,21 @@ class ScreenCaptureUI:
         with self._window.frame:
             with ui.VStack(spacing=6):
 
-                with ui.HStack(spacing=4):
+                # 상단 한 줄: 주소 입력창 + 캡처 버튼 (세로로 안 늘어나게 고정)
+                with ui.HStack(spacing=4, height=28):
                     self._path_model = ui.StringField().model
                     self._path_model.set_value("omniverse://")
                     ui.Button("캡처", clicked_fn=self._on_capture, width=70)
 
+                # 미리보기: 남는 공간을 모두 차지
                 ui.ImageWithProvider(
                     self._preview_provider,
                     fill_policy=ui.FillPolicy.PRESERVE_ASPECT_FIT,
                     height=ui.Fraction(1),
                 )
 
-                with ui.HStack(spacing=4):
+                # 하단 한 줄: 저장 버튼들 (항상 보이게 고정)
+                with ui.HStack(spacing=4, height=32):
                     ui.Button("뉴클리어스에 저장", clicked_fn=self._on_save_nucleus)
                     ui.Button("다운로드에 저장", clicked_fn=lambda: None, enabled=False)
 
