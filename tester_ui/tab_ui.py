@@ -10,21 +10,31 @@ LOAD_TYPE_SHAPE = 4
 
 LOAD_TYPES = (LOAD_TYPE_SIM_1, LOAD_TYPE_SIM_2, LOAD_TYPE_SIM_3, LOAD_TYPE_SHAPE)
 
-# Partition layouts offered by the three "New Tab" buttons.
-PARTITION_LAYOUTS = (1, 2, 4)
+# Button text per load type.
+LOAD_LABELS = {
+    LOAD_TYPE_SIM_1: "press",
+    LOAD_TYPE_SIM_2: "vel",
+    LOAD_TYPE_SIM_3: "line",
+    LOAD_TYPE_SHAPE: "eqp",
+}
+
+# Viewport layouts offered by the three "New Tab" buttons.
+VIEWPORT_LAYOUTS = (1, 2, 4)
 
 
 class Tab:
-    """State for a single tab.  Holds `partition_count` partition slots.
+    """State for a single tab.  Holds `viewport_count` viewport slots.
 
-    Fill `partitions[i]` with whatever you need to track per partition
+    Fill `viewports[i]` with whatever you need to track per viewport
     (stage path, prim, viewport handle, ...).
     """
 
-    def __init__(self, name, partition_count):
-        self.name            = name
-        self.partition_count = partition_count
-        self.partitions      = [None] * partition_count
+    def __init__(self, name, viewport_count):
+        self.name              = name
+        self.viewport_count    = viewport_count
+        self.viewports         = [None] * viewport_count
+        self.selected_viewport = 0
+        self.maximized         = False
 
 
 class TabManagerWindow(ui.Window):
@@ -53,21 +63,15 @@ class TabManagerWindow(ui.Window):
                     ui.Label("Shape Path", width=90)
                     self._shape_path_m = ui.StringField().model
 
-                ui.Separator()
-
                 with ui.HStack(height=32, spacing=4):
                     ui.Button("New Tab (1)", clicked_fn=lambda: self._create_tab(1))
                     ui.Button("New Tab (2)", clicked_fn=lambda: self._create_tab(2))
                     ui.Button("New Tab (4)", clicked_fn=lambda: self._create_tab(4))
 
-                ui.Separator()
-
                 # Tab bar: one selectable button per tab.
                 self._tab_bar = ui.HStack(height=28, spacing=2)
 
-                ui.Separator()
-
-                # Body: partitions + load buttons for the active tab.
+                # Body: active-tab controls + per-viewport load buttons.
                 self._content = ui.VStack(spacing=6)
 
         self._refresh_tab_bar()
@@ -82,7 +86,7 @@ class TabManagerWindow(ui.Window):
             for i, tab in enumerate(self._tabs):
                 active = (i == self._active_index)
                 ui.Button(
-                    tab.name + (" *" if active else ""),
+                    "{} ({}){}".format(tab.name, tab.viewport_count, " *" if active else ""),
                     height=24,
                     clicked_fn=lambda idx=i: self._activate_tab(idx),
                 )
@@ -95,29 +99,41 @@ class TabManagerWindow(ui.Window):
                 ui.Label("Create a tab to begin.", height=24)
                 return
 
-            ui.Label(
-                "{}  ({} partition(s))".format(tab.name, tab.partition_count),
-                height=24,
-            )
+            # Selected-tab row: name + maximize / minimize.
+            with ui.HStack(height=28, spacing=4):
+                ui.Button(
+                    "{}{}".format(tab.name, "  [MAX]" if tab.maximized else ""),
+                    clicked_fn=lambda: self._activate_tab(self._active_index),
+                )
+                ui.Button("Maximize", width=90, clicked_fn=self._maximize_tab)
+                ui.Button("Minimize", width=90, clicked_fn=self._minimize_tab)
 
-            for p in range(tab.partition_count):
-                with ui.CollapsableFrame("Partition {}".format(p + 1)):
+            for v in range(tab.viewport_count):
+                selected = (v == tab.selected_viewport)
+                with ui.CollapsableFrame(
+                    "viewport {}{}".format(v + 1, " *" if selected else "")
+                ):
                     with ui.HStack(height=28, spacing=4):
+                        ui.Button(
+                            "select",
+                            width=70,
+                            clicked_fn=lambda vi=v: self._select_viewport(vi),
+                        )
                         for load_type in LOAD_TYPES:
                             ui.Button(
-                                "Load {}".format(load_type),
-                                clicked_fn=lambda pi=p, lt=load_type: self._on_load(pi, lt),
+                                LOAD_LABELS[load_type],
+                                clicked_fn=lambda vi=v, lt=load_type: self._on_load(vi, lt),
                             )
 
     # ── Tab logic ───────────────────────────────────────────────────────────────
-    def _create_tab(self, partition_count):
+    def _create_tab(self, viewport_count):
         self._tab_counter += 1
         name = "tab_{}".format(self._tab_counter)
-        self._tabs.append(Tab(name, partition_count))
+        self._tabs.append(Tab(name, viewport_count))
         self._active_index = len(self._tabs) - 1
         self._refresh_tab_bar()
         self._refresh_content()
-        print("[tester_ui] created {} with {} partition(s)".format(name, partition_count))
+        print("[tester_ui] created {} with {} viewport(s)".format(name, viewport_count))
 
     def _activate_tab(self, index):
         if 0 <= index < len(self._tabs):
@@ -131,6 +147,39 @@ class TabManagerWindow(ui.Window):
             return self._tabs[self._active_index]
         return None
 
+    def _select_viewport(self, index):
+        tab = self.active_tab()
+        if tab is None or not (0 <= index < tab.viewport_count):
+            return
+        tab.selected_viewport = index
+        self._refresh_content()
+        print("[tester_ui] {} selected viewport {}".format(tab.name, index + 1))
+
+    def _maximize_tab(self):
+        """Maximize the active tab; the target is its selected viewport.
+
+        TODO: implement the actual maximize behavior.
+        """
+        tab = self.active_tab()
+        if tab is None:
+            return
+        tab.maximized = True
+        self._refresh_content()
+        print("[tester_ui] maximize {} -> viewport {}".format(
+            tab.name, tab.selected_viewport + 1))
+
+    def _minimize_tab(self):
+        """Restore the active tab from maximized state.
+
+        TODO: implement the actual minimize behavior.
+        """
+        tab = self.active_tab()
+        if tab is None:
+            return
+        tab.maximized = False
+        self._refresh_content()
+        print("[tester_ui] minimize {}".format(tab.name))
+
     # ── Helpers ─────────────────────────────────────────────────────────────────
     def sim_path(self):
         return self._sim_path_m.get_value_as_string() if self._sim_path_m else ""
@@ -138,10 +187,10 @@ class TabManagerWindow(ui.Window):
     def shape_path(self):
         return self._shape_path_m.get_value_as_string() if self._shape_path_m else ""
 
-    def _on_load(self, partition_index, load_type):
-        """Load `load_type` into `partition_index` of the active tab.
+    def _on_load(self, viewport_index, load_type):
+        """Load `load_type` into `viewport_index` of the active tab.
 
-        Types 1/2/3 use the Sim Path; type 4 uses the Shape Path.
+        press/vel/line use the Sim Path; eqp uses the Shape Path.
         TODO: implement the actual load here.
         """
         tab = self.active_tab()
@@ -150,11 +199,11 @@ class TabManagerWindow(ui.Window):
 
         path = self.shape_path() if load_type == LOAD_TYPE_SHAPE else self.sim_path()
         print(
-            "[tester_ui] load type={} into {} partition {} (path='{}')".format(
-                load_type, tab.name, partition_index + 1, path
+            "[tester_ui] load '{}' into {} viewport {} (path='{}')".format(
+                LOAD_LABELS[load_type], tab.name, viewport_index + 1, path
             )
         )
-        # tab.partitions[partition_index] = ...  # store result here
+        # tab.viewports[viewport_index] = ...  # store result here
 
     def destroy(self):
         self._tabs.clear()
