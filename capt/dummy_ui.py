@@ -10,7 +10,6 @@ class ScreenCaptureUI:
     def __init__(self):
         self._window = None
         self._path_model = None
-        self._last_image = None
         self._preview_provider = None
 
     def build_ui(self):
@@ -42,19 +41,18 @@ class ScreenCaptureUI:
     def _on_capture(self):
         asyncio.ensure_future(self._capture_async())
 
-    async def _capture_async(self):
+    async def _capture_async(self) -> None:
         img = await ScreenCaptureService.capture_image()
         if img is None:
             return
-        self._last_image = img
         rgba = img.convert("RGBA")
         self._preview_provider.set_bytes_data(
             list(rgba.tobytes()), [rgba.width, rgba.height]
         )
 
-    def _on_save_nucleus(self):
+    def _on_save_nucleus(self) -> None:
         folder_path = self._path_model.get_value_as_string()
-        ScreenCaptureService.save_to_nucleus(self._last_image, folder_path)
+        ScreenCaptureService.save_to_nucleus(folder_path)
 
     def destroy(self):
         if self._window:

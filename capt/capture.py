@@ -3,28 +3,30 @@ import os
 import asyncio
 import tempfile
 from datetime import datetime
+from typing import Optional, Tuple
 
 import omni.client
 import omni.ui as ui
 import omni.kit.app
 import omni.renderer_capture
-from PIL import Image
+from PIL import Image as PILImage
 
 
 class ScreenCapture:
-    _current_window = None
-    _sem = asyncio.Semaphore(1)
-    _prefix = "capture"
-    _index = 0
-    _last_second = ""
-    _last_filename = None
+    _current_window: Optional[ui.Window] = None
+    _sem: asyncio.Semaphore = asyncio.Semaphore(1)
+    _prefix: str = "capture"
+    _index: int = 0
+    _last_second: str = ""
+    _last_filename: Optional[str] = None
+    _last_image: Optional[PILImage.Image] = None
 
     @classmethod
-    def set_prefix(cls, prefix):
+    def set_prefix(cls, prefix: str) -> None:
         cls._prefix = prefix
 
     @classmethod
-    def _next_filename(cls):
+    def _next_filename(cls) -> str:
         # 초가 바뀌면 인덱스 리셋, 같은 초 안에서는 00~99 증가
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if timestamp != cls._last_second:
@@ -35,7 +37,7 @@ class ScreenCapture:
         return f"{cls._prefix}_{timestamp}_{index:02d}.png"
 
     @classmethod
-    def _window_rect_px(cls):
+    def _window_rect_px(cls) -> Tuple[int, int, int, int]:
         # 창 좌표/크기는 UI 포인트 단위 → DPI를 곱해 실제 픽셀 사각형으로 변환
         dpi = ui.Workspace.get_dpi_scale()
         left   = int(cls._current_window.position_x * dpi)
@@ -45,16 +47,17 @@ class ScreenCapture:
         return left, top, width, height
 
     @classmethod
-    async def capture_image(cls):
+    async def capture_image(cls) -> Optional[PILImage.Image]:
         # 캡처가 진행 중이면 끝날 때까지 대기 후 순서대로 실행
         async with cls._sem:
             img = await cls._do_capture()
             if img is not None:
+                cls._last_image = img
                 cls._last_filename = cls._next_filename()
             return img
 
     @classmethod
-    async def _do_capture(cls):
+    async def _do_capture(cls) -> Optional[PILImage.Image]:
         if cls._current_window is None:
             print("[capt] _current_window가 설정되지 않음")
             return None
@@ -87,7 +90,7 @@ class ScreenCapture:
         # Kit이 파일 핸들을 닫기 전에 열면 Windows에서 PermissionError 발생 → 재시도
         for _ in range(10):
             try:
-                img = Image.open(tmp_path)
+                img = PILImage.open(tmp_path)
                 img.load()
                 break
             except PermissionError:
@@ -115,8 +118,8 @@ class ScreenCapture:
         return cropped
 
     @classmethod
-    def save_to_nucleus(cls, img, folder_path):
-        if img is None or cls._last_filename is None:
+    def save_to_nucleus(cls, folder_path: str) -> bool:
+        if cls._last_image is None or cls._last_filename is None:
             print("[capt] 저장할 이미지가 없음")
             return False
 
@@ -129,7 +132,7 @@ class ScreenCapture:
             return False
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        cls._last_image.save(buf, format="PNG")
         omni.client.write_file(file_path, memoryview(buf.getvalue()))
         print(f"[capt] nucleus 저장 -> {file_path}")
         return True
