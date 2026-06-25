@@ -96,6 +96,8 @@ class ScreenCapture:
             print("[capt] 파일 접근 실패: 렌더러가 파일을 잠그고 있음")
             return None
 
+        img_w, img_h = img.size
+
         # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
         l = max(0, min(left, img_w))
         t = max(0, min(top, img_h))
