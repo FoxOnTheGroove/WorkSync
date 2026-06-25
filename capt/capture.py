@@ -17,10 +17,22 @@ class ScreenCapture:
     _prefix = "capture"
     _index = 0
     _last_second = ""
+    _last_filename = None
 
     @classmethod
     def set_prefix(cls, prefix):
         cls._prefix = prefix
+
+    @classmethod
+    def _next_filename(cls):
+        # 초가 바뀌면 인덱스 리셋, 같은 초 안에서는 00~99 증가
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if timestamp != cls._last_second:
+            cls._last_second = timestamp
+            cls._index = 0
+        index = cls._index
+        cls._index = (cls._index + 1) % 100
+        return f"{cls._prefix}_{timestamp}_{index:02d}.png"
 
     @classmethod
     def _window_rect_px(cls):
@@ -36,7 +48,10 @@ class ScreenCapture:
     async def capture_image(cls):
         # 캡처가 진행 중이면 끝날 때까지 대기 후 순서대로 실행
         async with cls._sem:
-            return await cls._do_capture()
+            img = await cls._do_capture()
+            if img is not None:
+                cls._last_filename = cls._next_filename()
+            return img
 
     @classmethod
     async def _do_capture(cls):
@@ -89,20 +104,17 @@ class ScreenCapture:
 
     @classmethod
     def save_to_nucleus(cls, img, folder_path):
-        if img is None:
+        if img is None or cls._last_filename is None:
             print("[capt] 저장할 이미지가 없음")
             return False
 
-        # 초가 바뀌면 인덱스 리셋, 같은 초 안에서는 00~99 증가
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if timestamp != cls._last_second:
-            cls._last_second = timestamp
-            cls._index = 0
-        index = cls._index
-        cls._index = (cls._index + 1) % 100
+        file_path = folder_path.rstrip("/") + "/" + cls._last_filename
 
-        file_name = f"{cls._prefix}_{timestamp}_{index:02d}.png"
-        file_path = folder_path.rstrip("/") + "/" + file_name
+        # 동일한 이름의 파일이 이미 있으면 저장 안 함
+        result, _ = omni.client.stat(file_path)
+        if result == omni.client.Result.OK:
+            print(f"[capt] 이미 저장됨: {file_path}")
+            return False
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
