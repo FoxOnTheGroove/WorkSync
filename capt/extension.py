@@ -1,12 +1,12 @@
 import omni.ext
-from .dummy_ui import CaptureUI
+from .dummy_ui import ScreenCaptureUI
 
 
-class CaptExtension(omni.ext.IExt):
+class ScreenCaptureExtension(omni.ext.IExt):
 
     def on_startup(self, ext_id):
         print("[capt] startup")
-        self._ui = CaptureUI()
+        self._ui = ScreenCaptureUI()
         self._ui.build_ui()
 
     def on_shutdown(self):

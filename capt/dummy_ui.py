@@ -1,25 +1,56 @@
+import asyncio
+
 import omni.ui as ui
-from .capture_service import CaptureService
+
+from .capture_service import ScreenCaptureService
 
 
-class CaptureUI:
+class ScreenCaptureUI:
 
     def __init__(self):
         self._window = None
-        self._folder_model = None
+        self._path_model = None
+        self._last_image = None
+        self._preview_provider = None
 
     def build_ui(self):
-        self._window = ui.Window("Capt", width=360, height=90)
+        self._window = ui.Window("Screen Capture", width=420, height=420)
+        self._preview_provider = ui.ByteImageProvider()
 
         with self._window.frame:
-            with ui.VStack(spacing=4):
-                self._folder_model = ui.StringField().model
-                self._folder_model.set_value("")
-                ui.Button("Capture", clicked_fn=self._on_capture, height=32)
+            with ui.VStack(spacing=6):
+
+                with ui.HStack(spacing=4):
+                    self._path_model = ui.StringField().model
+                    self._path_model.set_value("omniverse://")
+                    ui.Button("캡처", clicked_fn=self._on_capture, width=70)
+
+                ui.ImageWithProvider(
+                    self._preview_provider,
+                    fill_policy=ui.FillPolicy.PRESERVE_ASPECT_FIT,
+                    height=ui.Fraction(1),
+                )
+
+                with ui.HStack(spacing=4):
+                    ui.Button("뉴클리어스에 저장", clicked_fn=self._on_save_nucleus)
+                    ui.Button("다운로드에 저장", clicked_fn=lambda: None, enabled=False)
 
     def _on_capture(self):
-        folder_path = self._folder_model.get_value_as_string()
-        CaptureService.capture_to_folder(folder_path)
+        asyncio.ensure_future(self._capture_async())
+
+    async def _capture_async(self):
+        img = await ScreenCaptureService.capture_image()
+        if img is None:
+            return
+        self._last_image = img
+        rgba = img.convert("RGBA")
+        self._preview_provider.set_bytes_data(
+            list(rgba.tobytes()), [rgba.width, rgba.height]
+        )
+
+    def _on_save_nucleus(self):
+        folder_path = self._path_model.get_value_as_string()
+        ScreenCaptureService.save_to_nucleus(self._last_image, folder_path)
 
     def destroy(self):
         if self._window:
