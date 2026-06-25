@@ -30,7 +30,7 @@ class ScreenCaptureUI:
                 # ImageWithProvider는 FillPolicy가 아니라 IwpFillPolicy를 사용
                 ui.ImageWithProvider(
                     self._preview_provider,
-                    fill_policy=ui.IwpFillPolicy.PRESERVE_ASPECT_FIT,
+                    fill_policy=ui.IwpFillPolicy.IWP_PRESERVE_ASPECT_FIT,
                     height=ui.Fraction(1),
                 )
 
