@@ -1,8 +1,10 @@
+import io
 import os
 import asyncio
 import tempfile
 from datetime import datetime
 
+import omni.client
 import omni.ui as ui
 import omni.kit.app
 import omni.renderer_capture
@@ -23,6 +25,32 @@ class Capture:
         return None
 
     @classmethod
+    def _is_nucleus(cls, path):
+        return path.startswith("omniverse://")
+
+    @classmethod
+    def _make_folder(cls, folder_path):
+        if cls._is_nucleus(folder_path):
+            omni.client.make_folder(folder_path)
+        else:
+            os.makedirs(folder_path, exist_ok=True)
+
+    @classmethod
+    def _save_image(cls, img, file_path):
+        if cls._is_nucleus(file_path):
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            omni.client.write_file(file_path, memoryview(buf.getvalue()))
+        else:
+            img.save(file_path)
+
+    @classmethod
+    def _join_path(cls, folder, name):
+        if cls._is_nucleus(folder):
+            return folder.rstrip("/") + "/" + name
+        return os.path.join(folder, name)
+
+    @classmethod
     def capture_to_folder(cls, folder_path=None):
         window = cls.get_window()
         if window is None:
@@ -33,7 +61,7 @@ class Capture:
         if not folder_path:
             folder_path = os.path.join(os.path.expanduser("~"), "Downloads")
 
-        os.makedirs(folder_path, exist_ok=True)
+        cls._make_folder(folder_path)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # 초가 바뀌면 인덱스 리셋, 같은 초 안에서는 00~99 증가
@@ -43,7 +71,7 @@ class Capture:
         index = cls._index
         cls._index = (cls._index + 1) % 100
         file_name = f"{cls._prefix}_{timestamp}_{index:02d}.png"
-        file_path = os.path.join(folder_path, file_name)
+        file_path = cls._join_path(folder_path, file_name)
 
         asyncio.ensure_future(cls._capture_async(window, file_path))
         return True
@@ -105,7 +133,7 @@ class Capture:
         b = max(t, min(top + height, img_h))
 
         cropped = img.crop((l, t, r, b))
-        cropped.save(file_path)
+        cls._save_image(cropped, file_path)
         img.close()
 
         try:
