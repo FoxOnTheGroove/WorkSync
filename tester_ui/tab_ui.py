@@ -113,17 +113,18 @@ class TabManagerWindow(ui.Window):
                 with ui.CollapsableFrame(
                     "viewport {}{}".format(v + 1, " *" if selected else "")
                 ):
-                    with ui.HStack(height=28, spacing=4):
+                    with ui.VStack(spacing=4):
                         ui.Button(
                             "select",
-                            width=70,
+                            height=28,
                             clicked_fn=lambda vi=v: self._select_viewport(vi),
                         )
-                        for load_type in LOAD_TYPES:
-                            ui.Button(
-                                LOAD_LABELS[load_type],
-                                clicked_fn=lambda vi=v, lt=load_type: self._on_load(vi, lt),
-                            )
+                        with ui.HStack(height=28, spacing=4):
+                            for load_type in LOAD_TYPES:
+                                ui.Button(
+                                    LOAD_LABELS[load_type],
+                                    clicked_fn=lambda vi=v, lt=load_type: self._on_load(vi, lt),
+                                )
 
     # ── Tab logic ───────────────────────────────────────────────────────────────
     def _create_tab(self, viewport_count):
