@@ -16,6 +16,35 @@ import omni.kit.converter.hoops_core as hoops_mod
 from pxr import UsdGeom
 
 
+class CadConverterService:
+    """단일 진입점 서비스. src/dest + 5옵션 + autoload 를 받아 변환(+로드)을 한 번에 수행."""
+
+    @classmethod
+    async def convert(
+        cls,
+        src_path: str,
+        dest_path: str,
+        up_axis: str = "1",
+        tess_lod: str = "2",
+        instancing: bool = False,
+        use_materials: bool = False,
+        meters_per_unit: str = "1.0",
+        autoload: bool = True,
+    ) -> str:
+        """STEP -> USD 변환. autoload=True 면 현재 스테이지에 로드. 로드된 prim 경로 반환."""
+        options = CadConverter.build_options(
+            up_axis=up_axis,
+            tess_lod=tess_lod,
+            instancing=instancing,
+            use_materials=use_materials,
+            meters_per_unit=meters_per_unit,
+        )
+        await CadConverter.convert_async(src_path, dest_path, options)
+        if autoload:
+            return CadConverter.load_into_stage(dest_path)
+        return ""
+
+
 class CadConverter:
 
     # ====== UI 콤보박스용 옵션 정의 (라벨 -> file_format_args 값) ======
