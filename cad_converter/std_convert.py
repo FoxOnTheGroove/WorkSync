@@ -28,6 +28,14 @@ TESS_LOD_CHOICES = {
     "ExtraHigh": "4",
 }
 
+# dMetersPerUnit: 스테이지 단위 스케일. 0.0 = 변환 단위 그대로 유지
+METERS_PER_UNIT_CHOICES = {
+    "Meter (1.0)":        "1.0",
+    "Centimeter (0.01)":  "0.01",
+    "Millimeter (0.001)": "0.001",
+    "Keep Original (0.0)": "0.0",
+}
+
 
 def build_options(
     up_axis: str = "1",

@@ -4,7 +4,7 @@ CAD Converter UI
 - Source 경로 입력 (STEP 등)
 - Dest 경로 입력 (출력 USD)
 - (Prim 경로 입력은 지금은 제외)
-- Convert Options 선택창 (Up Axis / Tess LOD / Instancing / Materials)
+- Convert Options 선택창 (Up Axis / Tess LOD / Meters Per Unit / Instancing / Materials)
 - Convert 버튼
 - Load 버튼 (+ Auto Load 체크박스)
 """
@@ -13,6 +13,31 @@ import omni.ui as ui
 import omni.kit.async_engine
 
 from . import std_convert
+
+
+# ---------------- styles ----------------
+
+LABEL_W = 130          # 옵션 라벨 고정 폭
+ROW_H = 26
+
+_SECTION_TITLE = {"font_size": 15, "color": 0xFFCCCCCC}
+_HINT = {"font_size": 12, "color": 0xFF888888}
+
+_GROUP_FRAME = {
+    "Frame": {
+        "background_color": 0xFF2A2A2A,
+        "border_color":     0xFF4A4A4A,
+        "border_width":     1,
+        "border_radius":    6,
+        "padding":          8,
+        "margin_height":    2,
+    }
+}
+
+_CONVERT_BTN = {"Button": {"background_color": 0xFF3B7A3B, "border_radius": 4}}
+_LOAD_BTN    = {"Button": {"background_color": 0xFF3B5A7A, "border_radius": 4}}
+
+_STATUS = {"font_size": 12, "color": 0xFFAACCAA}
 
 
 class CadConverterUI:
@@ -26,83 +51,97 @@ class CadConverterUI:
         # 옵션 위젯
         self._up_axis_combo: ui.ComboBox | None = None
         self._lod_combo: ui.ComboBox | None = None
+        self._mpu_combo: ui.ComboBox | None = None
         self._instancing_cb: ui.CheckBox | None = None
         self._materials_cb: ui.CheckBox | None = None
         self._autoload_cb: ui.CheckBox | None = None
 
         self._up_axis_labels = list(std_convert.UP_AXIS_CHOICES.keys())
         self._lod_labels = list(std_convert.TESS_LOD_CHOICES.keys())
+        self._mpu_labels = list(std_convert.METERS_PER_UNIT_CHOICES.keys())
 
     # ---------------- build ----------------
 
     def build_ui(self):
-        self._window = ui.Window("CAD Converter", width=480, height=360)
+        self._window = ui.Window("CAD Converter", width=460, height=400)
         with self._window.frame:
-            with ui.VStack(spacing=6, style={"margin": 8}):
+            with ui.VStack(spacing=10, height=0, style={"margin": 10}):
+                self._build_paths()
+                self._build_options()
+                self._build_actions()
+                self._build_status()
 
-                # --- 경로 입력 ---
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("Source:", width=70)
+    def _build_paths(self):
+        ui.Label("Files", style=_SECTION_TITLE)
+        with ui.Frame(style=_GROUP_FRAME):
+            with ui.VStack(spacing=6, height=0):
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Source", width=70)
                     self._src_field = ui.StringField()
                     self._src_field.model.set_value("C:/data/model.stp")
-
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("Dest:", width=70)
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Dest", width=70)
                     self._dest_field = ui.StringField()
                     self._dest_field.model.set_value("C:/data/out/model.usd")
 
-                ui.Spacer(height=4)
-                ui.Label("Convert Options", style={"font_size": 14})
-                ui.Separator(height=2)
-
-                # --- Up Axis ---
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("Up Axis:", width=120)
+    def _build_options(self):
+        ui.Label("Convert Options", style=_SECTION_TITLE)
+        with ui.Frame(style=_GROUP_FRAME):
+            with ui.VStack(spacing=6, height=0):
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Up Axis", width=LABEL_W)
                     self._up_axis_combo = ui.ComboBox(0, *self._up_axis_labels)
 
-                # --- Tessellation LOD ---
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("Tessellation LOD:", width=120)
-                    # 기본값 Medium(index 2)
-                    self._lod_combo = ui.ComboBox(2, *self._lod_labels)
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Tessellation LOD", width=LABEL_W)
+                    self._lod_combo = ui.ComboBox(2, *self._lod_labels)  # Medium
 
-                # --- Instancing ---
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("Instancing:", width=120)
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Meters Per Unit", width=LABEL_W)
+                    self._mpu_combo = ui.ComboBox(0, *self._mpu_labels)  # Meter
+
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Instancing", width=LABEL_W)
                     self._instancing_cb = ui.CheckBox(width=20)
                     self._instancing_cb.model.set_value(False)
+                    ui.Spacer()
 
-                # --- Materials ---
-                with ui.HStack(height=24, spacing=4):
-                    ui.Label("Use Materials:", width=120)
+                with ui.HStack(height=ROW_H, spacing=6):
+                    ui.Label("Use Materials", width=LABEL_W)
                     self._materials_cb = ui.CheckBox(width=20)
                     self._materials_cb.model.set_value(False)
+                    ui.Spacer()
 
-                ui.Spacer(height=6)
+    def _build_actions(self):
+        with ui.HStack(height=32, spacing=8):
+            ui.Button("Convert", clicked_fn=self._on_convert, style=_CONVERT_BTN)
+            ui.Button("Load", clicked_fn=self._on_load, style=_LOAD_BTN)
+            with ui.HStack(width=110, spacing=6):
+                self._autoload_cb = ui.CheckBox(width=20)
+                self._autoload_cb.model.set_value(True)
+                ui.Label("Auto Load")
 
-                # --- 버튼 ---
-                with ui.HStack(height=28, spacing=8):
-                    ui.Button("Convert", clicked_fn=self._on_convert)
-                    ui.Button("Load", clicked_fn=self._on_load)
-                    ui.Label("Auto Load", width=70)
-                    self._autoload_cb = ui.CheckBox(width=20)
-                    self._autoload_cb.model.set_value(True)
-
-                self._status_label = ui.Label("Status: ready", height=20)
+    def _build_status(self):
+        ui.Separator(height=2)
+        self._status_label = ui.Label("Status: ready", height=20, style=_STATUS)
 
     # ---------------- options ----------------
 
+    def _combo_label(self, combo: ui.ComboBox, labels: list) -> str:
+        idx = combo.model.get_item_value_model().get_value_as_int()
+        return labels[idx]
+
     def _gather_options(self) -> dict:
-        up_idx = self._up_axis_combo.model.get_item_value_model().get_value_as_int()
-        lod_idx = self._lod_combo.model.get_item_value_model().get_value_as_int()
-        up_label = self._up_axis_labels[up_idx]
-        lod_label = self._lod_labels[lod_idx]
+        up_label = self._combo_label(self._up_axis_combo, self._up_axis_labels)
+        lod_label = self._combo_label(self._lod_combo, self._lod_labels)
+        mpu_label = self._combo_label(self._mpu_combo, self._mpu_labels)
 
         return std_convert.build_options(
             up_axis=std_convert.UP_AXIS_CHOICES[up_label],
             tess_lod=std_convert.TESS_LOD_CHOICES[lod_label],
             instancing=self._instancing_cb.model.get_value_as_bool(),
             use_materials=self._materials_cb.model.get_value_as_bool(),
+            meters_per_unit=std_convert.METERS_PER_UNIT_CHOICES[mpu_label],
         )
 
     # ---------------- callbacks ----------------
@@ -119,7 +158,7 @@ class CadConverterUI:
 
     async def _run_convert(self, src: str, dest: str, options: dict):
         try:
-            result = await std_convert.convert_async(src, dest, options)
+            await std_convert.convert_async(src, dest, options)
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: convert 실패 - {e}")
             return
