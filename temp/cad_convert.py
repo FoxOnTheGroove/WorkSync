@@ -4,6 +4,7 @@ Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사�
 사전 조건: Extension Manager 에서 omni.kit.converter.hoops_core 활성화
 """
 
+import os
 import omni.usd
 import omni.kit.commands
 import omni.kit.async_engine
@@ -17,6 +18,7 @@ DEST_PATH   = r"C:/data/out/model.usd"
 # ==============================
 
 LOAD_AFTER_CONVERT = True   # 변환 후 현재 스테이지에 reference 로 로드
+LOAD_PRIM_PATH     = None   # None 이면 /World 바로 아래에 파일명으로 생성, 경로 지정 시 그대로 사용
 
 
 # file_format_args 는 dict[str, str] - 값 전부 문자열
@@ -29,29 +31,41 @@ CONVERT_OPTIONS = {
 }
 
 
-def _load_into_stage(usd_path: str, parent: str = "/World", base: str = "Imported"):
-    """변환된 USD 를 현재 스테이지의 parent 아래에 reference 로 추가."""
+def _sanitize(name: str) -> str:
+    """USD prim 이름으로 쓸 수 있게 정리 (영숫자/언더스코어만)."""
+    s = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+    return ("_" + s) if s and s[0].isdigit() else (s or "Imported")
+
+
+def _load_into_stage(usd_path: str, prim_path: str = None):
+    """변환된 USD 를 현재 스테이지에 reference 로 추가.
+
+    prim_path 지정 시 그 경로에, None 이면 /World 바로 아래에 파일명으로 생성.
+    """
     ctx = omni.usd.get_context()
     stage = ctx.get_stage()
 
-    # parent(/World) 없으면 생성
-    if not stage.GetPrimAtPath(parent).IsValid():
-        UsdGeom.Xform.Define(stage, parent)
+    if prim_path is None:
+        # /World 바로 아래에 USD 파일명으로
+        if not stage.GetPrimAtPath("/World").IsValid():
+            UsdGeom.Xform.Define(stage, "/World")
+        base = _sanitize(os.path.splitext(os.path.basename(usd_path))[0])
+        prim_path = f"/World/{base}"
 
-    # parent 아래에서 충돌 안 나는 유니크 경로 직접 계산
-    prim_path = f"{parent}/{base}"
+    # 충돌 시 유니크 처리
+    final_path = prim_path
     i = 1
-    while stage.GetPrimAtPath(prim_path).IsValid():
-        prim_path = f"{parent}/{base}_{i:02d}"
+    while stage.GetPrimAtPath(final_path).IsValid():
+        final_path = f"{prim_path}_{i:02d}"
         i += 1
 
     omni.kit.commands.execute(
         "CreateReference",
-        path_to=prim_path,
+        path_to=final_path,
         asset_path=usd_path,
         usd_context=ctx,
     )
-    print("[로드]", prim_path, "<-", usd_path)
+    print("[로드]", final_path, "<-", usd_path)
 
 
 async def _convert():
@@ -60,7 +74,7 @@ async def _convert():
     print("[완료]", result)
 
     if LOAD_AFTER_CONVERT:
-        _load_into_stage(DEST_PATH)
+        _load_into_stage(DEST_PATH, LOAD_PRIM_PATH)
 
 
 omni.kit.async_engine.run_coroutine(_convert())
