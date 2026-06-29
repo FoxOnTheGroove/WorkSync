@@ -36,6 +36,7 @@ _GROUP_FRAME = {
 
 _CONVERT_BTN = {"Button": {"background_color": 0xFF3B7A3B, "border_radius": 4}}
 _LOAD_BTN    = {"Button": {"background_color": 0xFF3B5A7A, "border_radius": 4}}
+_CLEAR_BTN   = {"Button": {"background_color": 0xFF7A3B3B, "border_radius": 4}}
 
 _STATUS = {"font_size": 12, "color": 0xFFAACCAA}
 
@@ -59,6 +60,8 @@ class CadConverterUI:
         self._up_axis_labels = list(std_convert.UP_AXIS_CHOICES.keys())
         self._lod_labels = list(std_convert.TESS_LOD_CHOICES.keys())
         self._mpu_labels = list(std_convert.METERS_PER_UNIT_CHOICES.keys())
+
+        self._loaded_prims: list[str] = []   # 로드로 생성된 prim 경로 추적
 
     # ---------------- build ----------------
 
@@ -116,6 +119,7 @@ class CadConverterUI:
         with ui.HStack(height=32, spacing=8):
             ui.Button("Convert", clicked_fn=self._on_convert, style=_CONVERT_BTN)
             ui.Button("Load", clicked_fn=self._on_load, style=_LOAD_BTN)
+            ui.Button("Clear", clicked_fn=self._on_clear, style=_CLEAR_BTN)
             with ui.HStack(width=110, spacing=6):
                 self._autoload_cb = ui.CheckBox(width=20)
                 self._autoload_cb.model.set_value(True)
@@ -181,7 +185,22 @@ class CadConverterUI:
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: load 실패 - {e}")
             return
+        if prim_path:
+            self._loaded_prims.append(prim_path)
         self._set_status(f"loaded -> {prim_path}")
+
+    def _on_clear(self):
+        if not self._loaded_prims:
+            self._set_status("지울 로드 항목이 없습니다")
+            return
+        try:
+            std_convert.remove_prims(self._loaded_prims)
+        except Exception as e:  # noqa: BLE001
+            self._set_status(f"ERROR: clear 실패 - {e}")
+            return
+        count = len(self._loaded_prims)
+        self._loaded_prims.clear()
+        self._set_status(f"cleared {count} prim(s)")
 
     # ---------------- util ----------------
 

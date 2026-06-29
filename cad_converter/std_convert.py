@@ -102,3 +102,12 @@ def load_into_stage(usd_path: str, prim_path: str = None) -> str:
     )
     print(f"[cad_converter] loaded {final_path} <- {usd_path}")
     return final_path
+
+
+def remove_prims(prim_paths: list) -> None:
+    """로드로 생성된 prim 들을 스테이지에서 제거."""
+    valid = [p for p in prim_paths if p]
+    if not valid:
+        return
+    omni.kit.commands.execute("DeletePrims", paths=valid)
+    print(f"[cad_converter] removed {valid}")
