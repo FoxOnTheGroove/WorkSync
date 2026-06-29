@@ -1,18 +1,21 @@
 """
 CAD Converter UI
 
+구현부는 전부 std_convert.CadConverter 에 있고, UI 는 on_~ 콜백에서
+위젯 값만 모아 CadConverter 의 classmethod 를 호출한다.
+
 - Source 경로 입력 (STEP 등)
 - Dest 경로 입력 (출력 USD)
 - (Prim 경로 입력은 지금은 제외)
 - Convert Options 선택창 (Up Axis / Tess LOD / Meters Per Unit / Instancing / Materials)
 - Convert 버튼
-- Load 버튼 (+ Auto Load 체크박스)
+- Load / Clear 버튼 (+ Auto Load 체크박스)
 """
 
 import omni.ui as ui
 import omni.kit.async_engine
 
-from . import std_convert
+from .std_convert import CadConverter
 
 
 # ---------------- styles ----------------
@@ -21,7 +24,6 @@ LABEL_W = 130          # 옵션 라벨 고정 폭
 ROW_H = 26
 
 _SECTION_TITLE = {"font_size": 15, "color": 0xFFCCCCCC}
-_HINT = {"font_size": 12, "color": 0xFF888888}
 
 _GROUP_FRAME = {
     "Frame": {
@@ -57,18 +59,16 @@ class CadConverterUI:
         self._materials_cb: ui.CheckBox | None = None
         self._autoload_cb: ui.CheckBox | None = None
 
-        self._up_axis_labels = list(std_convert.UP_AXIS_CHOICES.keys())
-        self._lod_labels = list(std_convert.TESS_LOD_CHOICES.keys())
-        self._mpu_labels = list(std_convert.METERS_PER_UNIT_CHOICES.keys())
-
-        self._loaded_prims: list[str] = []   # 로드로 생성된 prim 경로 추적
+        self._up_axis_labels = list(CadConverter.UP_AXIS_CHOICES.keys())
+        self._lod_labels = list(CadConverter.TESS_LOD_CHOICES.keys())
+        self._mpu_labels = list(CadConverter.METERS_PER_UNIT_CHOICES.keys())
 
     # ---------------- build ----------------
 
     def build_ui(self):
         self._window = ui.Window("CAD Converter", width=460, height=400)
         with self._window.frame:
-            with ui.VStack(spacing=10, height=0, style={"margin": 10}):
+            with ui.VStack(spacing=10, height=0, style={"margin": 2}):
                 self._build_paths()
                 self._build_options()
                 self._build_actions()
@@ -129,26 +129,25 @@ class CadConverterUI:
         ui.Separator(height=2)
         self._status_label = ui.Label("Status: ready", height=20, style=_STATUS)
 
-    # ---------------- options ----------------
+    # ---------------- widget readers ----------------
 
     def _combo_label(self, combo: ui.ComboBox, labels: list) -> str:
         idx = combo.model.get_item_value_model().get_value_as_int()
         return labels[idx]
 
-    def _gather_options(self) -> dict:
+    def _gather_option_kwargs(self) -> dict:
         up_label = self._combo_label(self._up_axis_combo, self._up_axis_labels)
         lod_label = self._combo_label(self._lod_combo, self._lod_labels)
         mpu_label = self._combo_label(self._mpu_combo, self._mpu_labels)
+        return {
+            "up_axis":         CadConverter.UP_AXIS_CHOICES[up_label],
+            "tess_lod":        CadConverter.TESS_LOD_CHOICES[lod_label],
+            "instancing":      self._instancing_cb.model.get_value_as_bool(),
+            "use_materials":   self._materials_cb.model.get_value_as_bool(),
+            "meters_per_unit": CadConverter.METERS_PER_UNIT_CHOICES[mpu_label],
+        }
 
-        return std_convert.build_options(
-            up_axis=std_convert.UP_AXIS_CHOICES[up_label],
-            tess_lod=std_convert.TESS_LOD_CHOICES[lod_label],
-            instancing=self._instancing_cb.model.get_value_as_bool(),
-            use_materials=self._materials_cb.model.get_value_as_bool(),
-            meters_per_unit=std_convert.METERS_PER_UNIT_CHOICES[mpu_label],
-        )
-
-    # ---------------- callbacks ----------------
+    # ---------------- callbacks (호출만) ----------------
 
     def _on_convert(self):
         src = self._src_field.model.get_value_as_string().strip()
@@ -156,51 +155,38 @@ class CadConverterUI:
         if not src or not dest:
             self._set_status("ERROR: source/dest 경로를 입력하세요")
             return
-        options = self._gather_options()
+        autoload = self._autoload_cb.model.get_value_as_bool()
+        kwargs = self._gather_option_kwargs()
         self._set_status("converting...")
-        omni.kit.async_engine.run_coroutine(self._run_convert(src, dest, options))
+        omni.kit.async_engine.run_coroutine(self._drive_convert(src, dest, autoload, kwargs))
 
-    async def _run_convert(self, src: str, dest: str, options: dict):
+    async def _drive_convert(self, src: str, dest: str, autoload: bool, kwargs: dict):
         try:
-            await std_convert.convert_async(src, dest, options)
+            prim = await CadConverter.run(src, dest, autoload=autoload, **kwargs)
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: convert 실패 - {e}")
             return
-
-        self._set_status(f"converted -> {dest}")
-
-        if self._autoload_cb.model.get_value_as_bool():
-            self._load(dest)
+        self._set_status(f"loaded -> {prim}" if autoload and prim else f"converted -> {dest}")
 
     def _on_load(self):
         dest = self._dest_field.model.get_value_as_string().strip()
         if not dest:
             self._set_status("ERROR: dest 경로를 입력하세요")
             return
-        self._load(dest)
-
-    def _load(self, dest: str):
         try:
-            prim_path = std_convert.load_into_stage(dest)  # prim 경로 지정은 지금은 제외
+            prim = CadConverter.load_into_stage(dest)  # prim 경로 지정은 지금은 제외
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: load 실패 - {e}")
             return
-        if prim_path:
-            self._loaded_prims.append(prim_path)
-        self._set_status(f"loaded -> {prim_path}")
+        self._set_status(f"loaded -> {prim}")
 
     def _on_clear(self):
-        if not self._loaded_prims:
-            self._set_status("지울 로드 항목이 없습니다")
-            return
         try:
-            std_convert.remove_prims(self._loaded_prims)
+            count = CadConverter.clear()
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: clear 실패 - {e}")
             return
-        count = len(self._loaded_prims)
-        self._loaded_prims.clear()
-        self._set_status(f"cleared {count} prim(s)")
+        self._set_status(f"cleared {count} prim(s)" if count else "지울 로드 항목이 없습니다")
 
     # ---------------- util ----------------
 
