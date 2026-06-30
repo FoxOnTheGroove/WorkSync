@@ -33,6 +33,7 @@ class ProgressPanelDemoUI:
                 with ui.HStack(height=28, spacing=8):
                     ui.Button("Run", clicked_fn=self._on_run)
                     ui.Button("Hide", clicked_fn=self._on_hide)
+                    ui.Button("Show", clicked_fn=self._on_show)
                     ui.Button("Destroy", clicked_fn=self._on_destroy)
 
     # ---------------- callbacks (공개 API 만 사용) ----------------
@@ -43,11 +44,14 @@ class ProgressPanelDemoUI:
     def _on_hide(self):
         ProgressPanelService.hide(self.KEY)
 
+    def _on_show(self):
+        ProgressPanelService.show(self.KEY)
+
     def _on_destroy(self):
         ProgressPanelService.destroy(self.KEY)
 
     async def _fake_progress(self):
-        ProgressPanelService.show(self.KEY, self._target_frame)
+        ProgressPanelService.create(self.KEY, self._target_frame)
         for i in range(101):
             ProgressPanelService.update(self.KEY, i / 100.0, f"loading {i}%")
             await asyncio.sleep(0.02)

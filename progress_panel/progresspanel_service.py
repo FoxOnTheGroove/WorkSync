@@ -7,11 +7,12 @@ Progress Panel 공개 API.
 사용 예:
     from progress_panel.progresspanel_service import ProgressPanelService
 
-    ProgressPanelService.show("my_task", target_frame)
+    ProgressPanelService.create("my_task", target_frame)
     ProgressPanelService.update("my_task", 0.5, "loading...")
     ProgressPanelService.update("my_task", 1.0, "done")   # 1.5초 뒤 자동 제거
-    # hide: 잠깐 가리기(객체 유지) / destroy: 완전 제거
+    # hide/show: 가리기/다시 보이기(객체 유지) / destroy: 완전 제거
     ProgressPanelService.hide("my_task")
+    ProgressPanelService.show("my_task")
     ProgressPanelService.destroy("my_task")
 """
 
@@ -23,8 +24,8 @@ from .progresspanel import ProgressPanel
 class ProgressPanelService:
 
     @classmethod
-    def show(cls, key: str, frame: ui.Frame):
-        """frame 위치에 progress 오버레이를 띄운다."""
+    def create(cls, key: str, frame: ui.Frame):
+        """frame 위치에 progress 오버레이를 생성한다."""
         ProgressPanel.create(key, frame)
 
     @classmethod
@@ -38,9 +39,19 @@ class ProgressPanelService:
         ProgressPanel.hide(key)
 
     @classmethod
-    def show_again(cls, key: str):
+    def show(cls, key: str):
         """hide 한 오버레이를 다시 보이게 한다."""
-        ProgressPanel.show_again(key)
+        ProgressPanel.show(key)
+
+    @classmethod
+    def hide_all(cls):
+        """모든 progress 오버레이를 visible off 한다."""
+        ProgressPanel.hide_all()
+
+    @classmethod
+    def show_all(cls):
+        """모든 progress 오버레이를 visible on 한다."""
+        ProgressPanel.show_all()
 
     @classmethod
     def destroy(cls, key: str):
@@ -49,5 +60,5 @@ class ProgressPanelService:
 
     @classmethod
     def destroy_all(cls):
-        """모든 progress 오버레이를 제거한다."""
+        """모든 progress 오버레이를 제거한다 (셧다운 정리용)."""
         ProgressPanel.destroy_all()

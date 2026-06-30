@@ -71,11 +71,23 @@ class ProgressPanel:
             item[0].visible = False
 
     @classmethod
-    def show_again(cls, key: str):
+    def show(cls, key: str):
         """hide 한 오버레이를 다시 visible on."""
         item = cls._items.get(key)
         if item:
             item[0].visible = True
+
+    @classmethod
+    def hide_all(cls):
+        """모든 오버레이를 visible off."""
+        for key in list(cls._items.keys()):
+            cls.hide(key)
+
+    @classmethod
+    def show_all(cls):
+        """모든 오버레이를 visible on."""
+        for key in list(cls._items.keys()):
+            cls.show(key)
 
     @classmethod
     def destroy(cls, key: str):
