@@ -60,10 +60,15 @@ class ProgressPanelService:
 
     @classmethod
     def destroy(cls, key: str):
-        """progress 오버레이를 완전히 제거한다."""
+        """progress 오버레이를 1초 뒤에 제거한다."""
         ProgressPanel.destroy(key)
 
     @classmethod
+    def destroy_immediate(cls, key: str):
+        """progress 오버레이를 즉시 제거한다."""
+        ProgressPanel.destroy_immediate(key)
+
+    @classmethod
     def destroy_all(cls):
-        """모든 progress 오버레이를 제거한다 (셧다운 정리용)."""
+        """모든 progress 오버레이를 즉시 제거한다 (셧다운 정리용)."""
         ProgressPanel.destroy_all()

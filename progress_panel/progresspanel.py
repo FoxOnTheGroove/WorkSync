@@ -18,7 +18,10 @@ class ProgressPanel:
 
     HEIGHT = 50            # 바 패널 높이(px)
     WIDTH_RATIO = 2.0 / 3.0  # 바 패널 너비 = 타겟 프레임 너비의 2/3
-    AUTO_DESTROY_DELAY = 1.5   # value 완료(>=1.0) 후 자동 파괴까지 대기(초)
+    DESTROY_DELAY = 1.0    # destroy() 호출 후 실제 파괴까지 대기(초)
+
+    # 패널 배경색 - 핑크골드 (RGB ~ E8B7AB), omni.ui 는 0xAABBGGRR
+    BG_COLOR = 0xFFABB7E8
 
     # 이동/리사이즈/도킹/접기 등 마우스 조작 전부 비활성
     _WIN_FLAGS = (
@@ -37,7 +40,7 @@ class ProgressPanel:
     @classmethod
     def create(cls, key: str, frame: ui.Frame):
         """frame 하단·가로중앙에 progress 오버레이 생성. 같은 key 는 교체."""
-        cls.destroy(key)
+        cls.destroy_immediate(key)
 
         win_w = frame.computed_width * cls.WIDTH_RATIO
 
@@ -52,29 +55,29 @@ class ProgressPanel:
         win.position_y = frame.screen_position_y + frame.computed_height - cls.HEIGHT
 
         with win.frame:
-            with ui.VStack(spacing=2):
-                label = ui.Label("")
-                bar = ui.ProgressBar()
-                bar.model.set_value(0.0)
+            with ui.ZStack():
+                # 핑크골드 배경
+                ui.Rectangle(style={"background_color": cls.BG_COLOR})
+                with ui.VStack(spacing=2):
+                    label = ui.Label("")
+                    bar = ui.ProgressBar()
+                    bar.model.set_value(0.0)
+
+        # 더미 UI 등 다른 윈도우 위로 올림
+        if hasattr(win, "focus"):
+            win.focus()
 
         cls._items[key] = (win, bar, label)
 
     @classmethod
     def update(cls, key: str, value: float, desc: str = ""):
-        """value(0.0~1.0) 반영 + desc 표기. 완료 시 자동 파괴 예약."""
+        """value(0.0~1.0) 반영 + desc 표기."""
         item = cls._items.get(key)
         if not item:
             return
         _, bar, label = item
         bar.model.set_value(max(0.0, min(1.0, value)))
         label.text = desc
-        if value >= 1.0:
-            omni.kit.async_engine.run_coroutine(cls._auto_destroy(key))
-
-    @classmethod
-    async def _auto_destroy(cls, key: str):
-        await asyncio.sleep(cls.AUTO_DESTROY_DELAY)
-        cls.destroy(key)
 
     @classmethod
     def set_color(cls, key: str, color: int):
@@ -111,13 +114,23 @@ class ProgressPanel:
 
     @classmethod
     def destroy(cls, key: str):
-        """해당 key 오버레이를 완전히 제거."""
+        """destroy 명령 후 DESTROY_DELAY(1초) 뒤에 제거."""
+        omni.kit.async_engine.run_coroutine(cls._destroy_delayed(key))
+
+    @classmethod
+    async def _destroy_delayed(cls, key: str):
+        await asyncio.sleep(cls.DESTROY_DELAY)
+        cls.destroy_immediate(key)
+
+    @classmethod
+    def destroy_immediate(cls, key: str):
+        """해당 key 오버레이를 즉시 제거."""
         item = cls._items.pop(key, None)
         if item:
             item[0].destroy()
 
     @classmethod
     def destroy_all(cls):
-        """모든 오버레이 제거 (셧다운 정리용)."""
+        """모든 오버레이 즉시 제거 (셧다운 정리용)."""
         for key in list(cls._items.keys()):
-            cls.destroy(key)
+            cls.destroy_immediate(key)

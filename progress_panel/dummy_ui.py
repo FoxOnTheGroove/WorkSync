@@ -72,7 +72,8 @@ class ProgressPanelDemoUI:
                 with ui.HStack(height=26, spacing=8):
                     ui.Button("Hide", clicked_fn=self._on_hide)
                     ui.Button("Show", clicked_fn=self._on_show)
-                    ui.Button("Destroy", clicked_fn=self._on_destroy)
+                    ui.Button("Destroy (1s)", clicked_fn=self._on_destroy)
+                    ui.Button("Destroy Now", clicked_fn=self._on_destroy_now)
 
     # ---------------- callbacks (공개 API 만 사용) ----------------
 
@@ -104,6 +105,9 @@ class ProgressPanelDemoUI:
 
     def _on_destroy(self):
         ProgressPanelService.destroy(self.KEY)
+
+    def _on_destroy_now(self):
+        ProgressPanelService.destroy_immediate(self.KEY)
 
     async def _run(self):
         ProgressPanelService.create(self.KEY, self._target_frame)
