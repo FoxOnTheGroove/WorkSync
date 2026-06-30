@@ -9,9 +9,10 @@ Progress Panel 공개 API.
 
     ProgressPanelService.show("my_task", target_frame)
     ProgressPanelService.update("my_task", 0.5, "loading...")
-    ProgressPanelService.update("my_task", 1.0, "done")   # 1.5초 뒤 자동 사라짐
-    # 필요 시 수동 제거
+    ProgressPanelService.update("my_task", 1.0, "done")   # 1.5초 뒤 자동 제거
+    # hide: 잠깐 가리기(객체 유지) / destroy: 완전 제거
     ProgressPanelService.hide("my_task")
+    ProgressPanelService.destroy("my_task")
 """
 
 import omni.ui as ui
@@ -33,10 +34,20 @@ class ProgressPanelService:
 
     @classmethod
     def hide(cls, key: str):
-        """progress 오버레이를 즉시 제거한다."""
+        """progress 오버레이를 visible off 한다 (객체는 유지)."""
+        ProgressPanel.hide(key)
+
+    @classmethod
+    def show_again(cls, key: str):
+        """hide 한 오버레이를 다시 보이게 한다."""
+        ProgressPanel.show_again(key)
+
+    @classmethod
+    def destroy(cls, key: str):
+        """progress 오버레이를 완전히 제거한다."""
         ProgressPanel.destroy(key)
 
     @classmethod
-    def hide_all(cls):
+    def destroy_all(cls):
         """모든 progress 오버레이를 제거한다."""
-        ProgressPanel.clear_all()
+        ProgressPanel.destroy_all()

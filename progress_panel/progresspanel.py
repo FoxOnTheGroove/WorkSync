@@ -64,14 +64,28 @@ class ProgressPanel:
         cls.destroy(key)
 
     @classmethod
+    def hide(cls, key: str):
+        """해당 key 오버레이를 visible off (제거하지 않음)."""
+        item = cls._items.get(key)
+        if item:
+            item[0].visible = False
+
+    @classmethod
+    def show_again(cls, key: str):
+        """hide 한 오버레이를 다시 visible on."""
+        item = cls._items.get(key)
+        if item:
+            item[0].visible = True
+
+    @classmethod
     def destroy(cls, key: str):
-        """해당 key 오버레이 제거."""
+        """해당 key 오버레이를 완전히 제거."""
         item = cls._items.pop(key, None)
         if item:
             item[0].destroy()
 
     @classmethod
-    def clear_all(cls):
+    def destroy_all(cls):
         """모든 오버레이 제거 (셧다운 정리용)."""
         for key in list(cls._items.keys()):
             cls.destroy(key)
