@@ -24,7 +24,8 @@ class ProgressPanel:
     BG_COLOR = 0xFFABB7E8
     BORDER_RADIUS = 8   # 모서리 곡률(px)
 
-    # 이동/리사이즈/도킹/접기 등 마우스 조작 전부 비활성
+    # 이동/리사이즈/도킹/접기 등 마우스 조작 전부 비활성 + 윈도우 기본 배경 제거
+    # (NO_BACKGROUND 로 프레임 바깥 배경을 없애야 둥근 모서리가 깔끔하게 남음)
     _WIN_FLAGS = (
         ui.WINDOW_FLAGS_NO_TITLE_BAR
         | ui.WINDOW_FLAGS_NO_RESIZE
@@ -33,6 +34,7 @@ class ProgressPanel:
         | ui.WINDOW_FLAGS_NO_DOCKING
         | ui.WINDOW_FLAGS_NO_COLLAPSE
         | ui.WINDOW_FLAGS_NO_CLOSE
+        | ui.WINDOW_FLAGS_NO_BACKGROUND
     )
 
     # key -> (window, bar, label)
