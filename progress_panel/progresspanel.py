@@ -16,26 +16,39 @@ import omni.kit.async_engine
 
 class ProgressPanel:
 
-    HEIGHT = 24
+    HEIGHT = 50            # 바 패널 높이(px)
+    WIDTH_RATIO = 2.0 / 3.0  # 바 패널 너비 = 타겟 프레임 너비의 2/3
     AUTO_DESTROY_DELAY = 1.5   # value 완료(>=1.0) 후 자동 파괴까지 대기(초)
+
+    # 이동/리사이즈/도킹/접기 등 마우스 조작 전부 비활성
+    _WIN_FLAGS = (
+        ui.WINDOW_FLAGS_NO_TITLE_BAR
+        | ui.WINDOW_FLAGS_NO_RESIZE
+        | ui.WINDOW_FLAGS_NO_SCROLLBAR
+        | ui.WINDOW_FLAGS_NO_MOVE
+        | ui.WINDOW_FLAGS_NO_DOCKING
+        | ui.WINDOW_FLAGS_NO_COLLAPSE
+        | ui.WINDOW_FLAGS_NO_CLOSE
+    )
 
     # key -> (window, bar, label)
     _items: dict = {}
 
     @classmethod
     def create(cls, key: str, frame: ui.Frame):
-        """frame 위치(하단)에 progress 오버레이 생성. 같은 key 는 교체."""
+        """frame 하단·가로중앙에 progress 오버레이 생성. 같은 key 는 교체."""
         cls.destroy(key)
+
+        win_w = frame.computed_width * cls.WIDTH_RATIO
 
         win = ui.Window(
             f"progress_{key}",
-            width=frame.computed_width,
+            width=win_w,
             height=cls.HEIGHT,
-            flags=ui.WINDOW_FLAGS_NO_TITLE_BAR
-                  | ui.WINDOW_FLAGS_NO_RESIZE
-                  | ui.WINDOW_FLAGS_NO_SCROLLBAR,
+            flags=cls._WIN_FLAGS,
         )
-        win.position_x = frame.screen_position_x
+        # 가로 중앙 정렬 + 프레임 하단에 붙임
+        win.position_x = frame.screen_position_x + (frame.computed_width - win_w) / 2.0
         win.position_y = frame.screen_position_y + frame.computed_height - cls.HEIGHT
 
         with win.frame:

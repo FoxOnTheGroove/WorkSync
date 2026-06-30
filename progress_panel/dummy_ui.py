@@ -35,10 +35,16 @@ class ProgressPanelDemoUI:
         self._window = ui.Window("Progress Panel Demo", width=460, height=300)
         with self._window.frame:
             with ui.VStack(spacing=8, style={"margin": 2}):
-                # 진행바가 떠오를 대상 영역
-                self._target_frame = ui.Frame(height=100)
+                # 진행바가 떠오를 대상 영역 (사각형 선으로 프레임 시각화, 임시 타겟)
+                self._target_frame = ui.Frame(height=120)
                 with self._target_frame:
-                    ui.Label("target area", alignment=ui.Alignment.CENTER)
+                    with ui.ZStack():
+                        ui.Rectangle(style={
+                            "background_color": 0x00000000,   # 투명
+                            "border_color":     0xFF888888,
+                            "border_width":     1,
+                        })
+                        ui.Label("target area", alignment=ui.Alignment.CENTER)
 
                 # create / run
                 with ui.HStack(height=26, spacing=8):
