@@ -39,6 +39,17 @@ class ProgressPanel:
 
     # key -> (window, bar, label)
     _items: dict = {}
+    # 개별 hide 된 key 집합
+    _hidden: set = set()
+    # 전역 패널 on/off (setting). off 면 어떤 패널도 노출 안 함
+    _enabled: bool = True
+
+    @classmethod
+    def _apply_visibility(cls, key: str):
+        """실제 표시 = 전역 enabled AND 개별 미숨김."""
+        item = cls._items.get(key)
+        if item:
+            item[0].visible = cls._enabled and (key not in cls._hidden)
 
     @classmethod
     def create(cls, key: str, frame: ui.Frame):
@@ -68,11 +79,13 @@ class ProgressPanel:
                 bar = ui.ProgressBar()
                 bar.model.set_value(0.0)
 
-        # 더미 UI 등 다른 윈도우 위로 올림
-        if hasattr(win, "focus"):
-            win.focus()
-
         cls._items[key] = (win, bar, label)
+        cls._hidden.discard(key)
+        cls._apply_visibility(key)   # 전역 off 면 생성해도 노출 안 됨
+
+        # 노출 상태일 때만 다른 윈도우 위로 올림
+        if cls._enabled and hasattr(win, "focus"):
+            win.focus()
 
     @classmethod
     def update(cls, key: str, value: float, desc: str = ""):
@@ -93,29 +106,41 @@ class ProgressPanel:
 
     @classmethod
     def hide(cls, key: str):
-        """해당 key 오버레이를 visible off (제거하지 않음)."""
-        item = cls._items.get(key)
-        if item:
-            item[0].visible = False
+        """해당 key 오버레이를 일시적으로 가림 (제거하지 않음)."""
+        cls._hidden.add(key)
+        cls._apply_visibility(key)
 
     @classmethod
     def show(cls, key: str):
-        """hide 한 오버레이를 다시 visible on."""
-        item = cls._items.get(key)
-        if item:
-            item[0].visible = True
+        """hide 한 오버레이를 다시 표시 (전역 off 면 여전히 안 보임)."""
+        cls._hidden.discard(key)
+        cls._apply_visibility(key)
 
     @classmethod
     def hide_all(cls):
-        """모든 오버레이를 visible off."""
+        """모든 오버레이를 일시적으로 가림."""
         for key in list(cls._items.keys()):
             cls.hide(key)
 
     @classmethod
     def show_all(cls):
-        """모든 오버레이를 visible on."""
+        """모든 오버레이를 다시 표시."""
         for key in list(cls._items.keys()):
             cls.show(key)
+
+    @classmethod
+    def panel_on(cls):
+        """[전역 setting] 패널 노출 켬. 개별 hide 상태는 유지."""
+        cls._enabled = True
+        for key in list(cls._items.keys()):
+            cls._apply_visibility(key)
+
+    @classmethod
+    def panel_off(cls):
+        """[전역 setting] 패널 노출 끔. 모든 패널 숨김 (객체는 유지)."""
+        cls._enabled = False
+        for key in list(cls._items.keys()):
+            cls._apply_visibility(key)
 
     @classmethod
     def destroy(cls, key: str):
@@ -130,6 +155,7 @@ class ProgressPanel:
     @classmethod
     def destroy_immediate(cls, key: str):
         """해당 key 오버레이를 즉시 제거."""
+        cls._hidden.discard(key)
         item = cls._items.pop(key, None)
         if item:
             item[0].destroy()

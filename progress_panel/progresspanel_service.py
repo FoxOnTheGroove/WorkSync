@@ -59,6 +59,16 @@ class ProgressPanelService:
         ProgressPanel.show_all()
 
     @classmethod
+    def panel_on(cls):
+        """[전역 setting] 패널 노출을 켠다."""
+        ProgressPanel.panel_on()
+
+    @classmethod
+    def panel_off(cls):
+        """[전역 setting] 패널 노출을 끈다. off 면 어떤 패널도 안 보인다."""
+        ProgressPanel.panel_off()
+
+    @classmethod
     def destroy(cls, key: str):
         """progress 오버레이를 1초 뒤에 제거한다."""
         ProgressPanel.destroy(key)

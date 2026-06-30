@@ -75,6 +75,11 @@ class ProgressPanelDemoUI:
                     ui.Button("Destroy (1s)", clicked_fn=self._on_destroy)
                     ui.Button("Destroy Now", clicked_fn=self._on_destroy_now)
 
+                # 전역 setting: panel on/off
+                with ui.HStack(height=26, spacing=8):
+                    ui.Button("Panel ON", clicked_fn=self._on_panel_on)
+                    ui.Button("Panel OFF", clicked_fn=self._on_panel_off)
+
     # ---------------- callbacks (공개 API 만 사용) ----------------
 
     def _on_create(self):
@@ -108,6 +113,12 @@ class ProgressPanelDemoUI:
 
     def _on_destroy_now(self):
         ProgressPanelService.destroy_immediate(self.KEY)
+
+    def _on_panel_on(self):
+        ProgressPanelService.panel_on()
+
+    def _on_panel_off(self):
+        ProgressPanelService.panel_off()
 
     async def _run(self):
         ProgressPanelService.create(self.KEY, self._target_frame)
