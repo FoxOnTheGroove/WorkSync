@@ -22,6 +22,7 @@ from .progresspanel_service import ProgressPanelService
 
 class ProgressPanelDemoUI:
 
+    TAB_KEY = "demo_tab"
     KEY = "demo"
 
     def __init__(self):
@@ -75,6 +76,11 @@ class ProgressPanelDemoUI:
                     ui.Button("Destroy (1s)", clicked_fn=self._on_destroy)
                     ui.Button("Destroy Now", clicked_fn=self._on_destroy_now)
 
+                # tab 그룹 단위 hide/show
+                with ui.HStack(height=26, spacing=8):
+                    ui.Button("Hide Tab", clicked_fn=self._on_hide_tab)
+                    ui.Button("Show Tab", clicked_fn=self._on_show_tab)
+
                 # 전역 setting: panel on/off
                 with ui.HStack(height=26, spacing=8):
                     ui.Button("Panel ON", clicked_fn=self._on_panel_on)
@@ -83,7 +89,7 @@ class ProgressPanelDemoUI:
     # ---------------- callbacks (공개 API 만 사용) ----------------
 
     def _on_create(self):
-        ProgressPanelService.create(self.KEY, self._target_frame)
+        ProgressPanelService.create(self.TAB_KEY, self.KEY, self._target_frame)
 
     def _on_run(self):
         omni.kit.async_engine.run_coroutine(self._run())
@@ -114,6 +120,12 @@ class ProgressPanelDemoUI:
     def _on_destroy_now(self):
         ProgressPanelService.destroy_immediate(self.KEY)
 
+    def _on_hide_tab(self):
+        ProgressPanelService.hide_all(self.TAB_KEY)
+
+    def _on_show_tab(self):
+        ProgressPanelService.show_all(self.TAB_KEY)
+
     def _on_panel_on(self):
         ProgressPanelService.panel_on()
 
@@ -121,7 +133,7 @@ class ProgressPanelDemoUI:
         ProgressPanelService.panel_off()
 
     async def _run(self):
-        ProgressPanelService.create(self.KEY, self._target_frame)
+        ProgressPanelService.create(self.TAB_KEY, self.KEY, self._target_frame)
         for i in range(101):
             ProgressPanelService.update(self.KEY, i / 100.0, f"loading {i}%")
             await asyncio.sleep(0.02)

@@ -24,9 +24,9 @@ from .progresspanel import ProgressPanel
 class ProgressPanelService:
 
     @classmethod
-    def create(cls, key: str, frame: ui.Frame):
-        """frame 위치에 progress 오버레이를 생성한다."""
-        ProgressPanel.create(key, frame)
+    def create(cls, tab_key: str, key: str, frame: ui.Frame):
+        """frame 위치에 progress 오버레이를 생성한다. tab_key 는 그룹 식별자."""
+        ProgressPanel.create(tab_key, key, frame)
 
     @classmethod
     def update(cls, key: str, value: float, desc: str = ""):
@@ -49,14 +49,14 @@ class ProgressPanelService:
         ProgressPanel.show(key)
 
     @classmethod
-    def hide_all(cls):
-        """모든 progress 오버레이를 visible off 한다."""
-        ProgressPanel.hide_all()
+    def hide_all(cls, tab_key: str):
+        """해당 tab_key 그룹의 오버레이만 visible off 한다."""
+        ProgressPanel.hide_all(tab_key)
 
     @classmethod
-    def show_all(cls):
-        """모든 progress 오버레이를 visible on 한다."""
-        ProgressPanel.show_all()
+    def show_all(cls, tab_key: str):
+        """해당 tab_key 그룹의 오버레이만 visible on 한다."""
+        ProgressPanel.show_all(tab_key)
 
     @classmethod
     def panel_on(cls):

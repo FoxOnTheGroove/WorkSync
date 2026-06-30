@@ -37,7 +37,7 @@ class ProgressPanel:
         | ui.WINDOW_FLAGS_NO_BACKGROUND
     )
 
-    # key -> (window, bar, label)
+    # key -> (window, bar, label, tab_key)
     _items: dict = {}
     # 개별 hide 된 key 집합
     _hidden: set = set()
@@ -52,8 +52,11 @@ class ProgressPanel:
             item[0].visible = cls._enabled and (key not in cls._hidden)
 
     @classmethod
-    def create(cls, key: str, frame: ui.Frame):
-        """frame 하단·가로중앙에 progress 오버레이 생성. 같은 key 는 교체."""
+    def create(cls, tab_key: str, key: str, frame: ui.Frame):
+        """frame 하단·가로중앙에 progress 오버레이 생성. 같은 key 는 교체.
+
+        tab_key: 그룹 식별자. hide_all/show_all 이 이 단위로 작용.
+        """
         cls.destroy_immediate(key)
 
         win_w = frame.computed_width * cls.WIDTH_RATIO
@@ -79,7 +82,7 @@ class ProgressPanel:
                 bar = ui.ProgressBar()
                 bar.model.set_value(0.0)
 
-        cls._items[key] = (win, bar, label)
+        cls._items[key] = (win, bar, label, tab_key)
         cls._hidden.discard(key)
         cls._apply_visibility(key)   # 전역 off 면 생성해도 노출 안 됨
 
@@ -117,16 +120,18 @@ class ProgressPanel:
         cls._apply_visibility(key)
 
     @classmethod
-    def hide_all(cls):
-        """모든 오버레이를 일시적으로 가림."""
-        for key in list(cls._items.keys()):
-            cls.hide(key)
+    def hide_all(cls, tab_key: str):
+        """해당 tab_key 그룹의 오버레이만 일시적으로 가림."""
+        for key, item in list(cls._items.items()):
+            if item[3] == tab_key:
+                cls.hide(key)
 
     @classmethod
-    def show_all(cls):
-        """모든 오버레이를 다시 표시."""
-        for key in list(cls._items.keys()):
-            cls.show(key)
+    def show_all(cls, tab_key: str):
+        """해당 tab_key 그룹의 오버레이만 다시 표시."""
+        for key, item in list(cls._items.items()):
+            if item[3] == tab_key:
+                cls.show(key)
 
     @classmethod
     def panel_on(cls):
