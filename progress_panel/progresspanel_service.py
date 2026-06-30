@@ -34,6 +34,11 @@ class ProgressPanelService:
         ProgressPanel.update(key, value, desc)
 
     @classmethod
+    def set_color(cls, key: str, color: int):
+        """progress bar fill 색을 변경한다. color 는 omni.ui 정수 (0xAABBGGRR)."""
+        ProgressPanel.set_color(key, color)
+
+    @classmethod
     def hide(cls, key: str):
         """progress 오버레이를 visible off 한다 (객체는 유지)."""
         ProgressPanel.hide(key)

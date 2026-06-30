@@ -1,8 +1,15 @@
 """
 Progress Panel 데모/조작용 UI.
 
-공개 API(ProgressPanelService) 만 사용해서 패널을 조작하는 예시.
-Run 버튼을 누르면 target frame 위치에 progress 오버레이가 떠서 0->100% 진행.
+공개 API(ProgressPanelService) 만 사용해서 패널을 조작/테스트.
+
+컨트롤:
+  - Create  : target frame 위치에 빈 progress 오버레이 생성
+  - Run     : 0->100% 자동 진행 (UI 에서 구현하는 자동 동작)
+  - Update  : value(0~1) + desc 를 직접 입력해 수동 갱신
+  - Hide/Show : visible off / on
+  - Set Color : fill 색 변경 (hex 입력)
+  - Destroy : 완전 제거
 """
 
 import asyncio
@@ -20,26 +27,68 @@ class ProgressPanelDemoUI:
     def __init__(self):
         self._window: ui.Window | None = None
         self._target_frame: ui.Frame | None = None
+        self._value_field: ui.FloatField | None = None
+        self._desc_field: ui.StringField | None = None
+        self._color_field: ui.StringField | None = None
 
     def build_ui(self):
-        self._window = ui.Window("Progress Panel Demo", width=400, height=200)
+        self._window = ui.Window("Progress Panel Demo", width=460, height=300)
         with self._window.frame:
             with ui.VStack(spacing=8, style={"margin": 2}):
                 # 진행바가 떠오를 대상 영역
-                self._target_frame = ui.Frame(height=120)
+                self._target_frame = ui.Frame(height=100)
                 with self._target_frame:
                     ui.Label("target area", alignment=ui.Alignment.CENTER)
 
-                with ui.HStack(height=28, spacing=8):
+                # create / run
+                with ui.HStack(height=26, spacing=8):
+                    ui.Button("Create", clicked_fn=self._on_create)
                     ui.Button("Run", clicked_fn=self._on_run)
+
+                # update (value + desc)
+                with ui.HStack(height=26, spacing=6):
+                    ui.Label("value", width=42)
+                    self._value_field = ui.FloatField(width=70)
+                    self._value_field.model.set_value(0.5)
+                    ui.Label("desc", width=36)
+                    self._desc_field = ui.StringField()
+                    self._desc_field.model.set_value("loading...")
+                    ui.Button("Update", width=70, clicked_fn=self._on_update)
+
+                # set color (hex)
+                with ui.HStack(height=26, spacing=6):
+                    ui.Label("color", width=42)
+                    self._color_field = ui.StringField(width=110)
+                    self._color_field.model.set_value("0xFF33CC33")
+                    ui.Button("Set Color", width=80, clicked_fn=self._on_set_color)
+
+                # hide / show / destroy
+                with ui.HStack(height=26, spacing=8):
                     ui.Button("Hide", clicked_fn=self._on_hide)
                     ui.Button("Show", clicked_fn=self._on_show)
                     ui.Button("Destroy", clicked_fn=self._on_destroy)
 
     # ---------------- callbacks (공개 API 만 사용) ----------------
 
+    def _on_create(self):
+        ProgressPanelService.create(self.KEY, self._target_frame)
+
     def _on_run(self):
-        omni.kit.async_engine.run_coroutine(self._fake_progress())
+        omni.kit.async_engine.run_coroutine(self._run())
+
+    def _on_update(self):
+        value = self._value_field.model.get_value_as_float()
+        desc = self._desc_field.model.get_value_as_string()
+        ProgressPanelService.update(self.KEY, value, desc)
+
+    def _on_set_color(self):
+        text = self._color_field.model.get_value_as_string().strip()
+        try:
+            color = int(text, 0)   # "0xAABBGGRR" 파싱
+        except ValueError:
+            print(f"[progress_panel] invalid color: {text}")
+            return
+        ProgressPanelService.set_color(self.KEY, color)
 
     def _on_hide(self):
         ProgressPanelService.hide(self.KEY)
@@ -50,7 +99,7 @@ class ProgressPanelDemoUI:
     def _on_destroy(self):
         ProgressPanelService.destroy(self.KEY)
 
-    async def _fake_progress(self):
+    async def _run(self):
         ProgressPanelService.create(self.KEY, self._target_frame)
         for i in range(101):
             ProgressPanelService.update(self.KEY, i / 100.0, f"loading {i}%")
