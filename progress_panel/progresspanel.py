@@ -22,6 +22,7 @@ class ProgressPanel:
 
     # 패널 배경색 - 핑크골드 (RGB ~ E8B7AB), omni.ui 는 0xAABBGGRR
     BG_COLOR = 0xFFABB7E8
+    BORDER_RADIUS = 8   # 모서리 곡률(px)
 
     # 이동/리사이즈/도킹/접기 등 마우스 조작 전부 비활성
     _WIN_FLAGS = (
@@ -54,14 +55,16 @@ class ProgressPanel:
         win.position_x = frame.screen_position_x + (frame.computed_width - win_w) / 2.0
         win.position_y = frame.screen_position_y + frame.computed_height - cls.HEIGHT
 
+        # 핑크골드 배경 + 둥근 모서리 (frame style 직접 지정)
+        win.frame.set_style({
+            "background_color": cls.BG_COLOR,
+            "border_radius": cls.BORDER_RADIUS,
+        })
         with win.frame:
-            with ui.ZStack():
-                # 핑크골드 배경
-                ui.Rectangle(style={"background_color": cls.BG_COLOR})
-                with ui.VStack(spacing=2):
-                    label = ui.Label("")
-                    bar = ui.ProgressBar()
-                    bar.model.set_value(0.0)
+            with ui.VStack(spacing=2):
+                label = ui.Label("")
+                bar = ui.ProgressBar()
+                bar.model.set_value(0.0)
 
         # 더미 UI 등 다른 윈도우 위로 올림
         if hasattr(win, "focus"):
