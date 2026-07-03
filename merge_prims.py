@@ -84,7 +84,15 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                 print(f"[merge] flat에 경계 없음, 건너뜀: {src_boundary}")
                 continue
             slot = f"{dest}/{rel}/{_slot_name(i)}"   # slot_01, slot_02, ... (경계 노드째 복사)
-            _copy_from(flat, edit, src_boundary, slot)
+            # ChangeBlock: 복사→타겟 리매핑→초기 가시성까지 한 번에 notify
+            # (셰이더 바인딩이 옛 경로를 가리킨 채 Hydra에 흘러가면
+            #  ChangeTracker verification 에러가 나므로 반드시 묶는다)
+            with Sdf.ChangeBlock():
+                Sdf.CreatePrimInLayer(edit, slot)
+                Sdf.CopySpec(flat, src_boundary, edit, slot)
+                _remap_internal_targets(edit, Sdf.Path(slot),
+                                        Sdf.Path(src_boundary), Sdf.Path(slot))
+                _author_visibility(edit, slot, visible=(i == 1))   # 1번만 on, 나머지 off로 삽입
 
     if delete_rest:
         seen = {dest}                                # dest는 지우면 안 됨 (중복 경로 대비)
@@ -140,7 +148,39 @@ def _ensure_skeleton(stage, path):
             UsdGeom.Xform.Define(stage, cur)
 
 
-def _copy_from(src_layer, dst_layer, src_path, dst_path):
-    """src_layer(flat)의 서브트리를 dst_layer(edit)로 복사."""
-    Sdf.CreatePrimInLayer(dst_layer, dst_path)       # 조상 spec 확보
-    Sdf.CopySpec(src_layer, src_path, dst_layer, dst_path)
+def _remap_internal_targets(layer, root_path, old_prefix, new_prefix):
+    """복사된 서브트리 내부의 릴레이션십 타겟/어트리뷰트 커넥션 경로를
+    old_prefix → new_prefix 로 리매핑한다.
+    (Sdf.CopySpec은 material:binding, 셰이더 connection 등의 절대경로를
+     새 위치로 고쳐주지 않으므로 직접 수정. 서브트리 밖을 가리키는
+     경로는 ReplacePrefix가 그대로 두므로 안전.)"""
+    spec = layer.GetPrimAtPath(root_path)
+    if spec is None:
+        return
+
+    def _fix(prim_spec):
+        for rel in prim_spec.relationships:
+            items = list(rel.targetPathList.explicitItems)
+            new = [p.ReplacePrefix(old_prefix, new_prefix) for p in items]
+            if new != items:
+                rel.targetPathList.explicitItems = new
+        for attr in prim_spec.attributes:
+            conns = list(attr.connectionPathList.explicitItems)
+            new = [p.ReplacePrefix(old_prefix, new_prefix) for p in conns]
+            if new != conns:
+                attr.connectionPathList.explicitItems = new
+        for child in prim_spec.nameChildren:
+            _fix(child)
+
+    _fix(spec)
+
+
+def _author_visibility(layer, prim_path, visible):
+    """슬롯 prim spec에 visibility를 직접 author (삽입 시점부터 적용)."""
+    spec = layer.GetPrimAtPath(prim_path)
+    if spec is None:
+        return
+    attr = layer.GetAttributeAtPath(f"{prim_path}.visibility")
+    if attr is None:
+        attr = Sdf.AttributeSpec(spec, "visibility", Sdf.ValueTypeNames.Token)
+    attr.default = "inherited" if visible else "invisible"
