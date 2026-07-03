@@ -36,6 +36,9 @@ from pxr import Usd, UsdGeom
 
 SLOT_SUFFIX = "_slot_"       # 자식 이름 뒤에 붙는 소스 식별자: name_slot_01
 
+_MERGING = False             # 재진입 가드 (merge가 일으킨 stage 변화가
+                             #  로드감지 로직을 다시 깨워 merge가 또 불리는 것 방지)
+
 
 def _slot_child_name(name: str, i: int) -> str:
     return f"{name}{SLOT_SUFFIX}{i:02d}"      # ("이하a", 1) → "이하a_slot_01"
@@ -60,6 +63,11 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
     delete_rest : True면 병합 후 prim_paths[1:] 삭제
     반환        : (병합된 소스 개수, 목적지 prim path)  실패 시 (0, None)
     """
+    global _MERGING
+    if _MERGING:
+        print("[merge] 이미 병합 진행 중 — 재진입 차단")
+        return 0, None
+
     if stage is None:
         stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -71,13 +79,34 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
 
     dest = prim_paths[0].rstrip("/")
 
-    # 원본(루트) 레이어에만 기록
+    # dest가 이미 병합된 상태면 스킵 (로드감지 로직이 다시 불러도 안전)
+    if _already_merged(stage, dest, boundaries):
+        print(f"[merge] 이미 병합됨, 스킵: {dest}")
+        return 0, dest
+
+    _MERGING = True
     prev_target = stage.GetEditTarget()
-    stage.SetEditTarget(Usd.EditTarget(stage.GetRootLayer()))
+    stage.SetEditTarget(Usd.EditTarget(stage.GetRootLayer()))   # 원본(루트) 레이어에만 기록
     try:
-        return _do_merge(stage, prim_paths, boundaries, dest, delete_rest)
+        print(f"[merge] 시작: {len(prim_paths)}개 소스, {len(boundaries)}개 경계")
+        result = _do_merge(stage, prim_paths, boundaries, dest, delete_rest)
+        print(f"[merge] 완료: {result}")
+        return result
     finally:
         stage.SetEditTarget(prev_target)
+        _MERGING = False
+
+
+def _already_merged(stage, dest, boundaries):
+    """dest의 경계 아래에 _slot_ 복사본이 하나라도 있으면 병합 완료로 본다."""
+    for rel in boundaries:
+        boundary = stage.GetPrimAtPath(f"{dest}/{rel.strip('/')}")
+        if not boundary.IsValid():
+            continue
+        for child in boundary.GetChildren():
+            if _slot_suffix_index(child.GetName()) is not None:
+                return True
+    return False
 
 
 def _do_merge(stage, prim_paths, boundaries, dest, delete_rest):
@@ -139,6 +168,7 @@ def _do_merge(stage, prim_paths, boundaries, dest, delete_rest):
     if stage.GetPrimAtPath(tmp_root).IsValid():
         stage.RemovePrim(tmp_root)
 
+    print(f"[merge] 삽입된 슬롯 복사본 {len(copied)}개")
     return len(prim_paths), dest
 
 
