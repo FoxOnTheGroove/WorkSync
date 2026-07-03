@@ -1,22 +1,24 @@
-# merge_prims.py — reference로 로드된 N개 소스를 1번 프림으로 병합 (Kit 네이티브 복제 방식)
+# merge_prims.py — reference로 로드된 N개 소스를 1번 프림으로 병합
 #
 # 구조 가정:
 #   /World/Space/LoadPrim/
 #       prim1   ← AddReference(assetA)  → scene/vec/aplane/... 합성
 #       prim2   ← AddReference(assetB)  → scene/vec/aplane/... 합성
 #       ...
-#   asset은 같아도 달라도 각각 독립(different)으로 처리한다.
 #
-# 동작 (순서가 핵심):
-#   1) 소스가 전부 살아있는 동안, 각 경계 노드를 Kit 네이티브 복제(CopyPrim)로
-#      숨겨진 임시 스코프 아래에 복제한다.
-#      → reference 합성 결과가 그대로 구워지고, material:binding 등
-#        서브트리 내부 경로는 Kit이 자동 리매핑한다. (fabric-safe)
-#   2) dest(prim_paths[0])의 reference/payload 제거, 나머지 소스 삭제.
-#   3) 스켈레톤(경계 상위 경로) 재생성 후, 임시 복제본을 슬롯
-#      (slot_01, slot_02, ...)으로 이동. 이동 직전에 visibility를 author하여
-#      1번만 on, 나머지는 off 상태로 삽입된다.
-#   4) 임시 스코프 삭제.
+# 동작:
+#   - 경계(boundary) 아래의 "자식들"만 복사 대상. 경계 밖은 일절 건드리지 않는다.
+#   - 각 소스 i의 경계 자식들을 dest(prim_paths[0])의 같은 경계 바로 아래에
+#     "{원래이름}_slot_{i:02d}" 이름으로 삽입한다. (슬롯 컨테이너 없음)
+#       aplane/
+#           이하a_slot_01   ← prim1의 이하a (원본 자식은 deactivate)
+#           이하a_slot_02   ← prim2의 이하a
+#   - dest의 reference는 유지. dest의 원본 경계 자식은 _slot_01 복사 후
+#     deactivate 한다 (reference 콘텐츠라 rename 불가).
+#   - 복제는 Kit 네이티브(CopyPrim, combine_layers)라 내부 경로 자동 리매핑.
+#   - 삽입 전에 visibility를 author하여 _slot_01만 on, 나머지는 off로 들어간다.
+#   - 병합 후 prim_paths[1:] 은 통째로 삭제한다.
+#   - 모든 기록은 stage 루트(원본) 레이어에만 한다.
 #
 # 사용 예:
 #   BOUNDARIES = ["scene/vec/aplane", "scene/vec/bplane",
@@ -30,21 +32,20 @@
 
 import omni.usd
 import omni.kit.commands
-from pxr import UsdGeom
+from pxr import Usd, UsdGeom
 
-SLOT_PREFIX = "slot_"        # USD prim 이름은 숫자로 시작할 수 없어 접두어를 붙인다
-
-
-def _slot_name(i: int) -> str:
-    return f"{SLOT_PREFIX}{i:02d}"        # 1 → "slot_01"
+SLOT_SUFFIX = "_slot_"       # 자식 이름 뒤에 붙는 소스 식별자: name_slot_01
 
 
-def _slot_index(name: str):
-    """슬롯 이름에서 인덱스 추출. 슬롯이 아니면 None."""
-    if name.startswith(SLOT_PREFIX):
-        tail = name[len(SLOT_PREFIX):]
-        if tail.isdigit():
-            return int(tail)
+def _slot_child_name(name: str, i: int) -> str:
+    return f"{name}{SLOT_SUFFIX}{i:02d}"      # ("이하a", 1) → "이하a_slot_01"
+
+
+def _slot_suffix_index(name: str):
+    """이름 끝의 _slot_NN에서 인덱스 추출. 슬롯 복사본이 아니면 None."""
+    base, sep, tail = name.rpartition(SLOT_SUFFIX)
+    if sep and base and tail.isdigit():
+        return int(tail)
     return None
 
 
@@ -70,33 +71,51 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
 
     dest = prim_paths[0].rstrip("/")
 
+    # 원본(루트) 레이어에만 기록
+    prev_target = stage.GetEditTarget()
+    stage.SetEditTarget(Usd.EditTarget(stage.GetRootLayer()))
+    try:
+        return _do_merge(stage, prim_paths, boundaries, dest, delete_rest)
+    finally:
+        stage.SetEditTarget(prev_target)
+
+
+def _do_merge(stage, prim_paths, boundaries, dest, delete_rest):
     # 숨겨진 임시 스코프 (복제본 대기 장소 — invisible이라 화면에 안 비침)
     tmp_root = _unique_path(stage, f"{dest}_mergetmp")
     tmp_xf = UsdGeom.Xform.Define(stage, tmp_root)
     UsdGeom.Imageable(tmp_xf.GetPrim()).GetVisibilityAttr().Set(
         UsdGeom.Tokens.invisible)
 
-    # 1) 복제 — 소스가 살아있는 동안 Kit 네이티브 복제 (내부 바인딩 자동 리매핑)
-    copied = []                                  # (rel, i, tmp_path)
+    # 1) 복제 — 소스가 살아있는 동안, 각 경계의 "자식들"을 임시 스코프로 복제
+    copied = []                                  # (rel, i, child_name, tmp_path)
     for bi, rel in enumerate(boundaries):
         rel = rel.strip("/")
         for i, root in enumerate(prim_paths, start=1):
-            src = f"{root.rstrip('/')}/{rel}"
-            if not stage.GetPrimAtPath(src).IsValid():
-                print(f"[merge] 경계 없음, 건너뜀: {src}")
+            boundary = stage.GetPrimAtPath(f"{root.rstrip('/')}/{rel}")
+            if not boundary.IsValid():
+                print(f"[merge] 경계 없음, 건너뜀: {root}/{rel}")
                 continue
-            tmp = f"{tmp_root}/b{bi:02d}_s{i:02d}"
-            if _kit_copy(stage, src, tmp):
-                copied.append((rel, i, tmp))
-            else:
-                print(f"[merge] 복제 실패, 건너뜀: {src}")
+            for child in boundary.GetChildren():
+                name = child.GetName()
+                if _slot_suffix_index(name) is not None:
+                    continue                     # 이미 슬롯 복사본이면 제외 (재실행 대비)
+                tmp = f"{tmp_root}/b{bi:02d}_s{i:02d}_{name}"
+                if _kit_copy(stage, child.GetPath().pathString, tmp):
+                    copied.append((rel, i, name, tmp))
+                else:
+                    print(f"[merge] 복제 실패, 건너뜀: {child.GetPath()}")
 
-    # 2) dest reference/payload 제거 + 나머지 소스 삭제
-    dp = stage.GetPrimAtPath(dest)
-    if dp.IsValid():
-        dp.GetReferences().ClearReferences()
-        dp.GetPayloads().ClearPayloads()
+    # 2) dest의 원본 경계 자식 deactivate (_slot_01 복사본이 대신한다)
+    for rel in boundaries:
+        boundary = stage.GetPrimAtPath(f"{dest}/{rel.strip('/')}")
+        if not boundary.IsValid():
+            continue
+        for child in boundary.GetChildren():
+            if _slot_suffix_index(child.GetName()) is None and child.IsActive():
+                child.SetActive(False)
 
+    # 3) 나머지 소스 통째 삭제 (경계 밖 포함 전부 — dest만 남긴다)
     if delete_rest:
         seen = {dest}                            # dest는 지우면 안 됨 (중복 경로 대비)
         for root in prim_paths[1:]:
@@ -107,18 +126,16 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
             if stage.GetPrimAtPath(p).IsValid():
                 stage.RemovePrim(p)
 
-    # 3) 스켈레톤 재생성 + 임시 복제본 → 슬롯 이동 (visibility 먼저 author)
-    for rel, i, tmp in copied:
-        _ensure_skeleton(stage, f"{dest}/{rel}")
+    # 4) 임시 복제본 → dest 경계 아래로 이동 (visibility 먼저 author)
+    for rel, i, name, tmp in copied:
         prim = stage.GetPrimAtPath(tmp)
         if not prim.IsValid():
             continue
         vis = UsdGeom.Tokens.inherited if i == 1 else UsdGeom.Tokens.invisible
         UsdGeom.Imageable(prim).GetVisibilityAttr().Set(vis)   # 1번만 on 상태로 삽입
-        slot = f"{dest}/{rel}/{_slot_name(i)}"
-        _kit_move(tmp, slot)
+        _kit_move(tmp, f"{dest}/{rel}/{_slot_child_name(name, i)}")
 
-    # 4) 임시 스코프 정리
+    # 5) 임시 스코프 정리
     if stage.GetPrimAtPath(tmp_root).IsValid():
         stage.RemovePrim(tmp_root)
 
@@ -130,7 +147,8 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
 # ----------------------------------------------------------------------
 
 def set_slot_visible(container_path, idx, stage=None):
-    """container의 자식 번호 슬롯 중 idx만 visible, 나머지는 invisible."""
+    """container(경계)의 자식 중 _slot_NN 복사본만 대상으로,
+    idx만 visible, 나머지는 invisible. suffix 없는 자식은 건드리지 않는다."""
     if stage is None:
         stage = omni.usd.get_context().get_stage()
     container = stage.GetPrimAtPath(container_path)
@@ -138,7 +156,7 @@ def set_slot_visible(container_path, idx, stage=None):
         print(f"[merge] 컨테이너 없음: {container_path}")
         return
     for child in container.GetChildren():
-        slot_idx = _slot_index(child.GetName())
+        slot_idx = _slot_suffix_index(child.GetName())
         if slot_idx is None:
             continue
         vis = (UsdGeom.Tokens.inherited if slot_idx == idx
@@ -164,15 +182,6 @@ def _unique_path(stage, base):
         n += 1
         path = f"{base}_{n}"
     return path
-
-
-def _ensure_skeleton(stage, path):
-    """/a/b/c 경로의 각 조상 prim을 Xform으로 생성 (이미 있으면 유지)."""
-    cur = ""
-    for part in path.strip("/").split("/"):
-        cur = f"{cur}/{part}"
-        if not stage.GetPrimAtPath(cur).IsValid():
-            UsdGeom.Xform.Define(stage, cur)
 
 
 def _kit_copy(stage, path_from, path_to) -> bool:
