@@ -84,10 +84,16 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                 print(f"[merge] flat에 경계 없음, 건너뜀: {src_boundary}")
                 continue
             slot = f"{dest}/{rel}/{_slot_name(i)}"   # slot_01, slot_02, ... (경계 노드째 복사)
-            # flat(오프라인 스냅샷) 쪽에 visibility를 미리 박아 넣고 복사
-            # → 슬롯이 처음부터 1번만 on, 나머지는 off 상태로 삽입된다
-            _author_visibility(flat, src_boundary, visible=(i == 1))
-            _copy_from(flat, edit, src_boundary, slot)
+            # 오프라인 익명 레이어에서 완성본 조립(복사→바인딩 리매핑→가시성),
+            # 라이브 레이어에는 완성본을 CopySpec 1회로만 투입.
+            # → fabric/Hydra는 중간 상태(깨진 바인딩)를 전혀 보지 못한다.
+            tmp = Sdf.Layer.CreateAnonymous("merge_slot")
+            Sdf.CreatePrimInLayer(tmp, slot)
+            Sdf.CopySpec(flat, src_boundary, tmp, slot)
+            _remap_internal_targets(tmp, slot,
+                                    Sdf.Path(src_boundary), Sdf.Path(slot))
+            _author_visibility(tmp, slot, visible=(i == 1))
+            _copy_from(tmp, edit, slot, slot)
 
     if delete_rest:
         seen = {dest}                                # dest는 지우면 안 됨 (중복 경로 대비)
@@ -147,6 +153,35 @@ def _copy_from(src_layer, dst_layer, src_path, dst_path):
     """src_layer(flat)의 서브트리를 dst_layer(edit)로 복사."""
     Sdf.CreatePrimInLayer(dst_layer, dst_path)       # 조상 spec 확보
     Sdf.CopySpec(src_layer, src_path, dst_layer, dst_path)
+
+
+def _remap_internal_targets(layer, root_path, old_prefix, new_prefix):
+    """오프라인 레이어에서, 서브트리 내부의 릴레이션십 타겟(material:binding)과
+    어트리뷰트 커넥션(셰이더 연결) 경로를 old_prefix → new_prefix로 리매핑.
+    서브트리 밖을 가리키는 경로는 ReplacePrefix가 건드리지 않는다."""
+    spec = layer.GetPrimAtPath(root_path)
+    if spec is None:
+        return
+
+    def _remap_list(proxy):
+        for field in ("explicitItems", "addedItems",
+                      "prependedItems", "appendedItems"):
+            items = list(getattr(proxy, field))
+            if not items:
+                continue
+            new = [p.ReplacePrefix(old_prefix, new_prefix) for p in items]
+            if new != items:
+                setattr(proxy, field, new)
+
+    def _fix(prim_spec):
+        for rel_spec in prim_spec.relationships:
+            _remap_list(rel_spec.targetPathList)
+        for attr_spec in prim_spec.attributes:
+            _remap_list(attr_spec.connectionPathList)
+        for child in prim_spec.nameChildren:
+            _fix(child)
+
+    _fix(spec)
 
 
 def _author_visibility(layer, prim_path, visible):
