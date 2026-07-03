@@ -9,10 +9,11 @@
 #
 # 동작:
 #   - prim_paths[0](1번)을 목적지로, 각 소스의 경계 노드(트랜스폼+"이하" 통째)를
-#     dest/<경계>/01, /02, ... 슬롯으로 복사한다.
+#     dest/<경계>/slot_01, /slot_02, ... 슬롯으로 복사한다.
+#     (USD prim 이름은 숫자로 시작 불가 → "01"이 아니라 "slot_01")
 #   - reference로 합성된 콘텐츠라 stage.Flatten()으로 한 번 구운 뒤 복사한다.
 #   - dest의 원본 reference는 제거하고 스켈레톤(경계 상위 경로)을 재생성한다.
-#   - 병합 후 prim_paths[1:] 은 삭제한다.
+#   - 병합 후 prim_paths[1:] 은 삭제한다 (dest와 같은 경로는 제외).
 #
 # 사용 예:
 #   BOUNDARIES = ["scene/vec/aplane", "scene/vec/bplane",
@@ -26,6 +27,21 @@
 
 import omni.usd
 from pxr import UsdGeom, Sdf
+
+SLOT_PREFIX = "slot_"        # USD prim 이름은 숫자로 시작할 수 없어 접두어를 붙인다
+
+
+def _slot_name(i: int) -> str:
+    return f"{SLOT_PREFIX}{i:02d}"        # 1 → "slot_01"
+
+
+def _slot_index(name: str):
+    """슬롯 이름에서 인덱스 추출. 슬롯이 아니면 None."""
+    if name.startswith(SLOT_PREFIX):
+        tail = name[len(SLOT_PREFIX):]
+        if tail.isdigit():
+            return int(tail)
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -67,12 +83,16 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
             if flat.GetPrimAtPath(src_boundary) is None:
                 print(f"[merge] flat에 경계 없음, 건너뜀: {src_boundary}")
                 continue
-            slot = f"{dest}/{rel}/{i:02d}"           # 01, 02, ... (경계 노드째 복사)
+            slot = f"{dest}/{rel}/{_slot_name(i)}"   # slot_01, slot_02, ... (경계 노드째 복사)
             _copy_from(flat, edit, src_boundary, slot)
 
     if delete_rest:
+        seen = {dest}                                # dest는 지우면 안 됨 (중복 경로 대비)
         for root in prim_paths[1:]:
             p = root.rstrip("/")
+            if p in seen:
+                continue
+            seen.add(p)
             if stage.GetPrimAtPath(p).IsValid():
                 stage.RemovePrim(p)
 
@@ -92,10 +112,10 @@ def set_slot_visible(container_path, idx, stage=None):
         print(f"[merge] 컨테이너 없음: {container_path}")
         return
     for child in container.GetChildren():
-        name = child.GetName()
-        if not name.isdigit():
+        slot_idx = _slot_index(child.GetName())
+        if slot_idx is None:
             continue
-        vis = (UsdGeom.Tokens.inherited if int(name) == idx
+        vis = (UsdGeom.Tokens.inherited if slot_idx == idx
                else UsdGeom.Tokens.invisible)
         UsdGeom.Imageable(child).GetVisibilityAttr().Set(vis)
 
