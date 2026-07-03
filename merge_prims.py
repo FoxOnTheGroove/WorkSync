@@ -84,6 +84,9 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                 print(f"[merge] flat에 경계 없음, 건너뜀: {src_boundary}")
                 continue
             slot = f"{dest}/{rel}/{_slot_name(i)}"   # slot_01, slot_02, ... (경계 노드째 복사)
+            # flat(오프라인 스냅샷) 쪽에 visibility를 미리 박아 넣고 복사
+            # → 슬롯이 처음부터 1번만 on, 나머지는 off 상태로 삽입된다
+            _author_visibility(flat, src_boundary, visible=(i == 1))
             _copy_from(flat, edit, src_boundary, slot)
 
     if delete_rest:
@@ -144,3 +147,14 @@ def _copy_from(src_layer, dst_layer, src_path, dst_path):
     """src_layer(flat)의 서브트리를 dst_layer(edit)로 복사."""
     Sdf.CreatePrimInLayer(dst_layer, dst_path)       # 조상 spec 확보
     Sdf.CopySpec(src_layer, src_path, dst_layer, dst_path)
+
+
+def _author_visibility(layer, prim_path, visible):
+    """레이어의 prim spec에 visibility default를 직접 author."""
+    spec = layer.GetPrimAtPath(prim_path)
+    if spec is None:
+        return
+    attr = layer.GetAttributeAtPath(f"{prim_path}.visibility")
+    if attr is None:
+        attr = Sdf.AttributeSpec(spec, "visibility", Sdf.ValueTypeNames.Token)
+    attr.default = "inherited" if visible else "invisible"
