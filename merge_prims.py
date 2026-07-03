@@ -1,4 +1,4 @@
-# merge_prims.py — reference로 로드된 N개 소스를 1번 프림으로 병합 (Bake 방식)
+# merge_prims.py — reference로 로드된 N개 소스를 1번 프림으로 병합 (Kit 네이티브 복제 방식)
 #
 # 구조 가정:
 #   /World/Space/LoadPrim/
@@ -7,13 +7,16 @@
 #       ...
 #   asset은 같아도 달라도 각각 독립(different)으로 처리한다.
 #
-# 동작:
-#   - prim_paths[0](1번)을 목적지로, 각 소스의 경계 노드(트랜스폼+"이하" 통째)를
-#     dest/<경계>/slot_01, /slot_02, ... 슬롯으로 복사한다.
-#     (USD prim 이름은 숫자로 시작 불가 → "01"이 아니라 "slot_01")
-#   - reference로 합성된 콘텐츠라 stage.Flatten()으로 한 번 구운 뒤 복사한다.
-#   - dest의 원본 reference는 제거하고 스켈레톤(경계 상위 경로)을 재생성한다.
-#   - 병합 후 prim_paths[1:] 은 삭제한다 (dest와 같은 경로는 제외).
+# 동작 (순서가 핵심):
+#   1) 소스가 전부 살아있는 동안, 각 경계 노드를 Kit 네이티브 복제(CopyPrim)로
+#      숨겨진 임시 스코프 아래에 복제한다.
+#      → reference 합성 결과가 그대로 구워지고, material:binding 등
+#        서브트리 내부 경로는 Kit이 자동 리매핑한다. (fabric-safe)
+#   2) dest(prim_paths[0])의 reference/payload 제거, 나머지 소스 삭제.
+#   3) 스켈레톤(경계 상위 경로) 재생성 후, 임시 복제본을 슬롯
+#      (slot_01, slot_02, ...)으로 이동. 이동 직전에 visibility를 author하여
+#      1번만 on, 나머지는 off 상태로 삽입된다.
+#   4) 임시 스코프 삭제.
 #
 # 사용 예:
 #   BOUNDARIES = ["scene/vec/aplane", "scene/vec/bplane",
@@ -26,7 +29,8 @@
 #   set_slot_visible_all("/World/Space/LoadPrim/prim1", 2, BOUNDARIES)
 
 import omni.usd
-from pxr import UsdGeom, Sdf
+import omni.kit.commands
+from pxr import UsdGeom
 
 SLOT_PREFIX = "slot_"        # USD prim 이름은 숫자로 시작할 수 없어 접두어를 붙인다
 
@@ -45,7 +49,7 @@ def _slot_index(name: str):
 
 
 # ----------------------------------------------------------------------
-# 병합 (Bake)
+# 병합
 # ----------------------------------------------------------------------
 
 def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
@@ -64,33 +68,37 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
         print("[merge] prim_paths 비어있음")
         return 0, None
 
-    flat = stage.Flatten()                       # 모든 reference를 concrete spec으로 bake
-    edit = stage.GetEditTarget().GetLayer()
     dest = prim_paths[0].rstrip("/")
 
-    # dest 원본 reference/payload 제거 (원본 합성 콘텐츠 정리) — flat은 별도 스냅샷이라 안전
+    # 숨겨진 임시 스코프 (복제본 대기 장소 — invisible이라 화면에 안 비침)
+    tmp_root = _unique_path(stage, f"{dest}_mergetmp")
+    tmp_xf = UsdGeom.Xform.Define(stage, tmp_root)
+    UsdGeom.Imageable(tmp_xf.GetPrim()).GetVisibilityAttr().Set(
+        UsdGeom.Tokens.invisible)
+
+    # 1) 복제 — 소스가 살아있는 동안 Kit 네이티브 복제 (내부 바인딩 자동 리매핑)
+    copied = []                                  # (rel, i, tmp_path)
+    for bi, rel in enumerate(boundaries):
+        rel = rel.strip("/")
+        for i, root in enumerate(prim_paths, start=1):
+            src = f"{root.rstrip('/')}/{rel}"
+            if not stage.GetPrimAtPath(src).IsValid():
+                print(f"[merge] 경계 없음, 건너뜀: {src}")
+                continue
+            tmp = f"{tmp_root}/b{bi:02d}_s{i:02d}"
+            if _kit_copy(stage, src, tmp):
+                copied.append((rel, i, tmp))
+            else:
+                print(f"[merge] 복제 실패, 건너뜀: {src}")
+
+    # 2) dest reference/payload 제거 + 나머지 소스 삭제
     dp = stage.GetPrimAtPath(dest)
     if dp.IsValid():
         dp.GetReferences().ClearReferences()
         dp.GetPayloads().ClearPayloads()
 
-    for rel in boundaries:
-        rel = rel.strip("/")
-        _ensure_skeleton(stage, f"{dest}/{rel}")     # 스켈레톤(경계 포함) Xform 생성
-
-        for i, root in enumerate(prim_paths, start=1):
-            src_boundary = f"{root.rstrip('/')}/{rel}"
-            if flat.GetPrimAtPath(src_boundary) is None:
-                print(f"[merge] flat에 경계 없음, 건너뜀: {src_boundary}")
-                continue
-            slot = f"{dest}/{rel}/{_slot_name(i)}"   # slot_01, slot_02, ... (경계 노드째 복사)
-            # flat(오프라인 스냅샷) 쪽에 visibility를 미리 박아 넣고 복사
-            # → 슬롯이 처음부터 1번만 on, 나머지는 off 상태로 삽입된다
-            _author_visibility(flat, src_boundary, visible=(i == 1))
-            _copy_from(flat, edit, src_boundary, slot)
-
     if delete_rest:
-        seen = {dest}                                # dest는 지우면 안 됨 (중복 경로 대비)
+        seen = {dest}                            # dest는 지우면 안 됨 (중복 경로 대비)
         for root in prim_paths[1:]:
             p = root.rstrip("/")
             if p in seen:
@@ -98,6 +106,21 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
             seen.add(p)
             if stage.GetPrimAtPath(p).IsValid():
                 stage.RemovePrim(p)
+
+    # 3) 스켈레톤 재생성 + 임시 복제본 → 슬롯 이동 (visibility 먼저 author)
+    for rel, i, tmp in copied:
+        _ensure_skeleton(stage, f"{dest}/{rel}")
+        prim = stage.GetPrimAtPath(tmp)
+        if not prim.IsValid():
+            continue
+        vis = UsdGeom.Tokens.inherited if i == 1 else UsdGeom.Tokens.invisible
+        UsdGeom.Imageable(prim).GetVisibilityAttr().Set(vis)   # 1번만 on 상태로 삽입
+        slot = f"{dest}/{rel}/{_slot_name(i)}"
+        _kit_move(tmp, slot)
+
+    # 4) 임시 스코프 정리
+    if stage.GetPrimAtPath(tmp_root).IsValid():
+        stage.RemovePrim(tmp_root)
 
     return len(prim_paths), dest
 
@@ -134,6 +157,15 @@ def set_slot_visible_all(merged_root, idx, boundaries, stage=None):
 # helpers
 # ----------------------------------------------------------------------
 
+def _unique_path(stage, base):
+    """base, base_1, base_2 ... 중 비어있는 경로 반환."""
+    path, n = base, 0
+    while stage.GetPrimAtPath(path).IsValid():
+        n += 1
+        path = f"{base}_{n}"
+    return path
+
+
 def _ensure_skeleton(stage, path):
     """/a/b/c 경로의 각 조상 prim을 Xform으로 생성 (이미 있으면 유지)."""
     cur = ""
@@ -143,18 +175,36 @@ def _ensure_skeleton(stage, path):
             UsdGeom.Xform.Define(stage, cur)
 
 
-def _copy_from(src_layer, dst_layer, src_path, dst_path):
-    """src_layer(flat)의 서브트리를 dst_layer(edit)로 복사."""
-    Sdf.CreatePrimInLayer(dst_layer, dst_path)       # 조상 spec 확보
-    Sdf.CopySpec(src_layer, src_path, dst_layer, dst_path)
+def _kit_copy(stage, path_from, path_to) -> bool:
+    """Kit 네이티브 복제. 합성 결과를 굽고 내부 경로를 리매핑한다."""
+    try:
+        ok, _ = omni.kit.commands.execute(
+            "CopyPrim",
+            path_from=path_from,
+            path_to=path_to,
+            exclusive_select=False,
+            combine_layers=True,        # 모든 레이어/reference 합성 결과를 하나로
+        )
+        if ok:
+            return True
+    except Exception as e:
+        print(f"[merge] CopyPrim 실패({e}), duplicate_prim으로 폴백")
+    try:
+        return bool(omni.usd.duplicate_prim(stage, path_from, path_to))
+    except Exception as e:
+        print(f"[merge] duplicate_prim 실패: {e}")
+        return False
 
 
-def _author_visibility(layer, prim_path, visible):
-    """레이어의 prim spec에 visibility default를 직접 author."""
-    spec = layer.GetPrimAtPath(prim_path)
-    if spec is None:
-        return
-    attr = layer.GetAttributeAtPath(f"{prim_path}.visibility")
-    if attr is None:
-        attr = Sdf.AttributeSpec(spec, "visibility", Sdf.ValueTypeNames.Token)
-    attr.default = "inherited" if visible else "invisible"
+def _kit_move(path_from, path_to) -> bool:
+    try:
+        ok, _ = omni.kit.commands.execute(
+            "MovePrim",
+            path_from=path_from,
+            path_to=path_to,
+            keep_world_transform=False,
+        )
+        return bool(ok)
+    except Exception as e:
+        print(f"[merge] MovePrim 실패: {e}")
+        return False
