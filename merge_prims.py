@@ -28,7 +28,7 @@
 import asyncio
 import omni.kit.app
 import omni.usd
-from pxr import UsdGeom, Sdf
+from pxr import Usd, UsdGeom, Sdf
 
 SLOT_PREFIX = "slot_"        # USD prim 이름은 숫자로 시작할 수 없어 접두어를 붙인다
 
@@ -96,6 +96,8 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                                     Sdf.Path(src_boundary), Sdf.Path(slot))
             _author_visibility(tmp, slot, visible=(i == 1))
             _copy_from(tmp, edit, slot, slot)
+            _fix_point_instancers(stage, slot,
+                                  Sdf.Path(src_boundary), Sdf.Path(slot))
 
     if delete_rest:
         seen = {dest}                                # dest는 지우면 안 됨 (중복 경로 대비)
@@ -239,6 +241,32 @@ def _remap_internal_targets(layer, root_path, old_prefix, new_prefix):
             _fix(child)
 
     _fix(spec)
+
+
+def _fix_point_instancers(stage, slot_path, old_prefix, new_prefix):
+    """슬롯 안 PointInstancer의 prototypes 타겟에 옛 경로가 남아있으면 교정.
+    (usdrt/FSD 'invalid protoIndex, numPrototypes=0' 대응 안전망.
+     원본이 삭제되면 옛 경로 타겟은 0개로 해석되어 버킷 생성이 깨진다.)
+    정상 Usd 편집이라 fabric-safe."""
+    root = stage.GetPrimAtPath(slot_path)
+    if not root.IsValid():
+        return
+    for prim in Usd.PrimRange(root):
+        if not prim.IsA(UsdGeom.PointInstancer):
+            continue
+        rel = UsdGeom.PointInstancer(prim).GetPrototypesRel()
+        targets = list(rel.GetTargets())
+        if not targets:
+            print(f"[merge] prototypes 타겟 없음: {prim.GetPath()}")
+            continue
+        fixed = [t.ReplacePrefix(old_prefix, new_prefix) for t in targets]
+        if fixed != targets:
+            rel.SetTargets(fixed)
+            print(f"[merge] prototypes 리매핑: {prim.GetPath()}")
+        for t in fixed:
+            if not stage.GetPrimAtPath(t).IsValid():
+                print(f"[merge] prototype 경로 해석 불가(경계 밖?): "
+                      f"{prim.GetPath()} -> {t}")
 
 
 def _author_visibility(layer, prim_path, visible):
