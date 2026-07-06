@@ -116,15 +116,14 @@ def set_slot_visible_all(merged_root, idx, boundaries, stage=None):
 # 타임라인 전환 (t=i 에서 슬롯 i만 보임)
 # ----------------------------------------------------------------------
 
-def _slot_timecode(idx, count):
-    """슬롯 idx의 타임코드: 0~1 구간을 N-1 분할. (N=5 → 0, 0.25, 0.5, 0.75, 1)"""
-    if count < 2:
-        return 0.0
-    return (idx - 1) / (count - 1)
+def _slot_timecode(idx):
+    """슬롯 idx(1..N)의 타임코드 = 정수 프레임 (idx-1).
+    타임라인이 정수 프레임으로만 스냅하므로 소수 타임코드는 도달 불가."""
+    return float(idx - 1)
 
 
 def author_slot_timeline(merged_root, boundaries, count, stage=None):
-    """슬롯 전환을 타임라인으로: t = (i-1)/(N-1) 에서 슬롯 i만 visible.
+    """슬롯 전환을 타임라인으로: 프레임 (i-1) 에서 슬롯 i만 visible.
     visibility는 어트리뷰트라 타임샘플 가능. suffix 없는 원본 = slot 1."""
     if stage is None:
         stage = omni.usd.get_context().get_stage()
@@ -144,26 +143,32 @@ def author_slot_timeline(merged_root, boundaries, count, stage=None):
                 slot_idx = _slot_suffix_index(child.GetName()) or 1   # 원본 = slot 1
                 attr = imageable.GetVisibilityAttr()
                 for i in range(1, count + 1):
-                    t = Usd.TimeCode(_slot_timecode(i, count))
+                    t = Usd.TimeCode(_slot_timecode(i))
                     attr.Set(UsdGeom.Tokens.inherited if i == slot_idx
                              else UsdGeom.Tokens.invisible, t)
 
-        # 스테이지 타임 범위를 0~1로 덮음
-        if stage.GetStartTimeCode() > 0.0:
-            stage.SetStartTimeCode(0.0)
-        if stage.GetEndTimeCode() < 1.0:
-            stage.SetEndTimeCode(1.0)
+        # 스테이지 타임 범위를 0 ~ (N-1) 프레임으로 덮음
+        stage.SetStartTimeCode(0.0)
+        if stage.GetEndTimeCode() < count - 1:
+            stage.SetEndTimeCode(float(count - 1))
 
 
-def set_slot_time(idx, count, stage=None):
-    """타임라인 현재 시간을 슬롯 idx의 타임코드((idx-1)/(N-1))로 이동.
+def set_slot_time(idx, stage=None):
+    """타임라인 현재 시간을 슬롯 idx의 프레임(idx-1)으로 이동.
     author_slot_timeline이 적용된 stage에서 set_slot_visible_all 대신 사용.
-    IntSlider 콜백용:
+    IntSlider(min=1, max=N) 콜백용:
         slider.model.add_value_changed_fn(
-            lambda m: set_slot_time(m.get_value_as_int(), count))"""
+            lambda m: set_slot_time(m.get_value_as_int()))"""
     import omni.timeline
     if stage is None:
         stage = omni.usd.get_context().get_stage()
-    timecode = _slot_timecode(idx, count)
     tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-    omni.timeline.get_timeline_interface().set_current_time(timecode / tps)
+    omni.timeline.get_timeline_interface().set_current_time(
+        _slot_timecode(idx) / tps)
+
+
+def set_slot_fraction(frac, count, stage=None):
+    """0~1 값(frac)을 슬롯으로 매핑해 타임라인 이동. FloatSlider(0~1)용.
+    frac=0 → slot 1, frac=1 → slot N. IntSlider면 set_slot_time을 써라."""
+    idx = 1 + int(round(max(0.0, min(1.0, frac)) * (count - 1)))
+    set_slot_time(idx, stage)
