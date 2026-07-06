@@ -21,6 +21,69 @@ _WINDOW_FLAGS = (
     | ui.WINDOW_FLAGS_NO_MOVE
 )
 
+# ── 뷰포트 우하단 앵커링 (UVMixer_overlay 이식, 필요 시 주석 해제) ──────────
+# import omni.kit.app
+# import omni.kit.async_engine
+# import morph.hytwin_viewportwidget_extension as _hytwin_vp_wg
+#
+# _MARGIN = 8
+#
+# def _find_vph(target_path: str):
+#     for vph in _hytwin_vp_wg.ViewportWidgetHost.get_instances():
+#         if vph.prim_header_path.rstrip("/") == target_path.rstrip("/"):
+#             return vph
+#     return None
+#
+# def _calc_panel_pos(vph, width=PANEL_W, height=PANEL_H,
+#                     extra_margin_y=0):
+#     frame = vph.frame
+#     x = int(frame.screen_position_x + frame.computed_width  - width - _MARGIN)
+#     y = int(frame.screen_position_y + frame.computed_height - height - _MARGIN - extra_margin_y)
+#     return x, y
+#
+# 사용법:
+#   __init__에서
+#     self._vph = _find_vph(target_path)
+#     self._reposition_task = None
+#   build_ui에서 윈도우 생성 시
+#     x, y = _calc_panel_pos(self._vph)
+#     ui.Window(..., position_x=x, position_y=y, ...)
+#   생성 직후
+#     self._vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
+#
+# def _on_viewport_resized(self):
+#     if self._window and self._vph:
+#         if self._minimized:
+#             x, y = _calc_panel_pos(self._vph, PANEL_W_MIN, PANEL_H_MIN,
+#                                    extra_margin_y=_MARGIN)
+#         else:
+#             x, y = _calc_panel_pos(self._vph)
+#         self._window.position_x = x
+#         self._window.position_y = y
+#
+# def reposition_deferred(self, frames: int = 2):
+#     """show 직후 frame 레이아웃이 stale할 수 있어 몇 프레임 뒤 재배치."""
+#     if self._reposition_task is not None and not self._reposition_task.done():
+#         self._reposition_task.cancel()
+#     self._reposition_task = omni.kit.async_engine.run_coroutine(
+#         self._reposition_async(frames))
+#
+# async def _reposition_async(self, frames: int):
+#     app = omni.kit.app.get_app()
+#     for _ in range(frames):
+#         await app.next_update_async()
+#     self._on_viewport_resized()
+#
+# destroy에서:
+#     if self._reposition_task and not self._reposition_task.done():
+#         self._reposition_task.cancel()
+#     if self._vph:
+#         self._vph.frame.set_computed_content_size_changed_fn(None)
+#         self._vph = None
+# 최소화 토글(_on_toggle_minimize) 끝에서:
+#     self._on_viewport_resized()
+# ────────────────────────────────────────────────────────────────────────
+
 
 class SubPanel:
 
