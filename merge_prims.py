@@ -116,9 +116,15 @@ def set_slot_visible_all(merged_root, idx, boundaries, stage=None):
 # 타임라인 전환 (t=i 에서 슬롯 i만 보임)
 # ----------------------------------------------------------------------
 
-def author_slot_timeline(merged_root, boundaries, count,
-                         stage=None, start_time=1.0, step=1.0):
-    """슬롯 전환을 타임라인으로: t = start_time + (i-1)*step 에서 슬롯 i만 visible.
+def _slot_timecode(idx, count):
+    """슬롯 idx의 타임코드: 0~1 구간을 N-1 분할. (N=5 → 0, 0.25, 0.5, 0.75, 1)"""
+    if count < 2:
+        return 0.0
+    return (idx - 1) / (count - 1)
+
+
+def author_slot_timeline(merged_root, boundaries, count, stage=None):
+    """슬롯 전환을 타임라인으로: t = (i-1)/(N-1) 에서 슬롯 i만 visible.
     visibility는 어트리뷰트라 타임샘플 가능. suffix 없는 원본 = slot 1."""
     if stage is None:
         stage = omni.usd.get_context().get_stage()
@@ -138,27 +144,26 @@ def author_slot_timeline(merged_root, boundaries, count,
                 slot_idx = _slot_suffix_index(child.GetName()) or 1   # 원본 = slot 1
                 attr = imageable.GetVisibilityAttr()
                 for i in range(1, count + 1):
-                    t = Usd.TimeCode(start_time + (i - 1) * step)
+                    t = Usd.TimeCode(_slot_timecode(i, count))
                     attr.Set(UsdGeom.Tokens.inherited if i == slot_idx
                              else UsdGeom.Tokens.invisible, t)
 
-        # 스테이지 타임 범위가 슬롯 구간을 덮도록 확장
-        end_time = start_time + (count - 1) * step
-        if stage.GetStartTimeCode() > start_time:
-            stage.SetStartTimeCode(start_time)
-        if stage.GetEndTimeCode() < end_time:
-            stage.SetEndTimeCode(end_time)
+        # 스테이지 타임 범위를 0~1로 덮음
+        if stage.GetStartTimeCode() > 0.0:
+            stage.SetStartTimeCode(0.0)
+        if stage.GetEndTimeCode() < 1.0:
+            stage.SetEndTimeCode(1.0)
 
 
-def set_slot_time(idx, stage=None, start_time=1.0, step=1.0):
-    """타임라인 현재 시간을 슬롯 idx의 프레임으로 이동.
+def set_slot_time(idx, count, stage=None):
+    """타임라인 현재 시간을 슬롯 idx의 타임코드((idx-1)/(N-1))로 이동.
     author_slot_timeline이 적용된 stage에서 set_slot_visible_all 대신 사용.
     IntSlider 콜백용:
         slider.model.add_value_changed_fn(
-            lambda m: set_slot_time(m.get_value_as_int()))"""
+            lambda m: set_slot_time(m.get_value_as_int(), count))"""
     import omni.timeline
     if stage is None:
         stage = omni.usd.get_context().get_stage()
-    timecode = start_time + (idx - 1) * step
+    timecode = _slot_timecode(idx, count)
     tps = stage.GetTimeCodesPerSecond() if stage else 24.0
     omni.timeline.get_timeline_interface().set_current_time(timecode / tps)
