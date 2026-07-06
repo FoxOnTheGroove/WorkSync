@@ -16,7 +16,7 @@
 #   set_slot_visible_all(merged, 2, BOUNDARIES)
 
 import omni.usd
-from pxr import Usd, UsdGeom
+from pxr import Usd, UsdGeom, Sdf
 
 SLOT_SUFFIX = "_slot_"       # 자식 이름 뒤 소스 식별자: name_slot_02
 
@@ -37,7 +37,12 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
 
     dest = prim_paths[0].rstrip("/")
 
-    with Usd.EditContext(stage, Usd.EditTarget(stage.GetRootLayer())):
+    # reference 합성 콘텐츠는 로컬 레이어에 spec이 없어 그대로 복사가 안 됨
+    # → 합성 결과를 구운 flat 스냅샷에서 CopySpec으로 가져온다
+    flat = stage.Flatten()
+    root_layer = stage.GetRootLayer()
+
+    with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
         for rel in [b.strip("/") for b in boundaries]:
             if not stage.GetPrimAtPath(f"{dest}/{rel}").IsValid():
                 print(f"[merge] 경계 없음: {dest}/{rel}")
@@ -52,11 +57,13 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                     name = child.GetName()
                     if _slot_suffix_index(name) is not None:
                         continue
-                    dst = f"{dest}/{rel}/{name}{SLOT_SUFFIX}{i:02d}"
-                    if not omni.usd.duplicate_prim(
-                            stage, str(child.GetPath()), dst):
-                        print(f"[merge] 복제 실패: {child.GetPath()}")
+                    src = str(child.GetPath())
+                    if flat.GetPrimAtPath(src) is None:
+                        print(f"[merge] flat에 없음: {src}")
                         continue
+                    dst = f"{dest}/{rel}/{name}{SLOT_SUFFIX}{i:02d}"
+                    Sdf.CreatePrimInLayer(root_layer, dst)
+                    Sdf.CopySpec(flat, src, root_layer, dst)
                     UsdGeom.Imageable(
                         stage.GetPrimAtPath(dst)).GetVisibilityAttr().Set(
                         UsdGeom.Tokens.invisible)          # 삽입 시 off, 원본(slot 1)만 보임
