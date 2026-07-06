@@ -148,3 +148,17 @@ def author_slot_timeline(merged_root, boundaries, count,
             stage.SetStartTimeCode(start_time)
         if stage.GetEndTimeCode() < end_time:
             stage.SetEndTimeCode(end_time)
+
+
+def set_slot_time(idx, stage=None, start_time=1.0, step=1.0):
+    """타임라인 현재 시간을 슬롯 idx의 프레임으로 이동.
+    author_slot_timeline이 적용된 stage에서 set_slot_visible_all 대신 사용.
+    IntSlider 콜백용:
+        slider.model.add_value_changed_fn(
+            lambda m: set_slot_time(m.get_value_as_int()))"""
+    import omni.timeline
+    if stage is None:
+        stage = omni.usd.get_context().get_stage()
+    timecode = start_time + (idx - 1) * step
+    tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+    omni.timeline.get_timeline_interface().set_current_time(timecode / tps)
