@@ -28,8 +28,11 @@ def _slot_suffix_index(name: str):
     return None
 
 
-def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
-    """반환: (소스 개수, dest 경로). 실패 시 (0, None)."""
+def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
+                     timeline=False):
+    """반환: (소스 개수, dest 경로). 실패 시 (0, None).
+    timeline=True면 병합 후 visibility 타임샘플을 author해서
+    타임라인 t=i 에서 슬롯 i만 보이게 한다."""
     if stage is None:
         stage = omni.usd.get_context().get_stage()
     if stage is None or not prim_paths:
@@ -73,6 +76,9 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                 if p != dest and stage.GetPrimAtPath(p).IsValid():
                     stage.RemovePrim(p)
 
+    if timeline:
+        author_slot_timeline(dest, boundaries, len(prim_paths), stage)
+
     return len(prim_paths), dest
 
 
@@ -104,3 +110,41 @@ def set_slot_visible_all(merged_root, idx, boundaries, stage=None):
     merged_root = merged_root.rstrip("/")
     for rel in boundaries:
         set_slot_visible(f"{merged_root}/{rel.strip('/')}", idx, stage)
+
+
+# ----------------------------------------------------------------------
+# 타임라인 전환 (t=i 에서 슬롯 i만 보임)
+# ----------------------------------------------------------------------
+
+def author_slot_timeline(merged_root, boundaries, count,
+                         stage=None, start_time=1.0, step=1.0):
+    """슬롯 전환을 타임라인으로: t = start_time + (i-1)*step 에서 슬롯 i만 visible.
+    visibility는 어트리뷰트라 타임샘플 가능. suffix 없는 원본 = slot 1."""
+    if stage is None:
+        stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return
+    merged_root = merged_root.rstrip("/")
+
+    with Usd.EditContext(stage, Usd.EditTarget(stage.GetRootLayer())):
+        for rel in boundaries:
+            container = stage.GetPrimAtPath(f"{merged_root}/{rel.strip('/')}")
+            if not container.IsValid():
+                continue
+            for child in container.GetChildren():
+                imageable = UsdGeom.Imageable(child)
+                if not imageable:
+                    continue
+                slot_idx = _slot_suffix_index(child.GetName()) or 1   # 원본 = slot 1
+                attr = imageable.GetVisibilityAttr()
+                for i in range(1, count + 1):
+                    t = Usd.TimeCode(start_time + (i - 1) * step)
+                    attr.Set(UsdGeom.Tokens.inherited if i == slot_idx
+                             else UsdGeom.Tokens.invisible, t)
+
+        # 스테이지 타임 범위가 슬롯 구간을 덮도록 확장
+        end_time = start_time + (count - 1) * step
+        if stage.GetStartTimeCode() > start_time:
+            stage.SetStartTimeCode(start_time)
+        if stage.GetEndTimeCode() < end_time:
+            stage.SetEndTimeCode(end_time)
