@@ -29,7 +29,7 @@ def _slot_suffix_index(name: str):
 
 
 def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
-                     timeline=False):
+                     timeline=True):
     """반환: (소스 개수, dest 경로). 실패 시 (0, None).
     timeline=True면 병합 후 visibility 타임샘플을 author해서
     타임라인 t=i 에서 슬롯 i만 보이게 한다."""
@@ -136,6 +136,8 @@ def author_slot_timeline(merged_root, boundaries, count, stage=None):
         return
     merged_root = merged_root.rstrip("/")
 
+    session = stage.GetSessionLayer()
+
     with Usd.EditContext(stage, Usd.EditTarget(stage.GetRootLayer())):
         for rel in boundaries:
             container = stage.GetPrimAtPath(f"{merged_root}/{rel.strip('/')}")
@@ -145,6 +147,14 @@ def author_slot_timeline(merged_root, boundaries, count, stage=None):
                 imageable = UsdGeom.Imageable(child)
                 if not imageable:
                     continue
+
+                # 세션 레이어에 visibility default가 남아있으면(눈알 토글 등)
+                # 루트 레이어의 타임샘플을 통째로 가리므로 제거한다
+                vis_path = child.GetPath().AppendProperty("visibility")
+                sspec = session.GetAttributeAtPath(vis_path)
+                if sspec is not None:
+                    sspec.owner.RemoveProperty(sspec)
+
                 slot_idx = _slot_suffix_index(child.GetName()) or 1   # 원본 = slot 1
                 attr = imageable.GetVisibilityAttr()
                 for i in range(1, count + 1):
@@ -164,11 +174,13 @@ def set_slot_time(idx, count, stage=None):
         slider.model.add_value_changed_fn(
             lambda m, c=count: set_slot_time(m.get_value_as_int(), c))"""
     import omni.timeline
-    if stage is None:
-        stage = omni.usd.get_context().get_stage()
-    tps = stage.GetTimeCodesPerSecond() if stage else 24.0
-    omni.timeline.get_timeline_interface().set_current_time(
-        _slot_timecode(idx, count) / tps)
+    tl = omni.timeline.get_timeline_interface()
+    tps = tl.get_time_codes_per_seconds()
+    if not tps:
+        if stage is None:
+            stage = omni.usd.get_context().get_stage()
+        tps = stage.GetTimeCodesPerSecond() if stage else 24.0
+    tl.set_current_time(_slot_timecode(idx, count) / tps)
 
 
 def set_slot_fraction(frac, count, stage=None):
