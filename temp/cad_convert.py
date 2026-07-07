@@ -25,11 +25,15 @@ LOAD_PRIM_PATH     = None   # None 이면 /World 바로 아래에 파일명으�
 
 # file_format_args 는 dict[str, str] - 값 전부 문자열
 CONVERT_OPTIONS = {
-    "upAxis"         : "1",      # 1=Y-up
-    "tessLOD"        : "2",      # 2=Medium (기본값)
-    "bInstancing"    : "false",  # 인스턴싱 비활성화
-    "useMaterials"   : "false",  # 재질 없음
-    "dMetersPerUnit" : "1.0",
+    "upAxis"            : "1",      # 1=Y-up
+    "tessLOD"           : "2",      # 2=Medium (기본값)
+    "bInstancing"       : "false",  # 인스턴싱 비활성화
+    "useMaterials"      : "false",  # 재질 없음
+    "dMetersPerUnit"    : "1.0",
+    # 진행 로그(*Begin*/*step*/*prog*) 는 이 옵션에 게이트됨 - 신규/레거시 키 둘 다 지정
+    "reportProgress"    : "true",
+    "bReportProgress"   : "true",
+    "reportProgressFreq": "10.0",   # 초당 리포팅 횟수 [1~10]
 }
 
 
