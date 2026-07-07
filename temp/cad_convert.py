@@ -5,9 +5,9 @@ Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사�
 """
 
 import os
-import asyncio
+import inspect
+import carb.logging
 import omni.usd
-import omni.kit.app
 import omni.kit.commands
 import omni.kit.async_engine
 import omni.kit.converter.hoops_core as hoops_mod
@@ -71,42 +71,37 @@ def _load_into_stage(usd_path: str, prim_path: str = None):
     print("[로드]", final_path, "<-", usd_path)
 
 
-def _snapshot(consumer) -> dict:
-    """consumer 의 public 비호출 속성만 모아서 반환 (상태 확인용)."""
-    snap = {}
-    for a in dir(consumer):
-        if a.startswith("_"):
-            continue
-        try:
-            v = getattr(consumer, a)
-        except Exception:
-            continue
-        if not callable(v):
-            snap[a] = v
-    return snap
-
-
 async def _convert():
     converter = hoops_mod.get_instance()
 
     # HOOPS 진행 로그 파서 (프리픽스는 컨버터별로 다름)
     consumer = ProgressLogConsumer("[omni.converter.hoops_progress]")
-    print("[consumer 메소드]", [a for a in dir(consumer) if not a.startswith("_")])
 
-    # 변환을 별도 태스크로 돌리고, 끝날 때까지 1프레임마다 consumer 상태 출력
-    conv = asyncio.ensure_future(
-        converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
-    )
-    app = omni.kit.app.get_app()
-    while not conv.done():
-        print("[progress]", _snapshot(consumer))
-        await app.next_update_async()
+    # 클래스 소스 1회 출력 - extract_line 반환/내부 상태 확인용
+    try:
+        print(inspect.getsource(type(consumer)))
+    except Exception as e:
+        print("[source 확인 실패]", e)
 
-    result = conv.result()
-    print("[완료]", result)
+    # carb 로그 리스너: hoops_progress 라인만 골라 extract_line 에 먹임
+    def _on_log(source, level, filename, line_number, message):
+        if "hoops_progress" not in message:
+            return
+        try:
+            ret = consumer.extract_line(message)
+            # 반환값 + 내부 상태를 같이 출력 (프리픽스 겹치지 않게 [hoops%] 사용)
+            print("[hoops%]", ret, vars(consumer))
+        except Exception as e:
+            print("[hoops% 오류]", e)
 
-    if hasattr(consumer, "destroy"):
-        consumer.destroy()
+    logging = carb.logging.acquire_logging()
+    handle = logging.add_logger(_on_log)
+
+    try:
+        result = await converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+        print("[완료]", result)
+    finally:
+        logging.remove_logger(handle)
 
     if LOAD_AFTER_CONVERT:
         _load_into_stage(DEST_PATH, LOAD_PRIM_PATH)
