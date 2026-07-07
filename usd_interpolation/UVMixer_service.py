@@ -254,6 +254,22 @@ class UVMixerService:
         cls.panel_off(key)
 
     @classmethod
+    def on_remove_tab(cls) -> None:
+        """외부에서 모든 탭이 삭제될 때 호출한다(파라미터 없음).
+        전체 mixer를 정지·해제하고 패널을 없애며, 모든 shared_player를 정지한다.
+        TabContext와 _active_tab까지 완전히 비워, 이후 create로 처음부터 다시
+        시작할 수 있는 초기 상태로 되돌린다. (_panel_mgr는 재사용 위해 유지)"""
+        for tab_ctx in cls._tab_contexts.values():
+            tab_ctx.shared_player.stop()
+        for key in list(cls._instances.keys()):
+            cls.destroy(key)              # mixer 정지·해제 + 패널 제거 + 레지스트리 정리
+        # destroy가 대부분 비우지만, 잔여/유령 엔트리까지 확실히 초기화.
+        cls._instances.clear()
+        cls._key_tab.clear()
+        cls._tab_contexts.clear()
+        cls._active_tab = None
+
+    @classmethod
     def destroy_all(cls) -> None:
         """모든 mixer를 해제하고 레지스트리·탭 목록을 비운다(서비스 패널 동반 제거)."""
         for m in list(cls._instances.values()):
