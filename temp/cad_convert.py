@@ -112,6 +112,15 @@ async def _convert():
             print(f"[hoops% 오류] {e} | msg={message!r}")
 
     logging = carb.logging.acquire_logging()
+
+    # 진행 로그가 verbose/info 레벨이라 임계값에 걸러질 수 있음 -> 테스트로 낮춤
+    prev_level = None
+    try:
+        prev_level = logging.get_level_threshold()
+        logging.set_level_threshold(carb.logging.LEVEL_VERBOSE)
+    except Exception as e:
+        print("[log level 조정 실패]", e)
+
     handle = logging.add_logger(_on_log)
 
     try:
@@ -119,6 +128,8 @@ async def _convert():
         print("[완료]", result)
     finally:
         logging.remove_logger(handle)
+        if prev_level is not None:
+            logging.set_level_threshold(prev_level)
 
     if LOAD_AFTER_CONVERT:
         _load_into_stage(DEST_PATH, LOAD_PRIM_PATH)
