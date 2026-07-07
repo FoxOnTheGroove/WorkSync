@@ -5,13 +5,12 @@ Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사�
 """
 
 import os
-import inspect
 import carb.logging
 import omni.usd
 import omni.kit.commands
 import omni.kit.async_engine
 import omni.kit.converter.hoops_core as hoops_mod
-from omni.kit.converter.common import ProgressLogConsumer
+from omni.kit.converter.common import ProgressLogConsumer, ProgressStepType
 from pxr import UsdGeom
 
 
@@ -77,20 +76,28 @@ async def _convert():
     # HOOPS 진행 로그 파서 (프리픽스는 컨버터별로 다름)
     consumer = ProgressLogConsumer("[omni.converter.hoops_progress]")
 
-    # 클래스 소스 1회 출력 - extract_line 반환/내부 상태 확인용
-    try:
-        print(inspect.getsource(type(consumer)))
-    except Exception as e:
-        print("[source 확인 실패]", e)
+    # 현재 진행 단계명 (step/begin 라인에서 갱신)
+    state = {"step": ""}
 
     # carb 로그 리스너: hoops_progress 라인만 골라 extract_line 에 먹임
+    # extract_line 반환: [ProgressStepType, decoded_msg(list)]
+    #   PROGRESS 타입이면 [ProgressStepType, decoded_msg, 진행률(0~1 float)]
     def _on_log(source, level, filename, line_number, message):
         if "hoops_progress" not in message:
             return
         try:
             ret = consumer.extract_line(message)
-            # 반환값 + 내부 상태를 같이 출력 (프리픽스 겹치지 않게 [hoops%] 사용)
-            print("[hoops%]", ret, vars(consumer))
+            if not ret:
+                return
+            step_type = ret[0]
+            type_name = getattr(step_type, "name", str(step_type)).lower()
+
+            if "progress" in type_name and len(ret) > 2:
+                print(f"[hoops%] {state['step']} {ret[2] * 100:.1f}%")
+            else:
+                # step / begin - 단계명 갱신
+                state["step"] = " ".join(str(x) for x in ret[1])
+                print(f"[hoops step] {state['step']}")
         except Exception as e:
             print("[hoops% 오류]", e)
 
