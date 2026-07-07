@@ -1,18 +1,25 @@
 """
-Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사용)
+Script Editor 에서 실행 - STEP -> USD 변환 + 진행도 추적 (HoopsCoreConverter)
+
+구조:
+  1. carb 로거 + fd1(C stdout) tap 으로 나오는 모든 로그 라인을 수집
+  2. hoops_progress 라인만 ProgressLogConsumer 로 파싱해 캐시에 저장 (push)
+  3. 매 프레임 루프가 캐시된 현재 진행도를 출력 (pull)
 
 사전 조건: Extension Manager 에서 omni.kit.converter.hoops_core 활성화
 """
 
 import os
 import sys
+import asyncio
 import threading
 import carb.logging
 import omni.usd
+import omni.kit.app
 import omni.kit.commands
 import omni.kit.async_engine
 import omni.kit.converter.hoops_core as hoops_mod
-from omni.kit.converter.common import ProgressLogConsumer, ProgressStepType
+from omni.kit.converter.common import ProgressLogConsumer
 from pxr import UsdGeom
 
 
@@ -22,22 +29,24 @@ DEST_PATH   = r"C:/data/out/model.usd"
 # ==============================
 
 LOAD_AFTER_CONVERT = True   # 변환 후 현재 스테이지에 reference 로 로드
-LOAD_PRIM_PATH     = None   # None 이면 /World 바로 아래에 파일명으로 생성, 경로 지정 시 그대로 사용
+LOAD_PRIM_PATH     = None   # None 이면 /World 바로 아래에 파일명으로 생성
 
 
 # file_format_args 는 dict[str, str] - 값 전부 문자열
+# 진행/상태 로그가 최대한 많이 나오도록 리포팅 옵션 전부 켬 (신규/레거시 키 둘 다)
 CONVERT_OPTIONS = {
     "upAxis"            : "1",      # 1=Y-up
-    "tessLOD"           : "2",      # 2=Medium (기본값)
+    "tessLOD"           : "2",      # 2=Medium
     "bInstancing"       : "false",  # 인스턴싱 비활성화
     "useMaterials"      : "false",  # 재질 없음
     "dMetersPerUnit"    : "1.0",
-    # 진행 로그(*Begin*/*step*/*prog*) 는 이 옵션에 게이트됨 - 신규/레거시 키 둘 다 지정
     "reportProgress"    : "true",
     "bReportProgress"   : "true",
-    "reportProgressFreq": "10.0",   # 초당 리포팅 횟수 [1~10]
+    "reportProgressFreq": "10.0",   # 초당 리포팅 횟수 [1~10] 최대
 }
 
+
+# ---------------- 스테이지 로드 ----------------
 
 def _sanitize(name: str) -> str:
     """USD prim 이름으로 쓸 수 있게 정리 (영숫자/언더스코어만)."""
@@ -46,21 +55,16 @@ def _sanitize(name: str) -> str:
 
 
 def _load_into_stage(usd_path: str, prim_path: str = None):
-    """변환된 USD 를 현재 스테이지에 reference 로 추가.
-
-    prim_path 지정 시 그 경로에, None 이면 /World 바로 아래에 파일명으로 생성.
-    """
+    """변환된 USD 를 현재 스테이지에 reference 로 추가."""
     ctx = omni.usd.get_context()
     stage = ctx.get_stage()
 
     if prim_path is None:
-        # /World 바로 아래에 USD 파일명으로
         if not stage.GetPrimAtPath("/World").IsValid():
             UsdGeom.Xform.Define(stage, "/World")
         base = _sanitize(os.path.splitext(os.path.basename(usd_path))[0])
         prim_path = f"/World/{base}"
 
-    # 충돌 시 유니크 처리
     final_path = prim_path
     i = 1
     while stage.GetPrimAtPath(final_path).IsValid():
@@ -76,11 +80,13 @@ def _load_into_stage(usd_path: str, prim_path: str = None):
     print("[로드]", final_path, "<-", usd_path)
 
 
+# ---------------- 로그 수집 ----------------
+
 class StdoutTap:
     """C 레벨 stdout(fd 1)을 파이프로 복제해 라인 콜백으로 전달.
 
     네이티브(HOOPS)가 fd1 에 직접 쓰는 진행 로그는 carb/py stdout 캡처에
-    안 잡히므로, fd1 자체를 가로챈다. 원본 콘솔로는 그대로 통과시킴.
+    안 잡히므로 fd1 자체를 가로챈다. 원본 콘솔로는 그대로 통과.
     """
 
     def __init__(self, on_line):
@@ -120,7 +126,7 @@ class StdoutTap:
     def stop(self):
         sys.stdout.flush()
         if self._saved_fd is not None:
-            os.dup2(self._saved_fd, 1)    # fd1 원복 -> 파이프 write 끝 닫힘 -> pump 종료
+            os.dup2(self._saved_fd, 1)    # fd1 원복 -> pump 종료
             os.close(self._saved_fd)
             self._saved_fd = None
         if self._read_fd is not None:
@@ -131,61 +137,74 @@ class StdoutTap:
             self._read_fd = None
 
 
-async def _convert():
-    converter = hoops_mod.get_instance()
+# ---------------- 진행도 캐시 ----------------
 
-    # HOOPS 진행 로그 파서 (프리픽스는 컨버터별로 다름)
+class ProgressWatcher:
+    """들어오는 로그 라인을 ProgressLogConsumer 로 파싱해 최신 진행도를 캐시.
+
+    feed()  : 로그 라인 유입 (push) - 어느 스레드에서 불려도 안전한 단순 대입만 수행
+    step / value : 현재 단계명 / 진행도(0.0~1.0) 조회 (pull)
+    """
+
     PREFIX = "[omni.converter.hoops_progress]"
-    consumer = ProgressLogConsumer(PREFIX)
 
-    # step: 현재 단계명 / raw: 원본 라인 확인용 카운터
-    state = {"step": "", "raw": 0}
+    def __init__(self):
+        self._consumer = ProgressLogConsumer(self.PREFIX)
+        self.step = ""
+        self.value = 0.0
 
-    # 공용 라인 핸들러 - carb 로거(py print 경로)와 fd tap(네이티브 경로) 둘 다 여기로
-    # extract_line 반환: [ProgressStepType, decoded_msg(list)]
-    #   PROGRESS 타입이면 [ProgressStepType, decoded_msg, 진행률(0~1 float)]
-    def _handle_line(text: str, origin: str):
+    def feed(self, text: str):
         if "hoops_progress" not in text:
             return
-        if state["raw"] < 5:
-            state["raw"] += 1
-            os.write(2, f"[hoops raw/{origin}] {text!r}\n".encode())
-
         try:
-            line = text if PREFIX in text else f"{PREFIX} {text}"
-            ret = consumer.extract_line(line)
+            line = text if self.PREFIX in text else f"{self.PREFIX} {text}"
+            ret = self._consumer.extract_line(line)
             if not ret:
                 return
             type_name = getattr(ret[0], "name", str(ret[0])).lower()
-
             if len(ret) > 2 and "progress" in type_name:
-                out = f"[hoops%] {state['step']} {ret[2] * 100:.1f}%"
+                self.value = float(ret[2])            # 0.0 ~ 1.0
             elif len(ret) > 1:
-                state["step"] = " ".join(str(x) for x in ret[1])
-                out = f"[hoops step] {state['step']}"
-            else:
-                out = f"[hoops ret] {ret}"
-            # tap 스레드에서도 안전하게 stderr 로 출력 (stdout 은 지금 가로채는 중)
-            os.write(2, (out + "\n").encode())
-        except Exception as e:
-            os.write(2, f"[hoops% 오류] {e} | {text!r}\n".encode())
+                self.step = " ".join(str(x) for x in ret[1])
+                self.value = 0.0                      # 새 단계 시작
+        except Exception:
+            pass
 
+
+# ---------------- 메인 ----------------
+
+async def _convert():
+    converter = hoops_mod.get_instance()
+    watcher = ProgressWatcher()
+
+    # 수집 경로 1: carb 로거 (py stdout 에코 포함, Kit 로그 전부)
     def _on_log(source, level, filename, line_number, message):
-        _handle_line(str(message), "carb")
+        watcher.feed(str(message))
 
     logging = carb.logging.acquire_logging()
     handle = logging.add_logger(_on_log)
 
-    tap = StdoutTap(lambda line: _handle_line(line, "fd1"))
+    # 수집 경로 2: fd1 tap (네이티브가 stdout 에 직접 쓰는 라인)
+    tap = StdoutTap(watcher.feed)
     tap.start()
 
+    # 변환을 별도 태스크로 돌리고, 매 프레임 캐시된 진행도 출력
+    conv = asyncio.ensure_future(
+        converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+    )
+    app = omni.kit.app.get_app()
+
     try:
-        result = await converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+        while not conv.done():
+            # stdout 은 tap 중이므로 stderr(fd2) 로 출력
+            os.write(2, f"[진행도] {watcher.step} {watcher.value * 100:.1f}%\n".encode())
+            await app.next_update_async()
     finally:
         tap.stop()
         logging.remove_logger(handle)
 
-    print("[완료]", result)
+    result = conv.result()
+    print(f"[완료] {watcher.step} 100.0% | {result}")
 
     if LOAD_AFTER_CONVERT:
         _load_into_stage(DEST_PATH, LOAD_PRIM_PATH)
