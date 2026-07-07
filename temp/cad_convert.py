@@ -5,10 +5,13 @@ Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사�
 """
 
 import os
+import asyncio
 import omni.usd
+import omni.kit.app
 import omni.kit.commands
 import omni.kit.async_engine
 import omni.kit.converter.hoops_core as hoops_mod
+from omni.kit.converter.common import ProgressLogConsumer
 from pxr import UsdGeom
 
 
@@ -68,10 +71,42 @@ def _load_into_stage(usd_path: str, prim_path: str = None):
     print("[로드]", final_path, "<-", usd_path)
 
 
+def _snapshot(consumer) -> dict:
+    """consumer 의 public 비호출 속성만 모아서 반환 (상태 확인용)."""
+    snap = {}
+    for a in dir(consumer):
+        if a.startswith("_"):
+            continue
+        try:
+            v = getattr(consumer, a)
+        except Exception:
+            continue
+        if not callable(v):
+            snap[a] = v
+    return snap
+
+
 async def _convert():
     converter = hoops_mod.get_instance()
-    result = await converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+
+    # HOOPS 진행 로그 파서 (프리픽스는 컨버터별로 다름)
+    consumer = ProgressLogConsumer("[omni.converter.hoops_progress]")
+    print("[consumer 메소드]", [a for a in dir(consumer) if not a.startswith("_")])
+
+    # 변환을 별도 태스크로 돌리고, 끝날 때까지 1프레임마다 consumer 상태 출력
+    conv = asyncio.ensure_future(
+        converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
+    )
+    app = omni.kit.app.get_app()
+    while not conv.done():
+        print("[progress]", _snapshot(consumer))
+        await app.next_update_async()
+
+    result = conv.result()
     print("[완료]", result)
+
+    if hasattr(consumer, "destroy"):
+        consumer.destroy()
 
     if LOAD_AFTER_CONVERT:
         _load_into_stage(DEST_PATH, LOAD_PRIM_PATH)
