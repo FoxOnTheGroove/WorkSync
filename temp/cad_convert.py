@@ -5,6 +5,8 @@ Script Editor 에서 실행 - STEP -> USD 변환 (HoopsCoreConverter 직접 사�
 """
 
 import os
+import sys
+import threading
 import carb.logging
 import omni.usd
 import omni.kit.commands
@@ -74,66 +76,116 @@ def _load_into_stage(usd_path: str, prim_path: str = None):
     print("[로드]", final_path, "<-", usd_path)
 
 
+class StdoutTap:
+    """C 레벨 stdout(fd 1)을 파이프로 복제해 라인 콜백으로 전달.
+
+    네이티브(HOOPS)가 fd1 에 직접 쓰는 진행 로그는 carb/py stdout 캡처에
+    안 잡히므로, fd1 자체를 가로챈다. 원본 콘솔로는 그대로 통과시킴.
+    """
+
+    def __init__(self, on_line):
+        self._on_line = on_line
+        self._saved_fd = None
+        self._read_fd = None
+        self._thread = None
+
+    def start(self):
+        sys.stdout.flush()
+        self._saved_fd = os.dup(1)
+        r, w = os.pipe()
+        os.dup2(w, 1)
+        os.close(w)
+        self._read_fd = r
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self):
+        buf = b""
+        while True:
+            try:
+                chunk = os.read(self._read_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            os.write(self._saved_fd, chunk)   # 원본 콘솔로 그대로 통과
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                try:
+                    self._on_line(line.decode("utf-8", "ignore"))
+                except Exception:
+                    pass
+
+    def stop(self):
+        sys.stdout.flush()
+        if self._saved_fd is not None:
+            os.dup2(self._saved_fd, 1)    # fd1 원복 -> 파이프 write 끝 닫힘 -> pump 종료
+            os.close(self._saved_fd)
+            self._saved_fd = None
+        if self._read_fd is not None:
+            try:
+                os.close(self._read_fd)
+            except OSError:
+                pass
+            self._read_fd = None
+
+
 async def _convert():
     converter = hoops_mod.get_instance()
 
     # HOOPS 진행 로그 파서 (프리픽스는 컨버터별로 다름)
-    consumer = ProgressLogConsumer("[omni.converter.hoops_progress]")
-
     PREFIX = "[omni.converter.hoops_progress]"
+    consumer = ProgressLogConsumer(PREFIX)
+
     # step: 현재 단계명 / raw: 원본 라인 확인용 카운터
     state = {"step": "", "raw": 0}
 
-    # carb 로그 리스너: hoops_progress 라인만 골라 extract_line 에 먹임
+    # 공용 라인 핸들러 - carb 로거(py print 경로)와 fd tap(네이티브 경로) 둘 다 여기로
     # extract_line 반환: [ProgressStepType, decoded_msg(list)]
     #   PROGRESS 타입이면 [ProgressStepType, decoded_msg, 진행률(0~1 float)]
-    def _on_log(source, level, filename, line_number, message):
-        if "hoops_progress" not in message and "hoops_progress" not in str(source):
+    def _handle_line(text: str, origin: str):
+        if "hoops_progress" not in text:
             return
-
-        # 원본 포맷 확인 (처음 5개만)
         if state["raw"] < 5:
             state["raw"] += 1
-            print(f"[hoops raw] source={source!r} msg={message!r}")
+            os.write(2, f"[hoops raw/{origin}] {text!r}\n".encode())
 
         try:
-            # carb message 에 프리픽스가 없으면 붙여서 파서가 기대하는 형태로
-            line = message if PREFIX in message else f"{PREFIX} {message}"
+            line = text if PREFIX in text else f"{PREFIX} {text}"
             ret = consumer.extract_line(line)
             if not ret:
                 return
-
             type_name = getattr(ret[0], "name", str(ret[0])).lower()
 
             if len(ret) > 2 and "progress" in type_name:
-                print(f"[hoops%] {state['step']} {ret[2] * 100:.1f}%")
+                out = f"[hoops%] {state['step']} {ret[2] * 100:.1f}%"
             elif len(ret) > 1:
                 state["step"] = " ".join(str(x) for x in ret[1])
-                print(f"[hoops step] {state['step']}")
+                out = f"[hoops step] {state['step']}"
             else:
-                print("[hoops ret]", ret)
+                out = f"[hoops ret] {ret}"
+            # tap 스레드에서도 안전하게 stderr 로 출력 (stdout 은 지금 가로채는 중)
+            os.write(2, (out + "\n").encode())
         except Exception as e:
-            print(f"[hoops% 오류] {e} | msg={message!r}")
+            os.write(2, f"[hoops% 오류] {e} | {text!r}\n".encode())
+
+    def _on_log(source, level, filename, line_number, message):
+        _handle_line(str(message), "carb")
 
     logging = carb.logging.acquire_logging()
-
-    # 진행 로그가 verbose/info 레벨이라 임계값에 걸러질 수 있음 -> 테스트로 낮춤
-    prev_level = None
-    try:
-        prev_level = logging.get_level_threshold()
-        logging.set_level_threshold(carb.logging.LEVEL_VERBOSE)
-    except Exception as e:
-        print("[log level 조정 실패]", e)
-
     handle = logging.add_logger(_on_log)
+
+    tap = StdoutTap(lambda line: _handle_line(line, "fd1"))
+    tap.start()
 
     try:
         result = await converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
-        print("[완료]", result)
     finally:
+        tap.stop()
         logging.remove_logger(handle)
-        if prev_level is not None:
-            logging.set_level_threshold(prev_level)
+
+    print("[완료]", result)
 
     if LOAD_AFTER_CONVERT:
         _load_into_stage(DEST_PATH, LOAD_PRIM_PATH)
