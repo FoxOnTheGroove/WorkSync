@@ -194,24 +194,32 @@ class ProgressWatcher:
             if not ret:
                 return
 
-            # PROGRESS 타입이면 파서가 계산해준 0~1 값
-            if len(ret) > 2:
-                self.value = float(ret[2])
-
             # decoded_msg 에서 필드 직접 추출
+            # (파서의 타입 분류에 의존하지 않음 - prog 0.0 라인이 Begin 류로
+            #  분류되면 ret[2] 가 없어서 이전 값이 유지되는 문제 방지)
             msg = ret[1] if len(ret) > 1 else None
             if isinstance(msg, (list, tuple)):
                 m = [str(x).strip() for x in msg]
                 if "step" in m:
                     i = m.index("step")
                     if i + 1 < len(m):
-                        self.step = m[i + 1]                  # "1:2"
+                        new_step = m[i + 1]                   # "1:2"
+                        if new_step != self.step:
+                            self.step = new_step
+                            self.value = 0.0                  # 새 단계 시작
+                if "prog" in m:
+                    i = m.index("prog")
+                    if i + 1 < len(m) and self._is_number(m[i + 1]):
+                        self.value = float(m[i + 1]) / 100.0  # 0.0 ~ 1.0
                 if "end" in m:
                     self.ended = True
                     self.value = 1.0
                     self.desc = "end"
                 elif m and m[-1] and m[-1] not in self._MARKERS and not self._is_number(m[-1]):
                     self.desc = m[-1]                         # 설명문 (마지막 필드)
+            elif len(ret) > 2:
+                # decoded_msg 를 못 쓰는 경우만 파서 계산값 사용
+                self.value = float(ret[2])
 
             # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력. origin 은 유입 경로(carb/fd1)
             _err(f"[반응형/{origin}] step {self.step} {self.value * 100:.1f}% | {self.desc}")
