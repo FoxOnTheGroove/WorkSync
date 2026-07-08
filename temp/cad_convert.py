@@ -47,10 +47,21 @@ CONVERT_OPTIONS = {
 }
 
 
-# 콘솔 인코딩 (Windows 한국어 콘솔은 cp949 - UTF-8 고정으로 쓰면 한글 깨짐)
-_CONSOLE_ENC = (getattr(sys.stderr, "encoding", None)
-                or locale.getpreferredencoding(False)
-                or "utf-8")
+# 콘솔 인코딩 - Kit 의 sys.stderr.encoding 은 utf-8 로 잡히므로 믿으면 안 됨.
+# Windows 콘솔의 실제 출력 코드페이지를 API 로 조회 (한국어 콘솔 = 949)
+def _detect_console_enc() -> str:
+    if os.name == "nt":
+        try:
+            import ctypes
+            cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+            if cp:
+                return f"cp{cp}"       # 949 -> cp949, 65001 -> cp65001(=utf-8)
+        except Exception:
+            pass
+    return locale.getpreferredencoding(False) or "utf-8"
+
+
+_CONSOLE_ENC = _detect_console_enc()
 
 
 def _err(text: str):
