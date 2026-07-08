@@ -176,18 +176,23 @@ class ProgressWatcher:
 
     # ---------- 접근 API ----------
 
+    @property
+    def step_label(self) -> str:
+        """단계 표시 문자열 - "1:2" -> "1/2" (없으면 빈 문자열)."""
+        return self.step.replace(":", "/") if self.step else ""
+
     def get_current_state(self):
         """원할 때 현재 상태 조회 (매프레임 루프 등)."""
-        return self.step_type, self.desc, self.value
+        return self.step_type, self.desc, self.value, self.step_label
 
     def on_progress_changed(self, callback):
-        """상태 갱신 시마다 callback(step_type, desc, value) 호출 등록 (반응형)."""
+        """상태 갱신 시마다 callback(step_type, desc, value, step_label) 호출 등록 (반응형)."""
         self._callbacks.append(callback)
 
     def _notify(self):
         for cb in self._callbacks:
             try:
-                cb(self.step_type, self.desc, self.value)
+                cb(self.step_type, self.desc, self.value, self.step_label)
             except Exception:
                 pass
 
@@ -239,7 +244,7 @@ async def _convert():
 
     # 반응형 접근: 상태 갱신 즉시 호출되는 콜백 등록
     watcher.on_progress_changed(
-        lambda step_type, desc, value: _err(f"[반응형] {desc} {value * 100:.1f}%")
+        lambda step_type, desc, value, step: _err(f"[반응형] {desc} {value * 100:.1f}%  step {step}")
     )
 
     # 진행 로그는 네이티브가 fd1(stdout)에 직접 쓰므로 tap 이 유일한 수집 경로
@@ -257,8 +262,8 @@ async def _convert():
     try:
         while not conv.done():
             # 원할 때 접근: 현재 상태 조회
-            _, desc, value = watcher.get_current_state()
-            _err(f"[매프레임] {desc} {value * 100:.1f}%")
+            _, desc, value, step = watcher.get_current_state()
+            _err(f"[매프레임] {desc} {value * 100:.1f}%  step {step}")
             await app.next_update_async()
     finally:
         for s in shields:
