@@ -1,8 +1,11 @@
 """
-STEP/CAD -> USD 변환 + 스테이지 로드 구현부 전체.
+STEP/CAD -> USD 변환 + 스테이지 로드 + 진행도 추적 구현부 전체.
 
-모든 기능은 CadConverter 클래스의 @classmethod 로 구현되며,
+모든 변환 기능은 CadConverter 의 @classmethod 로 구현되며,
 UI 없이 단독 실행도 가능 (Script Editor 에서 CadConverter.launch(...) 호출).
+
+진행도는 CadConverter.progress (CadConverterProgress 인스턴스) 가 보유한다.
+UI/외부는 CadConverterService 를 통해 접근.
 
 사전 조건: Extension Manager 에서 omni.kit.converter.hoops_core 활성화
 """
@@ -19,158 +22,10 @@ from omni.kit.converter.common import ProgressLogConsumer
 from pxr import UsdGeom
 
 
-# ---------------- 진행 로그 수집 ----------------
-
-class _StdoutTap:
-    """C 레벨 stdout(fd 1)을 파이프로 복제해 라인 콜백으로 전달.
-
-    HOOPS 네이티브 진행 로그는 fd1 에 직접 쓰므로 이 방법으로만 잡힌다.
-    읽은 내용은 원본 콘솔로 그대로 통과시킨다.
-    """
-
-    def __init__(self, on_line):
-        self._on_line = on_line
-        self._saved_fd = None
-        self._read_fd = None
-        self._thread = None
-        self._shields = []
-
-    def start(self):
-        sys.stdout.flush()
-        self._saved_fd = os.dup(1)
-        r, w = os.pipe()
-        os.dup2(w, 1)
-        os.close(w)
-        self._read_fd = r
-        # tap 중 콘솔 스트림 write 의 OSError(WinError 1) 삼키는 보호막
-        self._shields = [self._shield(sys.stdout), self._shield(sys.stderr)]
-        self._thread = threading.Thread(target=self._pump, daemon=True)
-        self._thread.start()
-
-    def _pump(self):
-        buf = b""
-        while True:
-            try:
-                chunk = os.read(self._read_fd, 4096)
-            except OSError:
-                break
-            if not chunk:
-                break
-            os.write(self._saved_fd, chunk)   # 원본 콘솔로 그대로 통과
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                try:
-                    self._on_line(line.decode("utf-8", "ignore"))
-                except Exception:
-                    pass
-
-    def stop(self):
-        if self._saved_fd is not None:
-            os.dup2(self._saved_fd, 1)    # fd1 원복 -> pump 종료
-            os.close(self._saved_fd)
-            self._saved_fd = None
-        if self._read_fd is not None:
-            try:
-                os.close(self._read_fd)
-            except OSError:
-                pass
-            self._read_fd = None
-        for stream, orig in self._shields:
-            try:
-                stream.write = orig
-            except (AttributeError, TypeError):
-                pass
-        self._shields = []
-
-    @staticmethod
-    def _shield(stream):
-        orig = getattr(stream, "write", None)
-        if orig is None:
-            return (stream, None)
-        def _safe(s, _orig=orig):
-            try:
-                return _orig(s)
-            except OSError:
-                return len(s)
-        try:
-            stream.write = _safe
-        except (AttributeError, TypeError):
-            return (stream, None)
-        return (stream, orig)
-
-
-class CadConverterProgress:
-    """변환 진행 로그를 파싱해 상태를 관리 (변환 1건당 1개).
-
-    extract_line 반환: [ProgressStepType, desc(str), prog(0.0~1.0, PROGRESS 일 때만)]
-
-    접근 방법 두 가지:
-      get_current_state()             : (step_type, desc, value, step_label) 반환 (pull)
-      on_progress_changed_fn(callback): 갱신마다 callback(step_type, desc, value, step_label) (push)
-
-    주의: 콜백은 tap 백그라운드 스레드에서 호출됨. UI 직접 조작 대신 값 캐싱/
-          메인 스레드 폴링(get_current_state) 용도로 쓸 것.
-    """
-
-    PREFIX = "[omni.converter.hoops_progress]"
-
-    def __init__(self):
-        self._consumer = ProgressLogConsumer(self.PREFIX)
-        self._callbacks = []
-        self.step_type = None   # ret[0]
-        self.desc = ""          # ret[1] - 현재 과정
-        self.value = 0.0        # ret[2] - 진행도 0.0 ~ 1.0
-        self.step = ""          # 단계 인덱스 (예: "1:2")
-
-    @property
-    def step_label(self) -> str:
-        """단계 표시 - "1:2" -> "1/2"."""
-        return self.step.replace(":", "/")
-
-    def reset(self):
-        self.step_type, self.desc, self.value, self.step = None, "", 0.0, ""
-
-    def get_current_state(self):
-        return self.step_type, self.desc, self.value, self.step_label
-
-    def on_progress_changed_fn(self, callback):
-        """상태 갱신마다 callback(step_type, desc, value, step_label) 호출 등록."""
-        self._callbacks.append(callback)
-
-    def feed(self, text: str):
-        if "hoops_progress" not in text:
-            return
-        try:
-            # 파서는 프리픽스로 시작하는 라인을 기대함 - 프리픽스 위치부터 자름.
-            line = text[text.find(self.PREFIX):]
-            parts = [p.strip() for p in line.split("*")]
-
-            if "end" in parts:
-                self.step_type, self.desc, self.value = "end", "convert complete", 1.0
-            else:
-                ret = self._consumer.extract_line(line)
-                if not ret:
-                    return
-                self.step_type = ret[0]
-                # step 인덱스가 바뀌면 새 단계 시작 - 진행도 리셋
-                if "step" in parts:
-                    new_step = parts[parts.index("step") + 1]
-                    if new_step != self.step:
-                        self.step, self.value = new_step, 0.0
-                if len(ret) > 2:                     # PROGRESS - 0.0~1.0
-                    self.value = float(ret[2])
-                if len(ret) > 1 and ret[1]:
-                    self.desc = ret[1]               # 현재 과정
-
-            for cb in self._callbacks:
-                cb(self.step_type, self.desc, self.value, self.step_label)
-        except Exception:
-            pass
-
-
 class CadConverterService:
-    """단일 진입점 서비스. src/dest + 5옵션 + autoload 를 받아 변환(+로드)을 한 번에 수행."""
+    """단일 진입점 서비스. 변환 + 진행도 접근을 외부에 노출."""
+
+    # ---------------- convert ----------------
 
     @classmethod
     async def convert(
@@ -196,6 +51,18 @@ class CadConverterService:
         if autoload:
             return CadConverter.load_into_stage(dest_path)
         return ""
+
+    # ---------------- progress ----------------
+
+    @classmethod
+    def on_progress_changed_fn(cls, callback):
+        """진행 상태 갱신마다 callback(step_type, desc, value, step_label) 호출 등록."""
+        CadConverter.progress.on_progress_changed_fn(callback)
+
+    @classmethod
+    def get_progress(cls):
+        """현재 진행 상태 (step_type, desc, value, step_label) 조회."""
+        return CadConverter.progress.get_current_state()
 
 
 class CadConverter:
@@ -226,8 +93,8 @@ class CadConverter:
     # 로드로 생성된 prim 경로 추적 (Clear 대상)
     _loaded_prims: list = []
 
-    # 변환 진행도 (UI 등에서 콜백 등록 / 상태 조회)
-    progress = CadConverterProgress()
+    # 변환 진행도 - 파일 하단에서 CadConverterProgress 인스턴스로 채워짐
+    progress = None
 
     # ---------------- options ----------------
 
@@ -242,11 +109,14 @@ class CadConverter:
     ) -> dict:
         """file_format_args 는 dict[str, str] - 값 전부 문자열."""
         return {
-            "upAxis"        : up_axis,
-            "tessLOD"       : tess_lod,
-            "bInstancing"   : "true" if instancing else "false",
-            "useMaterials"  : "true" if use_materials else "false",
-            "dMetersPerUnit": meters_per_unit,
+            "upAxis"            : up_axis,
+            "tessLOD"           : tess_lod,
+            "bInstancing"       : "true" if instancing else "false",
+            "useMaterials"      : "true" if use_materials else "false",
+            "dMetersPerUnit"    : meters_per_unit,
+            # 진행 로그(*step*/*prog*) 는 이 옵션에 게이트됨 - 진행도 추적하려면 필수
+            "reportProgress"    : "true",
+            "reportProgressFreq": "10.0",   # 초당 리포팅 상한 [1~10]
         }
 
     # ---------------- convert ----------------
@@ -347,6 +217,161 @@ class CadConverter:
         return omni.kit.async_engine.run_coroutine(
             cls.run(src_path, dest_path, autoload, **option_kwargs)
         )
+
+
+# ---------------- 진행 로그 수집 ----------------
+
+class CadConverterProgress:
+    """변환 진행 로그를 파싱해 상태를 관리 (변환 1건당 1개).
+
+    extract_line 반환: [ProgressStepType, desc(str), prog(0.0~1.0, PROGRESS 일 때만)]
+
+    접근 방법 두 가지:
+      get_current_state()             : (step_type, desc, value, step_label) 반환 (pull)
+      on_progress_changed_fn(callback): 갱신마다 callback(step_type, desc, value, step_label) (push)
+
+    주의: 콜백은 tap 백그라운드 스레드에서 호출됨. UI 직접 조작 대신 값 캐싱/
+          메인 스레드 폴링(get_current_state) 용도로 쓸 것.
+    """
+
+    PREFIX = "[omni.converter.hoops_progress]"
+
+    def __init__(self):
+        self._consumer = ProgressLogConsumer(self.PREFIX)
+        self._callbacks = []
+        self.step_type = None   # ret[0]
+        self.desc = ""          # ret[1] - 현재 과정
+        self.value = 0.0        # ret[2] - 진행도 0.0 ~ 1.0
+        self.step = ""          # 단계 인덱스 (예: "1:2")
+
+    @property
+    def step_label(self) -> str:
+        """단계 표시 - "1:2" -> "1/2"."""
+        return self.step.replace(":", "/")
+
+    def reset(self):
+        self.step_type, self.desc, self.value, self.step = None, "", 0.0, ""
+
+    def get_current_state(self):
+        return self.step_type, self.desc, self.value, self.step_label
+
+    def on_progress_changed_fn(self, callback):
+        """상태 갱신마다 callback(step_type, desc, value, step_label) 호출 등록."""
+        self._callbacks.append(callback)
+
+    def feed(self, text: str):
+        if "hoops_progress" not in text:
+            return
+        try:
+            # 파서는 프리픽스로 시작하는 라인을 기대함 - 프리픽스 위치부터 자름.
+            line = text[text.find(self.PREFIX):]
+            parts = [p.strip() for p in line.split("*")]
+
+            if "end" in parts:
+                self.step_type, self.desc, self.value = "end", "convert complete", 1.0
+            else:
+                ret = self._consumer.extract_line(line)
+                if not ret:
+                    return
+                self.step_type = ret[0]
+                # step 인덱스가 바뀌면 새 단계 시작 - 진행도 리셋
+                if "step" in parts:
+                    new_step = parts[parts.index("step") + 1]
+                    if new_step != self.step:
+                        self.step, self.value = new_step, 0.0
+                if len(ret) > 2:                     # PROGRESS - 0.0~1.0
+                    self.value = float(ret[2])
+                if len(ret) > 1 and ret[1]:
+                    self.desc = ret[1]               # 현재 과정
+
+            for cb in self._callbacks:
+                cb(self.step_type, self.desc, self.value, self.step_label)
+        except Exception:
+            pass
+
+
+class _StdoutTap:
+    """C 레벨 stdout(fd 1)을 파이프로 복제해 라인 콜백으로 전달.
+
+    HOOPS 네이티브 진행 로그는 fd1 에 직접 쓰므로 이 방법으로만 잡힌다.
+    읽은 내용은 원본 콘솔로 그대로 통과시킨다.
+    """
+
+    def __init__(self, on_line):
+        self._on_line = on_line
+        self._saved_fd = None
+        self._read_fd = None
+        self._thread = None
+        self._shields = []
+
+    def start(self):
+        sys.stdout.flush()
+        self._saved_fd = os.dup(1)
+        r, w = os.pipe()
+        os.dup2(w, 1)
+        os.close(w)
+        self._read_fd = r
+        # tap 중 콘솔 스트림 write 의 OSError(WinError 1) 삼키는 보호막
+        self._shields = [self._shield(sys.stdout), self._shield(sys.stderr)]
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self):
+        buf = b""
+        while True:
+            try:
+                chunk = os.read(self._read_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            os.write(self._saved_fd, chunk)   # 원본 콘솔로 그대로 통과
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                try:
+                    self._on_line(line.decode("utf-8", "ignore"))
+                except Exception:
+                    pass
+
+    def stop(self):
+        if self._saved_fd is not None:
+            os.dup2(self._saved_fd, 1)    # fd1 원복 -> pump 종료
+            os.close(self._saved_fd)
+            self._saved_fd = None
+        if self._read_fd is not None:
+            try:
+                os.close(self._read_fd)
+            except OSError:
+                pass
+            self._read_fd = None
+        for stream, orig in self._shields:
+            if orig is not None:
+                try:
+                    stream.write = orig
+                except (AttributeError, TypeError):
+                    pass
+        self._shields = []
+
+    @staticmethod
+    def _shield(stream):
+        orig = getattr(stream, "write", None)
+        if orig is None:
+            return (stream, None)
+        def _safe(s, _orig=orig):
+            try:
+                return _orig(s)
+            except OSError:
+                return len(s)
+        try:
+            stream.write = _safe
+        except (AttributeError, TypeError):
+            return (stream, None)
+        return (stream, orig)
+
+
+# CadConverter 아래에 정의된 CadConverterProgress 로 progress 채움
+CadConverter.progress = CadConverterProgress()
 
 
 if __name__ == "__main__":
