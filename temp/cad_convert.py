@@ -6,8 +6,8 @@ Script Editor 에서 실행 - STEP -> USD 변환 + 진행도 추적 (HoopsCoreCo
      (HOOPS 네이티브 진행 로그는 fd1 에만 나오므로 tap 이 유일한 경로)
   2. hoops_progress 라인만 ProgressLogConsumer 로 파싱해 상태로 저장
   3. 접근 API 두 가지:
-     - on_progress_changed(cb) : 갱신 즉시 콜백 (push) -> [반응형]
-     - get_current_state()     : 원할 때 조회 (pull)  -> [매프레임]
+     - on_progress_changed_fn(cb) : 갱신 즉시 콜백 (push) -> [반응형]
+     - get_current_state()        : 원할 때 조회 (pull)  -> [매프레임]
 
 fd1 을 파이프로 돌리는 동안 파이썬 콘솔 스트림이 WriteConsoleW 를 파이프에
 호출하면 OSError(WinError 1) 가 나므로, sys.stdout/stderr 의 write 를
@@ -159,8 +159,8 @@ class ProgressWatcher:
       ret = [ProgressStepType, desc(str), prog(0.0~1.0, PROGRESS 타입일 때만)]
 
     접근 방법 두 가지:
-      get_current_state()          : 호출 시점의 (step_type, desc, value) 반환 (pull)
-      on_progress_changed(callback): 상태 갱신마다 callback(step_type, desc, value) 호출 (push)
+      get_current_state()             : (step_type, desc, value, step_label) 반환 (pull)
+      on_progress_changed_fn(callback): 갱신마다 callback(step_type, desc, value, step_label) (push)
     """
 
     PREFIX = "[omni.converter.hoops_progress]"
@@ -172,66 +172,46 @@ class ProgressWatcher:
         self.desc = ""          # ret[1] - 현재 과정
         self.value = 0.0        # ret[2] - 진행도 0.0 ~ 1.0
         self.step = ""          # 단계 인덱스 (예: "1:2")
-        self.ended = False
-
-    # ---------- 접근 API ----------
 
     @property
     def step_label(self) -> str:
-        """단계 표시 문자열 - "1:2" -> "1/2" (없으면 빈 문자열)."""
-        return self.step.replace(":", "/") if self.step else ""
+        """단계 표시 - "1:2" -> "1/2"."""
+        return self.step.replace(":", "/")
 
     def get_current_state(self):
-        """원할 때 현재 상태 조회 (매프레임 루프 등)."""
         return self.step_type, self.desc, self.value, self.step_label
 
-    def on_progress_changed(self, callback):
-        """상태 갱신 시마다 callback(step_type, desc, value, step_label) 호출 등록 (반응형)."""
+    def on_progress_changed_fn(self, callback):
+        """상태 갱신마다 callback(step_type, desc, value, step_label) 호출 등록."""
         self._callbacks.append(callback)
-
-    def _notify(self):
-        for cb in self._callbacks:
-            try:
-                cb(self.step_type, self.desc, self.value, self.step_label)
-            except Exception:
-                pass
-
-    # ---------- 로그 유입 ----------
 
     def feed(self, text: str):
         if "hoops_progress" not in text:
             return
         try:
             # 파서는 프리픽스로 시작하는 라인을 기대함 - 프리픽스 위치부터 자름.
-            idx = text.find(self.PREFIX)
-            line = text[idx:] if idx >= 0 else f"{self.PREFIX} {text}"
+            line = text[text.find(self.PREFIX):]
             parts = [p.strip() for p in line.split("*")]
 
             if "end" in parts:
-                self.ended = True
-                self.value = 1.0
-                self.desc = "convert complete"
-                self.step_type = "end"
+                self.step_type, self.desc, self.value = "end", "convert complete", 1.0
             else:
                 ret = self._consumer.extract_line(line)
                 if not ret:
                     return
-
                 self.step_type = ret[0]
-
-                # step 인덱스("1:2")가 바뀌면 새 단계 시작 - 진행도 리셋
+                # step 인덱스가 바뀌면 새 단계 시작 - 진행도 리셋
                 if "step" in parts:
-                    i = parts.index("step")
-                    if i + 1 < len(parts) and parts[i + 1] != self.step:
-                        self.step = parts[i + 1]
-                        self.value = 0.0
-
+                    new_step = parts[parts.index("step") + 1]
+                    if new_step != self.step:
+                        self.step, self.value = new_step, 0.0
                 if len(ret) > 2:                     # PROGRESS - 0.0~1.0
                     self.value = float(ret[2])
-                if len(ret) > 1 and isinstance(ret[1], str) and ret[1]:
+                if len(ret) > 1 and ret[1]:
                     self.desc = ret[1]               # 현재 과정
 
-            self._notify()
+            for cb in self._callbacks:
+                cb(self.step_type, self.desc, self.value, self.step_label)
         except Exception:
             pass
 
@@ -243,7 +223,7 @@ async def _convert():
     watcher = ProgressWatcher()
 
     # 반응형 접근: 상태 갱신 즉시 호출되는 콜백 등록
-    watcher.on_progress_changed(
+    watcher.on_progress_changed_fn(
         lambda step_type, desc, value, step: _err(f"[반응형] {desc} {value * 100:.1f}%  step {step}")
     )
 
