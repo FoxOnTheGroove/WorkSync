@@ -154,23 +154,45 @@ def _unshield_write(saved):
 # ---------------- 진행도 캐시 ----------------
 
 class ProgressWatcher:
-    """들어오는 로그 라인을 ProgressLogConsumer 로 파싱해 최신 진행도를 캐시.
+    """변환 진행 로그를 파싱해 ret[0,1,2] 상태를 관리하는 클래스.
 
     extract_line 반환 (확인됨):
       ret = [ProgressStepType, desc(str), prog(0.0~1.0, PROGRESS 타입일 때만)]
 
-    feed()  : 로그 라인 유입 (push) - 갱신 시 [반응형] 즉시 출력
-    step / value / desc : 단계(예 1:2) / 진행도(0.0~1.0) / 현재 과정 조회 (pull)
+    접근 방법 두 가지:
+      get_current_state()          : 호출 시점의 (step_type, desc, value) 반환 (pull)
+      on_progress_changed(callback): 상태 갱신마다 callback(step_type, desc, value) 호출 (push)
     """
 
     PREFIX = "[omni.converter.hoops_progress]"
 
     def __init__(self):
         self._consumer = ProgressLogConsumer(self.PREFIX)
-        self.step = ""     # 예: "1:2"
-        self.value = 0.0   # 0.0 ~ 1.0
-        self.desc = ""     # 예: "Completed Reading CAD model..."
+        self._callbacks = []
+        self.step_type = None   # ret[0] - ProgressStepType
+        self.desc = ""          # ret[1] - 현재 과정
+        self.value = 0.0        # ret[2] - 진행도 0.0 ~ 1.0
+        self.step = ""          # 단계 인덱스 (예: "1:2")
         self.ended = False
+
+    # ---------- 접근 API ----------
+
+    def get_current_state(self):
+        """원할 때 현재 상태 조회 (매프레임 루프 등)."""
+        return self.step_type, self.desc, self.value
+
+    def on_progress_changed(self, callback):
+        """상태 갱신 시마다 callback(step_type, desc, value) 호출 등록 (반응형)."""
+        self._callbacks.append(callback)
+
+    def _notify(self):
+        for cb in self._callbacks:
+            try:
+                cb(self.step_type, self.desc, self.value)
+            except Exception:
+                pass
+
+    # ---------- 로그 유입 ----------
 
     def feed(self, text: str, origin: str = "?"):
         if "hoops_progress" not in text:
@@ -185,11 +207,14 @@ class ProgressWatcher:
             if "end" in parts:
                 self.ended = True
                 self.value = 1.0
-                self.desc = "end"
+                self.desc = "convert complete"
+                self.step_type = "end"
             else:
                 ret = self._consumer.extract_line(line)
                 if not ret:
                     return
+
+                self.step_type = ret[0]
 
                 # step 인덱스("1:2")가 바뀌면 새 단계 시작 - 진행도 리셋
                 if "step" in parts:
@@ -203,8 +228,7 @@ class ProgressWatcher:
                 if len(ret) > 1 and isinstance(ret[1], str) and ret[1]:
                     self.desc = ret[1]               # 현재 과정
 
-            # 반응형: 태그, 현재 과정(desc), progress 순서로 즉시 출력
-            _err(f"[반응형/{origin}] {self.desc} {self.value * 100:.1f}%")
+            self._notify()
         except Exception:
             pass
 
@@ -214,6 +238,11 @@ class ProgressWatcher:
 async def _convert():
     converter = hoops_mod.get_instance()
     watcher = ProgressWatcher()
+
+    # 반응형 접근: 상태 갱신 즉시 호출되는 콜백 등록
+    watcher.on_progress_changed(
+        lambda step_type, desc, value: _err(f"[반응형] {desc} {value * 100:.1f}%")
+    )
 
     # 수집 경로 1: carb 로거 (py stdout 에코 등)
     def _on_log(source, level, filename, line_number, message):
@@ -236,7 +265,9 @@ async def _convert():
 
     try:
         while not conv.done():
-            _err(f"[매프레임] {watcher.desc} {watcher.value * 100:.1f}%")
+            # 원할 때 접근: 현재 상태 조회
+            _, desc, value = watcher.get_current_state()
+            _err(f"[매프레임] {desc} {value * 100:.1f}%")
             await app.next_update_async()
     finally:
         for s in shields:
