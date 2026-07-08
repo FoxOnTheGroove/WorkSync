@@ -156,16 +156,14 @@ def _unshield_write(saved):
 class ProgressWatcher:
     """들어오는 로그 라인을 ProgressLogConsumer 로 파싱해 최신 진행도를 캐시.
 
-    로그 한 라인에 필드가 * 구분자로 같이 들어옴:
-      [omni.converter.hoops_progress]*step*1:2*prog*100.0*Completed Reading CAD model...
-      [omni.converter.hoops_progress]*end*0*
+    extract_line 반환 (확인됨):
+      ret = [ProgressStepType, desc(str), prog(0.0~1.0, PROGRESS 타입일 때만)]
 
     feed()  : 로그 라인 유입 (push) - 갱신 시 [반응형] 즉시 출력
-    step / value / desc : 단계(예 1:2) / 진행도(0.0~1.0) / 설명 조회 (pull)
+    step / value / desc : 단계(예 1:2) / 진행도(0.0~1.0) / 현재 과정 조회 (pull)
     """
 
     PREFIX = "[omni.converter.hoops_progress]"
-    _MARKERS = {"step", "prog", "Begin", "end"}
 
     def __init__(self):
         self._consumer = ProgressLogConsumer(self.PREFIX)
@@ -173,15 +171,6 @@ class ProgressWatcher:
         self.value = 0.0   # 0.0 ~ 1.0
         self.desc = ""     # 예: "Completed Reading CAD model..."
         self.ended = False
-        self._dbg = 0      # ret 원형 확인용 (처음 3회만)
-
-    @staticmethod
-    def _is_number(s: str) -> bool:
-        try:
-            float(s)
-            return True
-        except ValueError:
-            return False
 
     def feed(self, text: str, origin: str = "?"):
         if "hoops_progress" not in text:
@@ -191,9 +180,6 @@ class ProgressWatcher:
             # carb 경유 라인은 앞에 "py stdout: " 등이 붙으므로 프리픽스 위치부터 자름.
             idx = text.find(self.PREFIX)
             line = text[idx:] if idx >= 0 else f"{self.PREFIX} {text}"
-
-            # 원본 라인을 * 기준으로 직접 파싱 (decoded_msg 구조에 의존하지 않음)
-            # 예: [prefix]*step*1:2*prog*100.0*Completed Reading CAD model...
             parts = [p.strip() for p in line.split("*")]
 
             if "end" in parts:
@@ -201,26 +187,21 @@ class ProgressWatcher:
                 self.value = 1.0
                 self.desc = "end"
             else:
-                # consumer 는 유효한 진행 라인인지 판별하는 용도로 유지
                 ret = self._consumer.extract_line(line)
                 if not ret:
                     return
-                if self._dbg < 3:
-                    self._dbg += 1
-                    _err(f"[디버그] ret={ret!r}")
 
+                # step 인덱스("1:2")가 바뀌면 새 단계 시작 - 진행도 리셋
                 if "step" in parts:
                     i = parts.index("step")
                     if i + 1 < len(parts) and parts[i + 1] != self.step:
-                        self.step = parts[i + 1]                  # "1:2"
-                        self.value = 0.0                          # 새 단계 시작
-                if "prog" in parts:
-                    i = parts.index("prog")
-                    if i + 1 < len(parts) and self._is_number(parts[i + 1]):
-                        self.value = float(parts[i + 1]) / 100.0  # 0.0 ~ 1.0
-                tail = parts[-1] if parts else ""
-                if tail and tail not in self._MARKERS and not self._is_number(tail):
-                    self.desc = tail                              # 현재 과정
+                        self.step = parts[i + 1]
+                        self.value = 0.0
+
+                if len(ret) > 2:                     # PROGRESS - 0.0~1.0
+                    self.value = float(ret[2])
+                if len(ret) > 1 and isinstance(ret[1], str) and ret[1]:
+                    self.desc = ret[1]               # 현재 과정
 
             # 반응형: 태그, 현재 과정(desc), progress 순서로 즉시 출력
             _err(f"[반응형/{origin}] {self.desc} {self.value * 100:.1f}%")
