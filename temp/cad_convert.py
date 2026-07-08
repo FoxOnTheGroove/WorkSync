@@ -173,6 +173,7 @@ class ProgressWatcher:
         self.value = 0.0   # 0.0 ~ 1.0
         self.desc = ""     # 예: "Completed Reading CAD model..."
         self.ended = False
+        self._dbg = 0      # ret 원형 확인용 (처음 3회만)
 
     @staticmethod
     def _is_number(s: str) -> bool:
@@ -191,38 +192,35 @@ class ProgressWatcher:
             idx = text.find(self.PREFIX)
             line = text[idx:] if idx >= 0 else f"{self.PREFIX} {text}"
 
-            # end 라인은 decoded_msg 형태가 달라서 원문에서 직접 감지
-            if "*end*" in line:
+            # 원본 라인을 * 기준으로 직접 파싱 (decoded_msg 구조에 의존하지 않음)
+            # 예: [prefix]*step*1:2*prog*100.0*Completed Reading CAD model...
+            parts = [p.strip() for p in line.split("*")]
+
+            if "end" in parts:
                 self.ended = True
                 self.value = 1.0
                 self.desc = "end"
             else:
+                # consumer 는 유효한 진행 라인인지 판별하는 용도로 유지
                 ret = self._consumer.extract_line(line)
                 if not ret:
                     return
+                if self._dbg < 3:
+                    self._dbg += 1
+                    _err(f"[디버그] ret={ret!r}")
 
-                # decoded_msg 에서 필드 직접 추출
-                # (파서의 타입 분류에 의존하지 않음 - prog 0.0 라인이 Begin 류로
-                #  분류되면 ret[2] 가 없어서 이전 값이 유지되는 문제 방지)
-                msg = ret[1] if len(ret) > 1 else None
-                if isinstance(msg, (list, tuple)):
-                    m = [str(x).strip() for x in msg]
-                    if "step" in m:
-                        i = m.index("step")
-                        if i + 1 < len(m):
-                            new_step = m[i + 1]                   # "1:2"
-                            if new_step != self.step:
-                                self.step = new_step
-                                self.value = 0.0                  # 새 단계 시작
-                    if "prog" in m:
-                        i = m.index("prog")
-                        if i + 1 < len(m) and self._is_number(m[i + 1]):
-                            self.value = float(m[i + 1]) / 100.0  # 0.0 ~ 1.0
-                    if m and m[-1] and m[-1] not in self._MARKERS and not self._is_number(m[-1]):
-                        self.desc = m[-1]                         # 현재 과정 (마지막 필드)
-                elif len(ret) > 2:
-                    # decoded_msg 를 못 쓰는 경우만 파서 계산값 사용
-                    self.value = float(ret[2])
+                if "step" in parts:
+                    i = parts.index("step")
+                    if i + 1 < len(parts) and parts[i + 1] != self.step:
+                        self.step = parts[i + 1]                  # "1:2"
+                        self.value = 0.0                          # 새 단계 시작
+                if "prog" in parts:
+                    i = parts.index("prog")
+                    if i + 1 < len(parts) and self._is_number(parts[i + 1]):
+                        self.value = float(parts[i + 1]) / 100.0  # 0.0 ~ 1.0
+                tail = parts[-1] if parts else ""
+                if tail and tail not in self._MARKERS and not self._is_number(tail):
+                    self.desc = tail                              # 현재 과정
 
             # 반응형: 태그, 현재 과정(desc), progress 순서로 즉시 출력
             _err(f"[반응형/{origin}] {self.desc} {self.value * 100:.1f}%")
