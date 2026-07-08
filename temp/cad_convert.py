@@ -163,7 +163,10 @@ class ProgressWatcher:
         if "hoops_progress" not in text:
             return
         try:
-            line = text if self.PREFIX in text else f"{self.PREFIX} {text}"
+            # 파서는 프리픽스로 시작하는 라인을 기대함.
+            # carb 경유 라인은 앞에 "py stdout: " 등이 붙으므로 프리픽스 위치부터 자름.
+            idx = text.find(self.PREFIX)
+            line = text[idx:] if idx >= 0 else f"{self.PREFIX} {text}"
             ret = self._consumer.extract_line(line)
             if not ret:
                 return
