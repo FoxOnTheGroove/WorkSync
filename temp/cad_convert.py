@@ -17,6 +17,7 @@ fd1 을 파이프로 돌리는 동안 파이썬 콘솔 스트림이 WriteConsole
 
 import os
 import sys
+import locale
 import asyncio
 import threading
 import carb.logging
@@ -44,6 +45,17 @@ CONVERT_OPTIONS = {
     "bReportProgress"   : "true",
     "reportProgressFreq": "10.0",   # 초당 리포팅 횟수 [1~10] 최대
 }
+
+
+# 콘솔 인코딩 (Windows 한국어 콘솔은 cp949 - UTF-8 고정으로 쓰면 한글 깨짐)
+_CONSOLE_ENC = (getattr(sys.stderr, "encoding", None)
+                or locale.getpreferredencoding(False)
+                or "utf-8")
+
+
+def _err(text: str):
+    """stderr(fd2) 로 콘솔 인코딩에 맞춰 한 줄 출력 (tap 중에도 안전)."""
+    os.write(2, (text + "\n").encode(_CONSOLE_ENC, "replace"))
 
 
 # ---------------- fd1 tap ----------------
@@ -191,8 +203,7 @@ class ProgressWatcher:
                     self.desc = m[-1]                         # 설명문 (마지막 필드)
 
             # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력. origin 은 유입 경로(carb/fd1)
-            # (tap 중에는 stdout 이 파이프이므로 stderr 로)
-            os.write(2, f"[반응형/{origin}] step {self.step} {self.value * 100:.1f}% | {self.desc}\n".encode())
+            _err(f"[반응형/{origin}] step {self.step} {self.value * 100:.1f}% | {self.desc}")
         except Exception:
             pass
 
@@ -224,7 +235,7 @@ async def _convert():
 
     try:
         while not conv.done():
-            os.write(2, f"[매프레임] step {watcher.step} {watcher.value * 100:.1f}% | {watcher.desc}\n".encode())
+            _err(f"[매프레임] step {watcher.step} {watcher.value * 100:.1f}% | {watcher.desc}")
             await app.next_update_async()
     finally:
         for s in shields:
