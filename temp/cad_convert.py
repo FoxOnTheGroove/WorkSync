@@ -159,7 +159,7 @@ class ProgressWatcher:
         except ValueError:
             return False
 
-    def feed(self, text: str):
+    def feed(self, text: str, origin: str = "?"):
         if "hoops_progress" not in text:
             return
         try:
@@ -190,9 +190,9 @@ class ProgressWatcher:
                 elif m and m[-1] and m[-1] not in self._MARKERS and not self._is_number(m[-1]):
                     self.desc = m[-1]                         # 설명문 (마지막 필드)
 
-            # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력
+            # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력. origin 은 유입 경로(carb/fd1)
             # (tap 중에는 stdout 이 파이프이므로 stderr 로)
-            os.write(2, f"[반응형] step {self.step} {self.value * 100:.1f}% | {self.desc}\n".encode())
+            os.write(2, f"[반응형/{origin}] step {self.step} {self.value * 100:.1f}% | {self.desc}\n".encode())
         except Exception:
             pass
 
@@ -205,13 +205,13 @@ async def _convert():
 
     # 수집 경로 1: carb 로거 (py stdout 에코 등)
     def _on_log(source, level, filename, line_number, message):
-        watcher.feed(str(message))
+        watcher.feed(str(message), "carb")
 
     logging = carb.logging.acquire_logging()
     handle = logging.add_logger(_on_log)
 
-    # 수집 경로 2: fd1 tap (네이티브 진행 로그 - 핵심 소스)
-    tap = StdoutTap(watcher.feed)
+    # 수집 경로 2: fd1 tap (네이티브가 stdout 에 직접 쓰는 라인)
+    tap = StdoutTap(lambda line: watcher.feed(line, "fd1"))
     tap.start()
 
     # tap 중 콘솔 스트림 보호 (WinError 1 방지)
