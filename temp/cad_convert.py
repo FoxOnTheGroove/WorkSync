@@ -190,39 +190,42 @@ class ProgressWatcher:
             # carb 경유 라인은 앞에 "py stdout: " 등이 붙으므로 프리픽스 위치부터 자름.
             idx = text.find(self.PREFIX)
             line = text[idx:] if idx >= 0 else f"{self.PREFIX} {text}"
-            ret = self._consumer.extract_line(line)
-            if not ret:
-                return
 
-            # decoded_msg 에서 필드 직접 추출
-            # (파서의 타입 분류에 의존하지 않음 - prog 0.0 라인이 Begin 류로
-            #  분류되면 ret[2] 가 없어서 이전 값이 유지되는 문제 방지)
-            msg = ret[1] if len(ret) > 1 else None
-            if isinstance(msg, (list, tuple)):
-                m = [str(x).strip() for x in msg]
-                if "step" in m:
-                    i = m.index("step")
-                    if i + 1 < len(m):
-                        new_step = m[i + 1]                   # "1:2"
-                        if new_step != self.step:
-                            self.step = new_step
-                            self.value = 0.0                  # 새 단계 시작
-                if "prog" in m:
-                    i = m.index("prog")
-                    if i + 1 < len(m) and self._is_number(m[i + 1]):
-                        self.value = float(m[i + 1]) / 100.0  # 0.0 ~ 1.0
-                if "end" in m:
-                    self.ended = True
-                    self.value = 1.0
-                    self.desc = "end"
-                elif m and m[-1] and m[-1] not in self._MARKERS and not self._is_number(m[-1]):
-                    self.desc = m[-1]                         # 설명문 (마지막 필드)
-            elif len(ret) > 2:
-                # decoded_msg 를 못 쓰는 경우만 파서 계산값 사용
-                self.value = float(ret[2])
+            # end 라인은 decoded_msg 형태가 달라서 원문에서 직접 감지
+            if "*end*" in line:
+                self.ended = True
+                self.value = 1.0
+                self.desc = "end"
+            else:
+                ret = self._consumer.extract_line(line)
+                if not ret:
+                    return
 
-            # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력. origin 은 유입 경로(carb/fd1)
-            _err(f"[반응형/{origin}] step {self.step} {self.value * 100:.1f}% | {self.desc}")
+                # decoded_msg 에서 필드 직접 추출
+                # (파서의 타입 분류에 의존하지 않음 - prog 0.0 라인이 Begin 류로
+                #  분류되면 ret[2] 가 없어서 이전 값이 유지되는 문제 방지)
+                msg = ret[1] if len(ret) > 1 else None
+                if isinstance(msg, (list, tuple)):
+                    m = [str(x).strip() for x in msg]
+                    if "step" in m:
+                        i = m.index("step")
+                        if i + 1 < len(m):
+                            new_step = m[i + 1]                   # "1:2"
+                            if new_step != self.step:
+                                self.step = new_step
+                                self.value = 0.0                  # 새 단계 시작
+                    if "prog" in m:
+                        i = m.index("prog")
+                        if i + 1 < len(m) and self._is_number(m[i + 1]):
+                            self.value = float(m[i + 1]) / 100.0  # 0.0 ~ 1.0
+                    if m and m[-1] and m[-1] not in self._MARKERS and not self._is_number(m[-1]):
+                        self.desc = m[-1]                         # 현재 과정 (마지막 필드)
+                elif len(ret) > 2:
+                    # decoded_msg 를 못 쓰는 경우만 파서 계산값 사용
+                    self.value = float(ret[2])
+
+            # 반응형: 태그, 현재 과정(desc), progress 순서로 즉시 출력
+            _err(f"[반응형/{origin}] {self.desc} {self.value * 100:.1f}%")
         except Exception:
             pass
 
@@ -254,7 +257,7 @@ async def _convert():
 
     try:
         while not conv.done():
-            _err(f"[매프레임] step {watcher.step} {watcher.value * 100:.1f}% | {watcher.desc}")
+            _err(f"[매프레임] {watcher.desc} {watcher.value * 100:.1f}%")
             await app.next_update_async()
     finally:
         for s in shields:
