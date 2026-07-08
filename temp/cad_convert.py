@@ -65,6 +65,10 @@ class ProgressWatcher:
             elif len(ret) > 1:
                 self.step = " ".join(str(x) for x in ret[1])
                 self.value = 0.0                      # 새 단계 시작
+            else:
+                return
+            # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력
+            print(f"[반응형] {self.step} {self.value * 100:.1f}%")
         except Exception:
             pass
 
@@ -87,7 +91,7 @@ async def _convert():
 
     try:
         while not conv.done():
-            print(f"[진행도] {watcher.step} {watcher.value * 100:.1f}%")
+            print(f"[매프레임] {watcher.step} {watcher.value * 100:.1f}%")
             await app.next_update_async()
     finally:
         logging.remove_logger(handle)
