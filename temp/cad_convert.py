@@ -2,11 +2,12 @@
 Script Editor 에서 실행 - STEP -> USD 변환 + 진행도 추적 (HoopsCoreConverter)
 
 구조:
-  1. fd1(C stdout) tap + carb 로거로 모든 로그 라인 수집
-     (HOOPS 네이티브 진행 로그는 fd1 에만 나오므로 tap 이 필수)
-  2. hoops_progress 라인만 ProgressLogConsumer 로 파싱해 캐시에 저장 (push)
-     - 갱신 즉시 [반응형] 출력
-  3. 매 프레임 루프가 캐시된 현재 진행도를 [매프레임] 으로 출력 (pull)
+  1. fd1(C stdout) tap 으로 로그 라인 수집
+     (HOOPS 네이티브 진행 로그는 fd1 에만 나오므로 tap 이 유일한 경로)
+  2. hoops_progress 라인만 ProgressLogConsumer 로 파싱해 상태로 저장
+  3. 접근 API 두 가지:
+     - on_progress_changed(cb) : 갱신 즉시 콜백 (push) -> [반응형]
+     - get_current_state()     : 원할 때 조회 (pull)  -> [매프레임]
 
 fd1 을 파이프로 돌리는 동안 파이썬 콘솔 스트림이 WriteConsoleW 를 파이프에
 호출하면 OSError(WinError 1) 가 나므로, sys.stdout/stderr 의 write 를
@@ -20,7 +21,6 @@ import sys
 import locale
 import asyncio
 import threading
-import carb.logging
 import omni.kit.app
 import omni.kit.async_engine
 import omni.kit.converter.hoops_core as hoops_mod
@@ -34,16 +34,15 @@ DEST_PATH   = r"C:/data/out/model.usd"
 
 
 # file_format_args 는 dict[str, str] - 값 전부 문자열
-# 진행/상태 로그가 최대한 많이 나오도록 리포팅 옵션 전부 켬 (신규/레거시 키 둘 다)
 CONVERT_OPTIONS = {
     "upAxis"            : "1",      # 1=Y-up
     "tessLOD"           : "2",      # 2=Medium
     "bInstancing"       : "false",  # 인스턴싱 비활성화
     "useMaterials"      : "false",  # 재질 없음
     "dMetersPerUnit"    : "1.0",
+    # 진행 로그(*step*/*prog*) 는 이 옵션에 게이트됨 - 진행률 추적하려면 필수
     "reportProgress"    : "true",
-    "bReportProgress"   : "true",
-    "reportProgressFreq": "10.0",   # 초당 리포팅 횟수 [1~10] 최대
+    "reportProgressFreq": "10.0",   # 초당 리포팅 상한 [1~10]
 }
 
 
@@ -194,12 +193,11 @@ class ProgressWatcher:
 
     # ---------- 로그 유입 ----------
 
-    def feed(self, text: str, origin: str = "?"):
+    def feed(self, text: str):
         if "hoops_progress" not in text:
             return
         try:
-            # 파서는 프리픽스로 시작하는 라인을 기대함.
-            # carb 경유 라인은 앞에 "py stdout: " 등이 붙으므로 프리픽스 위치부터 자름.
+            # 파서는 프리픽스로 시작하는 라인을 기대함 - 프리픽스 위치부터 자름.
             idx = text.find(self.PREFIX)
             line = text[idx:] if idx >= 0 else f"{self.PREFIX} {text}"
             parts = [p.strip() for p in line.split("*")]
@@ -244,15 +242,8 @@ async def _convert():
         lambda step_type, desc, value: _err(f"[반응형] {desc} {value * 100:.1f}%")
     )
 
-    # 수집 경로 1: carb 로거 (py stdout 에코 등)
-    def _on_log(source, level, filename, line_number, message):
-        watcher.feed(str(message), "carb")
-
-    logging = carb.logging.acquire_logging()
-    handle = logging.add_logger(_on_log)
-
-    # 수집 경로 2: fd1 tap (네이티브가 stdout 에 직접 쓰는 라인)
-    tap = StdoutTap(lambda line: watcher.feed(line, "fd1"))
+    # 진행 로그는 네이티브가 fd1(stdout)에 직접 쓰므로 tap 이 유일한 수집 경로
+    tap = StdoutTap(watcher.feed)
     tap.start()
 
     # tap 중 콘솔 스트림 보호 (WinError 1 방지)
@@ -273,7 +264,6 @@ async def _convert():
         for s in shields:
             _unshield_write(s)
         tap.stop()
-        logging.remove_logger(handle)
 
     try:
         result = conv.result()
