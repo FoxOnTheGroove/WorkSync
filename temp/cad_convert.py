@@ -2,14 +2,23 @@
 Script Editor 에서 실행 - STEP -> USD 변환 + 진행도 추적 (HoopsCoreConverter)
 
 구조:
-  1. carb 로거로 들어오는 모든 로그 라인 수집 (py stdout 에코 포함)
+  1. fd1(C stdout) tap + carb 로거로 모든 로그 라인 수집
+     (HOOPS 네이티브 진행 로그는 fd1 에만 나오므로 tap 이 필수)
   2. hoops_progress 라인만 ProgressLogConsumer 로 파싱해 캐시에 저장 (push)
-  3. 매 프레임 루프가 캐시된 현재 진행도를 출력 (pull)
+     - 갱신 즉시 [반응형] 출력
+  3. 매 프레임 루프가 캐시된 현재 진행도를 [매프레임] 으로 출력 (pull)
+
+fd1 을 파이프로 돌리는 동안 파이썬 콘솔 스트림이 WriteConsoleW 를 파이프에
+호출하면 OSError(WinError 1) 가 나므로, sys.stdout/stderr 의 write 를
+보호막으로 감싸 변환 태스크가 죽지 않게 한다.
 
 사전 조건: Extension Manager 에서 omni.kit.converter.hoops_core 활성화
 """
 
+import os
+import sys
 import asyncio
+import threading
 import carb.logging
 import omni.kit.app
 import omni.kit.async_engine
@@ -37,10 +46,94 @@ CONVERT_OPTIONS = {
 }
 
 
+# ---------------- fd1 tap ----------------
+
+class StdoutTap:
+    """C 레벨 stdout(fd 1)을 파이프로 복제해 라인 콜백으로 전달.
+
+    HOOPS 네이티브 진행 로그는 fd1 에 직접 쓰므로 이 방법으로만 잡힌다.
+    읽은 내용은 원본 콘솔로 그대로 통과시킨다.
+    """
+
+    def __init__(self, on_line):
+        self._on_line = on_line
+        self._saved_fd = None
+        self._read_fd = None
+        self._thread = None
+
+    def start(self):
+        sys.stdout.flush()
+        self._saved_fd = os.dup(1)
+        r, w = os.pipe()
+        os.dup2(w, 1)
+        os.close(w)
+        self._read_fd = r
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self):
+        buf = b""
+        while True:
+            try:
+                chunk = os.read(self._read_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            os.write(self._saved_fd, chunk)   # 원본 콘솔로 그대로 통과
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                try:
+                    self._on_line(line.decode("utf-8", "ignore"))
+                except Exception:
+                    pass
+
+    def stop(self):
+        if self._saved_fd is not None:
+            os.dup2(self._saved_fd, 1)    # fd1 원복 -> pump 종료
+            os.close(self._saved_fd)
+            self._saved_fd = None
+        if self._read_fd is not None:
+            try:
+                os.close(self._read_fd)
+            except OSError:
+                pass
+            self._read_fd = None
+
+
+def _shield_write(stream):
+    """stream.write 에서 나는 OSError(WinError 1 등)를 삼키는 보호막. 복원용 튜플 반환."""
+    orig = getattr(stream, "write", None)
+    if orig is None:
+        return None
+    def _safe(s, _orig=orig):
+        try:
+            return _orig(s)
+        except OSError:
+            return len(s)
+    try:
+        stream.write = _safe
+    except (AttributeError, TypeError):
+        return None   # C 구현 스트림이면 패치 불가 - 그대로 둠
+    return (stream, orig)
+
+
+def _unshield_write(saved):
+    if saved:
+        stream, orig = saved
+        try:
+            stream.write = orig
+        except (AttributeError, TypeError):
+            pass
+
+
+# ---------------- 진행도 캐시 ----------------
+
 class ProgressWatcher:
     """들어오는 로그 라인을 ProgressLogConsumer 로 파싱해 최신 진행도를 캐시.
 
-    feed()  : 로그 라인 유입 (push) - 단순 대입만 수행
+    feed()  : 로그 라인 유입 (push) - 갱신 시 [반응형] 즉시 출력
     step / value : 현재 단계명 / 진행도(0.0~1.0) 조회 (pull)
     """
 
@@ -63,27 +156,39 @@ class ProgressWatcher:
             if len(ret) > 2 and "progress" in type_name:
                 self.value = float(ret[2])            # 0.0 ~ 1.0
             elif len(ret) > 1:
-                self.step = " ".join(str(x) for x in ret[1])
+                msg = ret[1]
+                self.step = (" ".join(str(x) for x in msg)
+                             if isinstance(msg, (list, tuple)) else str(msg))
                 self.value = 0.0                      # 새 단계 시작
             else:
                 return
             # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력
-            print(f"[반응형] {self.step} {self.value * 100:.1f}%")
+            # (tap 중에는 stdout 이 파이프이므로 stderr 로)
+            os.write(2, f"[반응형] {self.step} {self.value * 100:.1f}%\n".encode())
         except Exception:
             pass
 
+
+# ---------------- 메인 ----------------
 
 async def _convert():
     converter = hoops_mod.get_instance()
     watcher = ProgressWatcher()
 
+    # 수집 경로 1: carb 로거 (py stdout 에코 등)
     def _on_log(source, level, filename, line_number, message):
         watcher.feed(str(message))
 
     logging = carb.logging.acquire_logging()
     handle = logging.add_logger(_on_log)
 
-    # 변환을 별도 태스크로 돌리고, 매 프레임 캐시된 진행도 출력
+    # 수집 경로 2: fd1 tap (네이티브 진행 로그 - 핵심 소스)
+    tap = StdoutTap(watcher.feed)
+    tap.start()
+
+    # tap 중 콘솔 스트림 보호 (WinError 1 방지)
+    shields = [_shield_write(sys.stdout), _shield_write(sys.stderr)]
+
     conv = asyncio.ensure_future(
         converter.create_converter_task(TARGET_PATH, DEST_PATH, CONVERT_OPTIONS)
     )
@@ -91,9 +196,12 @@ async def _convert():
 
     try:
         while not conv.done():
-            print(f"[매프레임] {watcher.step} {watcher.value * 100:.1f}%")
+            os.write(2, f"[매프레임] {watcher.step} {watcher.value * 100:.1f}%\n".encode())
             await app.next_update_async()
     finally:
+        for s in shields:
+            _unshield_write(s)
+        tap.stop()
         logging.remove_logger(handle)
 
     try:
@@ -102,7 +210,7 @@ async def _convert():
         print(f"[실패] {type(e).__name__}: {e}")
         return
 
-    print(f"[완료] {watcher.step} 100.0% | {result}")
+    print(f"[완료] {result}")
 
 
 omni.kit.async_engine.run_coroutine(_convert())
