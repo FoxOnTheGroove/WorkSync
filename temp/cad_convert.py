@@ -133,16 +133,31 @@ def _unshield_write(saved):
 class ProgressWatcher:
     """들어오는 로그 라인을 ProgressLogConsumer 로 파싱해 최신 진행도를 캐시.
 
+    로그 한 라인에 필드가 * 구분자로 같이 들어옴:
+      [omni.converter.hoops_progress]*step*1:2*prog*100.0*Completed Reading CAD model...
+      [omni.converter.hoops_progress]*end*0*
+
     feed()  : 로그 라인 유입 (push) - 갱신 시 [반응형] 즉시 출력
-    step / value : 현재 단계명 / 진행도(0.0~1.0) 조회 (pull)
+    step / value / desc : 단계(예 1:2) / 진행도(0.0~1.0) / 설명 조회 (pull)
     """
 
     PREFIX = "[omni.converter.hoops_progress]"
+    _MARKERS = {"step", "prog", "Begin", "end"}
 
     def __init__(self):
         self._consumer = ProgressLogConsumer(self.PREFIX)
-        self.step = ""
-        self.value = 0.0
+        self.step = ""     # 예: "1:2"
+        self.value = 0.0   # 0.0 ~ 1.0
+        self.desc = ""     # 예: "Completed Reading CAD model..."
+        self.ended = False
+
+    @staticmethod
+    def _is_number(s: str) -> bool:
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
 
     def feed(self, text: str):
         if "hoops_progress" not in text:
@@ -152,19 +167,29 @@ class ProgressWatcher:
             ret = self._consumer.extract_line(line)
             if not ret:
                 return
-            type_name = getattr(ret[0], "name", str(ret[0])).lower()
-            if len(ret) > 2 and "progress" in type_name:
-                self.value = float(ret[2])            # 0.0 ~ 1.0
-            elif len(ret) > 1:
-                msg = ret[1]
-                self.step = (" ".join(str(x) for x in msg)
-                             if isinstance(msg, (list, tuple)) else str(msg))
-                self.value = 0.0                      # 새 단계 시작
-            else:
-                return
+
+            # PROGRESS 타입이면 파서가 계산해준 0~1 값
+            if len(ret) > 2:
+                self.value = float(ret[2])
+
+            # decoded_msg 에서 필드 직접 추출
+            msg = ret[1] if len(ret) > 1 else None
+            if isinstance(msg, (list, tuple)):
+                m = [str(x).strip() for x in msg]
+                if "step" in m:
+                    i = m.index("step")
+                    if i + 1 < len(m):
+                        self.step = m[i + 1]                  # "1:2"
+                if "end" in m:
+                    self.ended = True
+                    self.value = 1.0
+                    self.desc = "end"
+                elif m and m[-1] and m[-1] not in self._MARKERS and not self._is_number(m[-1]):
+                    self.desc = m[-1]                         # 설명문 (마지막 필드)
+
             # 반응형: 로그가 도착해 상태가 갱신된 순간 즉시 출력
             # (tap 중에는 stdout 이 파이프이므로 stderr 로)
-            os.write(2, f"[반응형] {self.step} {self.value * 100:.1f}%\n".encode())
+            os.write(2, f"[반응형] step {self.step} {self.value * 100:.1f}% | {self.desc}\n".encode())
         except Exception:
             pass
 
@@ -196,7 +221,7 @@ async def _convert():
 
     try:
         while not conv.done():
-            os.write(2, f"[매프레임] {watcher.step} {watcher.value * 100:.1f}%\n".encode())
+            os.write(2, f"[매프레임] step {watcher.step} {watcher.value * 100:.1f}% | {watcher.desc}\n".encode())
             await app.next_update_async()
     finally:
         for s in shields:
