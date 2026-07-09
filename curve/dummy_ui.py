@@ -17,6 +17,7 @@ class LinesOptimizeUI:
         self._voxel_field: ui.FloatField | None = None
         self._res_field: ui.IntField | None = None
         self._radius_field: ui.FloatField | None = None
+        self._levels_field: ui.IntField | None = None
         self._density_cb: ui.CheckBox | None = None
         self._status: ui.Label | None = None
 
@@ -42,6 +43,9 @@ class LinesOptimizeUI:
                     ui.Label("Radius x:", width=80)
                     self._radius_field = ui.FloatField(width=90)
                     self._radius_field.model.set_value(0.5)
+                    ui.Label("Color Levels:", width=85)
+                    self._levels_field = ui.IntField(width=60)
+                    self._levels_field.model.set_value(4)
                     ui.Label("Density→Scale:", width=100)
                     self._density_cb = ui.CheckBox(width=24)
 
@@ -67,12 +71,14 @@ class LinesOptimizeUI:
         voxel = self._voxel_field.model.get_value_as_float()
         res = self._res_field.model.get_value_as_int()
         radius = self._radius_field.model.get_value_as_float()
+        levels = self._levels_field.model.get_value_as_int()
         density = self._density_cb.model.get_value_as_bool()
         self._set_status("처리 중...")
         try:
             msg = optimize_and_load(
                 path, voxel_size=voxel, resolution=res,
-                radius_factor=radius, density_to_scale=density)
+                radius_factor=radius, density_to_scale=density,
+                color_levels=levels)
         except Exception as e:  # noqa: BLE001
             msg = f"ERROR: {e}"
             import traceback
