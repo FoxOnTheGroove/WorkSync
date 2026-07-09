@@ -58,11 +58,11 @@ class LinesOptimizeUI:
                     self._run_btn = ui.Button(
                         "Voxelize & Load", clicked_fn=self._on_run)
 
-                self._status = ui.Label("Status: 대기 중", word_wrap=True)
+                self._status = ui.Label("Status: idle", word_wrap=True)
 
     def _on_inspect(self):
         path = self._path_field.model.get_value_as_string().strip()
-        self._set_status("진단 중...")
+        self._set_status("Inspecting...")
         try:
             msg = inspect_source(path)
         except Exception as e:  # noqa: BLE001
@@ -73,7 +73,7 @@ class LinesOptimizeUI:
 
     def _on_run(self):
         if self._task and not self._task.done():
-            self._set_status("이미 처리 중입니다...")
+            self._set_status("Already running...")
             return
         path = self._path_field.model.get_value_as_string().strip()
         voxel = self._voxel_field.model.get_value_as_float()
@@ -88,7 +88,7 @@ class LinesOptimizeUI:
     async def _run_async(self, path, voxel, res, radius, levels, density):
         if self._run_btn:
             self._run_btn.enabled = False
-        self._set_status("처리 중...")
+        self._set_status("Processing...")
         try:
             msg = await optimize_and_load_async(
                 path, voxel_size=voxel, resolution=res,

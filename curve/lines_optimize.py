@@ -142,7 +142,7 @@ def inspect_source(source_path: str) -> str:
     """타입 분포 / 인스턴싱 / time-sample / 색 중복 여부를 진단한다."""
     src = Usd.Stage.Open(source_path)
     if not src:
-        return f"ERROR: 열 수 없음: {source_path}"
+        return f"ERROR: cannot open: {source_path}"
 
     tc = _pick_timecode(src)
     types: Counter = Counter()
@@ -164,19 +164,19 @@ def inspect_source(source_path: str) -> str:
                 colors.append(c)
 
     # 색 중복/고유 분석
-    color_line = "colors: 없음"
+    color_line = "colors: none"
     if colors:
         arr = np.array(colors)
         exact = len(np.unique(np.round(arr, 4), axis=0))
         approx = len(np.unique(np.round(arr, 1), axis=0))  # ~10% 톨러런스
-        color_line = (f"colors: {len(colors)}개 읽음 | 고유(round4)={exact} | "
-                      f"유사묶음(round1)={approx}")
+        color_line = (f"colors: {len(colors)} read | unique(round4)={exact} | "
+                      f"grouped(round1)={approx}")
 
     n_proto = len(src.GetPrototypes())
     top = ", ".join(f"{t}:{c}" for t, c in types.most_common(15))
-    return (f"곡선={n_curve} | default-pts={n_def} | timesampled-pts={n_ts} | "
+    return (f"curves={n_curve} | default-pts={n_def} | timesampled-pts={n_ts} | "
             f"instanceable={n_inst} | prototypes={n_proto}\n{color_line}\n"
-            f"타입분포: {top}")
+            f"types: {top}")
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +253,7 @@ async def _collect_curves_async(stage: Usd.Stage, report=None, chunk: int = 20):
                 cl.append(color)
         if n % chunk == 0:
             if report:
-                report(f"곡선 읽는 중... {n}")
+                report(f"reading curves... {n}")
             await app.next_update_async()
     return pl, cl, n, skipped
 
@@ -441,26 +441,26 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
     """
     src = Usd.Stage.Open(source_path)
     if not src:
-        return f"ERROR: 열 수 없음: {source_path}"
+        return f"ERROR: cannot open: {source_path}"
 
     points_list, colors_list, src_prim_count, skipped_empty = _collect_curves(src)
     if not points_list:
         hint = ""
         if skipped_empty:
-            hint = (f"\n(곡선 {skipped_empty}개가 points/counts 를 읽지 못해 스킵됨 "
-                    "— time-sample 이거나 빈 곡선일 수 있음)")
-        return (f"ERROR: 유효한 곡선을 찾지 못함: {source_path}{hint}\n"
+            hint = (f"\n({skipped_empty} curve(s) skipped: points/counts "
+                    "unreadable - time-sampled or empty)")
+        return (f"ERROR: no valid curves found: {source_path}{hint}\n"
                 f"{inspect_source(source_path)}")
 
     n_src_pts = sum(len(p) for p in points_list)
 
     mins, maxs = _world_bounds(src)
     if mins is None:
-        return "ERROR: world bbox 계산 실패"
+        return "ERROR: failed to compute world bbox"
     if voxel_size <= 0.0:
         voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
     if voxel_size <= 0.0:
-        return "ERROR: voxel_size 산출 실패 (bbox 크기 0)"
+        return "ERROR: failed to derive voxel_size (empty bbox)"
 
     origin = mins.astype(np.float64)
     centers, counts, mean_colors = _voxelize(
@@ -469,7 +469,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
 
     stage = omni.usd.get_context().get_stage()
     if stage is None:
-        return "ERROR: 활성 stage 가 없음 (씬을 먼저 열어주세요)"
+        return "ERROR: no active stage (open a scene first)"
     if not stage.GetPrimAtPath("/World"):
         UsdGeom.Xform.Define(stage, "/World")
 
@@ -484,9 +484,9 @@ def _result_msg(n_curves, n_src_pts, n_voxels, n_protos, voxel_size):
     print(f"[curve] voxelize: curves {n_curves}, pts {n_src_pts} -> "
           f"instances {n_voxels}, color-buckets {n_protos}, "
           f"voxel_size={voxel_size:.4g}")
-    return (f"OK: 곡선 {n_curves} / 정점 {n_src_pts} → 인스턴스 {n_voxels}개 "
-            f"(복셀당 1, 색평균) | 색버킷 {n_protos}개 | voxel={voxel_size:.4g} | "
-            f"{MERGED_PATH}")
+    return (f"OK: curves {n_curves} / pts {n_src_pts} -> {n_voxels} instances "
+            f"(1 per voxel, color-averaged) | color-buckets {n_protos} | "
+            f"voxel={voxel_size:.4g} | {MERGED_PATH}")
 
 
 async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
@@ -507,32 +507,32 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
 
     src = Usd.Stage.Open(source_path)
     if not src:
-        return f"ERROR: 열 수 없음: {source_path}"
+        return f"ERROR: cannot open: {source_path}"
 
-    report("곡선 읽는 중...")
+    report("reading curves...")
     points_list, colors_list, src_prim_count, skipped_empty = \
         await _collect_curves_async(src, report)
     if not points_list:
         hint = ""
         if skipped_empty:
-            hint = (f"\n(곡선 {skipped_empty}개가 points/counts 를 읽지 못해 스킵됨 "
-                    "— time-sample 이거나 빈 곡선일 수 있음)")
-        return (f"ERROR: 유효한 곡선을 찾지 못함: {source_path}{hint}\n"
+            hint = (f"\n({skipped_empty} curve(s) skipped: points/counts "
+                    "unreadable - time-sampled or empty)")
+        return (f"ERROR: no valid curves found: {source_path}{hint}\n"
                 f"{inspect_source(source_path)}")
 
     n_src_pts = sum(len(p) for p in points_list)
 
     mins, maxs = _world_bounds(src)
     if mins is None:
-        return "ERROR: world bbox 계산 실패"
+        return "ERROR: failed to compute world bbox"
     if voxel_size <= 0.0:
         voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
     if voxel_size <= 0.0:
-        return "ERROR: voxel_size 산출 실패 (bbox 크기 0)"
+        return "ERROR: failed to derive voxel_size (empty bbox)"
     origin = mins.astype(np.float64)
 
     # 무거운 순수-numpy 연산은 백그라운드 스레드에서
-    report("복셀화 중 (백그라운드)...")
+    report("voxelizing (background)...")
     loop = asyncio.get_event_loop()
     centers, counts, mean_colors = await loop.run_in_executor(
         None, _voxelize, points_list, colors_list, origin, voxel_size)
@@ -541,11 +541,11 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
 
     stage = omni.usd.get_context().get_stage()
     if stage is None:
-        return "ERROR: 활성 stage 가 없음 (씬을 먼저 열어주세요)"
+        return "ERROR: no active stage (open a scene first)"
     if not stage.GetPrimAtPath("/World"):
         UsdGeom.Xform.Define(stage, "/World")
 
-    report("씬에 로드 중...")
+    report("loading into scene...")
     await omni.kit.app.get_app().next_update_async()
     n_protos, n_voxels = _author(
         stage, centers, counts, bucket_idx, reps, voxel_size,
