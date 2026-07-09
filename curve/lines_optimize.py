@@ -133,16 +133,36 @@ def _curve_color(prim: Usd.Prim, tc):
     return _material_color(_find_material_prim(prim), tc)
 
 
-def _group_key(prim: Usd.Prim, depth: int) -> str:
-    """곡선 prim 의 조상 경로를 depth 만큼 잘라 그룹 키로 사용.
+def _parse_group_paths(text: str) -> list:
+    """UI 입력("/root/target, /root/target2")을 대상 경로 리스트로 파싱한다."""
+    if not text:
+        return []
+    out = []
+    for tok in text.replace("\n", ",").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if not tok.startswith("/"):
+            tok = "/" + tok
+        out.append(tok.rstrip("/"))
+    return out
 
-    예) /a/b/line1, depth=2 → "/a/b" | /a/c/line5, depth=2 → "/a/c"
-    depth<=0 이면 그룹 분류 없음("all").
+
+def _group_for_path(path_str: str, targets: list) -> str:
+    """곡선 경로가 어느 대상 xform 하위인지 판별해 그룹 키를 반환.
+
+    예) targets=["/root/target","/root/target2"] 일 때
+        /root/target/b/line1  → "/root/target"
+        /root/target2/line5   → "/root/target2"
+        어느 대상에도 안 속함  → "ungrouped"
+    targets 가 비면 전부 "all" (그룹 분류 없음).
     """
-    if depth <= 0:
+    if not targets:
         return "all"
-    parts = prim.GetPath().pathString.strip("/").split("/")
-    return "/" + "/".join(parts[:depth]) if parts and parts[0] else "all"
+    for t in targets:
+        if path_str == t or path_str.startswith(t + "/"):
+            return t
+    return "ungrouped"
 
 
 def _safe_name(key: str, idx: int) -> str:
@@ -230,8 +250,9 @@ def _extract_curve(prim: Usd.Prim, tc, xform_cache):
     return segs, color
 
 
-def _collect_curves(stage: Usd.Stage, group_depth: int = 0):
+def _collect_curves(stage: Usd.Stage, group_paths: list = None):
     """동기 수집. return: (points_list, colors_list, groups_list, n, skipped)."""
+    targets = group_paths or []
     tc = _pick_timecode(stage)
     xc = UsdGeom.XformCache(tc)
     pl, cl, gl, n, skipped = [], [], [], 0, 0
@@ -244,7 +265,7 @@ def _collect_curves(stage: Usd.Stage, group_depth: int = 0):
             skipped += 1
             continue
         segs, color = r
-        gkey = _group_key(prim, group_depth)
+        gkey = _group_for_path(prim.GetPath().pathString, targets)
         for s in segs:
             pl.append(s)
             cl.append(color)
@@ -252,12 +273,19 @@ def _collect_curves(stage: Usd.Stage, group_depth: int = 0):
     return pl, cl, gl, n, skipped
 
 
-async def _collect_curves_async(stage: Usd.Stage, group_depth: int = 0,
+async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
                                 report=None, chunk: int = 20):
-    """비동기 수집: chunk 개마다 UI 에 양보(next_update_async)해 Kit 멈춤 방지."""
+    """비동기 수집: chunk 개마다 UI 에 양보(next_update_async)해 Kit 멈춤 방지.
+
+    진행률(%) 표기를 위해 먼저 곡선 prim 개수를 빠르게 센다.
+    """
+    targets = group_paths or []
     tc = _pick_timecode(stage)
     xc = UsdGeom.XformCache(tc)
     app = omni.kit.app.get_app()
+
+    total = sum(1 for p in _traverse_all(stage) if _is_curve(p))
+
     pl, cl, gl, n, skipped = [], [], [], 0, 0
     for prim in _traverse_all(stage):
         if not _is_curve(prim):
@@ -268,14 +296,14 @@ async def _collect_curves_async(stage: Usd.Stage, group_depth: int = 0,
             skipped += 1
         else:
             segs, color = r
-            gkey = _group_key(prim, group_depth)
+            gkey = _group_for_path(prim.GetPath().pathString, targets)
             for s in segs:
                 pl.append(s)
                 cl.append(color)
                 gl.append(gkey)
         if n % chunk == 0:
-            if report:
-                report(f"reading curves... {n}")
+            if report and total:
+                report(f"[1/3] reading curves... {100 * n // total}% ({n}/{total})")
             await app.next_update_async()
     return pl, cl, gl, n, skipped
 
@@ -419,7 +447,8 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
     for k, rep in enumerate(reps):
         proto_path = f"{proto_scope}/proto_{k}"
         sphere = UsdGeom.Sphere.Define(stage, proto_path)
-        sphere.CreateRadiusAttr(1.0)
+        # radius 를 프로토타입에 두면 이후 슬라이더로 전 인스턴스 일괄 조정 가능
+        sphere.CreateRadiusAttr(float(radius_factor))
         col = Gf.Vec3f(float(rep[0]), float(rep[1]), float(rep[2]))
         sphere.CreateDisplayColorAttr(Vt.Vec3fArray([col]))
         # RTX 에서 확실히 보이도록 대표색 UsdPreviewSurface 바인딩
@@ -433,8 +462,9 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
         UsdShade.MaterialBindingAPI.Apply(sphere.GetPrim()).Bind(mat)
         proto_paths.append(Sdf.Path(proto_path))
 
-    # 밀도 → scale (옵션): count 로그 정규화 0.5~1.5 배
-    base = float(voxel_size) * float(radius_factor)
+    # scale 에는 voxel 크기(+밀도 옵션)만 넣고, 반경은 프로토타입 radius 가 담당
+    # → 슬라이더가 proto radius 만 바꿔도 전 인스턴스가 즉시 리사이즈된다
+    base = float(voxel_size)
     if density_to_scale and len(counts) > 0:
         cmax = float(counts.max())
         norm = np.log1p(counts.astype(np.float64)) / np.log1p(max(cmax, 1.0))
@@ -449,6 +479,26 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
     instancer.CreateScalesAttr(_vec3f_array(scales_np))
 
     return len(proto_paths), len(centers)
+
+
+def set_sphere_radius(radius: float) -> str:
+    """최적화 결과의 모든 프로토타입 구 radius 를 일괄 변경한다 (라이브 슬라이더용).
+
+    인스턴스 scale 은 voxel 크기만 담고 있으므로, 프로토타입 radius 몇 개만
+    고치면 전체 인스턴스가 즉시 리사이즈된다.
+    """
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage"
+    root = stage.GetPrimAtPath(MERGED_PATH)
+    if not root:
+        return "ERROR: no optimized result in scene (run Voxelize first)"
+    n = 0
+    for prim in Usd.PrimRange(root):
+        if prim.IsA(UsdGeom.Sphere):
+            UsdGeom.Sphere(prim).GetRadiusAttr().Set(float(radius))
+            n += 1
+    return f"radius={radius:.3g} applied to {n} prototype sphere(s)"
 
 
 def _partition(points_list, colors_list, groups_list):
@@ -488,12 +538,13 @@ def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups):
 
 def optimize_and_load(source_path: str, voxel_size: float = 0.0,
                       resolution: int = 128, radius_factor: float = 0.5,
-                      density_to_scale: bool = False, color_levels: int = 4,
-                      group_depth: int = 0) -> str:
+                      density_to_scale: bool = False, color_levels: int = 8,
+                      group_paths: list = None) -> str:
     """streamline USD 를 색-인지 복셀 다운샘플링해 현재 씬에 로드한다.
 
     - 복셀당 인스턴스 1개, 겹치는 색은 평균 / 비슷한 색은 color_levels 로 버킷 양자화
-    - group_depth>0 이면 조상 경로 depth 기준으로 그룹을 나눠 각각 별도 PointInstancer
+    - group_paths(대상 xform 경로 리스트)가 있으면 각 경로 하위 곡선끼리 그룹으로
+      묶어 별도 PointInstancer 저작 (어디에도 안 속하면 'ungrouped')
     - voxel_size<=0 이면 root world bbox 최대변 / resolution 으로 자동 산출
     """
     src = Usd.Stage.Open(source_path)
@@ -501,7 +552,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         return f"ERROR: cannot open: {source_path}"
 
     points_list, colors_list, groups_list, _n, skipped_empty = \
-        _collect_curves(src, group_depth)
+        _collect_curves(src, group_paths)
     if not points_list:
         hint = ""
         if skipped_empty:
@@ -547,12 +598,14 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
                                   resolution: int = 128,
                                   radius_factor: float = 0.5,
                                   density_to_scale: bool = False,
-                                  color_levels: int = 4, group_depth: int = 0,
+                                  color_levels: int = 8,
+                                  group_paths: list = None,
                                   progress=None) -> str:
     """optimize_and_load 의 비동기 버전 — Kit 멈춤 방지.
 
     - USD 읽기: 주기적으로 UI 에 양보 / 무거운 numpy: 백그라운드 스레드 오프로드
     - 그룹마다 별도 PointInstancer 저작, 그룹 사이에 한 프레임 양보
+    - progress 콜백에 단계별 진행률(%)을 보고: [1/3] read, [2/3] voxelize, [3/3] author
     """
     def report(msg):
         if progress:
@@ -562,9 +615,9 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
     if not src:
         return f"ERROR: cannot open: {source_path}"
 
-    report("reading curves...")
+    report("[1/3] reading curves... 0%")
     points_list, colors_list, groups_list, _n, skipped_empty = \
-        await _collect_curves_async(src, group_depth, report)
+        await _collect_curves_async(src, group_paths, report)
     if not points_list:
         hint = ""
         if skipped_empty:
@@ -591,14 +644,18 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
     loop = asyncio.get_event_loop()
     app = omni.kit.app.get_app()
     parts = _partition(points_list, colors_list, groups_list)
+    n_parts = len(parts)
     tot_vox = tot_proto = 0
     for gi, (gkey, pl, cl) in enumerate(parts):
-        report(f"voxelizing group {gi + 1}/{len(parts)} '{gkey}'...")
+        pct = 100 * gi // n_parts
+        report(f"[2/3] voxelizing... {pct}% (group {gi + 1}/{n_parts} '{gkey}')")
         centers, counts, mean_colors = await loop.run_in_executor(
             None, _voxelize, pl, cl, origin, voxel_size)
         bucket_idx, reps = await loop.run_in_executor(
             None, _quantize_colors, mean_colors, color_levels)
         await app.next_update_async()
+        pct = 100 * (2 * gi + 1) // (2 * n_parts)
+        report(f"[3/3] authoring... {pct}% (group {gi + 1}/{n_parts} '{gkey}')")
         group_root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
         n_protos, n_vox = _author_group(
             stage, group_root, centers, counts, bucket_idx, reps,
@@ -608,6 +665,7 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         tot_vox += n_vox
         tot_proto += n_protos
         await app.next_update_async()
+    report("[3/3] authoring... 100%")
 
     return _result_msg(len(points_list), n_src_pts, (tot_vox, tot_proto),
-                       voxel_size, len(parts))
+                       voxel_size, n_parts)
