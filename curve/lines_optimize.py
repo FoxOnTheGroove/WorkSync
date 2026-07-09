@@ -2,35 +2,69 @@
 
 수많은 개별 line renderer(BasisCurves) prim으로 이루어진 streamline USD는
 prim 개수 = draw call 개수가 되어 뷰포트가 심하게 버벅인다.
+
 여기서는 소스 USD의 모든 곡선을 읽어 world 공간 좌표로 변환한 뒤,
-curveVertexCounts 를 이용해 **단일 BasisCurves prim** 하나로 병합한다.
+**바인딩된 머티리얼(색)별로 그룹핑**하여 그룹마다 단일 BasisCurves prim
+하나로 병합한다. 즉 draw call 수 = 색(머티리얼) 종류 수로 줄어든다.
+원본 머티리얼은 그대로 참조 바인딩하므로 모든 색이 정확히 보존된다.
 (선택적으로 Ramer-Douglas-Peucker 데시메이션으로 정점 수도 줄인다.)
+
+머티리얼 탐색 순서:
+  1) UsdShade MaterialBindingAPI 로 바인딩된 머티리얼
+  2) 없으면 형제(sibling) 위치의 UsdShade.Material prim
+  3) 그래도 없으면 displayColor / 무색 그룹
 
 모든 실질 구현은 이 파일에 있다. UI 는 dummy_ui.py 에서 이 함수들만 호출한다.
 """
 
 import numpy as np
 
-from pxr import Usd, UsdGeom, Gf, Vt, Sdf
+from pxr import Usd, UsdGeom, UsdShade, Gf, Vt, Sdf
 import omni.usd
 
 
 MERGED_PATH = "/World/OptimizedStreamlines"
+LOOKS_PATH = MERGED_PATH + "/Looks"
+NO_MAT_KEY = "__no_material__"
 
 
 # ---------------------------------------------------------------------------
-# 1. 소스에서 곡선 수집
+# 머티리얼 탐색
+# ---------------------------------------------------------------------------
+def _find_material_path(prim: Usd.Prim):
+    """prim 의 머티리얼 경로(Sdf.Path)를 찾는다. 없으면 None.
+
+    1) 바인딩된 머티리얼  2) 형제 위치의 Material prim
+    """
+    mat, _rel = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
+    if mat and mat.GetPrim().IsValid():
+        return mat.GetPath()
+
+    parent = prim.GetParent()
+    if parent and parent.IsValid():
+        for sib in parent.GetChildren():
+            if sib != prim and sib.IsA(UsdShade.Material):
+                return sib.GetPath()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 소스에서 곡선 수집 (머티리얼별 그룹핑)
 # ---------------------------------------------------------------------------
 def _collect_curves(stage: Usd.Stage):
-    """stage 내 모든 BasisCurves 를 순회하며 world 공간 point 배열들과
-    각 곡선의 정점 개수, 대표 색을 모은다.
+    """stage 내 모든 BasisCurves 를 순회하며 머티리얼별 그룹으로 모은다.
 
-    return: (list[np.ndarray(N,3)], list[Gf.Vec3f | None], str type)
+    return: groups = {
+        matkey(str): {
+            "src": Sdf.Path | None,   # 참조할 원본 머티리얼 경로
+            "points": [np.ndarray(N,3), ...],
+            "type": "linear" | "cubic",
+            "colors": [Gf.Vec3f | None, ...],   # 머티리얼 없을 때 fallback 용
+        }
+    }
     """
     xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
-    per_curve_points: list[np.ndarray] = []
-    per_curve_color: list = []
-    curve_type = "linear"
+    groups: dict = {}
 
     for prim in stage.Traverse():
         if not prim.IsA(UsdGeom.BasisCurves):
@@ -42,33 +76,35 @@ def _collect_curves(stage: Usd.Stage):
         if not pts or not counts:
             continue
 
-        # cubic 곡선이 하나라도 있으면 결과도 cubic 유지
         t = curves.GetTypeAttr().Get(Usd.TimeCode.Default())
-        if t == "cubic":
-            curve_type = "cubic"
+        ctype = "cubic" if t == "cubic" else "linear"
+
+        mat_path = _find_material_path(prim)
+        matkey = str(mat_path) if mat_path is not None else NO_MAT_KEY
+        grp = groups.setdefault(matkey, {
+            "src": mat_path, "points": [], "type": "linear", "colors": [],
+        })
+        if ctype == "cubic":
+            grp["type"] = "cubic"
 
         # local -> world 변환
-        m = xform_cache.GetLocalToWorldTransform(prim)
+        m = np.array(xform_cache.GetLocalToWorldTransform(prim)).reshape(4, 4)
         np_pts = np.array([[p[0], p[1], p[2]] for p in pts], dtype=np.float64)
-        ones = np.ones((np_pts.shape[0], 1))
-        homo = np.hstack([np_pts, ones])
-        mat = np.array(m).reshape(4, 4)  # Gf.Matrix4d, row-major, point * M
-        world = (homo @ mat)[:, :3]
+        homo = np.hstack([np_pts, np.ones((np_pts.shape[0], 1))])
+        world = (homo @ m)[:, :3]
 
-        # 색: uniform(곡선당 1개) 또는 constant 1개면 곡선별 대표색으로 사용
         color = _representative_color(curves, len(counts))
 
-        # 하나의 prim 이 여러 곡선을 품을 수 있으므로 counts 로 잘라서 개별화
         offset = 0
         for ci, c in enumerate(counts):
             seg = world[offset:offset + c]
             offset += c
             if len(seg) < 2:
                 continue
-            per_curve_points.append(seg.astype(np.float32))
-            per_curve_color.append(color[ci] if color is not None else None)
+            grp["points"].append(seg.astype(np.float32))
+            grp["colors"].append(color[ci] if color is not None else None)
 
-    return per_curve_points, per_curve_color, curve_type
+    return groups
 
 
 def _representative_color(curves: UsdGeom.BasisCurves, n_curves: int):
@@ -80,16 +116,15 @@ def _representative_color(curves: UsdGeom.BasisCurves, n_curves: int):
     if not vals:
         return None
     interp = dc_pv.GetInterpolation()
-    if interp in ("constant",) or len(vals) == 1:
+    if interp == "constant" or len(vals) == 1:
         return [vals[0]] * n_curves
     if interp == "uniform" and len(vals) == n_curves:
         return list(vals)
-    # vertex/varying 등은 대표색으로 첫 값 사용
     return [vals[0]] * n_curves
 
 
 # ---------------------------------------------------------------------------
-# 2. 데시메이션 (Ramer-Douglas-Peucker)
+# 데시메이션 (Ramer-Douglas-Peucker)
 # ---------------------------------------------------------------------------
 def _rdp(points: np.ndarray, epsilon: float) -> np.ndarray:
     """폴리라인 정점 수를 epsilon 허용오차로 줄인다. epsilon<=0 이면 원본."""
@@ -124,43 +159,66 @@ def _rdp(points: np.ndarray, epsilon: float) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# 3. 단일 BasisCurves 로 병합하여 현재 stage 에 저장
+# 병합 & 씬에 저장
 # ---------------------------------------------------------------------------
-def _author_merged(stage: Usd.Stage, per_curve_points, per_curve_color,
-                   curve_type: str, width: float):
-    # 기존 결과가 있으면 교체
+def _author_groups(stage: Usd.Stage, groups: dict, source_path: str,
+                   epsilon: float, width: float):
     if stage.GetPrimAtPath(MERGED_PATH):
         stage.RemovePrim(MERGED_PATH)
 
-    all_points: list = []
-    counts: list[int] = []
-    colors: list = []
-    has_color = any(c is not None for c in per_curve_color)
+    UsdGeom.Xform.Define(stage, MERGED_PATH)
+    UsdGeom.Scope.Define(stage, LOOKS_PATH)
 
-    for pts, col in zip(per_curve_points, per_curve_color):
-        counts.append(len(pts))
-        all_points.extend(Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts)
-        if has_color:
-            colors.append(col if col is not None else Gf.Vec3f(0.8, 0.8, 0.8))
+    total_curves = 0
+    total_pts = 0
 
-    curves = UsdGeom.BasisCurves.Define(stage, MERGED_PATH)
-    curves.CreateTypeAttr(curve_type)
-    if curve_type == "cubic":
-        curves.CreateBasisAttr("bspline")
-        curves.CreateWrapAttr("nonperiodic")
-    curves.CreateCurveVertexCountsAttr(Vt.IntArray(counts))
-    curves.CreatePointsAttr(Vt.Vec3fArray(all_points))
+    for gi, (matkey, grp) in enumerate(sorted(groups.items())):
+        pts_list = grp["points"]
+        if not pts_list:
+            continue
+        if epsilon > 0.0:
+            pts_list = [_rdp(p, epsilon) for p in pts_list]
 
-    widths = curves.CreateWidthsAttr(Vt.FloatArray([float(width)]))
-    curves.SetWidthsInterpolation("constant")
+        group_prim_path = f"{MERGED_PATH}/group_{gi}"
+        curves = UsdGeom.BasisCurves.Define(stage, group_prim_path)
+        curves.CreateTypeAttr(grp["type"])
+        if grp["type"] == "cubic":
+            curves.CreateBasisAttr("bspline")
+            curves.CreateWrapAttr("nonperiodic")
 
-    if has_color:
-        dc = UsdGeom.PrimvarsAPI(curves).CreatePrimvar(
-            "displayColor", Sdf.ValueTypeNames.Color3fArray)
-        dc.SetInterpolation("uniform")
-        dc.Set(Vt.Vec3fArray([Gf.Vec3f(*c) for c in colors]))
+        counts: list[int] = []
+        all_points: list = []
+        for p in pts_list:
+            counts.append(len(p))
+            all_points.extend(
+                Gf.Vec3f(float(v[0]), float(v[1]), float(v[2])) for v in p)
 
-    return len(counts), len(all_points)
+        curves.CreateCurveVertexCountsAttr(Vt.IntArray(counts))
+        curves.CreatePointsAttr(Vt.Vec3fArray(all_points))
+        curves.CreateWidthsAttr(Vt.FloatArray([float(width)]))
+        curves.SetWidthsInterpolation("constant")
+
+        total_curves += len(counts)
+        total_pts += len(all_points)
+
+        # 머티리얼: 원본을 참조로 가져와 그대로 바인딩 → 색 정확 보존
+        if grp["src"] is not None:
+            dst_mat_path = f"{LOOKS_PATH}/mat_{gi}"
+            mat_prim = stage.DefinePrim(dst_mat_path)
+            mat_prim.GetReferences().AddReference(source_path, str(grp["src"]))
+            mat = UsdShade.Material(mat_prim)
+            binding = UsdShade.MaterialBindingAPI.Apply(curves.GetPrim())
+            binding.Bind(mat)
+        else:
+            # 머티리얼이 없으면 displayColor 로 색 보존 (uniform)
+            cols = [c if c is not None else Gf.Vec3f(0.8, 0.8, 0.8)
+                    for c in grp["colors"]]
+            dc = UsdGeom.PrimvarsAPI(curves).CreatePrimvar(
+                "displayColor", Sdf.ValueTypeNames.Color3fArray)
+            dc.SetInterpolation("uniform")
+            dc.Set(Vt.Vec3fArray([Gf.Vec3f(*c) for c in cols]))
+
+    return len(groups), total_curves, total_pts
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +228,9 @@ def optimize_and_load(source_path: str, epsilon: float = 0.0,
                       width: float = 0.1) -> str:
     """source_path 의 streamline USD 를 최적화해 현재 씬에 로드한다.
 
-    - 모든 BasisCurves 를 world 공간으로 변환 후 단일 prim 으로 병합
+    - 모든 BasisCurves 를 world 공간으로 변환
+    - 바인딩된 머티리얼(색)별로 그룹핑 → 그룹마다 단일 BasisCurves 로 병합
+    - 원본 머티리얼을 참조 바인딩하여 모든 색 보존
     - epsilon>0 이면 RDP 데시메이션 적용
     return: 사람이 읽을 상태 문자열
     """
@@ -178,28 +238,23 @@ def optimize_and_load(source_path: str, epsilon: float = 0.0,
     if not src:
         return f"ERROR: 열 수 없음: {source_path}"
 
-    per_curve_points, per_curve_color, curve_type = _collect_curves(src)
-    if not per_curve_points:
+    groups = _collect_curves(src)
+    if not groups or all(not g["points"] for g in groups.values()):
         return f"ERROR: BasisCurves 를 찾지 못함: {source_path}"
 
-    n_src_curves = len(per_curve_points)
-    n_src_pts = sum(len(p) for p in per_curve_points)
-
-    if epsilon > 0.0:
-        per_curve_points = [_rdp(p, epsilon) for p in per_curve_points]
+    n_src_curves = sum(len(g["points"]) for g in groups.values())
+    n_src_pts = sum(len(p) for g in groups.values() for p in g["points"])
 
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         return "ERROR: 활성 stage 가 없음 (씬을 먼저 열어주세요)"
-
-    # /World 보장
     if not stage.GetPrimAtPath("/World"):
         UsdGeom.Xform.Define(stage, "/World")
 
-    n_curves, n_pts = _author_merged(
-        stage, per_curve_points, per_curve_color, curve_type, width)
+    n_groups, n_curves, n_pts = _author_groups(
+        stage, groups, source_path, epsilon, width)
 
     print(f"[curve] merged {n_src_curves} curves / {n_src_pts} pts "
-          f"-> 1 prim / {n_pts} pts (epsilon={epsilon})")
-    return (f"OK: {n_src_curves}개 곡선 → 단일 BasisCurves 1개 | "
-            f"정점 {n_src_pts} → {n_pts} | {MERGED_PATH}")
+          f"-> {n_groups} prim(s) / {n_pts} pts (epsilon={epsilon})")
+    return (f"OK: {n_src_curves}개 곡선 → {n_groups}개 머티리얼 그룹 prim | "
+            f"정점 {n_src_pts} → {n_pts} | 색 {n_groups}종 보존 | {MERGED_PATH}")
