@@ -20,13 +20,14 @@ class LinesOptimizeUI:
         self._res_field: ui.IntField | None = None
         self._radius_field: ui.FloatField | None = None
         self._levels_field: ui.IntField | None = None
+        self._depth_field: ui.IntField | None = None
         self._density_cb: ui.CheckBox | None = None
         self._status: ui.Label | None = None
         self._run_btn: ui.Button | None = None
         self._task: asyncio.Task | None = None
 
     def build_ui(self):
-        self._window = ui.Window("Streamline Voxel Optimizer", width=560, height=280)
+        self._window = ui.Window("Streamline Voxel Optimizer", width=560, height=320)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 with ui.HStack(height=24, spacing=4):
@@ -50,6 +51,12 @@ class LinesOptimizeUI:
                     ui.Label("Color Levels:", width=85)
                     self._levels_field = ui.IntField(width=60)
                     self._levels_field.model.set_value(4)
+
+                with ui.HStack(height=24, spacing=4):
+                    ui.Label("Group Depth:", width=80)
+                    self._depth_field = ui.IntField(width=60)
+                    self._depth_field.model.set_value(0)  # 0 = no grouping
+                    ui.Label("(0=off)", width=50)
                     ui.Label("Density→Scale:", width=100)
                     self._density_cb = ui.CheckBox(width=24)
 
@@ -80,12 +87,13 @@ class LinesOptimizeUI:
         res = self._res_field.model.get_value_as_int()
         radius = self._radius_field.model.get_value_as_float()
         levels = self._levels_field.model.get_value_as_int()
+        depth = self._depth_field.model.get_value_as_int()
         density = self._density_cb.model.get_value_as_bool()
         # 비동기 태스크로 실행 → 메인 스레드(Kit UI)가 멈추지 않음
         self._task = asyncio.ensure_future(
-            self._run_async(path, voxel, res, radius, levels, density))
+            self._run_async(path, voxel, res, radius, levels, depth, density))
 
-    async def _run_async(self, path, voxel, res, radius, levels, density):
+    async def _run_async(self, path, voxel, res, radius, levels, depth, density):
         if self._run_btn:
             self._run_btn.enabled = False
         self._set_status("Processing...")
@@ -93,7 +101,8 @@ class LinesOptimizeUI:
             msg = await optimize_and_load_async(
                 path, voxel_size=voxel, resolution=res,
                 radius_factor=radius, density_to_scale=density,
-                color_levels=levels, progress=self._set_status)
+                color_levels=levels, group_depth=depth,
+                progress=self._set_status)
         except Exception as e:  # noqa: BLE001
             msg = f"ERROR: {e}"
             import traceback
