@@ -65,10 +65,12 @@ def _collect_curves(stage: Usd.Stage):
     """
     xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
     groups: dict = {}
+    src_prim_count = 0  # 소스의 BasisCurves prim(=draw call) 개수
 
     for prim in stage.Traverse():
         if not prim.IsA(UsdGeom.BasisCurves):
             continue
+        src_prim_count += 1
 
         curves = UsdGeom.BasisCurves(prim)
         pts = curves.GetPointsAttr().Get(Usd.TimeCode.Default())
@@ -104,7 +106,7 @@ def _collect_curves(stage: Usd.Stage):
             grp["points"].append(seg.astype(np.float32))
             grp["colors"].append(color[ci] if color is not None else None)
 
-    return groups
+    return groups, src_prim_count
 
 
 def _representative_color(curves: UsdGeom.BasisCurves, n_curves: int):
@@ -238,7 +240,7 @@ def optimize_and_load(source_path: str, epsilon: float = 0.0,
     if not src:
         return f"ERROR: 열 수 없음: {source_path}"
 
-    groups = _collect_curves(src)
+    groups, src_prim_count = _collect_curves(src)
     if not groups or all(not g["points"] for g in groups.values()):
         return f"ERROR: BasisCurves 를 찾지 못함: {source_path}"
 
@@ -254,7 +256,15 @@ def optimize_and_load(source_path: str, epsilon: float = 0.0,
     n_groups, n_curves, n_pts = _author_groups(
         stage, groups, source_path, epsilon, width)
 
-    print(f"[curve] merged {n_src_curves} curves / {n_src_pts} pts "
-          f"-> {n_groups} prim(s) / {n_pts} pts (epsilon={epsilon})")
-    return (f"OK: {n_src_curves}개 곡선 → {n_groups}개 머티리얼 그룹 prim | "
-            f"정점 {n_src_pts} → {n_pts} | 색 {n_groups}종 보존 | {MERGED_PATH}")
+    # draw call 감소가 실제 최적화의 핵심 지표
+    print(f"[curve] draw call(prim): {src_prim_count} -> {n_groups} | "
+          f"curves {n_src_curves} | pts {n_src_pts} -> {n_pts} (epsilon={epsilon})")
+
+    if src_prim_count <= n_groups:
+        note = (" | ⚠ 이미 색당 prim 1개 구조라 draw call 감소 없음 "
+                "— 데시메이션(ε) / usdc 변환 위주로 최적화하세요")
+    else:
+        note = f" | draw call {src_prim_count}→{n_groups} 감소"
+
+    return (f"OK: prim {src_prim_count} → {n_groups} (색 {n_groups}종 보존) | "
+            f"곡선 {n_src_curves} | 정점 {n_src_pts} → {n_pts}{note}")
