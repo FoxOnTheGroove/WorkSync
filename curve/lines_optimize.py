@@ -45,6 +45,35 @@ def _is_curve(prim: Usd.Prim) -> bool:
     return prim.IsA(UsdGeom.BasisCurves) or prim.IsA(UsdGeom.NurbsCurves)
 
 
+def _get(attr, tc):
+    """attr 값을 tc 에서 읽되, 없으면 첫 time-sample 로 폴백한다.
+
+    지오메트리가 애니메이션(time-sample)으로만 저장돼 Default 타임코드에서
+    None 이 나오는 경우를 처리한다.
+    """
+    if attr is None or not attr.IsValid():
+        return None
+    v = attr.Get(tc)
+    if v is None:
+        ts = attr.GetTimeSamples()
+        if ts:
+            v = attr.Get(ts[0])
+    return v
+
+
+def _pick_timecode(stage: Usd.Stage):
+    """곡선 지오메트리가 time-sample 로 저장돼 있으면 그 첫 샘플을, 아니면
+    Default 타임코드를 반환한다. XformCache/BBoxCache 에 사용."""
+    for prim in _traverse_all(stage):
+        if not _is_curve(prim):
+            continue
+        ts = UsdGeom.Curves(prim).GetPointsAttr().GetTimeSamples()
+        if ts:
+            return Usd.TimeCode(ts[0])
+        return Usd.TimeCode.Default()
+    return Usd.TimeCode.Default()
+
+
 def inspect_source(source_path: str) -> str:
     """소스 USD 의 prim 타입 분포/인스턴싱 여부를 진단해 문자열로 반환한다.
 
@@ -57,6 +86,8 @@ def inspect_source(source_path: str) -> str:
     types: Counter = Counter()
     n_curve = 0
     n_instanceable = 0
+    n_timesampled = 0    # points 가 time-sample 로만 저장된 곡선
+    n_default = 0        # points 를 Default 타임코드에서 바로 읽는 곡선
     for prim in _traverse_all(src):
         tn = prim.GetTypeName() or "(untyped)"
         types[tn] += 1
@@ -64,10 +95,16 @@ def inspect_source(source_path: str) -> str:
             n_instanceable += 1
         if _is_curve(prim):
             n_curve += 1
+            pts_attr = UsdGeom.Curves(prim).GetPointsAttr()
+            if pts_attr.Get(Usd.TimeCode.Default()) is not None:
+                n_default += 1
+            elif pts_attr.GetTimeSamples():
+                n_timesampled += 1
 
     n_proto = len(src.GetPrototypes())
     top = ", ".join(f"{t}:{c}" for t, c in types.most_common(15))
-    return (f"곡선(Basis/Nurbs)={n_curve} | instanceable={n_instanceable} | "
+    return (f"곡선(Basis/Nurbs)={n_curve} | default-points={n_default} | "
+            f"timesampled-points={n_timesampled} | instanceable={n_instanceable} | "
             f"prototypes={n_proto}\n타입분포: {top}")
 
 
@@ -106,9 +143,11 @@ def _collect_curves(stage: Usd.Stage):
         }
       }
     """
-    xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    tc = _pick_timecode(stage)
+    xform_cache = UsdGeom.XformCache(tc)
     groups: dict = {}
     src_prim_count = 0
+    skipped_empty = 0
 
     for prim in _traverse_all(stage):
         if not _is_curve(prim):
@@ -116,9 +155,10 @@ def _collect_curves(stage: Usd.Stage):
         src_prim_count += 1
 
         curves = UsdGeom.Curves(prim)  # BasisCurves/NurbsCurves 공통 베이스
-        pts = curves.GetPointsAttr().Get(Usd.TimeCode.Default())
-        counts = curves.GetCurveVertexCountsAttr().Get(Usd.TimeCode.Default())
-        if not pts or not counts:
+        pts = _get(curves.GetPointsAttr(), tc)
+        counts = _get(curves.GetCurveVertexCountsAttr(), tc)
+        if pts is None or not len(pts) or counts is None or not len(counts):
+            skipped_empty += 1
             continue
 
         mat_path = _find_material_path(prim)
@@ -134,7 +174,7 @@ def _collect_curves(stage: Usd.Stage):
         world = (homo @ m)[:, :3]
 
         if grp["color"] is None:
-            grp["color"] = _representative_color(curves)
+            grp["color"] = _representative_color(curves, tc)
 
         offset = 0
         for c in counts:
@@ -144,16 +184,16 @@ def _collect_curves(stage: Usd.Stage):
                 continue
             grp["points"].append(seg.astype(np.float64))
 
-    return groups, src_prim_count
+    return groups, src_prim_count, skipped_empty
 
 
-def _representative_color(curves: UsdGeom.BasisCurves):
+def _representative_color(curves, tc):
     """곡선의 대표 displayColor 1개를 반환. 없으면 None."""
     dc_pv = UsdGeom.PrimvarsAPI(curves).GetPrimvar("displayColor")
     if not dc_pv or not dc_pv.GetAttr().IsValid():
         return None
-    vals = dc_pv.Get(Usd.TimeCode.Default())
-    if not vals:
+    vals = _get(dc_pv.GetAttr(), tc)
+    if not vals or not len(vals):
         return None
     return vals[0]
 
@@ -200,10 +240,12 @@ def _voxelize(points_list, origin: np.ndarray, voxel_size: float):
 # ---------------------------------------------------------------------------
 # root world bbox → 자동 voxel_size
 # ---------------------------------------------------------------------------
-def _world_bounds(stage: Usd.Stage):
-    """stage 내 모든 BasisCurves 를 감싸는 world AABB (min, max) 를 반환."""
+def _world_bounds(stage: Usd.Stage, tc=None):
+    """stage 내 모든 곡선을 감싸는 world AABB (min, max) 를 반환."""
+    if tc is None:
+        tc = _pick_timecode(stage)
     bbox_cache = UsdGeom.BBoxCache(
-        Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+        tc, [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
     mins = np.array([np.inf, np.inf, np.inf])
     maxs = np.array([-np.inf, -np.inf, -np.inf])
     found = False
@@ -309,10 +351,14 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
     if not src:
         return f"ERROR: 열 수 없음: {source_path}"
 
-    groups, src_prim_count = _collect_curves(src)
+    groups, src_prim_count, skipped_empty = _collect_curves(src)
     if not groups or all(not g["points"] for g in groups.values()):
         # 무엇이 들어있는지 타입 분포를 함께 보고
-        return (f"ERROR: 곡선(BasisCurves/NurbsCurves)을 찾지 못함: {source_path}\n"
+        hint = ""
+        if skipped_empty:
+            hint = (f"\n(곡선 {skipped_empty}개가 points/counts 를 읽지 못해 스킵됨 "
+                    "— time-sample 로만 저장됐거나 빈 곡선일 수 있음)")
+        return (f"ERROR: 유효한 곡선을 찾지 못함: {source_path}{hint}\n"
                 f"{inspect_source(source_path)}")
 
     n_src_pts = sum(len(p) for g in groups.values() for p in g["points"])
