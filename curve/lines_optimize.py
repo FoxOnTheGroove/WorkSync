@@ -18,12 +18,14 @@
 모든 실질 구현은 이 파일에 있다. UI 는 dummy_ui.py 에서 이 함수들만 호출한다.
 """
 
+import asyncio
 from collections import Counter
 
 import numpy as np
 
 from pxr import Usd, UsdGeom, UsdShade, Gf, Vt, Sdf
 import omni.usd
+import omni.kit.app
 
 
 MERGED_PATH = "/World/OptimizedStreamlines"
@@ -180,49 +182,80 @@ def inspect_source(source_path: str) -> str:
 # ---------------------------------------------------------------------------
 # 소스에서 곡선 + 색 수집 (world 좌표)
 # ---------------------------------------------------------------------------
-def _collect_curves(stage: Usd.Stage):
-    """return: (points_list, colors_list, src_prim_count, skipped_empty)
-      points_list[i] = np.ndarray(N,3) world 좌표 폴리라인
-      colors_list[i] = np.ndarray(3)   해당 곡선 색
-    """
-    tc = _pick_timecode(stage)
-    xform_cache = UsdGeom.XformCache(tc)
-    points_list = []
-    colors_list = []
-    src_prim_count = 0
-    skipped_empty = 0
+def _extract_curve(prim: Usd.Prim, tc, xform_cache):
+    """곡선 prim → (segments[list of np(N,3) world], color np(3)). 비면 None.
 
+    Vt→numpy 변환을 벡터화(np.array(Vt배열))해 Python 루프 없이 빠르게 처리.
+    """
+    curves = UsdGeom.Curves(prim)
+    pts = _get(curves.GetPointsAttr(), tc)
+    counts = _get(curves.GetCurveVertexCountsAttr(), tc)
+    if pts is None or not len(pts) or counts is None or not len(counts):
+        return None
+
+    m = np.array(xform_cache.GetLocalToWorldTransform(prim)).reshape(4, 4)
+    np_pts = np.array(pts, dtype=np.float64)          # (N,3) 빠른 변환
+    homo = np.hstack([np_pts, np.ones((np_pts.shape[0], 1))])
+    world = (homo @ m)[:, :3]
+
+    color = _curve_color(prim, tc)
+    if color is None:
+        color = DEFAULT_COLOR.copy()
+
+    cnts = np.array(counts, dtype=np.int64)
+    segs = []
+    offset = 0
+    for c in cnts:
+        seg = world[offset:offset + int(c)]
+        offset += int(c)
+        if len(seg) >= 1:
+            segs.append(seg)
+    return segs, color
+
+
+def _collect_curves(stage: Usd.Stage):
+    """동기 수집. return: (points_list, colors_list, src_prim_count, skipped)."""
+    tc = _pick_timecode(stage)
+    xc = UsdGeom.XformCache(tc)
+    pl, cl, n, skipped = [], [], 0, 0
     for prim in _traverse_all(stage):
         if not _is_curve(prim):
             continue
-        src_prim_count += 1
-
-        curves = UsdGeom.Curves(prim)
-        pts = _get(curves.GetPointsAttr(), tc)
-        counts = _get(curves.GetCurveVertexCountsAttr(), tc)
-        if pts is None or not len(pts) or counts is None or not len(counts):
-            skipped_empty += 1
+        n += 1
+        r = _extract_curve(prim, tc, xc)
+        if r is None:
+            skipped += 1
             continue
+        segs, color = r
+        for s in segs:
+            pl.append(s)
+            cl.append(color)
+    return pl, cl, n, skipped
 
-        m = np.array(xform_cache.GetLocalToWorldTransform(prim)).reshape(4, 4)
-        np_pts = np.array([[p[0], p[1], p[2]] for p in pts], dtype=np.float64)
-        homo = np.hstack([np_pts, np.ones((np_pts.shape[0], 1))])
-        world = (homo @ m)[:, :3]
 
-        color = _curve_color(prim, tc)
-        if color is None:
-            color = DEFAULT_COLOR.copy()
-
-        offset = 0
-        for c in counts:
-            seg = world[offset:offset + c]
-            offset += c
-            if len(seg) < 1:
-                continue
-            points_list.append(seg.astype(np.float64))
-            colors_list.append(color)
-
-    return points_list, colors_list, src_prim_count, skipped_empty
+async def _collect_curves_async(stage: Usd.Stage, report=None, chunk: int = 20):
+    """비동기 수집: chunk 개마다 UI 에 양보(next_update_async)해 Kit 멈춤 방지."""
+    tc = _pick_timecode(stage)
+    xc = UsdGeom.XformCache(tc)
+    app = omni.kit.app.get_app()
+    pl, cl, n, skipped = [], [], 0, 0
+    for prim in _traverse_all(stage):
+        if not _is_curve(prim):
+            continue
+        n += 1
+        r = _extract_curve(prim, tc, xc)
+        if r is None:
+            skipped += 1
+        else:
+            segs, color = r
+            for s in segs:
+                pl.append(s)
+                cl.append(color)
+        if n % chunk == 0:
+            if report:
+                report(f"곡선 읽는 중... {n}")
+            await app.next_update_async()
+    return pl, cl, n, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -327,16 +360,34 @@ def _world_bounds(stage: Usd.Stage, tc=None):
 # ---------------------------------------------------------------------------
 # PointInstancer 저작 (복셀당 1 인스턴스, 색 버킷 프로토타입)
 # ---------------------------------------------------------------------------
-def _author(stage, centers, counts, mean_colors, voxel_size, radius_factor,
-            density_to_scale, color_levels):
+def _vec3f_array(np_arr):
+    """(N,3) numpy → Vt.Vec3fArray (FromNumpy 우선, 없으면 폴백)."""
+    a = np.ascontiguousarray(np_arr, dtype=np.float32)
+    from_np = getattr(Vt.Vec3fArray, "FromNumpy", None)
+    if from_np is not None:
+        return from_np(a)
+    return Vt.Vec3fArray([Gf.Vec3f(float(x), float(y), float(z)) for x, y, z in a])
+
+
+def _int_array(np_arr):
+    a = np.ascontiguousarray(np_arr, dtype=np.int32)
+    from_np = getattr(Vt.IntArray, "FromNumpy", None)
+    if from_np is not None:
+        return from_np(a)
+    return Vt.IntArray([int(v) for v in a])
+
+
+def _author(stage, centers, counts, bucket_idx, reps, voxel_size,
+            radius_factor, density_to_scale):
+    """색 버킷 프로토타입 + 단일 PointInstancer 저작. bucket_idx/reps 는 미리 계산.
+
+    큰 배열은 Vt.*Array.FromNumpy 로 벡터화 저작해 블로킹을 최소화한다.
+    """
     if stage.GetPrimAtPath(MERGED_PATH):
         stage.RemovePrim(MERGED_PATH)
     UsdGeom.Xform.Define(stage, MERGED_PATH)
     UsdGeom.Scope.Define(stage, PROTO_SCOPE)
     UsdGeom.Scope.Define(stage, LOOKS_PATH)
-
-    # 복셀 평균색을 비슷한 색 버킷으로 양자화
-    bucket_idx, reps = _quantize_colors(mean_colors, color_levels)
 
     instancer = UsdGeom.PointInstancer.Define(stage, MERGED_PATH + "/instancer")
     proto_paths = []
@@ -365,15 +416,12 @@ def _author(stage, centers, counts, mean_colors, voxel_size, radius_factor,
         factors = 0.5 + norm
     else:
         factors = np.ones(len(centers))
-
-    positions = [Gf.Vec3f(float(c[0]), float(c[1]), float(c[2])) for c in centers]
-    scales = [Gf.Vec3f(base * float(f), base * float(f), base * float(f))
-              for f in factors]
+    scales_np = (base * factors)[:, None] * np.ones((1, 3))
 
     instancer.CreatePrototypesRel().SetTargets(proto_paths)
-    instancer.CreateProtoIndicesAttr(Vt.IntArray([int(b) for b in bucket_idx]))
-    instancer.CreatePositionsAttr(Vt.Vec3fArray(positions))
-    instancer.CreateScalesAttr(Vt.Vec3fArray(scales))
+    instancer.CreateProtoIndicesAttr(_int_array(bucket_idx))
+    instancer.CreatePositionsAttr(_vec3f_array(centers))
+    instancer.CreateScalesAttr(_vec3f_array(scales_np))
 
     return len(proto_paths), len(centers)
 
@@ -417,6 +465,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
     origin = mins.astype(np.float64)
     centers, counts, mean_colors = _voxelize(
         points_list, colors_list, origin, voxel_size)
+    bucket_idx, reps = _quantize_colors(mean_colors, color_levels)
 
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -425,12 +474,81 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         UsdGeom.Xform.Define(stage, "/World")
 
     n_protos, n_voxels = _author(
-        stage, centers, counts, mean_colors, voxel_size,
-        radius_factor, density_to_scale, color_levels)
+        stage, centers, counts, bucket_idx, reps, voxel_size,
+        radius_factor, density_to_scale)
 
-    print(f"[curve] voxelize: curves {len(points_list)}, pts {n_src_pts} -> "
+    return _result_msg(len(points_list), n_src_pts, n_voxels, n_protos, voxel_size)
+
+
+def _result_msg(n_curves, n_src_pts, n_voxels, n_protos, voxel_size):
+    print(f"[curve] voxelize: curves {n_curves}, pts {n_src_pts} -> "
           f"instances {n_voxels}, color-buckets {n_protos}, "
           f"voxel_size={voxel_size:.4g}")
-    return (f"OK: 곡선 {len(points_list)} / 정점 {n_src_pts} → 인스턴스 {n_voxels}개 "
+    return (f"OK: 곡선 {n_curves} / 정점 {n_src_pts} → 인스턴스 {n_voxels}개 "
             f"(복셀당 1, 색평균) | 색버킷 {n_protos}개 | voxel={voxel_size:.4g} | "
             f"{MERGED_PATH}")
+
+
+async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
+                                  resolution: int = 128,
+                                  radius_factor: float = 0.5,
+                                  density_to_scale: bool = False,
+                                  color_levels: int = 4,
+                                  progress=None) -> str:
+    """optimize_and_load 의 비동기 버전 — Kit 멈춤 방지.
+
+    - USD 읽기: 주기적으로 UI 에 양보 (_collect_curves_async)
+    - 무거운 순수-numpy(_voxelize/_quantize_colors): 백그라운드 스레드로 오프로드
+    - USD 저작: 벡터화(FromNumpy)로 짧게, 직전 한 프레임 양보
+    """
+    def report(msg):
+        if progress:
+            progress(msg)
+
+    src = Usd.Stage.Open(source_path)
+    if not src:
+        return f"ERROR: 열 수 없음: {source_path}"
+
+    report("곡선 읽는 중...")
+    points_list, colors_list, src_prim_count, skipped_empty = \
+        await _collect_curves_async(src, report)
+    if not points_list:
+        hint = ""
+        if skipped_empty:
+            hint = (f"\n(곡선 {skipped_empty}개가 points/counts 를 읽지 못해 스킵됨 "
+                    "— time-sample 이거나 빈 곡선일 수 있음)")
+        return (f"ERROR: 유효한 곡선을 찾지 못함: {source_path}{hint}\n"
+                f"{inspect_source(source_path)}")
+
+    n_src_pts = sum(len(p) for p in points_list)
+
+    mins, maxs = _world_bounds(src)
+    if mins is None:
+        return "ERROR: world bbox 계산 실패"
+    if voxel_size <= 0.0:
+        voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
+    if voxel_size <= 0.0:
+        return "ERROR: voxel_size 산출 실패 (bbox 크기 0)"
+    origin = mins.astype(np.float64)
+
+    # 무거운 순수-numpy 연산은 백그라운드 스레드에서
+    report("복셀화 중 (백그라운드)...")
+    loop = asyncio.get_event_loop()
+    centers, counts, mean_colors = await loop.run_in_executor(
+        None, _voxelize, points_list, colors_list, origin, voxel_size)
+    bucket_idx, reps = await loop.run_in_executor(
+        None, _quantize_colors, mean_colors, color_levels)
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: 활성 stage 가 없음 (씬을 먼저 열어주세요)"
+    if not stage.GetPrimAtPath("/World"):
+        UsdGeom.Xform.Define(stage, "/World")
+
+    report("씬에 로드 중...")
+    await omni.kit.app.get_app().next_update_async()
+    n_protos, n_voxels = _author(
+        stage, centers, counts, bucket_idx, reps, voxel_size,
+        radius_factor, density_to_scale)
+
+    return _result_msg(len(points_list), n_src_pts, n_voxels, n_protos, voxel_size)

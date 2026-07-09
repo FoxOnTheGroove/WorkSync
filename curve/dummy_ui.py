@@ -5,9 +5,11 @@
 실제 처리 로직은 모두 lines_optimize.py 에 있다.
 """
 
+import asyncio
+
 import omni.ui as ui
 
-from .lines_optimize import optimize_and_load, inspect_source
+from .lines_optimize import optimize_and_load_async, inspect_source
 
 
 class LinesOptimizeUI:
@@ -20,6 +22,8 @@ class LinesOptimizeUI:
         self._levels_field: ui.IntField | None = None
         self._density_cb: ui.CheckBox | None = None
         self._status: ui.Label | None = None
+        self._run_btn: ui.Button | None = None
+        self._task: asyncio.Task | None = None
 
     def build_ui(self):
         self._window = ui.Window("Streamline Voxel Optimizer", width=560, height=280)
@@ -51,7 +55,8 @@ class LinesOptimizeUI:
 
                 with ui.HStack(height=30, spacing=6):
                     ui.Button("Inspect", width=90, clicked_fn=self._on_inspect)
-                    ui.Button("Voxelize & Load", clicked_fn=self._on_run)
+                    self._run_btn = ui.Button(
+                        "Voxelize & Load", clicked_fn=self._on_run)
 
                 self._status = ui.Label("Status: 대기 중", word_wrap=True)
 
@@ -67,22 +72,35 @@ class LinesOptimizeUI:
         self._set_status(msg)
 
     def _on_run(self):
+        if self._task and not self._task.done():
+            self._set_status("이미 처리 중입니다...")
+            return
         path = self._path_field.model.get_value_as_string().strip()
         voxel = self._voxel_field.model.get_value_as_float()
         res = self._res_field.model.get_value_as_int()
         radius = self._radius_field.model.get_value_as_float()
         levels = self._levels_field.model.get_value_as_int()
         density = self._density_cb.model.get_value_as_bool()
+        # 비동기 태스크로 실행 → 메인 스레드(Kit UI)가 멈추지 않음
+        self._task = asyncio.ensure_future(
+            self._run_async(path, voxel, res, radius, levels, density))
+
+    async def _run_async(self, path, voxel, res, radius, levels, density):
+        if self._run_btn:
+            self._run_btn.enabled = False
         self._set_status("처리 중...")
         try:
-            msg = optimize_and_load(
+            msg = await optimize_and_load_async(
                 path, voxel_size=voxel, resolution=res,
                 radius_factor=radius, density_to_scale=density,
-                color_levels=levels)
+                color_levels=levels, progress=self._set_status)
         except Exception as e:  # noqa: BLE001
             msg = f"ERROR: {e}"
             import traceback
             traceback.print_exc()
+        finally:
+            if self._run_btn:
+                self._run_btn.enabled = True
         self._set_status(msg)
 
     def _set_status(self, text: str):
@@ -90,6 +108,9 @@ class LinesOptimizeUI:
             self._status.text = f"Status: {text}"
 
     def destroy(self):
+        if self._task and not self._task.done():
+            self._task.cancel()
+            self._task = None
         if self._window:
             self._window.destroy()
             self._window = None
