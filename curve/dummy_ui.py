@@ -7,7 +7,7 @@
 
 import omni.ui as ui
 
-from .lines_optimize import optimize_and_load
+from .lines_optimize import optimize_and_load, inspect_source
 
 
 class LinesOptimizeUI:
@@ -21,7 +21,7 @@ class LinesOptimizeUI:
         self._status: ui.Label | None = None
 
     def build_ui(self):
-        self._window = ui.Window("Streamline Voxel Optimizer", width=560, height=230)
+        self._window = ui.Window("Streamline Voxel Optimizer", width=560, height=280)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 with ui.HStack(height=24, spacing=4):
@@ -45,9 +45,22 @@ class LinesOptimizeUI:
                     ui.Label("Density→Scale:", width=100)
                     self._density_cb = ui.CheckBox(width=24)
 
-                ui.Button("Voxelize & Load", height=30, clicked_fn=self._on_run)
+                with ui.HStack(height=30, spacing=6):
+                    ui.Button("Inspect", width=90, clicked_fn=self._on_inspect)
+                    ui.Button("Voxelize & Load", clicked_fn=self._on_run)
 
                 self._status = ui.Label("Status: 대기 중", word_wrap=True)
+
+    def _on_inspect(self):
+        path = self._path_field.model.get_value_as_string().strip()
+        self._set_status("진단 중...")
+        try:
+            msg = inspect_source(path)
+        except Exception as e:  # noqa: BLE001
+            msg = f"ERROR: {e}"
+            import traceback
+            traceback.print_exc()
+        self._set_status(msg)
 
     def _on_run(self):
         path = self._path_field.model.get_value_as_string().strip()

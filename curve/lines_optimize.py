@@ -14,6 +14,8 @@
 모든 실질 구현은 이 파일에 있다. UI 는 dummy_ui.py 에서 이 함수들만 호출한다.
 """
 
+from collections import Counter
+
 import numpy as np
 
 from pxr import Usd, UsdGeom, UsdShade, Gf, Vt, Sdf
@@ -24,6 +26,49 @@ MERGED_PATH = "/World/OptimizedStreamlines"
 PROTO_SCOPE = MERGED_PATH + "/Prototypes"
 LOOKS_PATH = MERGED_PATH + "/Looks"
 NO_MAT_KEY = "__no_material__"
+
+
+# ---------------------------------------------------------------------------
+# 곡선 prim 순회 (인스턴스 프록시 포함 + BasisCurves/NurbsCurves 모두)
+# ---------------------------------------------------------------------------
+def _traverse_all(stage: Usd.Stage):
+    """인스턴스(instanceable) 내부까지 들어가서 모든 prim 을 순회한다.
+
+    스트림라인이 reference/instanceable 로 Xform 말단에 붙어 있으면
+    일반 stage.Traverse() 는 인스턴스 내부로 들어가지 않아 곡선을 놓친다.
+    """
+    return stage.Traverse(Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
+
+
+def _is_curve(prim: Usd.Prim) -> bool:
+    """BasisCurves / NurbsCurves 등 곡선 계열이면 True."""
+    return prim.IsA(UsdGeom.BasisCurves) or prim.IsA(UsdGeom.NurbsCurves)
+
+
+def inspect_source(source_path: str) -> str:
+    """소스 USD 의 prim 타입 분포/인스턴싱 여부를 진단해 문자열로 반환한다.
+
+    'BasisCurves 를 찾지 못함' 이 뜰 때 실제로 무엇이 들어있는지 확인용.
+    """
+    src = Usd.Stage.Open(source_path)
+    if not src:
+        return f"ERROR: 열 수 없음: {source_path}"
+
+    types: Counter = Counter()
+    n_curve = 0
+    n_instanceable = 0
+    for prim in _traverse_all(src):
+        tn = prim.GetTypeName() or "(untyped)"
+        types[tn] += 1
+        if prim.IsInstanceable():
+            n_instanceable += 1
+        if _is_curve(prim):
+            n_curve += 1
+
+    n_proto = len(src.GetPrototypes())
+    top = ", ".join(f"{t}:{c}" for t, c in types.most_common(15))
+    return (f"곡선(Basis/Nurbs)={n_curve} | instanceable={n_instanceable} | "
+            f"prototypes={n_proto}\n타입분포: {top}")
 
 
 # ---------------------------------------------------------------------------
@@ -65,12 +110,12 @@ def _collect_curves(stage: Usd.Stage):
     groups: dict = {}
     src_prim_count = 0
 
-    for prim in stage.Traverse():
-        if not prim.IsA(UsdGeom.BasisCurves):
+    for prim in _traverse_all(stage):
+        if not _is_curve(prim):
             continue
         src_prim_count += 1
 
-        curves = UsdGeom.BasisCurves(prim)
+        curves = UsdGeom.Curves(prim)  # BasisCurves/NurbsCurves 공통 베이스
         pts = curves.GetPointsAttr().Get(Usd.TimeCode.Default())
         counts = curves.GetCurveVertexCountsAttr().Get(Usd.TimeCode.Default())
         if not pts or not counts:
@@ -162,8 +207,8 @@ def _world_bounds(stage: Usd.Stage):
     mins = np.array([np.inf, np.inf, np.inf])
     maxs = np.array([-np.inf, -np.inf, -np.inf])
     found = False
-    for prim in stage.Traverse():
-        if not prim.IsA(UsdGeom.BasisCurves):
+    for prim in _traverse_all(stage):
+        if not _is_curve(prim):
             continue
         rng = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
         if rng.IsEmpty():
@@ -266,7 +311,9 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
 
     groups, src_prim_count = _collect_curves(src)
     if not groups or all(not g["points"] for g in groups.values()):
-        return f"ERROR: BasisCurves 를 찾지 못함: {source_path}"
+        # 무엇이 들어있는지 타입 분포를 함께 보고
+        return (f"ERROR: 곡선(BasisCurves/NurbsCurves)을 찾지 못함: {source_path}\n"
+                f"{inspect_source(source_path)}")
 
     n_src_pts = sum(len(p) for g in groups.values() for p in g["points"])
 
