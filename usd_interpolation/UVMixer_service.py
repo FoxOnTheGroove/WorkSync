@@ -37,6 +37,10 @@ class UVMixerService:
         if tab_ctx is None:
             tab_ctx = TabContext(tab_id)
             cls._tab_contexts[tab_id] = tab_ctx
+            # 새 탭은 t=0.0으로 시작. 이전 탭이 옮겨놓은 글로벌 타임라인 위치가
+            # 새 탭 메쉬에 그대로 보이지 않도록 0.0으로 리셋한다.
+            # (이전 탭으로 돌아가면 on_tab_changed가 그 탭 t로 타임라인을 복원한다.)
+            UVMixer.reset_timeline()
         if key not in tab_ctx.keys:
             tab_ctx.keys.append(key)
 

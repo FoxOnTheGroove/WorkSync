@@ -113,6 +113,13 @@ class UVMixer:
     def is_playing(self) -> bool:
         return self.own_player.is_playing()
 
+    @staticmethod
+    def reset_timeline() -> None:
+        """글로벌 타임라인을 0.0으로 되돌린다.
+        새 탭 생성 시 이전 탭이 남긴 타임라인 위치가 새 탭 메쉬에 보이지 않도록."""
+        tl = omni.timeline.get_timeline_interface()
+        tl.set_current_time(0.0)
+
     # ── 위치 ─────────────────────────────────────────────────────
 
     def set_value(self, t: float, *, correction: bool = True,
