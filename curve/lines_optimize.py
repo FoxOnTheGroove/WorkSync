@@ -1,19 +1,16 @@
-"""streamline USD 최적화 핵심 로직.
+"""streamline USD 최적화 핵심 로직 (복셀 PointInstancer 방식).
 
-수많은 개별 line renderer(BasisCurves) prim으로 이루어진 streamline USD는
-prim 개수 = draw call 개수가 되어 뷰포트가 심하게 버벅인다.
+소스는 색(머티리얼)당 BasisCurves prim 1개 구조 — draw call 은 이미 최소이고
+병목은 하나의 prim 안에 든 수십만 곡선 / 수백만 정점이다. 개별 흐름 궤적은
+필요 없고 "어느 영역에 무슨 색이 얼마나 있나"(색·밀도 분포)만 보면 되므로,
+라인을 **복셀 그리드로 다운샘플링**하여 단일 **UsdGeomPointInstancer +
+색당 구 프로토타입**으로 표현한다.
 
-여기서는 소스 USD의 모든 곡선을 읽어 world 공간 좌표로 변환한 뒤,
-**바인딩된 머티리얼(색)별로 그룹핑**하여 그룹마다 단일 BasisCurves prim
-하나로 병합한다. 즉 draw call 수 = 색(머티리얼) 종류 수로 줄어든다.
-원본 머티리얼은 그대로 참조 바인딩하므로 모든 색이 정확히 보존된다.
-(선택적으로 Ramer-Douglas-Peucker 데시메이션으로 정점 수도 줄인다.)
+- 결과 인스턴스 수 = 점유 복셀 수 → 소스 복잡도와 무관하게 상한 고정
+- 색별로 독립 복셀화 + 색당 프로토타입 → 모든 색 보존
+- 복셀을 개별 Sphere prim 으로 만들지 않고 인스턴싱 → draw call 소수 유지
 
-머티리얼 탐색 순서:
-  1) UsdShade MaterialBindingAPI 로 바인딩된 머티리얼
-  2) 없으면 형제(sibling) 위치의 UsdShade.Material prim
-  3) 그래도 없으면 displayColor / 무색 그룹
-
+머티리얼 탐색 순서: 1) 바인딩된 머티리얼  2) 형제 위치의 Material prim
 모든 실질 구현은 이 파일에 있다. UI 는 dummy_ui.py 에서 이 함수들만 호출한다.
 """
 
@@ -24,6 +21,7 @@ import omni.usd
 
 
 MERGED_PATH = "/World/OptimizedStreamlines"
+PROTO_SCOPE = MERGED_PATH + "/Prototypes"
 LOOKS_PATH = MERGED_PATH + "/Looks"
 NO_MAT_KEY = "__no_material__"
 
@@ -49,23 +47,23 @@ def _find_material_path(prim: Usd.Prim):
 
 
 # ---------------------------------------------------------------------------
-# 소스에서 곡선 수집 (머티리얼별 그룹핑)
+# 소스에서 곡선 수집 (머티리얼/색별 그룹핑, world 좌표)
 # ---------------------------------------------------------------------------
 def _collect_curves(stage: Usd.Stage):
-    """stage 내 모든 BasisCurves 를 순회하며 머티리얼별 그룹으로 모은다.
+    """stage 내 모든 BasisCurves 를 순회하며 색(머티리얼)별 그룹으로 모은다.
 
-    return: groups = {
+    return: (groups, src_prim_count)
+      groups = {
         matkey(str): {
             "src": Sdf.Path | None,   # 참조할 원본 머티리얼 경로
-            "points": [np.ndarray(N,3), ...],
-            "type": "linear" | "cubic",
-            "colors": [Gf.Vec3f | None, ...],   # 머티리얼 없을 때 fallback 용
+            "points": [np.ndarray(N,3), ...],  # world 좌표 곡선들
+            "color": Gf.Vec3f | None,          # 머티리얼 없을 때 fallback 색
         }
-    }
+      }
     """
     xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
     groups: dict = {}
-    src_prim_count = 0  # 소스의 BasisCurves prim(=draw call) 개수
+    src_prim_count = 0
 
     for prim in stage.Traverse():
         if not prim.IsA(UsdGeom.BasisCurves):
@@ -78,16 +76,11 @@ def _collect_curves(stage: Usd.Stage):
         if not pts or not counts:
             continue
 
-        t = curves.GetTypeAttr().Get(Usd.TimeCode.Default())
-        ctype = "cubic" if t == "cubic" else "linear"
-
         mat_path = _find_material_path(prim)
         matkey = str(mat_path) if mat_path is not None else NO_MAT_KEY
         grp = groups.setdefault(matkey, {
-            "src": mat_path, "points": [], "type": "linear", "colors": [],
+            "src": mat_path, "points": [], "color": None,
         })
-        if ctype == "cubic":
-            grp["type"] = "cubic"
 
         # local -> world 변환
         m = np.array(xform_cache.GetLocalToWorldTransform(prim)).reshape(4, 4)
@@ -95,145 +88,176 @@ def _collect_curves(stage: Usd.Stage):
         homo = np.hstack([np_pts, np.ones((np_pts.shape[0], 1))])
         world = (homo @ m)[:, :3]
 
-        color = _representative_color(curves, len(counts))
+        if grp["color"] is None:
+            grp["color"] = _representative_color(curves)
 
         offset = 0
-        for ci, c in enumerate(counts):
+        for c in counts:
             seg = world[offset:offset + c]
             offset += c
-            if len(seg) < 2:
+            if len(seg) < 1:
                 continue
-            grp["points"].append(seg.astype(np.float32))
-            grp["colors"].append(color[ci] if color is not None else None)
+            grp["points"].append(seg.astype(np.float64))
 
     return groups, src_prim_count
 
 
-def _representative_color(curves: UsdGeom.BasisCurves, n_curves: int):
-    """곡선별 대표 displayColor 리스트를 반환. 없으면 None."""
+def _representative_color(curves: UsdGeom.BasisCurves):
+    """곡선의 대표 displayColor 1개를 반환. 없으면 None."""
     dc_pv = UsdGeom.PrimvarsAPI(curves).GetPrimvar("displayColor")
     if not dc_pv or not dc_pv.GetAttr().IsValid():
         return None
     vals = dc_pv.Get(Usd.TimeCode.Default())
     if not vals:
         return None
-    interp = dc_pv.GetInterpolation()
-    if interp == "constant" or len(vals) == 1:
-        return [vals[0]] * n_curves
-    if interp == "uniform" and len(vals) == n_curves:
-        return list(vals)
-    return [vals[0]] * n_curves
+    return vals[0]
 
 
 # ---------------------------------------------------------------------------
-# 데시메이션 (Ramer-Douglas-Peucker)
+# 복셀화 (순수 numpy — pxr/omni 불필요, 오프라인 테스트 가능)
 # ---------------------------------------------------------------------------
-def _rdp(points: np.ndarray, epsilon: float) -> np.ndarray:
-    """폴리라인 정점 수를 epsilon 허용오차로 줄인다. epsilon<=0 이면 원본."""
-    if epsilon <= 0.0 or len(points) < 3:
-        return points
+def _voxelize(points_list, origin: np.ndarray, voxel_size: float):
+    """색 그룹의 곡선 점들을 복셀 그리드로 다운샘플링한다.
 
-    keep = np.zeros(len(points), dtype=bool)
-    keep[0] = keep[-1] = True
-    stack = [(0, len(points) - 1)]
+    긴 세그먼트가 복셀을 건너뛰지 않도록 voxel_size 간격으로 리샘플한 뒤
+    복셀 인덱스로 양자화하여 점유 복셀과 밀도(count)를 구한다.
 
-    while stack:
-        start, end = stack.pop()
-        if end <= start + 1:
+    return: (centers np(M,3), counts np(M,)) — 점유 복셀 중심과 관통 밀도.
+    """
+    if voxel_size <= 0.0:
+        raise ValueError("voxel_size must be > 0")
+
+    all_samples = []
+    for curve in points_list:
+        curve = np.asarray(curve, dtype=np.float64)
+        if len(curve) == 1:
+            all_samples.append(curve)
             continue
-        a, b = points[start], points[end]
-        ab = b - a
-        ab_len = np.linalg.norm(ab)
-        seg = points[start + 1:end]
-        if ab_len < 1e-12:
-            dists = np.linalg.norm(seg - a, axis=1)
-        else:
-            cross = np.cross(seg - a, ab)
-            dists = np.linalg.norm(cross, axis=1) / ab_len
-        idx = int(np.argmax(dists))
-        if dists[idx] > epsilon:
-            split = start + 1 + idx
-            keep[split] = True
-            stack.append((start, split))
-            stack.append((split, end))
+        # 인접 점 간 거리 기반으로 세그먼트를 voxel_size 간격으로 리샘플
+        seg_vec = np.diff(curve, axis=0)
+        seg_len = np.linalg.norm(seg_vec, axis=1)
+        for i, L in enumerate(seg_len):
+            n = max(int(np.ceil(L / voxel_size)), 1)
+            ts = np.linspace(0.0, 1.0, n + 1)[:, None]
+            pts = curve[i] + ts * seg_vec[i]
+            all_samples.append(pts)
 
-    return points[keep]
+    if not all_samples:
+        return np.empty((0, 3)), np.empty((0,), dtype=np.int64)
+
+    samples = np.concatenate(all_samples, axis=0)
+    idx = np.floor((samples - origin) / voxel_size).astype(np.int64)
+    uniq, counts = np.unique(idx, axis=0, return_counts=True)
+    centers = origin + (uniq + 0.5) * voxel_size
+    return centers, counts
 
 
 # ---------------------------------------------------------------------------
-# 병합 & 씬에 저장
+# root world bbox → 자동 voxel_size
 # ---------------------------------------------------------------------------
-def _author_groups(stage: Usd.Stage, groups: dict, source_path: str,
-                   epsilon: float, width: float):
+def _world_bounds(stage: Usd.Stage):
+    """stage 내 모든 BasisCurves 를 감싸는 world AABB (min, max) 를 반환."""
+    bbox_cache = UsdGeom.BBoxCache(
+        Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+    mins = np.array([np.inf, np.inf, np.inf])
+    maxs = np.array([-np.inf, -np.inf, -np.inf])
+    found = False
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdGeom.BasisCurves):
+            continue
+        rng = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        if rng.IsEmpty():
+            continue
+        found = True
+        lo, hi = rng.GetMin(), rng.GetMax()
+        mins = np.minimum(mins, [lo[0], lo[1], lo[2]])
+        maxs = np.maximum(maxs, [hi[0], hi[1], hi[2]])
+    if not found:
+        return None, None
+    return mins, maxs
+
+
+# ---------------------------------------------------------------------------
+# PointInstancer 저작
+# ---------------------------------------------------------------------------
+def _author_point_instancer(stage, per_color, source_path, voxel_size,
+                            radius_factor, density_to_scale):
+    """per_color = [ {src, color, centers np(M,3), counts np(M,)} ] 로부터
+    단일 PointInstancer + 색당 구 프로토타입을 저작한다."""
     if stage.GetPrimAtPath(MERGED_PATH):
         stage.RemovePrim(MERGED_PATH)
 
     UsdGeom.Xform.Define(stage, MERGED_PATH)
+    UsdGeom.Scope.Define(stage, PROTO_SCOPE)
     UsdGeom.Scope.Define(stage, LOOKS_PATH)
 
-    total_curves = 0
-    total_pts = 0
+    instancer = UsdGeom.PointInstancer.Define(stage, MERGED_PATH + "/instancer")
+    proto_paths = []
 
-    for gi, (matkey, grp) in enumerate(sorted(groups.items())):
-        pts_list = grp["points"]
-        if not pts_list:
+    positions: list = []
+    proto_indices: list = []
+    scales: list = []
+    base_scale = float(voxel_size) * float(radius_factor)
+    total_voxels = 0
+
+    for ci, grp in enumerate(per_color):
+        centers = grp["centers"]
+        counts = grp["counts"]
+        if len(centers) == 0:
             continue
-        if epsilon > 0.0:
-            pts_list = [_rdp(p, epsilon) for p in pts_list]
 
-        group_prim_path = f"{MERGED_PATH}/group_{gi}"
-        curves = UsdGeom.BasisCurves.Define(stage, group_prim_path)
-        curves.CreateTypeAttr(grp["type"])
-        if grp["type"] == "cubic":
-            curves.CreateBasisAttr("bspline")
-            curves.CreateWrapAttr("nonperiodic")
+        # 색당 구 프로토타입 (radius=1, scale 로 반경 제어)
+        proto_path = f"{PROTO_SCOPE}/proto_{ci}"
+        sphere = UsdGeom.Sphere.Define(stage, proto_path)
+        sphere.CreateRadiusAttr(1.0)
+        proto_paths.append(Sdf.Path(proto_path))
 
-        counts: list[int] = []
-        all_points: list = []
-        for p in pts_list:
-            counts.append(len(p))
-            all_points.extend(
-                Gf.Vec3f(float(v[0]), float(v[1]), float(v[2])) for v in p)
-
-        curves.CreateCurveVertexCountsAttr(Vt.IntArray(counts))
-        curves.CreatePointsAttr(Vt.Vec3fArray(all_points))
-        curves.CreateWidthsAttr(Vt.FloatArray([float(width)]))
-        curves.SetWidthsInterpolation("constant")
-
-        total_curves += len(counts)
-        total_pts += len(all_points)
-
-        # 머티리얼: 원본을 참조로 가져와 그대로 바인딩 → 색 정확 보존
+        # 색: 원본 머티리얼 참조 바인딩(정확 보존) 또는 displayColor
         if grp["src"] is not None:
-            dst_mat_path = f"{LOOKS_PATH}/mat_{gi}"
+            dst_mat_path = f"{LOOKS_PATH}/mat_{ci}"
             mat_prim = stage.DefinePrim(dst_mat_path)
             mat_prim.GetReferences().AddReference(source_path, str(grp["src"]))
-            mat = UsdShade.Material(mat_prim)
-            binding = UsdShade.MaterialBindingAPI.Apply(curves.GetPrim())
-            binding.Bind(mat)
+            binding = UsdShade.MaterialBindingAPI.Apply(sphere.GetPrim())
+            binding.Bind(UsdShade.Material(mat_prim))
         else:
-            # 머티리얼이 없으면 displayColor 로 색 보존 (uniform)
-            cols = [c if c is not None else Gf.Vec3f(0.8, 0.8, 0.8)
-                    for c in grp["colors"]]
-            dc = UsdGeom.PrimvarsAPI(curves).CreatePrimvar(
-                "displayColor", Sdf.ValueTypeNames.Color3fArray)
-            dc.SetInterpolation("uniform")
-            dc.Set(Vt.Vec3fArray([Gf.Vec3f(*c) for c in cols]))
+            col = grp["color"] if grp["color"] is not None else Gf.Vec3f(0.8, 0.8, 0.8)
+            sphere.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*col)]))
 
-    return len(groups), total_curves, total_pts
+        # 밀도 → scale 매핑 (옵션): count 를 로그 정규화해 0.5~1.5 배
+        if density_to_scale and len(counts) > 0:
+            cmax = float(counts.max())
+            norm = np.log1p(counts.astype(np.float64)) / np.log1p(max(cmax, 1.0))
+            factors = 0.5 + norm  # 0.5 ~ 1.5
+        else:
+            factors = np.ones(len(centers))
+
+        for center, f in zip(centers, factors):
+            positions.append(Gf.Vec3f(float(center[0]), float(center[1]), float(center[2])))
+            proto_indices.append(ci)
+            s = base_scale * float(f)
+            scales.append(Gf.Vec3f(s, s, s))
+
+        total_voxels += len(centers)
+
+    instancer.CreatePrototypesRel().SetTargets(proto_paths)
+    instancer.CreateProtoIndicesAttr(Vt.IntArray(proto_indices))
+    instancer.CreatePositionsAttr(Vt.Vec3fArray(positions))
+    instancer.CreateScalesAttr(Vt.Vec3fArray(scales))
+
+    return len(proto_paths), total_voxels
 
 
 # ---------------------------------------------------------------------------
 # 공개 API
 # ---------------------------------------------------------------------------
-def optimize_and_load(source_path: str, epsilon: float = 0.0,
-                      width: float = 0.1) -> str:
-    """source_path 의 streamline USD 를 최적화해 현재 씬에 로드한다.
+def optimize_and_load(source_path: str, voxel_size: float = 0.0,
+                      resolution: int = 128, radius_factor: float = 0.5,
+                      density_to_scale: bool = False) -> str:
+    """source_path 의 streamline USD 를 복셀 다운샘플링해 현재 씬에 로드한다.
 
-    - 모든 BasisCurves 를 world 공간으로 변환
-    - 바인딩된 머티리얼(색)별로 그룹핑 → 그룹마다 단일 BasisCurves 로 병합
-    - 원본 머티리얼을 참조 바인딩하여 모든 색 보존
-    - epsilon>0 이면 RDP 데시메이션 적용
+    - 색(머티리얼)별로 곡선을 world 좌표로 모아 복셀 그리드로 다운샘플링
+    - 단일 PointInstancer + 색당 구 프로토타입으로 표현 (모든 색 보존)
+    - voxel_size<=0 이면 root world bbox 최대변 / resolution 으로 자동 산출
     return: 사람이 읽을 상태 문자열
     """
     src = Usd.Stage.Open(source_path)
@@ -244,8 +268,28 @@ def optimize_and_load(source_path: str, epsilon: float = 0.0,
     if not groups or all(not g["points"] for g in groups.values()):
         return f"ERROR: BasisCurves 를 찾지 못함: {source_path}"
 
-    n_src_curves = sum(len(g["points"]) for g in groups.values())
     n_src_pts = sum(len(p) for g in groups.values() for p in g["points"])
+
+    mins, maxs = _world_bounds(src)
+    if mins is None:
+        return "ERROR: world bbox 계산 실패"
+    if voxel_size <= 0.0:
+        extent = float(np.max(maxs - mins))
+        voxel_size = extent / max(int(resolution), 1)
+    if voxel_size <= 0.0:
+        return "ERROR: voxel_size 산출 실패 (bbox 크기 0)"
+
+    origin = mins.astype(np.float64)
+    per_color = []
+    for matkey in sorted(groups):
+        grp = groups[matkey]
+        if not grp["points"]:
+            continue
+        centers, counts = _voxelize(grp["points"], origin, voxel_size)
+        per_color.append({
+            "src": grp["src"], "color": grp["color"],
+            "centers": centers, "counts": counts,
+        })
 
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -253,18 +297,11 @@ def optimize_and_load(source_path: str, epsilon: float = 0.0,
     if not stage.GetPrimAtPath("/World"):
         UsdGeom.Xform.Define(stage, "/World")
 
-    n_groups, n_curves, n_pts = _author_groups(
-        stage, groups, source_path, epsilon, width)
+    n_protos, n_voxels = _author_point_instancer(
+        stage, per_color, source_path, voxel_size, radius_factor, density_to_scale)
 
-    # draw call 감소가 실제 최적화의 핵심 지표
-    print(f"[curve] draw call(prim): {src_prim_count} -> {n_groups} | "
-          f"curves {n_src_curves} | pts {n_src_pts} -> {n_pts} (epsilon={epsilon})")
-
-    if src_prim_count <= n_groups:
-        note = (" | ⚠ 이미 색당 prim 1개 구조라 draw call 감소 없음 "
-                "— 데시메이션(ε) / usdc 변환 위주로 최적화하세요")
-    else:
-        note = f" | draw call {src_prim_count}→{n_groups} 감소"
-
-    return (f"OK: prim {src_prim_count} → {n_groups} (색 {n_groups}종 보존) | "
-            f"곡선 {n_src_curves} | 정점 {n_src_pts} → {n_pts}{note}")
+    print(f"[curve] voxelize: prim {src_prim_count}, pts {n_src_pts} -> "
+          f"instances {n_voxels}, protos(colors) {n_protos}, "
+          f"voxel_size={voxel_size:.4g}")
+    return (f"OK: 정점 {n_src_pts} → 인스턴스 {n_voxels}개 | "
+            f"색 {n_protos}종 보존 | voxel={voxel_size:.4g} | {MERGED_PATH}")
