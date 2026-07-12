@@ -19,6 +19,7 @@
 """
 
 import asyncio
+import time
 from collections import Counter
 
 import numpy as np
@@ -233,7 +234,7 @@ def _extract_curve(prim: Usd.Prim, tc, xform_cache):
     m = np.array(xform_cache.GetLocalToWorldTransform(prim)).reshape(4, 4)
     np_pts = np.array(pts, dtype=np.float64)          # (N,3) 빠른 변환
     homo = np.hstack([np_pts, np.ones((np_pts.shape[0], 1))])
-    world = (homo @ m)[:, :3]
+    world = (homo @ m)[:, :3].astype(np.float32)      # 이후 처리는 float32 로 충분
 
     color = _curve_color(prim, tc)
     if color is None:
@@ -247,65 +248,84 @@ def _extract_curve(prim: Usd.Prim, tc, xform_cache):
         offset += int(c)
         if len(seg) >= 1:
             segs.append(seg)
-    return segs, color
+    return segs, color, world.min(axis=0), world.max(axis=0)
+
+
+def _curve_prims_and_timecode(stage: Usd.Stage):
+    """곡선 prim 목록과 대표 타임코드를 단일 순회로 구한다.
+
+    prim 목록을 한 번만 뽑아 (1) 진행률용 총개수 (2) 타임코드 판별
+    (3) 실제 수집에 재사용 — 이전의 3중 traversal 을 1회로 줄인다.
+    """
+    prims = [p for p in _traverse_all(stage) if _is_curve(p)]
+    tc = Usd.TimeCode.Default()
+    if prims:
+        ts = UsdGeom.Curves(prims[0]).GetPointsAttr().GetTimeSamples()
+        if ts:
+            tc = Usd.TimeCode(ts[0])
+    return prims, tc
 
 
 def _collect_curves(stage: Usd.Stage, group_paths: list = None):
-    """동기 수집. return: (points_list, colors_list, groups_list, n, skipped)."""
+    """동기 수집. return: (pl, cl, gl, n, skipped, mins, maxs)."""
     targets = group_paths or []
-    tc = _pick_timecode(stage)
+    prims, tc = _curve_prims_and_timecode(stage)
     xc = UsdGeom.XformCache(tc)
-    pl, cl, gl, n, skipped = [], [], [], 0, 0
-    for prim in _traverse_all(stage):
-        if not _is_curve(prim):
-            continue
-        n += 1
+    pl, cl, gl, skipped = [], [], [], 0
+    mins = np.full(3, np.inf)
+    maxs = np.full(3, -np.inf)
+    for prim in prims:
         r = _extract_curve(prim, tc, xc)
         if r is None:
             skipped += 1
             continue
-        segs, color = r
+        segs, color, wmin, wmax = r
+        mins = np.minimum(mins, wmin)
+        maxs = np.maximum(maxs, wmax)
         gkey = _group_for_path(prim.GetPath().pathString, targets)
         for s in segs:
             pl.append(s)
             cl.append(color)
             gl.append(gkey)
-    return pl, cl, gl, n, skipped
+    return pl, cl, gl, len(prims), skipped, mins, maxs
 
 
 async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
-                                report=None, chunk: int = 20):
-    """비동기 수집: chunk 개마다 UI 에 양보(next_update_async)해 Kit 멈춤 방지.
+                                report=None, yield_interval: float = 0.05):
+    """비동기 수집. yield_interval 초 이상 일했을 때만 UI 에 양보한다.
 
-    진행률(%) 표기를 위해 먼저 곡선 prim 개수를 빠르게 센다.
+    (개수 기준 양보는 프레임이 느린 씬에서 대기 시간이 낭비됨 — 시간 기준으로.)
     """
     targets = group_paths or []
-    tc = _pick_timecode(stage)
+    prims, tc = _curve_prims_and_timecode(stage)
     xc = UsdGeom.XformCache(tc)
     app = omni.kit.app.get_app()
+    total = len(prims)
 
-    total = sum(1 for p in _traverse_all(stage) if _is_curve(p))
-
-    pl, cl, gl, n, skipped = [], [], [], 0, 0
-    for prim in _traverse_all(stage):
-        if not _is_curve(prim):
-            continue
-        n += 1
+    pl, cl, gl, skipped = [], [], [], 0
+    mins = np.full(3, np.inf)
+    maxs = np.full(3, -np.inf)
+    last_yield = time.perf_counter()
+    for i, prim in enumerate(prims):
         r = _extract_curve(prim, tc, xc)
         if r is None:
             skipped += 1
         else:
-            segs, color = r
+            segs, color, wmin, wmax = r
+            mins = np.minimum(mins, wmin)
+            maxs = np.maximum(maxs, wmax)
             gkey = _group_for_path(prim.GetPath().pathString, targets)
             for s in segs:
                 pl.append(s)
                 cl.append(color)
                 gl.append(gkey)
-        if n % chunk == 0:
+        if time.perf_counter() - last_yield >= yield_interval:
             if report and total:
-                report(f"[1/3] reading curves... {100 * n // total}% ({n}/{total})")
+                report(f"[1/3] reading curves... "
+                       f"{100 * (i + 1) // total}% ({i + 1}/{total})")
             await app.next_update_async()
-    return pl, cl, gl, n, skipped
+            last_yield = time.perf_counter()
+    return pl, cl, gl, total, skipped, mins, maxs
 
 
 # ---------------------------------------------------------------------------
@@ -315,45 +335,74 @@ def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
     """곡선 점들을 복셀 그리드로 다운샘플링하되, 복셀당 하나로 합치고 색은 평균낸다.
 
     긴 세그먼트가 복셀을 건너뛰지 않도록 voxel_size 간격으로 리샘플한다.
+    완전 벡터화: 세그먼트별 Python 루프 없이 전체 샘플을 배열 연산 한 번에 생성.
+    - 샘플색은 (M,3) 복제 대신 곡선 인덱스(int)로 참조, 평균은 채널별 bincount
+    - 복셀 3D 인덱스는 int64 키 하나로 팩킹해 1D unique (axis=0 unique 회피)
+    - 세그먼트 끝점은 다음 세그먼트 시작점과 중복이므로 제외하고,
+      각 곡선의 마지막 점만 별도 추가 (단일점 곡선도 이걸로 커버)
     return: (centers np(M,3), counts np(M,), mean_colors np(M,3))
     """
     if voxel_size <= 0.0:
         raise ValueError("voxel_size must be > 0")
-
-    sample_chunks = []
-    color_chunks = []
-    for curve, col in zip(points_list, colors_list):
-        curve = np.asarray(curve, dtype=np.float64)
-        col = np.asarray(col, dtype=np.float64)
-        if len(curve) == 1:
-            sample_chunks.append(curve)
-            color_chunks.append(col[None, :])
-            continue
-        seg_vec = np.diff(curve, axis=0)
-        seg_len = np.linalg.norm(seg_vec, axis=1)
-        for i, L in enumerate(seg_len):
-            n = max(int(np.ceil(L / voxel_size)), 1)
-            ts = np.linspace(0.0, 1.0, n + 1)[:, None]
-            pts = curve[i] + ts * seg_vec[i]
-            sample_chunks.append(pts)
-            color_chunks.append(np.repeat(col[None, :], len(pts), axis=0))
-
-    if not sample_chunks:
+    if not points_list:
         return (np.empty((0, 3)), np.empty((0,), dtype=np.int64), np.empty((0, 3)))
 
-    samples = np.concatenate(sample_chunks, axis=0)
-    sample_colors = np.concatenate(color_chunks, axis=0)
+    lengths = np.array([len(p) for p in points_list], dtype=np.int64)
+    all_pts = np.concatenate(
+        [np.asarray(p, dtype=np.float32) for p in points_list], axis=0)
+    n_curves = len(points_list)
+    curve_ids = np.repeat(np.arange(n_curves, dtype=np.int64), lengths)
+    palette = np.asarray(colors_list, dtype=np.float64)  # (n_curves, 3)
 
-    idx = np.floor((samples - origin) / voxel_size).astype(np.int64)
+    # 곡선 내부의 인접 점 쌍만 세그먼트로 (곡선 경계를 잇는 쌍은 제외)
+    valid = curve_ids[:-1] == curve_ids[1:]
+    seg_start = all_pts[:-1][valid]
+    seg_vec = all_pts[1:][valid] - seg_start
+    seg_curve = curve_ids[:-1][valid]
+    seg_len = np.linalg.norm(seg_vec, axis=1)
+    n_sub = np.maximum(np.ceil(seg_len / voxel_size).astype(np.int64), 1)
+
+    # 샘플 t = k/n (k=0..n-1): 시작점 포함, 끝점 제외(다음 세그먼트가 커버)
+    total = int(n_sub.sum())
+    seg_of = np.repeat(np.arange(len(n_sub), dtype=np.int64), n_sub)
+    k = np.arange(total, dtype=np.int64) - np.repeat(np.cumsum(n_sub) - n_sub, n_sub)
+    t = (k / n_sub[seg_of]).astype(np.float32)
+    samples = seg_start[seg_of] + t[:, None] * seg_vec[seg_of]
+    sample_curve = seg_curve[seg_of]
+
+    # 각 곡선의 마지막 점(위에서 제외된 유일한 점) 추가
+    last_idx = np.cumsum(lengths) - 1
+    samples = np.concatenate([samples, all_pts[last_idx]], axis=0)
+    sample_curve = np.concatenate(
+        [sample_curve, np.arange(n_curves, dtype=np.int64)])
+
+    # 복셀 3D 인덱스 → 단일 int64 키 팩킹
+    inv_vs = np.float32(1.0 / voxel_size)
+    origin32 = origin.astype(np.float32)
+    idx = np.floor((samples - origin32) * inv_vs).astype(np.int64)
+    imin = idx.min(axis=0)
+    rel = idx - imin
+    dims = rel.max(axis=0) + 1
+    key = (rel[:, 0] * dims[1] + rel[:, 1]) * dims[2] + rel[:, 2]
+
     uniq, inverse, counts = np.unique(
-        idx, axis=0, return_inverse=True, return_counts=True)
+        key, return_inverse=True, return_counts=True)
     inverse = inverse.ravel()
 
-    sums = np.zeros((len(uniq), 3))
-    np.add.at(sums, inverse, sample_colors)
-    mean_colors = sums / counts[:, None]
+    # 평균색: 채널별 bincount (np.add.at 대비 수 배 빠름)
+    n_vox = len(uniq)
+    mean_colors = np.empty((n_vox, 3))
+    for c in range(3):
+        mean_colors[:, c] = np.bincount(
+            inverse, weights=palette[sample_curve, c], minlength=n_vox)
+    mean_colors /= counts[:, None]
 
-    centers = origin + (uniq + 0.5) * voxel_size
+    # 키 → 3D 인덱스 복원 → 복셀 중심
+    plane = dims[1] * dims[2]
+    ux = uniq // plane
+    rem = uniq % plane
+    uniq3d = np.stack([ux, rem // dims[2], rem % dims[2]], axis=1) + imin
+    centers = origin + (uniq3d + 0.5) * voxel_size
     return centers, counts, mean_colors
 
 
@@ -379,32 +428,6 @@ def _quantize_colors(colors: np.ndarray, levels: int):
     cnt = np.bincount(inverse, minlength=k)
     reps = sums / cnt[:, None]
     return inverse, reps
-
-
-# ---------------------------------------------------------------------------
-# root world bbox → 자동 voxel_size
-# ---------------------------------------------------------------------------
-def _world_bounds(stage: Usd.Stage, tc=None):
-    if tc is None:
-        tc = _pick_timecode(stage)
-    bbox_cache = UsdGeom.BBoxCache(
-        tc, [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-    mins = np.array([np.inf, np.inf, np.inf])
-    maxs = np.array([-np.inf, -np.inf, -np.inf])
-    found = False
-    for prim in _traverse_all(stage):
-        if not _is_curve(prim):
-            continue
-        rng = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
-        if rng.IsEmpty():
-            continue
-        found = True
-        lo, hi = rng.GetMin(), rng.GetMax()
-        mins = np.minimum(mins, [lo[0], lo[1], lo[2]])
-        maxs = np.maximum(maxs, [hi[0], hi[1], hi[2]])
-    if not found:
-        return None, None
-    return mins, maxs
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +574,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
     if not src:
         return f"ERROR: cannot open: {source_path}"
 
-    points_list, colors_list, groups_list, _n, skipped_empty = \
+    points_list, colors_list, groups_list, _n, skipped_empty, mins, maxs = \
         _collect_curves(src, group_paths)
     if not points_list:
         hint = ""
@@ -562,9 +585,6 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
                 f"{inspect_source(source_path)}")
 
     n_src_pts = sum(len(p) for p in points_list)
-    mins, maxs = _world_bounds(src)
-    if mins is None:
-        return "ERROR: failed to compute world bbox"
     if voxel_size <= 0.0:
         voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
     if voxel_size <= 0.0:
@@ -616,7 +636,7 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         return f"ERROR: cannot open: {source_path}"
 
     report("[1/3] reading curves... 0%")
-    points_list, colors_list, groups_list, _n, skipped_empty = \
+    points_list, colors_list, groups_list, _n, skipped_empty, mins, maxs = \
         await _collect_curves_async(src, group_paths, report)
     if not points_list:
         hint = ""
@@ -627,9 +647,6 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
                 f"{inspect_source(source_path)}")
 
     n_src_pts = sum(len(p) for p in points_list)
-    mins, maxs = _world_bounds(src)
-    if mins is None:
-        return "ERROR: failed to compute world bbox"
     if voxel_size <= 0.0:
         voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
     if voxel_size <= 0.0:
