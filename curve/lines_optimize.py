@@ -531,6 +531,10 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(col)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+        # normal 을 (0,0,0)으로 죽여 N·L 항을 0으로 만듦 → diffuse/specular 기본값이
+        # 안 보이고 emissiveColor 만 그대로 드러나게 하는 용도 (emissive 테스트용)
+        shader.CreateInput("normal", Sdf.ValueTypeNames.Normal3f).Set(
+            Gf.Vec3f(0.0, 0.0, 0.0))
         mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
         UsdShade.MaterialBindingAPI.Apply(geom.GetPrim()).Bind(mat)
         proto_paths.append(Sdf.Path(proto_path))
