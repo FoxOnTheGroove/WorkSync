@@ -6,10 +6,11 @@
 로 표현한다. .usd/.usdz 소스 모두 Usd.Stage.Open() 이 네이티브로 처리한다.
 
 핵심 규칙:
-- **복셀당 인스턴스 1개.** 같은 복셀에 여러 색이 겹치면 그 색들을 **평균**내어
-  하나만 둔다(중복 스피어 제거).
-- 비슷한 색끼리 버킷으로 양자화(color_levels)하여 대표색 프로토타입 수를 소수로
-  줄인다. 각 인스턴스는 자기 복셀 색에 가장 가까운 버킷 프로토타입을 가리킨다.
+- **복셀당 인스턴스 1개.** 같은 복셀에 여러 곡선이 겹치면 원본에서 나중에
+  그려진(문서 순서상 뒤에 오는) 곡선의 색이 앞선 것을 덮어쓴다(평균 아님).
+- 색 프로토타입은 **정확히 동일한 색끼리만** 묶는다(반올림 양자화 없음, 손실
+  없음) — 인스턴스는 이미 수만~수십만 단위라 프로토타입이 원본 색 수만큼
+  늘어도 부담 없다.
 - 곡선을 개별 Sphere prim 으로 만들지 않고 인스턴싱 → draw call 소수 유지.
 - group_paths 로 지정한 대상 xform 하위 곡선만 복셀 연산 대상이고, 대상 밖
   ("ungrouped") 곡선은 연산하지 않고 원본을 그대로 참조해서 가져온다.
@@ -436,27 +437,23 @@ def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
 
 
 # ---------------------------------------------------------------------------
-# 색 양자화 — 비슷한 색을 버킷으로 (순수 numpy, 오프라인 테스트 가능)
+# 색 버킷 — 정확히 동일한 색만 하나로 묶는다 (순수 numpy, 오프라인 테스트 가능)
 # ---------------------------------------------------------------------------
-def _quantize_colors(colors: np.ndarray, levels: int):
-    """색들을 채널당 levels 단계 그리드로 양자화해 버킷으로 묶는다.
+def _quantize_colors(colors: np.ndarray):
+    """정확히 같은 색끼리만 버킷으로 묶는다 (반올림/격자 양자화 없음 — 손실 없음).
+
+    프로토타입 수 = 실제 서로 다른 색의 수. 인스턴스는 이미 수만~수십만 단위라
+    프로토타입이 원본 색 수(수백)만큼 늘어도 부담이 없어, "비슷한 색끼리 뭉치기"
+    보다 "원본 색 그대로 보존"을 우선한다.
 
     return: (bucket_idx np(M,), reps np(K,3))
       bucket_idx[i] = 색 i 가 속한 버킷 인덱스
-      reps[k]       = 버킷 k 의 대표색 (그 버킷에 속한 원본색들의 평균)
+      reps[k]       = 버킷 k 의 색 (동일한 색들이므로 평균 없이 그 값 자체)
     """
     if len(colors) == 0:
         return np.empty((0,), dtype=np.int64), np.empty((0, 3))
-    levels = max(int(levels), 2)
-    q = np.round(colors * (levels - 1)) / (levels - 1)
-    _uniq, inverse = np.unique(q, axis=0, return_inverse=True)
-    inverse = inverse.ravel()
-    k = inverse.max() + 1
-    sums = np.zeros((k, 3))
-    np.add.at(sums, inverse, colors)
-    cnt = np.bincount(inverse, minlength=k)
-    reps = sums / cnt[:, None]
-    return inverse, reps
+    reps, inverse = np.unique(colors, axis=0, return_inverse=True)
+    return inverse.ravel(), reps
 
 
 # ---------------------------------------------------------------------------
@@ -702,19 +699,20 @@ def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups, n_raw):
           f"instances {n_voxels}, color-buckets {n_protos}, groups {n_groups}, "
           f"raw(ungrouped) {n_raw}, voxel_size={voxel_size:.4g}")
     return (f"OK: curves {n_curves} / pts {n_src_pts} -> {n_voxels} instances "
-            f"(1 per voxel, color-averaged) | color-buckets {n_protos} | "
+            f"(1 per voxel, last-drawn-wins) | color-buckets {n_protos} | "
             f"groups {n_groups} | raw {n_raw} | voxel={voxel_size:.4g} | "
             f"{MERGED_PATH}")
 
 
 def optimize_and_load(source_path: str, voxel_size: float = 0.0,
                       resolution: int = 128, radius_factor: float = 0.5,
-                      density_to_scale: bool = False, color_levels: int = 8,
+                      density_to_scale: bool = False,
                       group_paths: list = None, raw_visible: bool = True,
                       proto_shape: str = "sphere") -> str:
     """streamline USD/USDZ 를 색-인지 복셀 다운샘플링해 현재 씬에 로드한다.
 
-    - 복셀당 인스턴스 1개, 겹치는 색은 평균 / 비슷한 색은 color_levels 로 버킷 양자화
+    - 복셀당 인스턴스 1개, 겹치는 곡선은 나중에 그려진 것이 이김(평균 아님).
+      색 프로토타입은 정확히 동일한 색끼리만 묶는다(양자화 없음, 손실 없음)
     - group_paths(대상 xform 경로 리스트)가 있으면 각 경로 하위 곡선끼리 그룹으로
       묶어 별도 PointInstancer 저작(타겟 경로 그대로 계층에 미러링). 대상 밖
       ("ungrouped") 곡선은 연산하지 않고 원본 계층을 그대로 미러링해 참조한다.
@@ -756,8 +754,8 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
     parts = _partition(points_list, colors_list, groups_list)
     tot_vox = tot_proto = 0
     for gkey, pl, cl in parts:
-        centers, counts, mean_colors = _voxelize(pl, cl, origin, voxel_size)
-        bucket_idx, reps = _quantize_colors(mean_colors, color_levels)
+        centers, counts, voxel_colors = _voxelize(pl, cl, origin, voxel_size)
+        bucket_idx, reps = _quantize_colors(voxel_colors)
         group_root = _group_root_path(gkey)
         n_protos, n_vox = _author_group(
             stage, group_root, centers, counts, bucket_idx, reps,
@@ -775,7 +773,6 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
                                   resolution: int = 128,
                                   radius_factor: float = 0.5,
                                   density_to_scale: bool = False,
-                                  color_levels: int = 8,
                                   group_paths: list = None,
                                   raw_visible: bool = True,
                                   proto_shape: str = "sphere",
@@ -833,10 +830,10 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
     for gi, (gkey, pl, cl) in enumerate(parts):
         pct = 100 * gi // n_parts
         report(f"[2/3] voxelizing... {pct}% (group {gi + 1}/{n_parts} '{gkey}')")
-        centers, counts, mean_colors = await loop.run_in_executor(
+        centers, counts, voxel_colors = await loop.run_in_executor(
             None, _voxelize, pl, cl, origin, voxel_size)
         bucket_idx, reps = await loop.run_in_executor(
-            None, _quantize_colors, mean_colors, color_levels)
+            None, _quantize_colors, voxel_colors)
         await app.next_update_async()
         pct = 100 * (2 * gi + 1) // (2 * n_parts)
         report(f"[3/3] authoring... {pct}% (group {gi + 1}/{n_parts} '{gkey}')")
