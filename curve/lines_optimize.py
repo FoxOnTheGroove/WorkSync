@@ -331,22 +331,11 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
 # ---------------------------------------------------------------------------
 # 복셀화 — 색 인지 (순수 numpy, 오프라인 테스트 가능)
 # ---------------------------------------------------------------------------
-def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
-    """곡선 점들을 복셀 그리드로 다운샘플링하되, 복셀당 하나로 합치고 색은 평균낸다.
+def _resample(points_list, colors_list, voxel_size: float):
+    """곡선들을 voxel_size 간격으로 리샘플. 완전 벡터화 (Python 루프 없음).
 
-    긴 세그먼트가 복셀을 건너뛰지 않도록 voxel_size 간격으로 리샘플한다.
-    완전 벡터화: 세그먼트별 Python 루프 없이 전체 샘플을 배열 연산 한 번에 생성.
-    - 샘플색은 (M,3) 복제 대신 곡선 인덱스(int)로 참조, 평균은 채널별 bincount
-    - 복셀 3D 인덱스는 int64 키 하나로 팩킹해 1D unique (axis=0 unique 회피)
-    - 세그먼트 끝점은 다음 세그먼트 시작점과 중복이므로 제외하고,
-      각 곡선의 마지막 점만 별도 추가 (단일점 곡선도 이걸로 커버)
-    return: (centers np(M,3), counts np(M,), mean_colors np(M,3))
+    return: (samples np(S,3) float32, sample_curve np(S,) int64, palette np(nc,3))
     """
-    if voxel_size <= 0.0:
-        raise ValueError("voxel_size must be > 0")
-    if not points_list:
-        return (np.empty((0, 3)), np.empty((0,), dtype=np.int64), np.empty((0, 3)))
-
     lengths = np.array([len(p) for p in points_list], dtype=np.int64)
     all_pts = np.concatenate(
         [np.asarray(p, dtype=np.float32) for p in points_list], axis=0)
@@ -375,35 +364,101 @@ def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
     samples = np.concatenate([samples, all_pts[last_idx]], axis=0)
     sample_curve = np.concatenate(
         [sample_curve, np.arange(n_curves, dtype=np.int64)])
+    return samples, sample_curve, palette
 
-    # 복셀 3D 인덱스 → 단일 int64 키 팩킹
-    inv_vs = np.float32(1.0 / voxel_size)
+
+def _reduce_voxels(key, sample_curve, palette):
+    """복셀 키별로 밀도(count)와 채널별 평균색을 구한다."""
+    uniq, inverse, counts = np.unique(
+        key, return_inverse=True, return_counts=True)
+    inverse = inverse.ravel()
+    mean_colors = np.empty((len(uniq), 3))
+    for c in range(3):
+        mean_colors[:, c] = np.bincount(
+            inverse, weights=palette[sample_curve, c], minlength=len(uniq))
+    mean_colors /= counts[:, None]
+    return uniq, counts, mean_colors
+
+
+def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
+    """단일 데이터셋 복셀화 (지역 격자). return: (centers, counts, mean_colors)."""
+    if voxel_size <= 0.0:
+        raise ValueError("voxel_size must be > 0")
+    if not points_list:
+        return (np.empty((0, 3)), np.empty((0,), dtype=np.int64), np.empty((0, 3)))
+
+    samples, sample_curve, palette = _resample(points_list, colors_list, voxel_size)
     origin32 = origin.astype(np.float32)
+    inv_vs = np.float32(1.0 / voxel_size)
     idx = np.floor((samples - origin32) * inv_vs).astype(np.int64)
     imin = idx.min(axis=0)
     rel = idx - imin
     dims = rel.max(axis=0) + 1
     key = (rel[:, 0] * dims[1] + rel[:, 1]) * dims[2] + rel[:, 2]
-
-    uniq, inverse, counts = np.unique(
-        key, return_inverse=True, return_counts=True)
-    inverse = inverse.ravel()
-
-    # 평균색: 채널별 bincount (np.add.at 대비 수 배 빠름)
-    n_vox = len(uniq)
-    mean_colors = np.empty((n_vox, 3))
-    for c in range(3):
-        mean_colors[:, c] = np.bincount(
-            inverse, weights=palette[sample_curve, c], minlength=n_vox)
-    mean_colors /= counts[:, None]
-
-    # 키 → 3D 인덱스 복원 → 복셀 중심
+    uniq, counts, mean_colors = _reduce_voxels(key, sample_curve, palette)
     plane = dims[1] * dims[2]
-    ux = uniq // plane
     rem = uniq % plane
-    uniq3d = np.stack([ux, rem // dims[2], rem % dims[2]], axis=1) + imin
+    uniq3d = np.stack([uniq // plane, rem // dims[2], rem % dims[2]], axis=1) + imin
     centers = origin + (uniq3d + 0.5) * voxel_size
     return centers, counts, mean_colors
+
+
+def _voxelize_keyed(points_list, colors_list, origin, voxel_size, dims):
+    """공통 격자(origin/voxel_size/dims 고정)로 복셀화.
+
+    보간을 위해 여러 데이터셋이 같은 키 체계를 쓰도록 dims 로 팩킹한다.
+    return: (keys np(M,) int64 정렬됨, counts np(M,), colors np(M,3))
+    """
+    if not points_list:
+        return (np.empty((0,), dtype=np.int64),
+                np.empty((0,)), np.empty((0, 3)))
+    samples, sample_curve, palette = _resample(points_list, colors_list, voxel_size)
+    origin32 = origin.astype(np.float32)
+    inv_vs = np.float32(1.0 / voxel_size)
+    idx = np.floor((samples - origin32) * inv_vs).astype(np.int64)
+    idx = np.clip(idx, 0, dims - 1)  # 공통 bbox 밖(수치오차)이면 경계로
+    key = (idx[:, 0] * dims[1] + idx[:, 1]) * dims[2] + idx[:, 2]
+    return _reduce_voxels(key, sample_curve, palette)
+
+
+def _keys_to_centers(keys, origin, voxel_size, dims):
+    """공통 격자 키 → 복셀 중심 좌표 (M,3)."""
+    plane = int(dims[1]) * int(dims[2])
+    rem = keys % plane
+    idx3d = np.stack([keys // plane, rem // dims[2], rem % dims[2]], axis=1)
+    return origin + (idx3d + 0.5) * voxel_size
+
+
+def _lerp_group(A, B, t):
+    """두 스냅샷의 한 그룹을 밀도-가중(premultiplied)으로 보간.
+
+    A, B = (keys, density, colors) 또는 None. 같은 공통 격자 키를 공유해야 함.
+    return: (keys, density, colors) 또는 None
+    """
+    if A is None and B is None:
+        return None
+    if B is None or t <= 0.0:
+        return A
+    if A is None or t >= 1.0:
+        return B
+
+    kA, dA, cA = A
+    kB, dB, cB = B
+    ku = np.union1d(kA, kB)
+
+    def scatter(keys, arr):
+        out = np.zeros((len(ku),) + arr.shape[1:], dtype=np.float64)
+        out[np.searchsorted(ku, keys)] = arr
+        return out
+
+    DA, DB = scatter(kA, dA), scatter(kB, dB)
+    PCA = scatter(kA, dA[:, None] * cA)
+    PCB = scatter(kB, dB[:, None] * cB)
+    d = (1.0 - t) * DA + t * DB
+    pc = (1.0 - t) * PCA + t * PCB
+    mask = d > 1e-9
+    color = pc[mask] / d[mask][:, None]
+    return ku[mask], d[mask], color
 
 
 # ---------------------------------------------------------------------------
@@ -686,3 +741,115 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
 
     return _result_msg(len(points_list), n_src_pts, (tot_vox, tot_proto),
                        voxel_size, n_parts)
+
+
+# ---------------------------------------------------------------------------
+# 다중 데이터셋 + 보간 (공통 격자)
+# ---------------------------------------------------------------------------
+async def build_snapshots_async(paths, resolution=128, group_paths=None,
+                                voxel_size=0.0, progress=None):
+    """여러 USD 를 공통 격자로 복셀화해 스냅샷 리스트를 만든다 (보간용).
+
+    mesh 가 서로 달라도 같은 origin/voxel_size/dims 로 리샘플하므로 공간 기준으로
+    정렬되어 스냅샷 사이를 lerp 할 수 있다.
+    return: (snapshots, grid, msg)
+      snapshots[i] = { gkey: (keys, density, colors) }  (i번째 데이터셋)
+      grid = (origin, voxel_size, dims)
+    """
+    def report(m):
+        if progress:
+            progress(m)
+
+    paths = [p for p in (paths or []) if p and p.strip()]
+    if not paths:
+        return None, None, "ERROR: no USD path given"
+
+    loop = asyncio.get_event_loop()
+    # 1) 각 데이터셋 곡선 수집 + 공통(union) bbox
+    datasets = []  # (partition, )  partition = [(gkey, pl, cl), ...]
+    gmin = np.full(3, np.inf)
+    gmax = np.full(3, -np.inf)
+    for pi, path in enumerate(paths):
+        report(f"[1/3] reading {pi + 1}/{len(paths)}: {path}")
+        src = Usd.Stage.Open(path)
+        if not src:
+            return None, None, f"ERROR: cannot open: {path}"
+        pl, cl, gl, _n, _sk, mn, mx = await _collect_curves_async(
+            src, group_paths, report)
+        if not pl:
+            return None, None, f"ERROR: no valid curves in {path}"
+        gmin = np.minimum(gmin, mn)
+        gmax = np.maximum(gmax, mx)
+        datasets.append(_partition(pl, cl, gl))
+
+    # 2) 공통 격자 확정
+    origin = gmin.astype(np.float64)
+    if voxel_size <= 0.0:
+        voxel_size = float(np.max(gmax - gmin)) / max(int(resolution), 1)
+    if voxel_size <= 0.0:
+        return None, None, "ERROR: failed to derive voxel_size (empty bbox)"
+    dims = (np.floor((gmax - gmin) / voxel_size).astype(np.int64) + 2)
+
+    # 3) 데이터셋별 공통 격자 복셀화
+    snapshots = []
+    for di, parts in enumerate(datasets):
+        report(f"[2/3] voxelizing dataset {di + 1}/{len(datasets)}...")
+        snap = {}
+        for gkey, pl, cl in parts:
+            keys, counts, colors = await loop.run_in_executor(
+                None, _voxelize_keyed, pl, cl, origin, voxel_size, dims)
+            snap[gkey] = (keys, counts.astype(np.float64), colors)
+        snapshots.append(snap)
+        datasets[di] = None  # free raw points early
+        await omni.kit.app.get_app().next_update_async()
+
+    grid = (origin, voxel_size, dims)
+    msg = (f"OK: {len(snapshots)} snapshot(s) on shared grid "
+           f"dims={tuple(int(d) for d in dims)} voxel={voxel_size:.4g}")
+    return snapshots, grid, msg
+
+
+def _author_cells(stage, groups_cells, grid, radius_factor, color_levels):
+    """{gkey: (keys, density, colors)} 를 씬에 저작한다. return: (n_groups, n_vox)."""
+    origin, voxel_size, dims = grid
+    _setup_root(stage)
+    tot_vox = 0
+    n_groups = 0
+    for gi, (gkey, cell) in enumerate(sorted(groups_cells.items())):
+        if cell is None:
+            continue
+        keys, density, colors = cell
+        if len(keys) == 0:
+            continue
+        centers = _keys_to_centers(keys, origin, voxel_size, dims)
+        bucket_idx, reps = _quantize_colors(colors, color_levels)
+        group_root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
+        _n_protos, n_vox = _author_group(
+            stage, group_root, centers, density, bucket_idx, reps,
+            voxel_size, radius_factor, False)
+        tot_vox += n_vox
+        n_groups += 1
+    return n_groups, tot_vox
+
+
+def author_snapshot(snapshot, grid, radius_factor=0.5, color_levels=16) -> str:
+    """스냅샷 하나를 그대로 씬에 로드한다."""
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage (open a scene first)"
+    n_groups, n_vox = _author_cells(stage, snapshot, grid, radius_factor, color_levels)
+    return f"OK: loaded snapshot | groups {n_groups} | instances {n_vox}"
+
+
+def author_interpolated(snap_a, snap_b, t, grid, radius_factor=0.5,
+                        color_levels=16) -> str:
+    """두 스냅샷 사이를 t(0~1)로 보간해 씬에 로드한다 (라이브 슬라이더용)."""
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage"
+    groups = set(snap_a) | set(snap_b)
+    merged = {}
+    for gkey in groups:
+        merged[gkey] = _lerp_group(snap_a.get(gkey), snap_b.get(gkey), t)
+    n_groups, n_vox = _author_cells(stage, merged, grid, radius_factor, color_levels)
+    return f"interp t={t:.2f} | groups {n_groups} | instances {n_vox}"
