@@ -841,15 +841,103 @@ def author_snapshot(snapshot, grid, radius_factor=0.5, color_levels=16) -> str:
     return f"OK: loaded snapshot | groups {n_groups} | instances {n_vox}"
 
 
-def author_interpolated(snap_a, snap_b, t, grid, radius_factor=0.5,
-                        color_levels=16) -> str:
-    """두 스냅샷 사이를 t(0~1)로 보간해 씬에 로드한다 (라이브 슬라이더용)."""
-    stage = omni.usd.get_context().get_stage()
-    if stage is None:
-        return "ERROR: no active stage"
-    groups = set(snap_a) | set(snap_b)
-    merged = {}
-    for gkey in groups:
-        merged[gkey] = _lerp_group(snap_a.get(gkey), snap_b.get(gkey), t)
-    n_groups, n_vox = _author_cells(stage, merged, grid, radius_factor, color_levels)
-    return f"interp t={t:.2f} | groups {n_groups} | instances {n_vox}"
+def _align(A, B):
+    """두 그룹 셀을 공통 키(union)로 정렬. return: (ku, wA, wB, pcA, pcB)."""
+    empty_k = np.empty((0,), dtype=np.int64)
+    if A is None and B is None:
+        return empty_k, *(np.empty((0,)),) * 2, *(np.empty((0, 3)),) * 2
+    kA, dA, cA = A if A is not None else (empty_k, np.empty((0,)), np.empty((0, 3)))
+    kB, dB, cB = B if B is not None else (empty_k, np.empty((0,)), np.empty((0, 3)))
+    ku = np.union1d(kA, kB)
+    n = len(ku)
+
+    def scat(keys, arr, shape):
+        out = np.zeros((n,) + shape, dtype=np.float64)
+        if len(keys):
+            out[np.searchsorted(ku, keys)] = arr
+        return out
+
+    wA = scat(kA, np.asarray(dA, float), ())
+    wB = scat(kB, np.asarray(dB, float), ())
+    pcA = scat(kA, np.asarray(dA, float)[:, None] * cA, (3,))
+    pcB = scat(kB, np.asarray(dB, float)[:, None] * cB, (3,))
+    return ku, wA, wB, pcA, pcB
+
+
+class InterpSession:
+    """한 구간(스냅샷 i↔i+1) 동안 프림을 재사용하며 색/스케일만 갱신하는 세션.
+
+    구간 안에서 셀 위치는 union 으로 고정 → 매 틱 prim teardown 없이
+    protoIndices/scales/머티리얼 색만 갱신해 슬라이더 반응을 빠르게 한다.
+    """
+
+    def __init__(self, grid):
+        self.grid = grid            # (origin, voxel_size, dims)
+        self.seg = None             # 현재 구간 (i, j)
+        self.groups = []            # 그룹별 고정 데이터/프림 핸들
+
+    def prepare(self, snap_a, snap_b, seg):
+        """구간 진입 시 1회: 프림 생성 + 고정 위치/정렬 배열 캐시."""
+        stage = omni.usd.get_context().get_stage()
+        origin, vs, dims = self.grid
+        if stage.GetPrimAtPath(MERGED_PATH):
+            stage.RemovePrim(MERGED_PATH)
+        UsdGeom.Xform.Define(stage, MERGED_PATH)
+        self.groups = []
+        self.seg = seg
+        for gi, gkey in enumerate(sorted(set(snap_a) | set(snap_b))):
+            ku, wA, wB, pcA, pcB = _align(snap_a.get(gkey), snap_b.get(gkey))
+            if len(ku) == 0:
+                continue
+            wfull = np.maximum(wA, wB)
+            wfull[wfull == 0] = 1.0
+            centers = _keys_to_centers(ku, origin, vs, dims)
+            root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
+            UsdGeom.Xform.Define(stage, root)
+            inst = UsdGeom.PointInstancer.Define(stage, root + "/instancer")
+            inst.CreatePositionsAttr(_vec3f_array(centers))     # 구간 내 고정
+            g = dict(inst=inst,
+                     proto_scope=root + "/instancer/Prototypes",
+                     looks=root + "/Looks",
+                     wA=wA, wB=wB, wfull=wfull, pcA=pcA, pcB=pcB,
+                     protos=[], mats=[])
+            UsdGeom.Scope.Define(stage, g["proto_scope"])
+            UsdGeom.Scope.Define(stage, g["looks"])
+            self.groups.append(g)
+
+    def _ensure_protos(self, stage, g, k_needed, radius_factor):
+        while len(g["protos"]) < k_needed:
+            k = len(g["protos"])
+            pp = f'{g["proto_scope"]}/proto_{k}'
+            sph = UsdGeom.Sphere.Define(stage, pp)
+            sph.CreateRadiusAttr(float(radius_factor))
+            mp = f'{g["looks"]}/mat_{k}'
+            mat = UsdShade.Material.Define(stage, mp)
+            sh = UsdShade.Shader.Define(stage, mp + "/Surface")
+            sh.CreateIdAttr("UsdPreviewSurface")
+            dc = sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f)
+            sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+            mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+            UsdShade.MaterialBindingAPI.Apply(sph.GetPrim()).Bind(mat)
+            g["protos"].append(Sdf.Path(pp))
+            g["mats"].append(dc)
+        g["inst"].CreatePrototypesRel().SetTargets(g["protos"])
+
+    def update(self, t, radius_factor, color_levels):
+        """틱마다: 밀도-가중 alpha→scale, 보간색→버킷 색만 갱신 (위치 고정)."""
+        stage = omni.usd.get_context().get_stage()
+        voxel_size = self.grid[1]
+        n_vox = 0
+        for g in self.groups:
+            d = (1.0 - t) * g["wA"] + t * g["wB"]
+            alpha = d / g["wfull"]                       # 0~1 (페이드)
+            color = ((1.0 - t) * g["pcA"] + t * g["pcB"]) / np.maximum(d, 1e-9)[:, None]
+            bidx, reps = _quantize_colors(color, color_levels)
+            self._ensure_protos(stage, g, len(reps), radius_factor)
+            for k, rep in enumerate(reps):
+                g["mats"][k].Set(Gf.Vec3f(float(rep[0]), float(rep[1]), float(rep[2])))
+            scales = (float(voxel_size) * alpha)[:, None] * np.ones((1, 3))
+            g["inst"].CreateProtoIndicesAttr(_int_array(bidx))
+            g["inst"].CreateScalesAttr(_vec3f_array(scales))
+            n_vox += len(d)
+        return n_vox

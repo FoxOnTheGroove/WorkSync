@@ -11,7 +11,7 @@ import asyncio
 import omni.ui as ui
 
 from .lines_optimize import (
-    build_snapshots_async, author_snapshot, author_interpolated,
+    build_snapshots_async, author_snapshot, InterpSession,
     set_sphere_radius, _parse_group_paths,
 )
 
@@ -34,6 +34,7 @@ class LinesOptimizeUI:
 
         self._snapshots = None
         self._grid = None
+        self._session = None
         self._busy = False
 
     def build_ui(self):
@@ -102,6 +103,7 @@ class LinesOptimizeUI:
                 paths, resolution=res, group_paths=groups,
                 voxel_size=VOXEL_SIZE, progress=self._set_status)
             self._snapshots, self._grid = snaps, grid
+            self._session = None  # 스냅샷 바뀌면 세션 초기화
             if snaps:
                 radius = self._radius_slider.model.get_value_as_float()
                 msg = author_snapshot(snaps[0], grid, radius, COLOR_LEVELS) \
@@ -136,10 +138,14 @@ class LinesOptimizeUI:
             seg = min(max(int(s) - 1, 0), n - 2)    # 0 .. N-2
             t = s - (seg + 1)                        # 0 .. 1 (s==N → seg=N-2, t=1)
             radius = self._radius_slider.model.get_value_as_float()
-            msg = author_interpolated(
-                self._snapshots[seg], self._snapshots[seg + 1], t,
-                self._grid, radius, COLOR_LEVELS)
-            self._set_status(msg)
+            # 같은 구간이면 세션 재사용(프림 유지, 색/스케일만 갱신) → 빠름
+            if self._session is None or self._session.seg != (seg, seg + 1):
+                self._session = InterpSession(self._grid)
+                self._session.prepare(
+                    self._snapshots[seg], self._snapshots[seg + 1], (seg, seg + 1))
+            n_vox = self._session.update(t, radius, COLOR_LEVELS)
+            self._set_status(f"interp {s:.2f} (seg {seg + 1}->{seg + 2}, "
+                             f"t={t:.2f}) | instances {n_vox}")
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: {e}")
             import traceback
