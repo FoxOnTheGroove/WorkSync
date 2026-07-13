@@ -3,7 +3,7 @@
 소스: 곡선(BasisCurves/NurbsCurves) 다수, 각자 고유 머티리얼을 가질 수 있음.
 개별 흐름 궤적은 필요 없고 "어느 영역에 무슨 색이 얼마나 있나"(색·밀도 분포)만
 보면 되므로, 곡선을 **복셀 그리드로 다운샘플링**하여 단일 **UsdGeomPointInstancer**
-로 표현한다.
+로 표현한다. .usd/.usdz 소스 모두 Usd.Stage.Open() 이 네이티브로 처리한다.
 
 핵심 규칙:
 - **복셀당 인스턴스 1개.** 같은 복셀에 여러 색이 겹치면 그 색들을 **평균**내어
@@ -13,6 +13,9 @@
 - 곡선을 개별 Sphere prim 으로 만들지 않고 인스턴싱 → draw call 소수 유지.
 - group_paths 로 지정한 대상 xform 하위 곡선만 복셀 연산 대상이고, 대상 밖
   ("ungrouped") 곡선은 연산하지 않고 원본을 그대로 참조해서 가져온다.
+- 결과 계층은 원본/타겟 절대경로를 그대로 미러링한다 (flat 이름으로 뭉개지 않음):
+  grouped 는 MERGED_PATH + 타겟경로 자리에 instancer 가 자식으로,
+  ungrouped 는 MERGED_PATH + 원본경로 자리에 원본을 참조(월드 변환은 구워서 위치 보존).
 
 색 추출: 1) 곡선의 displayColor primvar  2) 바인딩/형제 머티리얼의 셰이더 색 입력.
 지오메트리가 time-sample 로만 저장된 경우도 첫 샘플로 폴백해 읽는다.
@@ -20,6 +23,7 @@
 """
 
 import asyncio
+import os
 import time
 from collections import Counter
 
@@ -31,7 +35,7 @@ import omni.kit.app
 
 
 MERGED_PATH = "/World/OptimizedStreamlines"
-RAW_PATH = MERGED_PATH + "/RawUngrouped"
+RAW_MARKER_ATTR = "curveOptim:raw"   # ungrouped 미러링 prim 표식 (일괄 visibility 토글용)
 DEFAULT_COLOR = np.array([0.8, 0.8, 0.8])
 
 # 머티리얼 셰이더에서 색으로 읽어볼 입력 이름들 (UsdPreviewSurface / MDL 계열)
@@ -157,7 +161,7 @@ def _group_for_path(path_str: str, targets: list) -> str:
     예) targets=["/root/target","/root/target2"] 일 때
         /root/target/b/line1  → "/root/target"
         /root/target2/line5   → "/root/target2"
-        어느 대상에도 안 속함  → "ungrouped" (연산 대상 제외, 원본 그대로 참조)
+        어느 대상에도 안 속함  → "ungrouped" (연산 대상 제외, 원본 그대로 미러링)
     targets 가 비면 전부 "all" (그룹 분류 없음, 전부 연산 대상).
     """
     if not targets:
@@ -168,11 +172,18 @@ def _group_for_path(path_str: str, targets: list) -> str:
     return "ungrouped"
 
 
-def _safe_name(key: str, idx: int) -> str:
-    """그룹 키 → 유효한 prim 이름 (충돌 방지로 idx 접두)."""
-    raw = key.strip("/").replace("/", "_") or "root"
-    ident = Tf.MakeValidIdentifier(raw) if hasattr(Tf, "MakeValidIdentifier") else raw
-    return f"g{idx}_{ident}"
+def _sanitize_usd_path(path_str: str) -> str:
+    """경로 문자열을 세그먼트별로 유효한 prim 이름으로 정리해 재조합한다.
+
+    원본 절대경로/사용자가 입력한 타겟 경로를 그대로 계층에 미러링할 때,
+    각 세그먼트가 유효한 USD 식별자가 되도록 보정한다 (구조는 그대로 유지).
+    """
+    parts = [p for p in path_str.strip("/").split("/") if p]
+    safe = []
+    for p in parts:
+        ident = Tf.MakeValidIdentifier(p) if hasattr(Tf, "MakeValidIdentifier") else p
+        safe.append(ident or "_")
+    return "/" + "/".join(safe) if safe else ""
 
 
 # ---------------------------------------------------------------------------
@@ -261,21 +272,23 @@ def _curve_prims_and_timecode(stage: Usd.Stage):
 
 
 def _collect_curves(stage: Usd.Stage, group_paths: list = None):
-    """동기 수집. group_paths 밖("ungrouped") 곡선은 연산하지 않고 경로만 기록.
+    """동기 수집. group_paths 밖("ungrouped") 곡선은 연산하지 않고 (경로, world 행렬)만
+    기록한다 (행렬 하나만 조회 — O(depth), 점 데이터는 안 읽음).
 
-    return: (pl, cl, gl, raw_paths, n, skipped, mins, maxs)
+    return: (pl, cl, gl, raw_entries, n, skipped, mins, maxs)
+      raw_entries = [(path_str, Gf.Matrix4d world_xform), ...]
     """
     targets = group_paths or []
     prims, tc = _curve_prims_and_timecode(stage)
     xc = UsdGeom.XformCache(tc)
-    pl, cl, gl, skipped, raw_paths = [], [], [], 0, []
+    pl, cl, gl, skipped, raw_entries = [], [], [], 0, []
     mins = np.full(3, np.inf)
     maxs = np.full(3, -np.inf)
     for prim in prims:
         path_str = prim.GetPath().pathString
         gkey = _group_for_path(path_str, targets)
         if gkey == "ungrouped":
-            raw_paths.append(path_str)   # 연산 스킵, 원본 그대로 나중에 참조
+            raw_entries.append((path_str, xc.GetLocalToWorldTransform(prim)))
             continue
         r = _extract_curve(prim, tc, xc)
         if r is None:
@@ -288,7 +301,7 @@ def _collect_curves(stage: Usd.Stage, group_paths: list = None):
             pl.append(s)
             cl.append(color)
             gl.append(gkey)
-    return pl, cl, gl, raw_paths, len(prims), skipped, mins, maxs
+    return pl, cl, gl, raw_entries, len(prims), skipped, mins, maxs
 
 
 async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
@@ -300,7 +313,7 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
     app = omni.kit.app.get_app()
     total = len(prims)
 
-    pl, cl, gl, skipped, raw_paths = [], [], [], 0, []
+    pl, cl, gl, skipped, raw_entries = [], [], [], 0, []
     mins = np.full(3, np.inf)
     maxs = np.full(3, -np.inf)
     last_yield = time.perf_counter()
@@ -308,7 +321,7 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
         path_str = prim.GetPath().pathString
         gkey = _group_for_path(path_str, targets)
         if gkey == "ungrouped":
-            raw_paths.append(path_str)
+            raw_entries.append((path_str, xc.GetLocalToWorldTransform(prim)))
         else:
             r = _extract_curve(prim, tc, xc)
             if r is None:
@@ -327,7 +340,7 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
                        f"{100 * (i + 1) // total}% ({i + 1}/{total})")
             await app.next_update_async()
             last_yield = time.perf_counter()
-    return pl, cl, gl, raw_paths, total, skipped, mins, maxs
+    return pl, cl, gl, raw_entries, total, skipped, mins, maxs
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +462,14 @@ def _int_array(np_arr):
     return Vt.IntArray([int(v) for v in a])
 
 
+def _group_root_path(gkey: str) -> str:
+    """그룹 키 → 결과 계층 경로. 'all' 이면 MERGED_PATH 자체, 아니면 타겟 경로를
+    MERGED_PATH 밑에 그대로 미러링 (flat 이름으로 뭉개지 않음)."""
+    if gkey == "all":
+        return MERGED_PATH
+    return MERGED_PATH + _sanitize_usd_path(gkey)
+
+
 def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
                   voxel_size, radius_factor, density_to_scale):
     """한 그룹을 group_root 아래 단일 PointInstancer 로 저작한다.
@@ -503,19 +524,27 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
     return len(proto_paths), len(centers)
 
 
-def _author_raw(stage, source_path, raw_paths, visible):
-    """group_paths 밖(ungrouped) 곡선을 연산 없이 원본 그대로 참조해서 가져온다."""
-    if not raw_paths:
+def _author_raw(stage, source_path, raw_entries, visible):
+    """group_paths 밖(ungrouped) 곡선을 연산 없이 원본 계층 그대로 미러링해 가져온다.
+
+    각 원본 절대경로를 MERGED_PATH 밑에 그대로 재현하고(중간 조상은 DefinePrim 이
+    자동 생성), 리프에 world 변환(1회 조회, O(depth))을 구워 원본 위치를 재현한
+    뒤 원본 prim 을 참조한다. RAW_MARKER_ATTR 로 표식해 일괄 visibility 토글이
+    가능하게 한다.
+    """
+    if not raw_entries:
         return 0
-    UsdGeom.Xform.Define(stage, RAW_PATH)
-    for i, path_str in enumerate(raw_paths):
-        dst = f"{RAW_PATH}/raw_{i}"
-        prim = stage.DefinePrim(dst)
+    for path_str, mat in raw_entries:
+        dst = MERGED_PATH + _sanitize_usd_path(path_str)
+        xf = UsdGeom.Xform.Define(stage, dst)
+        xf.ClearXformOpOrder()
+        xf.AddTransformOp().Set(mat)
+        prim = xf.GetPrim()
         prim.GetReferences().AddReference(source_path, path_str)
-    imageable = UsdGeom.Imageable(stage.GetPrimAtPath(RAW_PATH))
-    imageable.CreateVisibilityAttr().Set(
-        UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible)
-    return len(raw_paths)
+        prim.CreateAttribute(RAW_MARKER_ATTR, Sdf.ValueTypeNames.Bool, custom=True).Set(True)
+        xf.CreateVisibilityAttr().Set(
+            UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible)
+    return len(raw_entries)
 
 
 def set_sphere_radius(radius: float) -> str:
@@ -539,16 +568,51 @@ def set_sphere_radius(radius: float) -> str:
 
 
 def set_raw_visible(visible: bool) -> str:
-    """group_paths 밖(ungrouped) 원본 지오메트리의 visibility 를 즉시 토글한다."""
+    """group_paths 밖(ungrouped) 원본 지오메트리의 visibility 를 일괄 토글한다.
+
+    미러링된 raw prim 들은 흩어져 있으므로(원본 계층 유지), RAW_MARKER_ATTR 로
+    표식된 prim 을 전부 찾아서 토글한다.
+    """
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         return "ERROR: no active stage"
-    prim = stage.GetPrimAtPath(RAW_PATH)
-    if not prim:
-        return "no raw/ungrouped geometry in scene"
-    UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(
-        UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible)
-    return f"raw/ungrouped geometry visible={visible}"
+    root = stage.GetPrimAtPath(MERGED_PATH)
+    if not root:
+        return "no optimized result in scene"
+    n = 0
+    for prim in Usd.PrimRange(root):
+        if prim.HasAttribute(RAW_MARKER_ATTR):
+            UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(
+                UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible)
+            n += 1
+    return f"raw/ungrouped geometry visible={visible} ({n} prim(s))"
+
+
+def save_voxelized(source_path: str) -> str:
+    """생성된 OptimizedStreamlines 프림(raw 포함)을 별도 usd 파일로 저장한다.
+
+    저장 경로: source_path 와 같은 디렉터리에 "{원본이름}_voxelized.usd".
+    머티리얼/원본 참조는 그대로 유지(가벼움) — source_path 를 계속 참조하므로
+    원본 파일을 옮기면 참조가 끊긴다.
+    """
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage"
+    src_prim = stage.GetPrimAtPath(MERGED_PATH)
+    if not src_prim or not src_prim.IsValid():
+        return "ERROR: no OptimizedStreamlines to save (run Voxelize & Load first)"
+
+    base = os.path.splitext(os.path.basename(source_path))[0]
+    out_dir = os.path.dirname(source_path) or "."
+    out_path = os.path.join(out_dir, f"{base}_voxelized.usd")
+    dst_root_path = "/" + MERGED_PATH.strip("/").split("/")[-1]  # "/OptimizedStreamlines"
+
+    out_stage = Usd.Stage.CreateInMemory()
+    Sdf.CopySpec(stage.GetRootLayer(), Sdf.Path(MERGED_PATH),
+                out_stage.GetRootLayer(), Sdf.Path(dst_root_path))
+    out_stage.SetDefaultPrim(out_stage.GetPrimAtPath(dst_root_path))
+    out_stage.GetRootLayer().Export(out_path)
+    return f"Saved: {out_path}"
 
 
 def _partition(points_list, colors_list, groups_list):
@@ -591,21 +655,21 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
                       resolution: int = 128, radius_factor: float = 0.5,
                       density_to_scale: bool = False, color_levels: int = 8,
                       group_paths: list = None, raw_visible: bool = True) -> str:
-    """streamline USD 를 색-인지 복셀 다운샘플링해 현재 씬에 로드한다.
+    """streamline USD/USDZ 를 색-인지 복셀 다운샘플링해 현재 씬에 로드한다.
 
     - 복셀당 인스턴스 1개, 겹치는 색은 평균 / 비슷한 색은 color_levels 로 버킷 양자화
     - group_paths(대상 xform 경로 리스트)가 있으면 각 경로 하위 곡선끼리 그룹으로
-      묶어 별도 PointInstancer 저작. 대상 밖("ungrouped") 곡선은 연산하지 않고
-      원본을 그대로 참조해서 가져온다 (raw_visible 로 초기 표시 여부 지정).
+      묶어 별도 PointInstancer 저작(타겟 경로 그대로 계층에 미러링). 대상 밖
+      ("ungrouped") 곡선은 연산하지 않고 원본 계층을 그대로 미러링해 참조한다.
     - voxel_size<=0 이면 root world bbox 최대변 / resolution 으로 자동 산출
     """
     src = Usd.Stage.Open(source_path)
     if not src:
         return f"ERROR: cannot open: {source_path}"
 
-    points_list, colors_list, groups_list, raw_paths, _n, skipped_empty, mins, maxs = \
+    points_list, colors_list, groups_list, raw_entries, _n, skipped_empty, mins, maxs = \
         _collect_curves(src, group_paths)
-    if not points_list and not raw_paths:
+    if not points_list and not raw_entries:
         hint = ""
         if skipped_empty:
             hint = (f"\n({skipped_empty} curve(s) skipped: points/counts "
@@ -618,7 +682,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         return "ERROR: no active stage (open a scene first)"
     _setup_root(stage)
 
-    n_raw = _author_raw(stage, source_path, raw_paths, raw_visible)
+    n_raw = _author_raw(stage, source_path, raw_entries, raw_visible)
 
     if not points_list:
         return (f"OK: no curves matched group_paths | raw(ungrouped) {n_raw} | "
@@ -633,10 +697,10 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
 
     parts = _partition(points_list, colors_list, groups_list)
     tot_vox = tot_proto = 0
-    for gi, (gkey, pl, cl) in enumerate(parts):
+    for gkey, pl, cl in parts:
         centers, counts, mean_colors = _voxelize(pl, cl, origin, voxel_size)
         bucket_idx, reps = _quantize_colors(mean_colors, color_levels)
-        group_root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
+        group_root = _group_root_path(gkey)
         n_protos, n_vox = _author_group(
             stage, group_root, centers, counts, bucket_idx, reps,
             voxel_size, radius_factor, density_to_scale)
@@ -661,7 +725,7 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
 
     - USD 읽기: 주기적으로 UI 에 양보 / 무거운 numpy: 백그라운드 스레드 오프로드
     - 그룹마다 별도 PointInstancer 저작, 그룹 사이에 한 프레임 양보
-    - group_paths 밖(ungrouped) 곡선은 연산하지 않고 원본을 그대로 참조
+    - group_paths 밖(ungrouped) 곡선은 연산하지 않고 원본 계층을 그대로 미러링
     - progress 콜백에 단계별 진행률(%)을 보고: [1/3] read, [2/3] voxelize, [3/3] author
     """
     def report(msg):
@@ -673,9 +737,9 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         return f"ERROR: cannot open: {source_path}"
 
     report("[1/3] reading curves... 0%")
-    points_list, colors_list, groups_list, raw_paths, _n, skipped_empty, mins, maxs = \
+    points_list, colors_list, groups_list, raw_entries, _n, skipped_empty, mins, maxs = \
         await _collect_curves_async(src, group_paths, report)
-    if not points_list and not raw_paths:
+    if not points_list and not raw_entries:
         hint = ""
         if skipped_empty:
             hint = (f"\n({skipped_empty} curve(s) skipped: points/counts "
@@ -688,7 +752,7 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         return "ERROR: no active stage (open a scene first)"
     _setup_root(stage)
 
-    n_raw = _author_raw(stage, source_path, raw_paths, raw_visible)
+    n_raw = _author_raw(stage, source_path, raw_entries, raw_visible)
 
     if not points_list:
         return (f"OK: no curves matched group_paths | raw(ungrouped) {n_raw} | "
@@ -716,7 +780,7 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         await app.next_update_async()
         pct = 100 * (2 * gi + 1) // (2 * n_parts)
         report(f"[3/3] authoring... {pct}% (group {gi + 1}/{n_parts} '{gkey}')")
-        group_root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
+        group_root = _group_root_path(gkey)
         n_protos, n_vox = _author_group(
             stage, group_root, centers, counts, bucket_idx, reps,
             voxel_size, radius_factor, density_to_scale)

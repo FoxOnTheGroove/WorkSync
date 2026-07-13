@@ -15,7 +15,7 @@ import omni.ui as ui
 
 from .lines_optimize import (
     optimize_and_load_async, set_sphere_radius, set_raw_visible,
-    _parse_group_paths,
+    save_voxelized, _parse_group_paths,
 )
 
 
@@ -32,7 +32,7 @@ class LinesOptimizeUI:
         self._task: asyncio.Task | None = None
 
     def build_ui(self):
-        self._window = ui.Window("Streamline Voxel Optimizer", width=580, height=260)
+        self._window = ui.Window("Streamline Voxel Optimizer", width=580, height=290)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 with ui.HStack(height=24, spacing=4):
@@ -58,6 +58,8 @@ class LinesOptimizeUI:
                     self._raw_visible_cb.model.set_value(True)
                     self._raw_visible_cb.model.add_value_changed_fn(
                         self._on_raw_visible_changed)
+
+                ui.Button("Save", width=150, height=26, clicked_fn=self._on_save)
 
                 with ui.HStack(height=24, spacing=6):
                     ui.Label("Sphere Radius:", width=100)
@@ -111,6 +113,18 @@ class LinesOptimizeUI:
             self._set_status(set_sphere_radius(model.get_value_as_float()))
         except Exception as e:  # noqa: BLE001
             self._set_status(f"ERROR: {e}")
+
+    def _on_save(self):
+        path = self._path_field.model.get_value_as_string().strip()
+        if not path:
+            self._set_status("ERROR: enter a USD Path")
+            return
+        try:
+            self._set_status(save_voxelized(path))
+        except Exception as e:  # noqa: BLE001
+            self._set_status(f"ERROR: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _on_raw_visible_changed(self, model):
         try:
