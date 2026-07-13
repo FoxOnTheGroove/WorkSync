@@ -140,9 +140,10 @@ class LinesOptimizeUI:
             radius = self._radius_slider.model.get_value_as_float()
             # 같은 구간이면 세션 재사용(프림 유지, 색/스케일만 갱신) → 빠름
             if self._session is None or self._session.seg != (seg, seg + 1):
-                self._session = InterpSession(self._grid)
+                self._session = InterpSession(self._grid, COLOR_LEVELS)
                 self._session.prepare(
-                    self._snapshots[seg], self._snapshots[seg + 1], (seg, seg + 1))
+                    self._snapshots[seg], self._snapshots[seg + 1],
+                    (seg, seg + 1), radius)
             n_vox = self._session.update(t, radius, COLOR_LEVELS)
             self._set_status(f"interp {s:.2f} (seg {seg + 1}->{seg + 2}, "
                              f"t={t:.2f}) | instances {n_vox}")

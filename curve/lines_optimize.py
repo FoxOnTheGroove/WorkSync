@@ -31,6 +31,7 @@ import omni.kit.app
 
 MERGED_PATH = "/World/OptimizedStreamlines"
 DEFAULT_COLOR = np.array([0.8, 0.8, 0.8])
+ALPHA_LEVELS = 8       # 보간 페이드 opacity 단계 수 (0=완전 투명/스킵)
 
 # 머티리얼 셰이더에서 색으로 읽어볼 입력 이름들 (UsdPreviewSurface / MDL 계열)
 _COLOR_INPUTS = [
@@ -505,6 +506,14 @@ def _int_array(np_arr):
     return Vt.IntArray([int(v) for v in a])
 
 
+def _int64_array(np_arr):
+    a = np.ascontiguousarray(np_arr, dtype=np.int64)
+    from_np = getattr(Vt.Int64Array, "FromNumpy", None)
+    if from_np is not None:
+        return from_np(a)
+    return Vt.Int64Array([int(v) for v in a])
+
+
 def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
                   voxel_size, radius_factor, density_to_scale):
     """한 그룹을 group_root 아래 단일 PointInstancer 로 저작한다.
@@ -865,21 +874,29 @@ def _align(A, B):
 
 
 class InterpSession:
-    """한 구간(스냅샷 i↔i+1) 동안 프림을 재사용하며 색/스케일만 갱신하는 세션.
+    """한 구간(스냅샷 i↔i+1) 동안 프림을 재사용하는 보간 세션.
 
-    구간 안에서 셀 위치는 union 으로 고정 → 매 틱 prim teardown 없이
-    protoIndices/scales/머티리얼 색만 갱신해 슬라이더 반응을 빠르게 한다.
+    - 셀 위치·스케일은 구간 내 고정 (스피어 크기는 오직 radius 슬라이더로만 제어)
+    - 페이드는 **opacity** 로: 색×알파를 (color_grid_key, alpha_level) 프로토타입으로
+      나눠두고, 매 틱 각 셀의 protoIndices 만 바꿔 자기 색·투명도 프로토타입을 가리킴
+      → 공유 머티리얼을 수정하지 않으므로 셀끼리 서로 영향 없음
+    - 프로토타입은 처음 나타난 (색,알파) 조합만 생성 후 재사용 (pool) → 워밍업 후 빠름
+    - alpha_level 0(거의 투명)은 invisibleIds 로 렌더 자체를 스킵
     """
 
-    def __init__(self, grid):
+    def __init__(self, grid, color_levels=16, alpha_levels=ALPHA_LEVELS):
         self.grid = grid            # (origin, voxel_size, dims)
         self.seg = None             # 현재 구간 (i, j)
-        self.groups = []            # 그룹별 고정 데이터/프림 핸들
+        self.groups = []
+        self.L = int(color_levels)
+        self.na = int(alpha_levels)
+        self._radius = 0.5
 
-    def prepare(self, snap_a, snap_b, seg):
-        """구간 진입 시 1회: 프림 생성 + 고정 위치/정렬 배열 캐시."""
+    def prepare(self, snap_a, snap_b, seg, radius_factor=0.5):
+        """구간 진입 시 1회: 프림 생성 + 고정 위치/스케일 + 정렬 배열 캐시."""
         stage = omni.usd.get_context().get_stage()
         origin, vs, dims = self.grid
+        self._radius = float(radius_factor)
         if stage.GetPrimAtPath(MERGED_PATH):
             stage.RemovePrim(MERGED_PATH)
         UsdGeom.Xform.Define(stage, MERGED_PATH)
@@ -895,49 +912,78 @@ class InterpSession:
             root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
             UsdGeom.Xform.Define(stage, root)
             inst = UsdGeom.PointInstancer.Define(stage, root + "/instancer")
-            inst.CreatePositionsAttr(_vec3f_array(centers))     # 구간 내 고정
-            g = dict(inst=inst,
-                     proto_scope=root + "/instancer/Prototypes",
-                     looks=root + "/Looks",
+            inst.CreatePositionsAttr(_vec3f_array(centers))     # 고정
+            # 스케일 상수 = voxel 크기 (알파를 크기로 인코딩하지 않음)
+            scales = np.full((len(ku), 3), float(vs))
+            inst.CreateScalesAttr(_vec3f_array(scales))
+            proto_scope = root + "/instancer/Prototypes"
+            looks = root + "/Looks"
+            UsdGeom.Scope.Define(stage, proto_scope)
+            UsdGeom.Scope.Define(stage, looks)
+            # 플레이스홀더 프로토타입 0 (invisible 셀이 가리킬 대상)
+            g = dict(inst=inst, proto_scope=proto_scope, looks=looks,
                      wA=wA, wB=wB, wfull=wfull, pcA=pcA, pcB=pcB,
-                     protos=[], mats=[])
-            UsdGeom.Scope.Define(stage, g["proto_scope"])
-            UsdGeom.Scope.Define(stage, g["looks"])
+                     protos=[], pool={})
+            self._make_proto(stage, g, np.array([0.5, 0.5, 0.5]), 1.0)  # idx 0
             self.groups.append(g)
 
-    def _ensure_protos(self, stage, g, k_needed, radius_factor):
-        while len(g["protos"]) < k_needed:
-            k = len(g["protos"])
-            pp = f'{g["proto_scope"]}/proto_{k}'
-            sph = UsdGeom.Sphere.Define(stage, pp)
-            sph.CreateRadiusAttr(float(radius_factor))
-            mp = f'{g["looks"]}/mat_{k}'
-            mat = UsdShade.Material.Define(stage, mp)
-            sh = UsdShade.Shader.Define(stage, mp + "/Surface")
-            sh.CreateIdAttr("UsdPreviewSurface")
-            dc = sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f)
-            sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
-            mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
-            UsdShade.MaterialBindingAPI.Apply(sph.GetPrim()).Bind(mat)
-            g["protos"].append(Sdf.Path(pp))
-            g["mats"].append(dc)
-        g["inst"].CreatePrototypesRel().SetTargets(g["protos"])
+    def _make_proto(self, stage, g, rep, opacity):
+        k = len(g["protos"])
+        pp = f'{g["proto_scope"]}/proto_{k}'
+        sph = UsdGeom.Sphere.Define(stage, pp)
+        sph.CreateRadiusAttr(self._radius)
+        mp = f'{g["looks"]}/mat_{k}'
+        mat = UsdShade.Material.Define(stage, mp)
+        sh = UsdShade.Shader.Define(stage, mp + "/Surface")
+        sh.CreateIdAttr("UsdPreviewSurface")
+        sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(float(rep[0]), float(rep[1]), float(rep[2])))
+        sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+        sh.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(float(opacity))
+        mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+        UsdShade.MaterialBindingAPI.Apply(sph.GetPrim()).Bind(mat)
+        g["protos"].append(Sdf.Path(pp))
+        return k
 
-    def update(self, t, radius_factor, color_levels):
-        """틱마다: 밀도-가중 alpha→scale, 보간색→버킷 색만 갱신 (위치 고정)."""
+    def update(self, t, radius_factor, color_levels=None):
+        """틱마다: 각 셀을 (색버킷,알파버킷) 프로토타입에 배정 (protoIndices) + 투명 스킵.
+
+        위치·스케일은 안 건드림 → 크기는 radius 로만, 페이드는 opacity 로만.
+        """
         stage = omni.usd.get_context().get_stage()
-        voxel_size = self.grid[1]
-        n_vox = 0
+        self._radius = float(radius_factor)
+        L = int(color_levels) if color_levels else self.L
+        na = self.na
+        n_vis = 0
         for g in self.groups:
             d = (1.0 - t) * g["wA"] + t * g["wB"]
-            alpha = d / g["wfull"]                       # 0~1 (페이드)
+            alpha = d / g["wfull"]                                  # 0~1
             color = ((1.0 - t) * g["pcA"] + t * g["pcB"]) / np.maximum(d, 1e-9)[:, None]
-            bidx, reps = _quantize_colors(color, color_levels)
-            self._ensure_protos(stage, g, len(reps), radius_factor)
-            for k, rep in enumerate(reps):
-                g["mats"][k].Set(Gf.Vec3f(float(rep[0]), float(rep[1]), float(rep[2])))
-            scales = (float(voxel_size) * alpha)[:, None] * np.ones((1, 3))
-            g["inst"].CreateProtoIndicesAttr(_int_array(bidx))
-            g["inst"].CreateScalesAttr(_vec3f_array(scales))
-            n_vox += len(d)
-        return n_vox
+
+            # 색 격자 키 (고정 양자화) + 알파 단계
+            ci = np.clip(np.round(color * (L - 1)), 0, L - 1).astype(np.int64)
+            ckey = (ci[:, 0] * L + ci[:, 1]) * L + ci[:, 2]
+            alvl = np.clip(np.round(alpha * na), 0, na).astype(np.int64)   # 0..na
+            visible = alvl > 0
+            combined = ckey * (na + 1) + alvl
+
+            proto_idx = np.zeros(len(d), dtype=np.int64)             # 기본 0(placeholder)
+            if visible.any():
+                for cv in np.unique(combined[visible]):
+                    if cv in g["pool"]:
+                        continue
+                    a = int(cv % (na + 1))
+                    ck = int(cv // (na + 1))
+                    r = ck % (L * L)
+                    rep = np.array([ck // (L * L), r // L, r % L]) / (L - 1)
+                    g["pool"][int(cv)] = self._make_proto(stage, g, rep, a / na)
+                pk = np.array(sorted(g["pool"].keys()), dtype=np.int64)
+                pv = np.array([g["pool"][int(k)] for k in pk], dtype=np.int64)
+                proto_idx[visible] = pv[np.searchsorted(pk, combined[visible])]
+
+            inst = g["inst"]
+            inst.CreatePrototypesRel().SetTargets(g["protos"])
+            inst.CreateProtoIndicesAttr(_int_array(proto_idx))
+            inst.CreateInvisibleIdsAttr(_int64_array(np.nonzero(~visible)[0]))
+            n_vis += int(visible.sum())
+        return n_vis
