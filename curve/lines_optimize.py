@@ -383,20 +383,37 @@ def _resample(points_list, colors_list, voxel_size: float):
 
 
 def _reduce_voxels(key, sample_curve, palette):
-    """복셀 키별로 밀도(count)와 채널별 평균색을 구한다."""
+    """복셀 키별로 밀도(count)와 '마지막에 그려진 곡선의 색'을 구한다.
+
+    원본에서 나중 곡선(문서상 뒤에 오는 curve)이 같은 위치의 앞선 곡선을
+    시각적으로 덮어쓰는 것과 동일하게, 평균이 아니라 curve 인덱스가 가장 큰
+    (=가장 늦게 등장한) 샘플의 색을 그 복셀의 대표색으로 채택한다.
+    sample_curve 는 문서(순회) 순서를 그대로 담고 있으므로 인덱스가 클수록
+    "나중에 그려진" 것과 같다.
+    """
     uniq, inverse, counts = np.unique(
         key, return_inverse=True, return_counts=True)
     inverse = inverse.ravel()
-    mean_colors = np.empty((len(uniq), 3))
-    for c in range(3):
-        mean_colors[:, c] = np.bincount(
-            inverse, weights=palette[sample_curve, c], minlength=len(uniq))
-    mean_colors /= counts[:, None]
-    return uniq, counts, mean_colors
+
+    # 복셀별로 curve 인덱스 오름차순 정렬 → 그룹의 마지막 원소가 최대 curve
+    # 인덱스(=가장 나중에 그려진 곡선)를 가리킨다.
+    order = np.lexsort((sample_curve, inverse))
+    sorted_inverse = inverse[order]
+    is_last = np.empty(len(sorted_inverse), dtype=bool)
+    is_last[:-1] = sorted_inverse[:-1] != sorted_inverse[1:]
+    is_last[-1] = True
+    winner_idx = order[is_last]   # 복셀 id(0..n_vox-1) 오름차순으로 정렬되어 있음
+    voxel_colors = palette[sample_curve[winner_idx]]
+
+    return uniq, counts, voxel_colors
 
 
 def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
-    """단일 데이터셋 복셀화 (지역 격자). return: (centers, counts, mean_colors)."""
+    """단일 데이터셋 복셀화 (지역 격자). return: (centers, counts, voxel_colors).
+
+    voxel_colors 는 복셀당 겹치는 곡선들의 평균이 아니라, points_list 에 담긴
+    순서상 가장 나중 곡선의 색(= 원본에서 나중에 그려져 앞선 것을 덮어쓴 색)이다.
+    """
     if voxel_size <= 0.0:
         raise ValueError("voxel_size must be > 0")
     if not points_list:
@@ -410,12 +427,12 @@ def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
     rel = idx - imin
     dims = rel.max(axis=0) + 1
     key = (rel[:, 0] * dims[1] + rel[:, 1]) * dims[2] + rel[:, 2]
-    uniq, counts, mean_colors = _reduce_voxels(key, sample_curve, palette)
+    uniq, counts, voxel_colors = _reduce_voxels(key, sample_curve, palette)
     plane = dims[1] * dims[2]
     rem = uniq % plane
     uniq3d = np.stack([uniq // plane, rem // dims[2], rem % dims[2]], axis=1) + imin
     centers = origin + (uniq3d + 0.5) * voxel_size
-    return centers, counts, mean_colors
+    return centers, counts, voxel_colors
 
 
 # ---------------------------------------------------------------------------
