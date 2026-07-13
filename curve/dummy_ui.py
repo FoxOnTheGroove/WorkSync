@@ -24,7 +24,6 @@ class LinesOptimizeUI:
         self._window: ui.Window | None = None
         self._groups_field: ui.StringField | None = None
         self._res_field: ui.IntField | None = None
-        self._levels_field: ui.IntField | None = None
         self._path_field: ui.StringField | None = None
         self._raw_visible_cb: ui.CheckBox | None = None
         self._cube_shape_cb: ui.CheckBox | None = None
@@ -46,9 +45,6 @@ class LinesOptimizeUI:
                     ui.Label("Resolution:", width=100)
                     self._res_field = ui.IntField(width=80)
                     self._res_field.model.set_value(128)
-                    ui.Label("Color Levels:", width=85)
-                    self._levels_field = ui.IntField(width=60)
-                    self._levels_field.model.set_value(8)
 
                 with ui.HStack(height=24, spacing=4):
                     ui.Label("USD Path:", width=100)
@@ -89,21 +85,20 @@ class LinesOptimizeUI:
             return
         groups = _parse_group_paths(self._groups_field.model.get_value_as_string())
         res = self._res_field.model.get_value_as_int()
-        levels = self._levels_field.model.get_value_as_int()
         radius = self._radius_slider.model.get_value_as_float()
         raw_visible = self._raw_visible_cb.model.get_value_as_bool()
         proto_shape = "cube" if self._cube_shape_cb.model.get_value_as_bool() else "sphere"
         self._task = asyncio.ensure_future(
-            self._run_async(path, res, levels, groups, radius, raw_visible, proto_shape))
+            self._run_async(path, res, groups, radius, raw_visible, proto_shape))
 
-    async def _run_async(self, path, res, levels, groups, radius, raw_visible, proto_shape):
+    async def _run_async(self, path, res, groups, radius, raw_visible, proto_shape):
         if self._run_btn:
             self._run_btn.enabled = False
         self._set_status("Processing...")
         start = time.perf_counter()
         try:
             msg = await optimize_and_load_async(
-                path, resolution=res, radius_factor=radius, color_levels=levels,
+                path, resolution=res, radius_factor=radius,
                 group_paths=groups, raw_visible=raw_visible,
                 proto_shape=proto_shape, progress=self._set_status)
             elapsed = time.perf_counter() - start

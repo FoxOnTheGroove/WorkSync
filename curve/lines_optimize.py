@@ -38,17 +38,11 @@ MERGED_PATH = "/World/OptimizedStreamlines"
 RAW_MARKER_ATTR = "curveOptim:raw"   # ungrouped 미러링 prim 표식 (일괄 visibility 토글용)
 DEFAULT_COLOR = np.array([0.8, 0.8, 0.8])
 
-# 머티리얼 셰이더에서 색으로 읽어볼 입력 이름들 (UsdPreviewSurface / MDL 계열).
-# emissive 를 먼저 본다 — streamline 은 조명 없이도 보이도록 발광(unlit)형
-# 셰이더를 쓰는 경우가 흔한데, 그 경우 실제 눈에 보이는 색은 diffuse 가 아니라
-# emissive 쪽에 있다 (diffuse 는 기본값/미사용인 채로 남아있기 쉬움).
-_PREFERRED_COLOR_INPUTS = [
-    "emissiveColor", "emissive_color",
+# 머티리얼 셰이더에서 색으로 읽어볼 입력 이름들 (UsdPreviewSurface / MDL 계열)
+_COLOR_INPUTS = [
     "diffuseColor", "diffuse_color_constant", "base_color", "diffuse_tint",
-    "diffuse_reflection_color", "albedo",
+    "diffuse_reflection_color", "albedo", "emissiveColor", "emissive_color",
 ]
-_COLOR_TYPE_NAMES = (Sdf.ValueTypeNames.Color3f, Sdf.ValueTypeNames.Float3,
-                    Sdf.ValueTypeNames.Vector3f)
 
 
 # ---------------------------------------------------------------------------
@@ -101,44 +95,16 @@ def _find_material_prim(prim: Usd.Prim):
     return None
 
 
-def _resolve_input_color(inp, tc, depth=0):
-    """UsdShade Input 하나에서 색을 뽑는다.
-
-    상수로 authoring 돼 있으면 바로 읽고, 다른 셰이더 출력에 연결(connected)돼
-    있으면 그 소스 셰이더까지 1단계 따라가 본다 (텍스처/셰이더 그래프에 물린
-    색이라 상수 읽기가 실패하는 흔한 경우 대응).
-    """
-    v = _get(inp.GetAttr(), tc)
-    if v is not None and hasattr(v, "__len__") and len(v) >= 3:
-        return np.array([float(v[0]), float(v[1]), float(v[2])])
-    if depth >= 1 or not inp.HasConnectedSource():
-        return None
-    src_api, _src_name, _src_type = inp.GetConnectedSource()
-    src_prim = src_api.GetPrim()
-    if not src_prim.IsA(UsdShade.Shader):
-        return None
-    return _shader_color(src_prim, tc, depth=depth + 1)
-
-
-def _shader_color(shader_prim: Usd.Prim, tc, depth=0):
-    """셰이더에서 대표 색을 읽는다. 없으면 None.
-
-    1) 알려진 이름(_PREFERRED_COLOR_INPUTS, emissive 우선)으로 탐색
-    2) 그래도 없으면 이름 무관하게 색 타입(Color3f/Float3/Vector3f) 입력을
-       전부 시도 (커스텀/MDL 등 이름 목록에 없는 셰이더 대응)
-    """
+def _shader_color(shader_prim: Usd.Prim, tc):
+    """셰이더의 알려진 색 입력에서 상수 색을 읽는다. 없으면 None."""
     shader = UsdShade.Shader(shader_prim)
-    for name in _PREFERRED_COLOR_INPUTS:
+    for name in _COLOR_INPUTS:
         inp = shader.GetInput(name)
-        if inp:
-            c = _resolve_input_color(inp, tc, depth)
-            if c is not None:
-                return c
-    for inp in shader.GetInputs():
-        if inp.GetTypeName() in _COLOR_TYPE_NAMES:
-            c = _resolve_input_color(inp, tc, depth)
-            if c is not None:
-                return c
+        if not inp:
+            continue
+        v = _get(inp.GetAttr(), tc)
+        if v is not None and hasattr(v, "__len__") and len(v) >= 3:
+            return np.array([float(v[0]), float(v[1]), float(v[2])])
     return None
 
 
@@ -233,7 +199,6 @@ def inspect_source(source_path: str) -> str:
     types: Counter = Counter()
     n_curve = n_inst = n_ts = n_def = 0
     colors = []
-    n_color_fallback = 0   # 색 추출 실패 -> DEFAULT_COLOR(회색) 대체 예정 개수
     for prim in _traverse_all(src):
         types[prim.GetTypeName() or "(untyped)"] += 1
         if prim.IsInstanceable():
@@ -248,8 +213,6 @@ def inspect_source(source_path: str) -> str:
             c = _curve_color(prim, tc)
             if c is not None:
                 colors.append(c)
-            else:
-                n_color_fallback += 1
 
     color_line = "colors: none"
     if colors:
@@ -258,10 +221,6 @@ def inspect_source(source_path: str) -> str:
         approx = len(np.unique(np.round(arr, 1), axis=0))
         color_line = (f"colors: {len(colors)} read | unique(round4)={exact} | "
                       f"grouped(round1)={approx}")
-    if n_color_fallback:
-        color_line += (f" | ⚠ {n_color_fallback} curve(s) will fall back to "
-                       "default gray (color unreadable: no displayColor, no "
-                       "constant color input on bound material)")
 
     n_proto = len(src.GetPrototypes())
     top = ", ".join(f"{t}:{c}" for t, c in types.most_common(15))
@@ -274,12 +233,7 @@ def inspect_source(source_path: str) -> str:
 # 소스에서 곡선 + 색 수집 (world 좌표)
 # ---------------------------------------------------------------------------
 def _extract_curve(prim: Usd.Prim, tc, xform_cache):
-    """곡선 prim → (segments[list of np(N,3) world], color np(3), wmin, wmax,
-    used_default_color bool). 비면 None.
-
-    used_default_color 는 원본 색 추출에 실패해 DEFAULT_COLOR(회색)로 대체됐는지
-    표시 — 진단/결과 메시지에서 "색이 왜 흐려 보이는지" 바로 알 수 있게 한다.
-    """
+    """곡선 prim → (segments[list of np(N,3) world], color np(3), wmin, wmax). 비면 None."""
     curves = UsdGeom.Curves(prim)
     pts = _get(curves.GetPointsAttr(), tc)
     counts = _get(curves.GetCurveVertexCountsAttr(), tc)
@@ -292,8 +246,7 @@ def _extract_curve(prim: Usd.Prim, tc, xform_cache):
     world = (homo @ m)[:, :3].astype(np.float32)      # 이후 처리는 float32 로 충분
 
     color = _curve_color(prim, tc)
-    used_default = color is None
-    if used_default:
+    if color is None:
         color = DEFAULT_COLOR.copy()
 
     cnts = np.array(counts, dtype=np.int64)
@@ -304,7 +257,7 @@ def _extract_curve(prim: Usd.Prim, tc, xform_cache):
         offset += int(c)
         if len(seg) >= 1:
             segs.append(seg)
-    return segs, color, world.min(axis=0), world.max(axis=0), used_default
+    return segs, color, world.min(axis=0), world.max(axis=0)
 
 
 def _curve_prims_and_timecode(stage: Usd.Stage):
@@ -322,14 +275,13 @@ def _collect_curves(stage: Usd.Stage, group_paths: list = None):
     """동기 수집. group_paths 밖("ungrouped") 곡선은 연산하지 않고 (경로, world 행렬)만
     기록한다 (행렬 하나만 조회 — O(depth), 점 데이터는 안 읽음).
 
-    return: (pl, cl, gl, raw_entries, n, skipped, mins, maxs, n_default_color)
+    return: (pl, cl, gl, raw_entries, n, skipped, mins, maxs)
       raw_entries = [(path_str, Gf.Matrix4d world_xform), ...]
-      n_default_color = 원본 색 추출 실패로 DEFAULT_COLOR(회색) 로 대체된 곡선 수
     """
     targets = group_paths or []
     prims, tc = _curve_prims_and_timecode(stage)
     xc = UsdGeom.XformCache(tc)
-    pl, cl, gl, skipped, raw_entries, n_default = [], [], [], 0, [], 0
+    pl, cl, gl, skipped, raw_entries = [], [], [], 0, []
     mins = np.full(3, np.inf)
     maxs = np.full(3, -np.inf)
     for prim in prims:
@@ -342,16 +294,14 @@ def _collect_curves(stage: Usd.Stage, group_paths: list = None):
         if r is None:
             skipped += 1
             continue
-        segs, color, wmin, wmax, used_default = r
-        if used_default:
-            n_default += 1
+        segs, color, wmin, wmax = r
         mins = np.minimum(mins, wmin)
         maxs = np.maximum(maxs, wmax)
         for s in segs:
             pl.append(s)
             cl.append(color)
             gl.append(gkey)
-    return pl, cl, gl, raw_entries, len(prims), skipped, mins, maxs, n_default
+    return pl, cl, gl, raw_entries, len(prims), skipped, mins, maxs
 
 
 async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
@@ -363,7 +313,7 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
     app = omni.kit.app.get_app()
     total = len(prims)
 
-    pl, cl, gl, skipped, raw_entries, n_default = [], [], [], 0, [], 0
+    pl, cl, gl, skipped, raw_entries = [], [], [], 0, []
     mins = np.full(3, np.inf)
     maxs = np.full(3, -np.inf)
     last_yield = time.perf_counter()
@@ -377,9 +327,7 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
             if r is None:
                 skipped += 1
             else:
-                segs, color, wmin, wmax, used_default = r
-                if used_default:
-                    n_default += 1
+                segs, color, wmin, wmax = r
                 mins = np.minimum(mins, wmin)
                 maxs = np.maximum(maxs, wmax)
                 for s in segs:
@@ -392,7 +340,7 @@ async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
                        f"{100 * (i + 1) // total}% ({i + 1}/{total})")
             await app.next_update_async()
             last_yield = time.perf_counter()
-    return pl, cl, gl, raw_entries, total, skipped, mins, maxs, n_default
+    return pl, cl, gl, raw_entries, total, skipped, mins, maxs
 
 
 # ---------------------------------------------------------------------------
@@ -731,20 +679,14 @@ def _setup_root(stage):
     UsdGeom.Xform.Define(stage, MERGED_PATH)
 
 
-def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups, n_raw,
-                n_default_color=0):
+def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups, n_raw):
     n_voxels, n_protos = totals
     print(f"[curve] voxelize: curves {n_curves}, pts {n_src_pts} -> "
           f"instances {n_voxels}, color-buckets {n_protos}, groups {n_groups}, "
-          f"raw(ungrouped) {n_raw}, default-color {n_default_color}, "
-          f"voxel_size={voxel_size:.4g}")
-    color_hint = ""
-    if n_default_color:
-        color_hint = (f" | ⚠ {n_default_color}/{n_curves} curves used default "
-                      "gray (color unreadable)")
+          f"raw(ungrouped) {n_raw}, voxel_size={voxel_size:.4g}")
     return (f"OK: curves {n_curves} / pts {n_src_pts} -> {n_voxels} instances "
             f"(1 per voxel, color-averaged) | color-buckets {n_protos} | "
-            f"groups {n_groups} | raw {n_raw}{color_hint} | voxel={voxel_size:.4g} | "
+            f"groups {n_groups} | raw {n_raw} | voxel={voxel_size:.4g} | "
             f"{MERGED_PATH}")
 
 
@@ -766,8 +708,8 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
     if not src:
         return f"ERROR: cannot open: {source_path}"
 
-    points_list, colors_list, groups_list, raw_entries, _n, skipped_empty, mins, maxs, \
-        n_default_color = _collect_curves(src, group_paths)
+    points_list, colors_list, groups_list, raw_entries, _n, skipped_empty, mins, maxs = \
+        _collect_curves(src, group_paths)
     if not points_list and not raw_entries:
         hint = ""
         if skipped_empty:
@@ -809,7 +751,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         tot_proto += n_protos
 
     return _result_msg(len(points_list), n_src_pts, (tot_vox, tot_proto),
-                       voxel_size, len(parts), n_raw, n_default_color)
+                       voxel_size, len(parts), n_raw)
 
 
 async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
@@ -838,8 +780,8 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         return f"ERROR: cannot open: {source_path}"
 
     report("[1/3] reading curves... 0%")
-    points_list, colors_list, groups_list, raw_entries, _n, skipped_empty, mins, maxs, \
-        n_default_color = await _collect_curves_async(src, group_paths, report)
+    points_list, colors_list, groups_list, raw_entries, _n, skipped_empty, mins, maxs = \
+        await _collect_curves_async(src, group_paths, report)
     if not points_list and not raw_entries:
         hint = ""
         if skipped_empty:
@@ -893,4 +835,4 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
     report("[3/3] authoring... 100%")
 
     return _result_msg(len(points_list), n_src_pts, (tot_vox, tot_proto),
-                       voxel_size, n_parts, n_raw, n_default_color)
+                       voxel_size, n_parts, n_raw)
