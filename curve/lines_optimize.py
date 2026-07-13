@@ -592,15 +592,16 @@ def save_voxelized(source_path: str) -> str:
     """생성된 OptimizedStreamlines 프림(raw 포함)을 자기완결 usd 파일로 저장한다.
 
     저장 경로: source_path 와 같은 디렉터리에 "{원본이름}_voxelized.usd".
-    결과 계층: OptimizedStreamlines 가 최상단(파일의 defaultPrim)이고, 그 자식으로
-    Root 가 와서 실제 내용(instancer, raw passthrough 등)을 담는다.
-        /OptimizedStreamlines        (top, defaultPrim)
-          └── Root                  (child, 실제 합성 결과)
+    OptimizedStreamlines 라는 wrapper 는 저장 파일에 남기지 않고, 그 바로 아래
+    자식들(예: group_paths="/root/target" 이면 "root", raw 미러링이면 원본
+    최상위 세그먼트 등)을 파일의 최상단 prim 으로 그대로 승격한다.
+        (라이브 씬) OptimizedStreamlines / root / target / ...
+        (저장 파일) root / target / ...              <- wrapper 없이 최상단
 
-    임시 stage 에 위 계층을 만들고 Root 를 현재 stage 의 MERGED_PATH 에 대한
-    참조로 걸어 Stage.Flatten() 하면, 원본 곡선·머티리얼 참조를 포함한 모든
-    합성 결과가 실제 값으로 구워진다 → source_path 에 더 이상 의존하지 않는
-    자기완결 파일이 된다.
+    임시 stage 에 OptimizedStreamlines 의 각 자식을 현재 stage 의 해당 경로에
+    대한 참조로 최상단에 걸고 Stage.Flatten() 하면, 원본 곡선·머티리얼 참조를
+    포함한 모든 합성 결과가 실제 값으로 구워진다 → source_path 에 더 이상
+    의존하지 않는 자기완결 파일이 된다.
     """
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -609,20 +610,23 @@ def save_voxelized(source_path: str) -> str:
     if not src_prim or not src_prim.IsValid():
         return "ERROR: no OptimizedStreamlines to save (run Voxelize & Load first)"
 
+    children = list(src_prim.GetChildren())
+    if not children:
+        return "ERROR: OptimizedStreamlines has no content to save"
+
     base = os.path.splitext(os.path.basename(source_path))[0]
     out_dir = os.path.dirname(source_path) or "."
     out_path = os.path.join(out_dir, f"{base}_voxelized.usd")
 
-    leaf_name = MERGED_PATH.strip("/").split("/")[-1]   # "OptimizedStreamlines"
-    top_path = f"/{leaf_name}"
-    root_path = f"{top_path}/Root"
-
     tmp_stage = Usd.Stage.CreateInMemory()
-    UsdGeom.Xform.Define(tmp_stage, top_path)
-    dst_prim = UsdGeom.Xform.Define(tmp_stage, root_path).GetPrim()
-    dst_prim.GetReferences().AddReference(
-        stage.GetRootLayer().identifier, Sdf.Path(MERGED_PATH))
-    tmp_stage.SetDefaultPrim(tmp_stage.GetPrimAtPath(top_path))
+    top_prims = []
+    for child in children:
+        dst_path = f"/{child.GetName()}"
+        dst_prim = tmp_stage.DefinePrim(dst_path)
+        dst_prim.GetReferences().AddReference(
+            stage.GetRootLayer().identifier, child.GetPath())
+        top_prims.append(dst_prim)
+    tmp_stage.SetDefaultPrim(top_prims[0])   # 최상단 prim 이 하나면 그게 defaultPrim
 
     flat_layer = tmp_stage.Flatten()
     flat_layer.Export(out_path)
