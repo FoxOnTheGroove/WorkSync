@@ -589,11 +589,15 @@ def set_raw_visible(visible: bool) -> str:
 
 
 def save_voxelized(source_path: str) -> str:
-    """생성된 OptimizedStreamlines 프림(raw 포함)을 별도 usd 파일로 저장한다.
+    """생성된 OptimizedStreamlines 프림(raw 포함)을 자기완결 usd 파일로 저장한다.
 
     저장 경로: source_path 와 같은 디렉터리에 "{원본이름}_voxelized.usd".
-    머티리얼/원본 참조는 그대로 유지(가벼움) — source_path 를 계속 참조하므로
-    원본 파일을 옮기면 참조가 끊긴다.
+    결과 계층은 최상단(/World) 바로 아래에 OptimizedStreamlines 가 오도록 구성.
+
+    임시 stage 에 /World/OptimizedStreamlines 를 현재 stage 의 MERGED_PATH 에
+    대한 참조로 걸고 Stage.Flatten() 하여, 원본 곡선·머티리얼 참조를 포함한 모든
+    합성 결과를 실제 값으로 구워낸다 → source_path 에 더 이상 의존하지 않는
+    자기완결 파일이 된다.
     """
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -605,14 +609,20 @@ def save_voxelized(source_path: str) -> str:
     base = os.path.splitext(os.path.basename(source_path))[0]
     out_dir = os.path.dirname(source_path) or "."
     out_path = os.path.join(out_dir, f"{base}_voxelized.usd")
-    dst_root_path = "/" + MERGED_PATH.strip("/").split("/")[-1]  # "/OptimizedStreamlines"
 
-    out_stage = Usd.Stage.CreateInMemory()
-    Sdf.CopySpec(stage.GetRootLayer(), Sdf.Path(MERGED_PATH),
-                out_stage.GetRootLayer(), Sdf.Path(dst_root_path))
-    out_stage.SetDefaultPrim(out_stage.GetPrimAtPath(dst_root_path))
-    out_stage.GetRootLayer().Export(out_path)
-    return f"Saved: {out_path}"
+    leaf_name = MERGED_PATH.strip("/").split("/")[-1]   # "OptimizedStreamlines"
+    dst_leaf_path = f"/World/{leaf_name}"
+
+    tmp_stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(tmp_stage, "/World")
+    dst_prim = tmp_stage.DefinePrim(dst_leaf_path)
+    dst_prim.GetReferences().AddReference(
+        stage.GetRootLayer().identifier, Sdf.Path(MERGED_PATH))
+    tmp_stage.SetDefaultPrim(tmp_stage.GetPrimAtPath("/World"))
+
+    flat_layer = tmp_stage.Flatten()
+    flat_layer.Export(out_path)
+    return f"Saved (self-contained): {out_path}"
 
 
 def _partition(points_list, colors_list, groups_list):
