@@ -8,10 +8,11 @@
 핵심 규칙:
 - **복셀당 인스턴스 1개.** 같은 복셀에 여러 색이 겹치면 그 색들을 **평균**내어
   하나만 둔다(중복 스피어 제거).
-- 400개나 되는 색은 **비슷한 색끼리 버킷으로 양자화**(color_levels)하여 대표색
-  프로토타입 수를 소수로 줄인다. 각 인스턴스는 자기 복셀 색에 가장 가까운
-  버킷 프로토타입을 가리킨다.
+- 비슷한 색끼리 버킷으로 양자화(color_levels)하여 대표색 프로토타입 수를 소수로
+  줄인다. 각 인스턴스는 자기 복셀 색에 가장 가까운 버킷 프로토타입을 가리킨다.
 - 곡선을 개별 Sphere prim 으로 만들지 않고 인스턴싱 → draw call 소수 유지.
+- group_paths 로 지정한 대상 xform 하위 곡선만 복셀 연산 대상이고, 대상 밖
+  ("ungrouped") 곡선은 연산하지 않고 원본을 그대로 참조해서 가져온다.
 
 색 추출: 1) 곡선의 displayColor primvar  2) 바인딩/형제 머티리얼의 셰이더 색 입력.
 지오메트리가 time-sample 로만 저장된 경우도 첫 샘플로 폴백해 읽는다.
@@ -30,8 +31,8 @@ import omni.kit.app
 
 
 MERGED_PATH = "/World/OptimizedStreamlines"
+RAW_PATH = MERGED_PATH + "/RawUngrouped"
 DEFAULT_COLOR = np.array([0.8, 0.8, 0.8])
-ALPHA_LEVELS = 8       # 보간 페이드 opacity 단계 수 (0=완전 투명/스킵)
 
 # 머티리얼 셰이더에서 색으로 읽어볼 입력 이름들 (UsdPreviewSurface / MDL 계열)
 _COLOR_INPUTS = [
@@ -156,8 +157,8 @@ def _group_for_path(path_str: str, targets: list) -> str:
     예) targets=["/root/target","/root/target2"] 일 때
         /root/target/b/line1  → "/root/target"
         /root/target2/line5   → "/root/target2"
-        어느 대상에도 안 속함  → "ungrouped"
-    targets 가 비면 전부 "all" (그룹 분류 없음).
+        어느 대상에도 안 속함  → "ungrouped" (연산 대상 제외, 원본 그대로 참조)
+    targets 가 비면 전부 "all" (그룹 분류 없음, 전부 연산 대상).
     """
     if not targets:
         return "all"
@@ -202,12 +203,11 @@ def inspect_source(source_path: str) -> str:
             if c is not None:
                 colors.append(c)
 
-    # 색 중복/고유 분석
     color_line = "colors: none"
     if colors:
         arr = np.array(colors)
         exact = len(np.unique(np.round(arr, 4), axis=0))
-        approx = len(np.unique(np.round(arr, 1), axis=0))  # ~10% 톨러런스
+        approx = len(np.unique(np.round(arr, 1), axis=0))
         color_line = (f"colors: {len(colors)} read | unique(round4)={exact} | "
                       f"grouped(round1)={approx}")
 
@@ -222,10 +222,7 @@ def inspect_source(source_path: str) -> str:
 # 소스에서 곡선 + 색 수집 (world 좌표)
 # ---------------------------------------------------------------------------
 def _extract_curve(prim: Usd.Prim, tc, xform_cache):
-    """곡선 prim → (segments[list of np(N,3) world], color np(3)). 비면 None.
-
-    Vt→numpy 변환을 벡터화(np.array(Vt배열))해 Python 루프 없이 빠르게 처리.
-    """
+    """곡선 prim → (segments[list of np(N,3) world], color np(3), wmin, wmax). 비면 None."""
     curves = UsdGeom.Curves(prim)
     pts = _get(curves.GetPointsAttr(), tc)
     counts = _get(curves.GetCurveVertexCountsAttr(), tc)
@@ -253,11 +250,7 @@ def _extract_curve(prim: Usd.Prim, tc, xform_cache):
 
 
 def _curve_prims_and_timecode(stage: Usd.Stage):
-    """곡선 prim 목록과 대표 타임코드를 단일 순회로 구한다.
-
-    prim 목록을 한 번만 뽑아 (1) 진행률용 총개수 (2) 타임코드 판별
-    (3) 실제 수집에 재사용 — 이전의 3중 traversal 을 1회로 줄인다.
-    """
+    """곡선 prim 목록과 대표 타임코드를 단일 순회로 구한다."""
     prims = [p for p in _traverse_all(stage) if _is_curve(p)]
     tc = Usd.TimeCode.Default()
     if prims:
@@ -268,14 +261,22 @@ def _curve_prims_and_timecode(stage: Usd.Stage):
 
 
 def _collect_curves(stage: Usd.Stage, group_paths: list = None):
-    """동기 수집. return: (pl, cl, gl, n, skipped, mins, maxs)."""
+    """동기 수집. group_paths 밖("ungrouped") 곡선은 연산하지 않고 경로만 기록.
+
+    return: (pl, cl, gl, raw_paths, n, skipped, mins, maxs)
+    """
     targets = group_paths or []
     prims, tc = _curve_prims_and_timecode(stage)
     xc = UsdGeom.XformCache(tc)
-    pl, cl, gl, skipped = [], [], [], 0
+    pl, cl, gl, skipped, raw_paths = [], [], [], 0, []
     mins = np.full(3, np.inf)
     maxs = np.full(3, -np.inf)
     for prim in prims:
+        path_str = prim.GetPath().pathString
+        gkey = _group_for_path(path_str, targets)
+        if gkey == "ungrouped":
+            raw_paths.append(path_str)   # 연산 스킵, 원본 그대로 나중에 참조
+            continue
         r = _extract_curve(prim, tc, xc)
         if r is None:
             skipped += 1
@@ -283,50 +284,50 @@ def _collect_curves(stage: Usd.Stage, group_paths: list = None):
         segs, color, wmin, wmax = r
         mins = np.minimum(mins, wmin)
         maxs = np.maximum(maxs, wmax)
-        gkey = _group_for_path(prim.GetPath().pathString, targets)
         for s in segs:
             pl.append(s)
             cl.append(color)
             gl.append(gkey)
-    return pl, cl, gl, len(prims), skipped, mins, maxs
+    return pl, cl, gl, raw_paths, len(prims), skipped, mins, maxs
 
 
 async def _collect_curves_async(stage: Usd.Stage, group_paths: list = None,
                                 report=None, yield_interval: float = 0.05):
-    """비동기 수집. yield_interval 초 이상 일했을 때만 UI 에 양보한다.
-
-    (개수 기준 양보는 프레임이 느린 씬에서 대기 시간이 낭비됨 — 시간 기준으로.)
-    """
+    """비동기 수집. yield_interval 초 이상 일했을 때만 UI 에 양보한다."""
     targets = group_paths or []
     prims, tc = _curve_prims_and_timecode(stage)
     xc = UsdGeom.XformCache(tc)
     app = omni.kit.app.get_app()
     total = len(prims)
 
-    pl, cl, gl, skipped = [], [], [], 0
+    pl, cl, gl, skipped, raw_paths = [], [], [], 0, []
     mins = np.full(3, np.inf)
     maxs = np.full(3, -np.inf)
     last_yield = time.perf_counter()
     for i, prim in enumerate(prims):
-        r = _extract_curve(prim, tc, xc)
-        if r is None:
-            skipped += 1
+        path_str = prim.GetPath().pathString
+        gkey = _group_for_path(path_str, targets)
+        if gkey == "ungrouped":
+            raw_paths.append(path_str)
         else:
-            segs, color, wmin, wmax = r
-            mins = np.minimum(mins, wmin)
-            maxs = np.maximum(maxs, wmax)
-            gkey = _group_for_path(prim.GetPath().pathString, targets)
-            for s in segs:
-                pl.append(s)
-                cl.append(color)
-                gl.append(gkey)
+            r = _extract_curve(prim, tc, xc)
+            if r is None:
+                skipped += 1
+            else:
+                segs, color, wmin, wmax = r
+                mins = np.minimum(mins, wmin)
+                maxs = np.maximum(maxs, wmax)
+                for s in segs:
+                    pl.append(s)
+                    cl.append(color)
+                    gl.append(gkey)
         if time.perf_counter() - last_yield >= yield_interval:
             if report and total:
                 report(f"[1/3] reading curves... "
                        f"{100 * (i + 1) // total}% ({i + 1}/{total})")
             await app.next_update_async()
             last_yield = time.perf_counter()
-    return pl, cl, gl, total, skipped, mins, maxs
+    return pl, cl, gl, raw_paths, total, skipped, mins, maxs
 
 
 # ---------------------------------------------------------------------------
@@ -404,64 +405,6 @@ def _voxelize(points_list, colors_list, origin: np.ndarray, voxel_size: float):
     return centers, counts, mean_colors
 
 
-def _voxelize_keyed(points_list, colors_list, origin, voxel_size, dims):
-    """공통 격자(origin/voxel_size/dims 고정)로 복셀화.
-
-    보간을 위해 여러 데이터셋이 같은 키 체계를 쓰도록 dims 로 팩킹한다.
-    return: (keys np(M,) int64 정렬됨, counts np(M,), colors np(M,3))
-    """
-    if not points_list:
-        return (np.empty((0,), dtype=np.int64),
-                np.empty((0,)), np.empty((0, 3)))
-    samples, sample_curve, palette = _resample(points_list, colors_list, voxel_size)
-    origin32 = origin.astype(np.float32)
-    inv_vs = np.float32(1.0 / voxel_size)
-    idx = np.floor((samples - origin32) * inv_vs).astype(np.int64)
-    idx = np.clip(idx, 0, dims - 1)  # 공통 bbox 밖(수치오차)이면 경계로
-    key = (idx[:, 0] * dims[1] + idx[:, 1]) * dims[2] + idx[:, 2]
-    return _reduce_voxels(key, sample_curve, palette)
-
-
-def _keys_to_centers(keys, origin, voxel_size, dims):
-    """공통 격자 키 → 복셀 중심 좌표 (M,3)."""
-    plane = int(dims[1]) * int(dims[2])
-    rem = keys % plane
-    idx3d = np.stack([keys // plane, rem // dims[2], rem % dims[2]], axis=1)
-    return origin + (idx3d + 0.5) * voxel_size
-
-
-def _lerp_group(A, B, t):
-    """두 스냅샷의 한 그룹을 밀도-가중(premultiplied)으로 보간.
-
-    A, B = (keys, density, colors) 또는 None. 같은 공통 격자 키를 공유해야 함.
-    return: (keys, density, colors) 또는 None
-    """
-    if A is None and B is None:
-        return None
-    if B is None or t <= 0.0:
-        return A
-    if A is None or t >= 1.0:
-        return B
-
-    kA, dA, cA = A
-    kB, dB, cB = B
-    ku = np.union1d(kA, kB)
-
-    def scatter(keys, arr):
-        out = np.zeros((len(ku),) + arr.shape[1:], dtype=np.float64)
-        out[np.searchsorted(ku, keys)] = arr
-        return out
-
-    DA, DB = scatter(kA, dA), scatter(kB, dB)
-    PCA = scatter(kA, dA[:, None] * cA)
-    PCB = scatter(kB, dB[:, None] * cB)
-    d = (1.0 - t) * DA + t * DB
-    pc = (1.0 - t) * PCA + t * PCB
-    mask = d > 1e-9
-    color = pc[mask] / d[mask][:, None]
-    return ku[mask], d[mask], color
-
-
 # ---------------------------------------------------------------------------
 # 색 양자화 — 비슷한 색을 버킷으로 (순수 numpy, 오프라인 테스트 가능)
 # ---------------------------------------------------------------------------
@@ -504,14 +447,6 @@ def _int_array(np_arr):
     if from_np is not None:
         return from_np(a)
     return Vt.IntArray([int(v) for v in a])
-
-
-def _int64_array(np_arr):
-    a = np.ascontiguousarray(np_arr, dtype=np.int64)
-    from_np = getattr(Vt.Int64Array, "FromNumpy", None)
-    if from_np is not None:
-        return from_np(a)
-    return Vt.Int64Array([int(v) for v in a])
 
 
 def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
@@ -568,6 +503,21 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
     return len(proto_paths), len(centers)
 
 
+def _author_raw(stage, source_path, raw_paths, visible):
+    """group_paths 밖(ungrouped) 곡선을 연산 없이 원본 그대로 참조해서 가져온다."""
+    if not raw_paths:
+        return 0
+    UsdGeom.Xform.Define(stage, RAW_PATH)
+    for i, path_str in enumerate(raw_paths):
+        dst = f"{RAW_PATH}/raw_{i}"
+        prim = stage.DefinePrim(dst)
+        prim.GetReferences().AddReference(source_path, path_str)
+    imageable = UsdGeom.Imageable(stage.GetPrimAtPath(RAW_PATH))
+    imageable.CreateVisibilityAttr().Set(
+        UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible)
+    return len(raw_paths)
+
+
 def set_sphere_radius(radius: float) -> str:
     """최적화 결과의 모든 프로토타입 구 radius 를 일괄 변경한다 (라이브 슬라이더용).
 
@@ -586,6 +536,19 @@ def set_sphere_radius(radius: float) -> str:
             UsdGeom.Sphere(prim).GetRadiusAttr().Set(float(radius))
             n += 1
     return f"radius={radius:.3g} applied to {n} prototype sphere(s)"
+
+
+def set_raw_visible(visible: bool) -> str:
+    """group_paths 밖(ungrouped) 원본 지오메트리의 visibility 를 즉시 토글한다."""
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage"
+    prim = stage.GetPrimAtPath(RAW_PATH)
+    if not prim:
+        return "no raw/ungrouped geometry in scene"
+    UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(
+        UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible)
+    return f"raw/ungrouped geometry visible={visible}"
 
 
 def _partition(points_list, colors_list, groups_list):
@@ -613,34 +576,36 @@ def _setup_root(stage):
     UsdGeom.Xform.Define(stage, MERGED_PATH)
 
 
-def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups):
+def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups, n_raw):
     n_voxels, n_protos = totals
     print(f"[curve] voxelize: curves {n_curves}, pts {n_src_pts} -> "
           f"instances {n_voxels}, color-buckets {n_protos}, groups {n_groups}, "
-          f"voxel_size={voxel_size:.4g}")
+          f"raw(ungrouped) {n_raw}, voxel_size={voxel_size:.4g}")
     return (f"OK: curves {n_curves} / pts {n_src_pts} -> {n_voxels} instances "
             f"(1 per voxel, color-averaged) | color-buckets {n_protos} | "
-            f"groups {n_groups} | voxel={voxel_size:.4g} | {MERGED_PATH}")
+            f"groups {n_groups} | raw {n_raw} | voxel={voxel_size:.4g} | "
+            f"{MERGED_PATH}")
 
 
 def optimize_and_load(source_path: str, voxel_size: float = 0.0,
                       resolution: int = 128, radius_factor: float = 0.5,
                       density_to_scale: bool = False, color_levels: int = 8,
-                      group_paths: list = None) -> str:
+                      group_paths: list = None, raw_visible: bool = True) -> str:
     """streamline USD 를 색-인지 복셀 다운샘플링해 현재 씬에 로드한다.
 
     - 복셀당 인스턴스 1개, 겹치는 색은 평균 / 비슷한 색은 color_levels 로 버킷 양자화
     - group_paths(대상 xform 경로 리스트)가 있으면 각 경로 하위 곡선끼리 그룹으로
-      묶어 별도 PointInstancer 저작 (어디에도 안 속하면 'ungrouped')
+      묶어 별도 PointInstancer 저작. 대상 밖("ungrouped") 곡선은 연산하지 않고
+      원본을 그대로 참조해서 가져온다 (raw_visible 로 초기 표시 여부 지정).
     - voxel_size<=0 이면 root world bbox 최대변 / resolution 으로 자동 산출
     """
     src = Usd.Stage.Open(source_path)
     if not src:
         return f"ERROR: cannot open: {source_path}"
 
-    points_list, colors_list, groups_list, _n, skipped_empty, mins, maxs = \
+    points_list, colors_list, groups_list, raw_paths, _n, skipped_empty, mins, maxs = \
         _collect_curves(src, group_paths)
-    if not points_list:
+    if not points_list and not raw_paths:
         hint = ""
         if skipped_empty:
             hint = (f"\n({skipped_empty} curve(s) skipped: points/counts "
@@ -648,17 +613,23 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         return (f"ERROR: no valid curves found: {source_path}{hint}\n"
                 f"{inspect_source(source_path)}")
 
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage (open a scene first)"
+    _setup_root(stage)
+
+    n_raw = _author_raw(stage, source_path, raw_paths, raw_visible)
+
+    if not points_list:
+        return (f"OK: no curves matched group_paths | raw(ungrouped) {n_raw} | "
+                f"{MERGED_PATH}")
+
     n_src_pts = sum(len(p) for p in points_list)
     if voxel_size <= 0.0:
         voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
     if voxel_size <= 0.0:
         return "ERROR: failed to derive voxel_size (empty bbox)"
     origin = mins.astype(np.float64)
-
-    stage = omni.usd.get_context().get_stage()
-    if stage is None:
-        return "ERROR: no active stage (open a scene first)"
-    _setup_root(stage)
 
     parts = _partition(points_list, colors_list, groups_list)
     tot_vox = tot_proto = 0
@@ -675,7 +646,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         tot_proto += n_protos
 
     return _result_msg(len(points_list), n_src_pts, (tot_vox, tot_proto),
-                       voxel_size, len(parts))
+                       voxel_size, len(parts), n_raw)
 
 
 async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
@@ -684,11 +655,13 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
                                   density_to_scale: bool = False,
                                   color_levels: int = 8,
                                   group_paths: list = None,
+                                  raw_visible: bool = True,
                                   progress=None) -> str:
     """optimize_and_load 의 비동기 버전 — Kit 멈춤 방지.
 
     - USD 읽기: 주기적으로 UI 에 양보 / 무거운 numpy: 백그라운드 스레드 오프로드
     - 그룹마다 별도 PointInstancer 저작, 그룹 사이에 한 프레임 양보
+    - group_paths 밖(ungrouped) 곡선은 연산하지 않고 원본을 그대로 참조
     - progress 콜백에 단계별 진행률(%)을 보고: [1/3] read, [2/3] voxelize, [3/3] author
     """
     def report(msg):
@@ -700,9 +673,9 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         return f"ERROR: cannot open: {source_path}"
 
     report("[1/3] reading curves... 0%")
-    points_list, colors_list, groups_list, _n, skipped_empty, mins, maxs = \
+    points_list, colors_list, groups_list, raw_paths, _n, skipped_empty, mins, maxs = \
         await _collect_curves_async(src, group_paths, report)
-    if not points_list:
+    if not points_list and not raw_paths:
         hint = ""
         if skipped_empty:
             hint = (f"\n({skipped_empty} curve(s) skipped: points/counts "
@@ -710,17 +683,23 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         return (f"ERROR: no valid curves found: {source_path}{hint}\n"
                 f"{inspect_source(source_path)}")
 
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return "ERROR: no active stage (open a scene first)"
+    _setup_root(stage)
+
+    n_raw = _author_raw(stage, source_path, raw_paths, raw_visible)
+
+    if not points_list:
+        return (f"OK: no curves matched group_paths | raw(ungrouped) {n_raw} | "
+                f"{MERGED_PATH}")
+
     n_src_pts = sum(len(p) for p in points_list)
     if voxel_size <= 0.0:
         voxel_size = float(np.max(maxs - mins)) / max(int(resolution), 1)
     if voxel_size <= 0.0:
         return "ERROR: failed to derive voxel_size (empty bbox)"
     origin = mins.astype(np.float64)
-
-    stage = omni.usd.get_context().get_stage()
-    if stage is None:
-        return "ERROR: no active stage (open a scene first)"
-    _setup_root(stage)
 
     loop = asyncio.get_event_loop()
     app = omni.kit.app.get_app()
@@ -749,241 +728,4 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
     report("[3/3] authoring... 100%")
 
     return _result_msg(len(points_list), n_src_pts, (tot_vox, tot_proto),
-                       voxel_size, n_parts)
-
-
-# ---------------------------------------------------------------------------
-# 다중 데이터셋 + 보간 (공통 격자)
-# ---------------------------------------------------------------------------
-async def build_snapshots_async(paths, resolution=128, group_paths=None,
-                                voxel_size=0.0, progress=None):
-    """여러 USD 를 공통 격자로 복셀화해 스냅샷 리스트를 만든다 (보간용).
-
-    mesh 가 서로 달라도 같은 origin/voxel_size/dims 로 리샘플하므로 공간 기준으로
-    정렬되어 스냅샷 사이를 lerp 할 수 있다.
-    return: (snapshots, grid, msg)
-      snapshots[i] = { gkey: (keys, density, colors) }  (i번째 데이터셋)
-      grid = (origin, voxel_size, dims)
-    """
-    def report(m):
-        if progress:
-            progress(m)
-
-    paths = [p for p in (paths or []) if p and p.strip()]
-    if not paths:
-        return None, None, "ERROR: no USD path given"
-
-    loop = asyncio.get_event_loop()
-    # 1) 각 데이터셋 곡선 수집 + 공통(union) bbox
-    datasets = []  # (partition, )  partition = [(gkey, pl, cl), ...]
-    gmin = np.full(3, np.inf)
-    gmax = np.full(3, -np.inf)
-    for pi, path in enumerate(paths):
-        report(f"[1/3] reading {pi + 1}/{len(paths)}: {path}")
-        src = Usd.Stage.Open(path)
-        if not src:
-            return None, None, f"ERROR: cannot open: {path}"
-        pl, cl, gl, _n, _sk, mn, mx = await _collect_curves_async(
-            src, group_paths, report)
-        if not pl:
-            return None, None, f"ERROR: no valid curves in {path}"
-        gmin = np.minimum(gmin, mn)
-        gmax = np.maximum(gmax, mx)
-        datasets.append(_partition(pl, cl, gl))
-
-    # 2) 공통 격자 확정
-    origin = gmin.astype(np.float64)
-    if voxel_size <= 0.0:
-        voxel_size = float(np.max(gmax - gmin)) / max(int(resolution), 1)
-    if voxel_size <= 0.0:
-        return None, None, "ERROR: failed to derive voxel_size (empty bbox)"
-    dims = (np.floor((gmax - gmin) / voxel_size).astype(np.int64) + 2)
-
-    # 3) 데이터셋별 공통 격자 복셀화
-    snapshots = []
-    for di, parts in enumerate(datasets):
-        report(f"[2/3] voxelizing dataset {di + 1}/{len(datasets)}...")
-        snap = {}
-        for gkey, pl, cl in parts:
-            keys, counts, colors = await loop.run_in_executor(
-                None, _voxelize_keyed, pl, cl, origin, voxel_size, dims)
-            snap[gkey] = (keys, counts.astype(np.float64), colors)
-        snapshots.append(snap)
-        datasets[di] = None  # free raw points early
-        await omni.kit.app.get_app().next_update_async()
-
-    grid = (origin, voxel_size, dims)
-    msg = (f"OK: {len(snapshots)} snapshot(s) on shared grid "
-           f"dims={tuple(int(d) for d in dims)} voxel={voxel_size:.4g}")
-    return snapshots, grid, msg
-
-
-def _author_cells(stage, groups_cells, grid, radius_factor, color_levels):
-    """{gkey: (keys, density, colors)} 를 씬에 저작한다. return: (n_groups, n_vox)."""
-    origin, voxel_size, dims = grid
-    _setup_root(stage)
-    tot_vox = 0
-    n_groups = 0
-    for gi, (gkey, cell) in enumerate(sorted(groups_cells.items())):
-        if cell is None:
-            continue
-        keys, density, colors = cell
-        if len(keys) == 0:
-            continue
-        centers = _keys_to_centers(keys, origin, voxel_size, dims)
-        bucket_idx, reps = _quantize_colors(colors, color_levels)
-        group_root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
-        _n_protos, n_vox = _author_group(
-            stage, group_root, centers, density, bucket_idx, reps,
-            voxel_size, radius_factor, False)
-        tot_vox += n_vox
-        n_groups += 1
-    return n_groups, tot_vox
-
-
-def author_snapshot(snapshot, grid, radius_factor=0.5, color_levels=16) -> str:
-    """스냅샷 하나를 그대로 씬에 로드한다."""
-    stage = omni.usd.get_context().get_stage()
-    if stage is None:
-        return "ERROR: no active stage (open a scene first)"
-    n_groups, n_vox = _author_cells(stage, snapshot, grid, radius_factor, color_levels)
-    return f"OK: loaded snapshot | groups {n_groups} | instances {n_vox}"
-
-
-def _align(A, B):
-    """두 그룹 셀을 공통 키(union)로 정렬. return: (ku, wA, wB, pcA, pcB)."""
-    empty_k = np.empty((0,), dtype=np.int64)
-    if A is None and B is None:
-        return empty_k, *(np.empty((0,)),) * 2, *(np.empty((0, 3)),) * 2
-    kA, dA, cA = A if A is not None else (empty_k, np.empty((0,)), np.empty((0, 3)))
-    kB, dB, cB = B if B is not None else (empty_k, np.empty((0,)), np.empty((0, 3)))
-    ku = np.union1d(kA, kB)
-    n = len(ku)
-
-    def scat(keys, arr, shape):
-        out = np.zeros((n,) + shape, dtype=np.float64)
-        if len(keys):
-            out[np.searchsorted(ku, keys)] = arr
-        return out
-
-    wA = scat(kA, np.asarray(dA, float), ())
-    wB = scat(kB, np.asarray(dB, float), ())
-    pcA = scat(kA, np.asarray(dA, float)[:, None] * cA, (3,))
-    pcB = scat(kB, np.asarray(dB, float)[:, None] * cB, (3,))
-    return ku, wA, wB, pcA, pcB
-
-
-class InterpSession:
-    """한 구간(스냅샷 i↔i+1) 동안 프림을 재사용하는 보간 세션.
-
-    - 셀 위치·스케일은 구간 내 고정 (스피어 크기는 오직 radius 슬라이더로만 제어)
-    - 페이드는 **opacity** 로: 색×알파를 (color_grid_key, alpha_level) 프로토타입으로
-      나눠두고, 매 틱 각 셀의 protoIndices 만 바꿔 자기 색·투명도 프로토타입을 가리킴
-      → 공유 머티리얼을 수정하지 않으므로 셀끼리 서로 영향 없음
-    - 프로토타입은 처음 나타난 (색,알파) 조합만 생성 후 재사용 (pool) → 워밍업 후 빠름
-    - alpha_level 0(거의 투명)은 invisibleIds 로 렌더 자체를 스킵
-    """
-
-    def __init__(self, grid, color_levels=16, alpha_levels=ALPHA_LEVELS):
-        self.grid = grid            # (origin, voxel_size, dims)
-        self.seg = None             # 현재 구간 (i, j)
-        self.groups = []
-        self.L = int(color_levels)
-        self.na = int(alpha_levels)
-        self._radius = 0.5
-
-    def prepare(self, snap_a, snap_b, seg, radius_factor=0.5):
-        """구간 진입 시 1회: 프림 생성 + 고정 위치/스케일 + 정렬 배열 캐시."""
-        stage = omni.usd.get_context().get_stage()
-        origin, vs, dims = self.grid
-        self._radius = float(radius_factor)
-        if stage.GetPrimAtPath(MERGED_PATH):
-            stage.RemovePrim(MERGED_PATH)
-        UsdGeom.Xform.Define(stage, MERGED_PATH)
-        self.groups = []
-        self.seg = seg
-        for gi, gkey in enumerate(sorted(set(snap_a) | set(snap_b))):
-            ku, wA, wB, pcA, pcB = _align(snap_a.get(gkey), snap_b.get(gkey))
-            if len(ku) == 0:
-                continue
-            wfull = np.maximum(wA, wB)
-            wfull[wfull == 0] = 1.0
-            centers = _keys_to_centers(ku, origin, vs, dims)
-            root = f"{MERGED_PATH}/{_safe_name(gkey, gi)}"
-            UsdGeom.Xform.Define(stage, root)
-            inst = UsdGeom.PointInstancer.Define(stage, root + "/instancer")
-            inst.CreatePositionsAttr(_vec3f_array(centers))     # 고정
-            # 스케일 상수 = voxel 크기 (알파를 크기로 인코딩하지 않음)
-            scales = np.full((len(ku), 3), float(vs))
-            inst.CreateScalesAttr(_vec3f_array(scales))
-            proto_scope = root + "/instancer/Prototypes"
-            looks = root + "/Looks"
-            UsdGeom.Scope.Define(stage, proto_scope)
-            UsdGeom.Scope.Define(stage, looks)
-            # 플레이스홀더 프로토타입 0 (invisible 셀이 가리킬 대상)
-            g = dict(inst=inst, proto_scope=proto_scope, looks=looks,
-                     wA=wA, wB=wB, wfull=wfull, pcA=pcA, pcB=pcB,
-                     protos=[], pool={})
-            self._make_proto(stage, g, np.array([0.5, 0.5, 0.5]), 1.0)  # idx 0
-            self.groups.append(g)
-
-    def _make_proto(self, stage, g, rep, opacity):
-        k = len(g["protos"])
-        pp = f'{g["proto_scope"]}/proto_{k}'
-        sph = UsdGeom.Sphere.Define(stage, pp)
-        sph.CreateRadiusAttr(self._radius)
-        mp = f'{g["looks"]}/mat_{k}'
-        mat = UsdShade.Material.Define(stage, mp)
-        sh = UsdShade.Shader.Define(stage, mp + "/Surface")
-        sh.CreateIdAttr("UsdPreviewSurface")
-        sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(float(rep[0]), float(rep[1]), float(rep[2])))
-        sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
-        sh.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(float(opacity))
-        mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
-        UsdShade.MaterialBindingAPI.Apply(sph.GetPrim()).Bind(mat)
-        g["protos"].append(Sdf.Path(pp))
-        return k
-
-    def update(self, t, radius_factor, color_levels=None):
-        """틱마다: 각 셀을 (색버킷,알파버킷) 프로토타입에 배정 (protoIndices) + 투명 스킵.
-
-        위치·스케일은 안 건드림 → 크기는 radius 로만, 페이드는 opacity 로만.
-        """
-        stage = omni.usd.get_context().get_stage()
-        self._radius = float(radius_factor)
-        L = int(color_levels) if color_levels else self.L
-        na = self.na
-        n_vis = 0
-        for g in self.groups:
-            d = (1.0 - t) * g["wA"] + t * g["wB"]
-            alpha = d / g["wfull"]                                  # 0~1
-            color = ((1.0 - t) * g["pcA"] + t * g["pcB"]) / np.maximum(d, 1e-9)[:, None]
-
-            # 색 격자 키 (고정 양자화) + 알파 단계
-            ci = np.clip(np.round(color * (L - 1)), 0, L - 1).astype(np.int64)
-            ckey = (ci[:, 0] * L + ci[:, 1]) * L + ci[:, 2]
-            alvl = np.clip(np.round(alpha * na), 0, na).astype(np.int64)   # 0..na
-            visible = alvl > 0
-            combined = ckey * (na + 1) + alvl
-
-            proto_idx = np.zeros(len(d), dtype=np.int64)             # 기본 0(placeholder)
-            if visible.any():
-                for cv in np.unique(combined[visible]):
-                    if cv in g["pool"]:
-                        continue
-                    a = int(cv % (na + 1))
-                    ck = int(cv // (na + 1))
-                    r = ck % (L * L)
-                    rep = np.array([ck // (L * L), r // L, r % L]) / (L - 1)
-                    g["pool"][int(cv)] = self._make_proto(stage, g, rep, a / na)
-                pk = np.array(sorted(g["pool"].keys()), dtype=np.int64)
-                pv = np.array([g["pool"][int(k)] for k in pk], dtype=np.int64)
-                proto_idx[visible] = pv[np.searchsorted(pk, combined[visible])]
-
-            inst = g["inst"]
-            inst.CreatePrototypesRel().SetTargets(g["protos"])
-            inst.CreateProtoIndicesAttr(_int_array(proto_idx))
-            inst.CreateInvisibleIdsAttr(_int64_array(np.nonzero(~visible)[0]))
-            n_vis += int(visible.sum())
-        return n_vis
+                       voxel_size, n_parts, n_raw)
