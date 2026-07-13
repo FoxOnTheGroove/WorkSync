@@ -470,13 +470,31 @@ def _group_root_path(gkey: str) -> str:
     return MERGED_PATH + _sanitize_usd_path(gkey)
 
 
+def _define_proto_shape(stage, proto_path, shape, radius_factor):
+    """프로토타입 지오메트리 1개 정의. shape: 'sphere' 또는 'cube'.
+
+    Sphere 는 radius, Cube 는 size(변 길이) 로 반경 개념을 구현 — Cube 는
+    radius_factor*2 를 변 길이로 써서 sphere 와 시각적 크기를 맞춘다.
+    return: (geom_prim, geom_schema) — geom_schema 는 이후 방사형 크기 조정에 사용.
+    """
+    if shape == "cube":
+        cube = UsdGeom.Cube.Define(stage, proto_path)
+        cube.CreateSizeAttr(float(radius_factor) * 2.0)
+        return cube
+    sphere = UsdGeom.Sphere.Define(stage, proto_path)
+    # radius 를 프로토타입에 두면 이후 슬라이더로 전 인스턴스 일괄 조정 가능
+    sphere.CreateRadiusAttr(float(radius_factor))
+    return sphere
+
+
 def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
-                  voxel_size, radius_factor, density_to_scale):
+                  voxel_size, radius_factor, density_to_scale, proto_shape="sphere"):
     """한 그룹을 group_root 아래 단일 PointInstancer 로 저작한다.
 
     프로토타입은 인스턴서 하위(instancer/Prototypes)에 중첩 → Hydra 가 원점에
     직접 그리지 않고 인스턴스로만 렌더한다. bucket_idx/reps 는 미리 계산.
     큰 배열은 Vt.*Array.FromNumpy 로 벡터화 저작.
+    proto_shape: 'sphere'(기본) 또는 'cube' — 프로토타입 지오메트리 종류.
     """
     UsdGeom.Xform.Define(stage, group_root)
     instancer_path = group_root + "/instancer"
@@ -489,11 +507,9 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
     proto_paths = []
     for k, rep in enumerate(reps):
         proto_path = f"{proto_scope}/proto_{k}"
-        sphere = UsdGeom.Sphere.Define(stage, proto_path)
-        # radius 를 프로토타입에 두면 이후 슬라이더로 전 인스턴스 일괄 조정 가능
-        sphere.CreateRadiusAttr(float(radius_factor))
+        geom = _define_proto_shape(stage, proto_path, proto_shape, radius_factor)
         col = Gf.Vec3f(float(rep[0]), float(rep[1]), float(rep[2]))
-        sphere.CreateDisplayColorAttr(Vt.Vec3fArray([col]))
+        geom.CreateDisplayColorAttr(Vt.Vec3fArray([col]))
         # RTX 에서 확실히 보이도록 대표색 UsdPreviewSurface 바인딩
         mat_path = f"{looks}/mat_{k}"
         mat = UsdShade.Material.Define(stage, mat_path)
@@ -502,7 +518,7 @@ def _author_group(stage, group_root, centers, counts, bucket_idx, reps,
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(col)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
         mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-        UsdShade.MaterialBindingAPI.Apply(sphere.GetPrim()).Bind(mat)
+        UsdShade.MaterialBindingAPI.Apply(geom.GetPrim()).Bind(mat)
         proto_paths.append(Sdf.Path(proto_path))
 
     # scale 에는 voxel 크기(+밀도 옵션)만 넣고, 반경은 프로토타입 radius 가 담당
@@ -548,10 +564,12 @@ def _author_raw(stage, source_path, raw_entries, visible):
 
 
 def set_sphere_radius(radius: float) -> str:
-    """최적화 결과의 모든 프로토타입 구 radius 를 일괄 변경한다 (라이브 슬라이더용).
+    """최적화 결과의 모든 프로토타입 반경을 일괄 변경한다 (라이브 슬라이더용).
 
-    인스턴스 scale 은 voxel 크기만 담고 있으므로, 프로토타입 radius 몇 개만
-    고치면 전체 인스턴스가 즉시 리사이즈된다.
+    Sphere/Cube 어느 쪽으로 만들어졌든 대응: Sphere 는 radius, Cube 는 size
+    (radius*2, sphere 와 시각적 크기를 맞춤) 로 설정. 인스턴스 scale 은 voxel
+    크기만 담고 있으므로, 프로토타입 몇 개만 고치면 전체 인스턴스가 즉시
+    리사이즈된다.
     """
     stage = omni.usd.get_context().get_stage()
     if stage is None:
@@ -564,7 +582,10 @@ def set_sphere_radius(radius: float) -> str:
         if prim.IsA(UsdGeom.Sphere):
             UsdGeom.Sphere(prim).GetRadiusAttr().Set(float(radius))
             n += 1
-    return f"radius={radius:.3g} applied to {n} prototype sphere(s)"
+        elif prim.IsA(UsdGeom.Cube):
+            UsdGeom.Cube(prim).GetSizeAttr().Set(float(radius) * 2.0)
+            n += 1
+    return f"radius={radius:.3g} applied to {n} prototype shape(s)"
 
 
 def set_raw_visible(visible: bool) -> str:
@@ -672,7 +693,8 @@ def _result_msg(n_curves, n_src_pts, totals, voxel_size, n_groups, n_raw):
 def optimize_and_load(source_path: str, voxel_size: float = 0.0,
                       resolution: int = 128, radius_factor: float = 0.5,
                       density_to_scale: bool = False, color_levels: int = 8,
-                      group_paths: list = None, raw_visible: bool = True) -> str:
+                      group_paths: list = None, raw_visible: bool = True,
+                      proto_shape: str = "sphere") -> str:
     """streamline USD/USDZ 를 색-인지 복셀 다운샘플링해 현재 씬에 로드한다.
 
     - 복셀당 인스턴스 1개, 겹치는 색은 평균 / 비슷한 색은 color_levels 로 버킷 양자화
@@ -680,6 +702,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
       묶어 별도 PointInstancer 저작(타겟 경로 그대로 계층에 미러링). 대상 밖
       ("ungrouped") 곡선은 연산하지 않고 원본 계층을 그대로 미러링해 참조한다.
     - voxel_size<=0 이면 root world bbox 최대변 / resolution 으로 자동 산출
+    - proto_shape: 'sphere'(기본) 또는 'cube' — 프로토타입 지오메트리 종류
     """
     src = Usd.Stage.Open(source_path)
     if not src:
@@ -721,7 +744,7 @@ def optimize_and_load(source_path: str, voxel_size: float = 0.0,
         group_root = _group_root_path(gkey)
         n_protos, n_vox = _author_group(
             stage, group_root, centers, counts, bucket_idx, reps,
-            voxel_size, radius_factor, density_to_scale)
+            voxel_size, radius_factor, density_to_scale, proto_shape)
         print(f"[curve]   group '{gkey}': curves {len(pl)} -> "
               f"instances {n_vox}, color-buckets {n_protos}")
         tot_vox += n_vox
@@ -738,12 +761,14 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
                                   color_levels: int = 8,
                                   group_paths: list = None,
                                   raw_visible: bool = True,
+                                  proto_shape: str = "sphere",
                                   progress=None) -> str:
     """optimize_and_load 의 비동기 버전 — Kit 멈춤 방지.
 
     - USD 읽기: 주기적으로 UI 에 양보 / 무거운 numpy: 백그라운드 스레드 오프로드
     - 그룹마다 별도 PointInstancer 저작, 그룹 사이에 한 프레임 양보
     - group_paths 밖(ungrouped) 곡선은 연산하지 않고 원본 계층을 그대로 미러링
+    - proto_shape: 'sphere'(기본) 또는 'cube' — 프로토타입 지오메트리 종류
     - progress 콜백에 단계별 진행률(%)을 보고: [1/3] read, [2/3] voxelize, [3/3] author
     """
     def report(msg):
@@ -801,7 +826,7 @@ async def optimize_and_load_async(source_path: str, voxel_size: float = 0.0,
         group_root = _group_root_path(gkey)
         n_protos, n_vox = _author_group(
             stage, group_root, centers, counts, bucket_idx, reps,
-            voxel_size, radius_factor, density_to_scale)
+            voxel_size, radius_factor, density_to_scale, proto_shape)
         print(f"[curve]   group '{gkey}': curves {len(pl)} -> "
               f"instances {n_vox}, color-buckets {n_protos}")
         tot_vox += n_vox

@@ -26,6 +26,7 @@ class LinesOptimizeUI:
         self._res_field: ui.IntField | None = None
         self._path_field: ui.StringField | None = None
         self._raw_visible_cb: ui.CheckBox | None = None
+        self._cube_shape_cb: ui.CheckBox | None = None
         self._radius_slider: ui.FloatSlider | None = None
         self._status: ui.Label | None = None
         self._run_btn: ui.Button | None = None
@@ -67,6 +68,9 @@ class LinesOptimizeUI:
                     self._radius_slider.model.set_value(0.5)
                     self._radius_slider.model.add_value_changed_fn(
                         self._on_radius_changed)
+                    ui.Label("Cube shape:", width=75)
+                    self._cube_shape_cb = ui.CheckBox(width=24)
+                    self._cube_shape_cb.model.set_value(False)
 
                 self._status = ui.Label("Status: idle", word_wrap=True)
 
@@ -83,10 +87,11 @@ class LinesOptimizeUI:
         res = self._res_field.model.get_value_as_int()
         radius = self._radius_slider.model.get_value_as_float()
         raw_visible = self._raw_visible_cb.model.get_value_as_bool()
+        proto_shape = "cube" if self._cube_shape_cb.model.get_value_as_bool() else "sphere"
         self._task = asyncio.ensure_future(
-            self._run_async(path, res, groups, radius, raw_visible))
+            self._run_async(path, res, groups, radius, raw_visible, proto_shape))
 
-    async def _run_async(self, path, res, groups, radius, raw_visible):
+    async def _run_async(self, path, res, groups, radius, raw_visible, proto_shape):
         if self._run_btn:
             self._run_btn.enabled = False
         self._set_status("Processing...")
@@ -95,7 +100,7 @@ class LinesOptimizeUI:
             msg = await optimize_and_load_async(
                 path, resolution=res, radius_factor=radius,
                 group_paths=groups, raw_visible=raw_visible,
-                progress=self._set_status)
+                proto_shape=proto_shape, progress=self._set_status)
             elapsed = time.perf_counter() - start
             msg = f"{msg} | {elapsed:.2f}s"
         except Exception as e:  # noqa: BLE001
