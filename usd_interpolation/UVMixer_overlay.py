@@ -20,6 +20,8 @@ _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
 
+_CHECKBOX_ROW_GAP = 16      # Reverse/Loop 그룹 사이 중앙 gap
+
 SPEED_CYCLE = [1.0, 2.0, 4.0, 0.5]     # 클릭할 때마다 x1 → x2 → x4 → x0.5 → x1 ...
 
 
@@ -37,6 +39,8 @@ _STYLE = {
     "Button:hovered":     {"background_color": 0x22FFFFFF},
     "Button:pressed":     {"background_color": 0x44FFFFFF},
     "Label":              {"color": _WHITE, "font_size": 10},
+    # 기본 테두리 제거 (Rectangle::* 배경 뒤로 window 기본 테두리가 비치는 것 방지)
+    "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
     "Rectangle::body_bg":   {"background_color": _BODY_BG},
     "Rectangle::separator": {"background_color": _WHITE},
@@ -45,6 +49,7 @@ _STYLE = {
 
 _WINDOW_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR
+    | ui.WINDOW_FLAGS_NO_BACKGROUND     # window 자체 기본 배경/테두리 제거 (Rectangle이 전부 대체)
     | ui.WINDOW_FLAGS_NO_RESIZE
     | ui.WINDOW_FLAGS_NO_SCROLLBAR
     | ui.WINDOW_FLAGS_NO_COLLAPSE
@@ -137,14 +142,20 @@ class ViewportOverlayPanel:
                         with ui.HStack(height=6):
                             ui.Rectangle(name="separator", height=1)
 
-                        # 행3: Reverse / Loop 체크박스
-                        with ui.HStack(height=16, spacing=3):
+                        # 행3: Reverse / Loop 체크박스 (가운데 정렬, 두 그룹 사이 gap)
+                        # 양끝 Spacer()가 늘어나며 고정폭 항목들을 가운데로 밀어준다.
+                        with ui.HStack(height=16):
+                            ui.Spacer()
                             rev_cb = ui.CheckBox(width=14, height=14)
                             rev_cb.model.add_value_changed_fn(self._on_reverse)
+                            ui.Spacer(width=3)
                             ui.Label("Reverse", width=46, height=14)
+                            ui.Spacer(width=_CHECKBOX_ROW_GAP)     # 두 그룹 사이 gap
                             loop_cb = ui.CheckBox(width=14, height=14)
                             loop_cb.model.add_value_changed_fn(self._on_loop)
+                            ui.Spacer(width=3)
                             ui.Label("Loop", width=30, height=14)
+                            ui.Spacer()
 
         self._body = body
         self._title_content = title_content
