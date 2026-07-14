@@ -50,7 +50,8 @@ def _speed_label(spd: float) -> str:
 # "타입::이름" 형태로 오버라이드한다(CSS의 태그 선택자 / .class 선택자와 대응).
 # 이 dict를 최상위 VStack(_build 안)에 한 번만 걸면 전체에 적용된다.
 _STYLE = {
-    "Button":            {"background_color": 0x00000000, "color": _WHITE, "font_size": 10},
+    "Button":            {"background_color": 0x00000000, "color": _WHITE, "font_size": 10,
+                          "margin": 0, "padding": 0, "border_width": 0},   # 기본 여백 제거 — width/height 그대로 콘텐츠 영역
     "Button:hovered":     {"background_color": 0x22FFFFFF},
     "Button:pressed":     {"background_color": 0x44FFFFFF},
     "Label":              {"color": _WHITE, "font_size": 10},
@@ -139,7 +140,8 @@ class ViewportOverlayPanel:
                                             name="min_btn",
                                             alignment=ui.Alignment.CENTER,
                                             clicked_fn=self._on_toggle_minimize,
-                                            style={"image_url": _ICON_ARROW})
+                                            style={"image_url": _ICON_ARROW,
+                                                  "fill_policy": ui.FillPolicy.STRETCH})
                         title_content = ui.HStack(spacing=3, alignment=ui.Alignment.CENTER)
                         with title_content:
                             ui.Label(self._key, height=_TITLE_INNER_H)
@@ -155,7 +157,8 @@ class ViewportOverlayPanel:
                             btn_play = ui.Button("", width=22, height=14,
                                                  alignment=ui.Alignment.CENTER,
                                                  clicked_fn=self._on_play,
-                                                 style={"image_url": _ICON_PLAY})
+                                                 style={"image_url": _ICON_PLAY,
+                                                       "fill_policy": ui.FillPolicy.STRETCH})
                             slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                             slider.model.add_value_changed_fn(self._on_slider)
                             spd_btn = ui.Button(_speed_label(self._speed),
@@ -215,7 +218,8 @@ class ViewportOverlayPanel:
 
     def _set_play_icon(self, playing: bool) -> None:
         self._widgets['btn_play'].style = {
-            "image_url": _ICON_STOP if playing else _ICON_PLAY
+            "image_url": _ICON_STOP if playing else _ICON_PLAY,
+            "fill_policy": ui.FillPolicy.STRETCH,
         }
 
     def _on_stopped(self) -> None:
@@ -344,7 +348,8 @@ class ViewportOverlayPanel:
         self._title_content.visible = not self._minimized
         self._body.visible = not self._minimized
         self._widgets['btn_min'].style = {
-            "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW
+            "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
+            "fill_policy": ui.FillPolicy.STRETCH,
         }
         if self._minimized:
             self._window.width = OVERLAY_W_MIN
