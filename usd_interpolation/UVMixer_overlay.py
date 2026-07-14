@@ -27,6 +27,8 @@ _ICON_STOP      = os.path.join(_ICON_DIR, "stop.png")
 _ICON_CHECKBOX_N = os.path.join(_ICON_DIR, "checkbox_n.png")
 _ICON_CHECKBOX_H = os.path.join(_ICON_DIR, "checkbox_h.png")
 _ICON_CHECKBOX_S = os.path.join(_ICON_DIR, "checkbox_s.png")
+_ICON_OV_N       = os.path.join(_ICON_DIR, "ov_n.png")      # 슬라이더 핸들 기본
+_ICON_OV_H       = os.path.join(_ICON_DIR, "ov_h.png")      # 슬라이더 핸들 hover
 
 # ── 패널 치수 명세 (전체 180x80) ────────────────────────────────────────
 OVERLAY_W = 180
@@ -60,6 +62,83 @@ def _vcenter(width, factory):
         w = factory()
         ui.Spacer()
     return w
+
+
+_SLIDER_TRACK_BG   = 0xFF6A6A6A     # 트랙 (#6a6a6a)
+_SLIDER_FILL_BG    = 0xFFF18D95     # 채움 (#958df1 → 0xAABBGGRR)
+
+
+class _ImageSlider:
+    """커스텀 슬라이더 (t 0~1, 값 텍스트 없음).
+    트랙 112x4(#6a6a6a) + 채움(#958df1) + 10x10 이미지 핸들(ov_n/ov_h).
+    FloatSlider 대체품 — .model(SimpleFloatModel)을 노출해서
+    기존 set_value / add_value_changed_fn 호출부가 그대로 동작한다."""
+
+    def __init__(self, width=112, track_h=4, knob=10):
+        self._w, self._th, self._ks = width, track_h, knob
+        self._dragging = False
+        self.model = ui.SimpleFloatModel(0.0)
+        self.model.add_value_changed_fn(lambda m: self._update_visual())
+        self._build()
+        self._update_visual()
+
+    def _build(self):
+        with ui.ZStack(width=self._w, height=self._ks):
+            # 트랙 + 채움 (세로 중앙)
+            with ui.VStack():
+                ui.Spacer()
+                with ui.ZStack(height=self._th):
+                    ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG})
+                    with ui.HStack():
+                        self._fill = ui.Rectangle(
+                            width=0, style={"background_color": _SLIDER_FILL_BG})
+                        ui.Spacer()
+                ui.Spacer()
+            # 핸들 (Placer offset으로 이동)
+            self._knob_placer = ui.Placer()
+            with self._knob_placer:
+                self._knob = ui.Image(_ICON_OV_N,
+                                      width=self._ks, height=self._ks,
+                                      fill_policy=ui.FillPolicy.STRETCH)
+            # 입력 캐처 (맨 위 투명 — 트랙 어디를 눌러도 점프+드래그)
+            catcher = ui.Rectangle(style={"background_color": 0x00000000})
+            catcher.set_mouse_pressed_fn(self._on_press)
+            catcher.set_mouse_moved_fn(self._on_move)
+            catcher.set_mouse_released_fn(self._on_release)
+            catcher.set_mouse_hovered_fn(self._on_hover)
+            self._catcher = catcher
+
+    # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
+
+    def _t_from_screen_x(self, x: float) -> float:
+        local = x - self._catcher.screen_position_x - self._ks / 2
+        span = self._w - self._ks
+        return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
+
+    def _update_visual(self):
+        t = self.model.get_value_as_float()
+        self._fill.width = ui.Pixel(t * self._w)
+        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
+
+    # ── 마우스 ───────────────────────────────────────────────────
+
+    def _on_press(self, x, y, button, modifier):
+        if button != 0:
+            return
+        self._dragging = True
+        self.model.set_value(self._t_from_screen_x(x))
+
+    def _on_move(self, x, y, modifier, pressed):
+        if self._dragging:
+            self.model.set_value(self._t_from_screen_x(x))
+
+    def _on_release(self, x, y, button, modifier):
+        if button == 0:
+            self._dragging = False
+
+    def _on_hover(self, hovered: bool):
+        self._knob.source_url = _ICON_OV_H if (hovered or self._dragging) \
+            else _ICON_OV_N
 
 
 # ── 스타일시트 ──────────────────────────────────────────────────────────
@@ -188,9 +267,8 @@ class ViewportOverlayPanel:
                                 style={"image_url": _ICON_PLAY,
                                        "fill_policy": ui.FillPolicy.STRETCH}))
                             ui.Spacer(width=5)
-                            slider = _vcenter(112, lambda: ui.FloatSlider(
-                                width=112, height=10,
-                                min=0.0, max=1.0, step=0.005))
+                            slider = _vcenter(112, lambda: _ImageSlider(
+                                width=112, track_h=4, knob=10))
                             slider.model.add_value_changed_fn(self._on_slider)
                             ui.Spacer(width=3)
                             spd_btn = _vcenter(24, lambda: ui.Button(
