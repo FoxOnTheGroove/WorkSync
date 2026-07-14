@@ -41,6 +41,7 @@ _STYLE = {
     "Button:hovered":     {"background_color": 0x22FFFFFF},
     "Button:pressed":     {"background_color": 0x44FFFFFF},
     "Label":              {"color": _WHITE, "font_size": 10},
+    "Button::min_btn":    {"font_size": 8},   # 최소화 삼각형(▼)만 작게 — 버튼 박스 크기는 그대로
     # 기본 테두리 제거 (Rectangle::* 배경 뒤로 window 기본 테두리가 비치는 것 방지)
     "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
@@ -122,6 +123,7 @@ class ViewportOverlayPanel:
                     ui.Rectangle(name="title_bg")
                     with ui.HStack(spacing=3, style={"margin": _TITLE_MARGIN}):
                         btn_min = ui.Button("▼", width=16, height=_TITLE_INNER_H,
+                                            name="min_btn",
                                             clicked_fn=self._on_toggle_minimize)
                         title_content = ui.HStack(spacing=3)
                         with title_content:
