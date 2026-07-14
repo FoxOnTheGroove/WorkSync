@@ -133,12 +133,14 @@ class ViewportOverlayPanel:
                 # 삐져나와 _TITLE_H를 줄여도 바가 안 줄어든 것처럼 보인다.
                 with ui.ZStack(height=_TITLE_H):
                     ui.Rectangle(name="title_bg")
-                    with ui.HStack(spacing=3, style={"margin": _TITLE_MARGIN}):
+                    with ui.HStack(spacing=3, style={"margin": _TITLE_MARGIN},
+                                   alignment=ui.Alignment.CENTER):
                         btn_min = ui.Button("", width=16, height=_TITLE_INNER_H,
                                             name="min_btn",
+                                            alignment=ui.Alignment.CENTER,
                                             clicked_fn=self._on_toggle_minimize,
                                             style={"image_url": _ICON_ARROW})
-                        title_content = ui.HStack(spacing=3)
+                        title_content = ui.HStack(spacing=3, alignment=ui.Alignment.CENTER)
                         with title_content:
                             ui.Label(self._key, height=_TITLE_INNER_H)
 
@@ -149,14 +151,16 @@ class ViewportOverlayPanel:
                     with ui.VStack(spacing=1, style={"margin": 2}):
 
                         # 행1: 재생 버튼 + 진행도(t) 슬라이더 + 속도 순환 버튼
-                        with ui.HStack(height=16, spacing=3):
+                        with ui.HStack(height=16, spacing=3, alignment=ui.Alignment.CENTER):
                             btn_play = ui.Button("", width=22, height=14,
+                                                 alignment=ui.Alignment.CENTER,
                                                  clicked_fn=self._on_play,
                                                  style={"image_url": _ICON_PLAY})
                             slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                             slider.model.add_value_changed_fn(self._on_slider)
                             spd_btn = ui.Button(_speed_label(self._speed),
                                                 width=34, height=14,
+                                                alignment=ui.Alignment.CENTER,
                                                 clicked_fn=self._on_speed_cycle)
 
                         # 행2: 구분선
