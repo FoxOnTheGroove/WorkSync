@@ -1,3 +1,5 @@
+import os
+
 import omni.ui as ui
 import omni.kit.app
 import omni.kit.async_engine
@@ -8,6 +10,17 @@ try:
     import morph.hytwin_viewportwidget_extension as _hytwin_vp_wg
 except ImportError:
     _hytwin_vp_wg = None
+
+# 아이콘: 이 파일과 같은 usd_interpolation/ 아래 data/icons/ 에 둔다.
+#   usd_interpolation/data/icons/arrow.png    (최소화 화살표, 펼침 상태)
+#   usd_interpolation/data/icons/arrow_r.png  (180도 회전본, 접힘 상태 — play/stop처럼 상태별 정적 에셋)
+#   usd_interpolation/data/icons/play.png     (재생)
+#   usd_interpolation/data/icons/stop.png     (정지)
+_ICON_DIR     = os.path.join(os.path.dirname(__file__), "data", "icons")
+_ICON_ARROW   = os.path.join(_ICON_DIR, "arrow.png")
+_ICON_ARROW_R = os.path.join(_ICON_DIR, "arrow_r.png")
+_ICON_PLAY    = os.path.join(_ICON_DIR, "play.png")
+_ICON_STOP    = os.path.join(_ICON_DIR, "stop.png")
 
 OVERLAY_W = 260
 OVERLAY_H = 105
@@ -41,7 +54,6 @@ _STYLE = {
     "Button:hovered":     {"background_color": 0x22FFFFFF},
     "Button:pressed":     {"background_color": 0x44FFFFFF},
     "Label":              {"color": _WHITE, "font_size": 10},
-    "Button::min_btn":    {"font_size": 8},   # 최소화 삼각형(▼)만 작게 — 버튼 박스 크기는 그대로
     # 기본 테두리 제거 (Rectangle::* 배경 뒤로 window 기본 테두리가 비치는 것 방지)
     "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
@@ -122,9 +134,10 @@ class ViewportOverlayPanel:
                 with ui.ZStack(height=_TITLE_H):
                     ui.Rectangle(name="title_bg")
                     with ui.HStack(spacing=3, style={"margin": _TITLE_MARGIN}):
-                        btn_min = ui.Button("▼", width=16, height=_TITLE_INNER_H,
+                        btn_min = ui.Button("", width=16, height=_TITLE_INNER_H,
                                             name="min_btn",
-                                            clicked_fn=self._on_toggle_minimize)
+                                            clicked_fn=self._on_toggle_minimize,
+                                            style={"image_url": _ICON_ARROW})
                         title_content = ui.HStack(spacing=3)
                         with title_content:
                             ui.Label(self._key, height=_TITLE_INNER_H)
@@ -137,8 +150,9 @@ class ViewportOverlayPanel:
 
                         # 행1: 재생 버튼 + 진행도(t) 슬라이더 + 속도 순환 버튼
                         with ui.HStack(height=16, spacing=3):
-                            btn_play = ui.Button("▶", width=22, height=14,
-                                                 clicked_fn=self._on_play)
+                            btn_play = ui.Button("", width=22, height=14,
+                                                 clicked_fn=self._on_play,
+                                                 style={"image_url": _ICON_PLAY})
                             slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                             slider.model.add_value_changed_fn(self._on_slider)
                             spd_btn = ui.Button(_speed_label(self._speed),
@@ -195,13 +209,18 @@ class ViewportOverlayPanel:
         self._widgets['slider'].model.set_value(t)
         self._in_tick = False
 
+    def _set_play_icon(self, playing: bool) -> None:
+        self._widgets['btn_play'].style = {
+            "image_url": _ICON_STOP if playing else _ICON_PLAY
+        }
+
     def _on_stopped(self) -> None:
         if UVMixerService.is_synced(self._tab_id):
-            self._widgets['btn_play'].text = "▶"
+            self._set_play_icon(False)
 
     def _on_own_stopped(self) -> None:
         if not UVMixerService.is_synced(self._tab_id):
-            self._widgets['btn_play'].text = "▶"
+            self._set_play_icon(False)
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
@@ -212,7 +231,7 @@ class ViewportOverlayPanel:
                 sp.stop()
             else:
                 sp.play()
-                self._widgets['btn_play'].text = "■"
+                self._set_play_icon(True)
                 self._mgr._sync_play(self._key, playing=True)
         else:
             op = self._own_player()
@@ -222,7 +241,7 @@ class ViewportOverlayPanel:
                 op.stop()
             else:
                 op.play()
-                self._widgets['btn_play'].text = "■"
+                self._set_play_icon(True)
 
     def _on_slider(self, model) -> None:
         if self._in_tick:
@@ -312,7 +331,7 @@ class ViewportOverlayPanel:
         self._apply_speed(spd, broadcast=False)
 
     def sync_play(self, playing: bool) -> None:
-        self._widgets['btn_play'].text = "■" if playing else "▶"
+        self._set_play_icon(playing)
 
     # ── 뷰포트 리사이즈 대응 ────────────────────────────────────
 
@@ -320,7 +339,9 @@ class ViewportOverlayPanel:
         self._minimized = not self._minimized
         self._title_content.visible = not self._minimized
         self._body.visible = not self._minimized
-        self._widgets['btn_min'].text = "▲" if self._minimized else "▼"
+        self._widgets['btn_min'].style = {
+            "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW
+        }
         if self._minimized:
             self._window.width = OVERLAY_W_MIN
             self._window.height = OVERLAY_H_MIN
