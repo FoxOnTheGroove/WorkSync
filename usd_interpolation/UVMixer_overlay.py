@@ -22,26 +22,38 @@ _ICON_ARROW_R = os.path.join(_ICON_DIR, "arrow_r.png")
 _ICON_PLAY    = os.path.join(_ICON_DIR, "play.png")
 _ICON_STOP    = os.path.join(_ICON_DIR, "stop.png")
 
-OVERLAY_W = 260
-OVERLAY_H = 105
-OVERLAY_W_MIN = 20          # 최소화 시 너비 (버튼만)
-OVERLAY_H_MIN = 20          # 최소화 시 높이 (버튼만)
-_MARGIN = 8
+# ── 패널 치수 명세 (전체 180x80) ────────────────────────────────────────
+OVERLAY_W = 180
+OVERLAY_H = 80
+OVERLAY_W_MIN = 16          # 최소화 시 너비 (버튼만)
+OVERLAY_H_MIN = 16          # 최소화 시 높이 (버튼만)
+_MARGIN = 8                 # 뷰포트 가장자리 여백
 
-_TITLE_H = 18
-_TITLE_MARGIN = 1                       # 타이틀바 위아래 여백(한쪽)
-_TITLE_INNER_H = _TITLE_H - _TITLE_MARGIN * 2   # 버튼/라벨 실제 높이 (넘치면 바 밖으로 삐져나감)
+# 행 높이 (세로 누적: 16 + 30 + 1 + 33 = 80)
+_ROW1_H = 16                # 타이틀
+_ROW2_H = 30                # 재생/슬라이더/배속
+_DIV_H  = 1                 # 구분선
+_ROW4_H = 33                # Reverse/Loop
+
 _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
-
-_CHECKBOX_ROW_GAP = 16      # Reverse/Loop 그룹 사이 중앙 gap
 
 SPEED_CYCLE = [1.0, 2.0, 4.0, 0.5]     # 클릭할 때마다 x1 → x2 → x4 → x0.5 → x1 ...
 
 
 def _speed_label(spd: float) -> str:
     return f"x{spd:g}"
+
+
+def _vcenter(width, factory):
+    """고정 크기 위젯을 부모 행(row) 높이 안에서 세로 중앙에 배치하고 반환.
+    HStack 안 자식은 기본 상단정렬이라, 위/아래 Spacer로 감싸 중앙에 맞춘다."""
+    with ui.VStack(width=width):
+        ui.Spacer()
+        w = factory()
+        ui.Spacer()
+    return w
 
 
 # ── 스타일시트 ──────────────────────────────────────────────────────────
@@ -128,61 +140,77 @@ class ViewportOverlayPanel:
         with self._window.frame:
             with ui.VStack(spacing=0, style=_STYLE):     # 스타일시트는 여기 한 번만
 
-                # 타이틀바: 최소화 버튼(좌측, 항상 표시) + key 텍스트(최소화 시 숨김)
-                # 내부 위젯 높이를 _TITLE_H에서 파생시켜야 한다 — 컨테이너의 height는
-                # 강제 클리핑이 아니라 힌트일 뿐이라, 안쪽이 더 크면 그대로 밖으로
-                # 삐져나와 _TITLE_H를 줄여도 바가 안 줄어든 것처럼 보인다.
-                with ui.ZStack(height=_TITLE_H):
+                # ── 행1 (y=0, h=16): 검정 타이틀바 ──────────────────────
+                #   3 여백 | 최소화 10x10(중앙) | 2 여백 | Animation(폰트10,h15,윗점)
+                with ui.ZStack(height=_ROW1_H):
                     ui.Rectangle(name="title_bg")
-                    with ui.HStack(spacing=3, style={"margin": _TITLE_MARGIN},
-                                   alignment=ui.Alignment.CENTER):
-                        btn_min = ui.Button("", width=16, height=_TITLE_INNER_H,
-                                            name="min_btn",
-                                            alignment=ui.Alignment.CENTER,
-                                            clicked_fn=self._on_toggle_minimize,
-                                            style={"image_url": _ICON_ARROW,
-                                                  "fill_policy": ui.FillPolicy.STRETCH})
-                        title_content = ui.HStack(spacing=3, alignment=ui.Alignment.CENTER)
+                    with ui.HStack():
+                        ui.Spacer(width=3)
+                        btn_min = _vcenter(10, lambda: ui.Button(
+                            "", width=10, height=10, name="min_btn",
+                            alignment=ui.Alignment.CENTER,
+                            clicked_fn=self._on_toggle_minimize,
+                            style={"image_url": _ICON_ARROW,
+                                   "fill_policy": ui.FillPolicy.STRETCH}))
+                        ui.Spacer(width=2)
+                        title_content = ui.HStack()       # 최소화 시 숨김
                         with title_content:
-                            ui.Label(self._key, height=_TITLE_INNER_H)
+                            with ui.VStack():             # 윗점(top) 정렬
+                                ui.Label(self._key, height=15,
+                                         style={"font_size": 10})
+                                ui.Spacer()
 
-                # 본문: 최소화 시 배경까지 통째로 숨김(ZStack 전체 토글)
+                # ── 본문 (행2·구분선·행4). 최소화 시 통째로 숨김 ─────────
                 body = ui.ZStack()
                 with body:
                     ui.Rectangle(name="body_bg")
-                    with ui.VStack(spacing=1, style={"margin": 2}):
+                    with ui.VStack(spacing=0):
 
-                        # 행1: 재생 버튼 + 진행도(t) 슬라이더 + 속도 순환 버튼
-                        with ui.HStack(height=16, spacing=3, alignment=ui.Alignment.CENTER):
-                            btn_play = ui.Button("", width=22, height=14,
-                                                 alignment=ui.Alignment.CENTER,
-                                                 clicked_fn=self._on_play,
-                                                 style={"image_url": _ICON_PLAY,
-                                                       "fill_policy": ui.FillPolicy.STRETCH})
-                            slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
+                        # 행2 (y=16, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
+                        with ui.HStack(height=_ROW2_H):
+                            ui.Spacer(width=12)
+                            btn_play = _vcenter(16, lambda: ui.Button(
+                                "", width=16, height=16,
+                                alignment=ui.Alignment.CENTER,
+                                clicked_fn=self._on_play,
+                                style={"image_url": _ICON_PLAY,
+                                       "fill_policy": ui.FillPolicy.STRETCH}))
+                            ui.Spacer(width=5)
+                            slider = _vcenter(112, lambda: ui.FloatSlider(
+                                width=112, height=10,
+                                min=0.0, max=1.0, step=0.005))
                             slider.model.add_value_changed_fn(self._on_slider)
-                            spd_btn = ui.Button(_speed_label(self._speed),
-                                                width=34, height=14,
-                                                alignment=ui.Alignment.CENTER,
-                                                clicked_fn=self._on_speed_cycle)
+                            ui.Spacer(width=3)
+                            spd_btn = _vcenter(24, lambda: ui.Button(
+                                _speed_label(self._speed), width=24, height=24,
+                                alignment=ui.Alignment.CENTER,
+                                clicked_fn=self._on_speed_cycle))
+                            ui.Spacer(width=8)
 
-                        # 행2: 구분선
-                        with ui.HStack(height=6):
-                            ui.Rectangle(name="separator", height=1)
+                        # 구분선 (y=46, h=1): 8 | 흰선 164x1 | 8
+                        with ui.HStack(height=_DIV_H):
+                            ui.Spacer(width=8)
+                            ui.Rectangle(name="separator", width=164, height=1)
+                            ui.Spacer(width=8)
 
-                        # 행3: Reverse / Loop 체크박스 (가운데 정렬, 두 그룹 사이 gap)
-                        # 양끝 Spacer()가 늘어나며 고정폭 항목들을 가운데로 밀어준다.
-                        with ui.HStack(height=16):
-                            ui.Spacer()
-                            rev_cb = ui.CheckBox(width=14, height=14)
+                        # 행4 (y=47, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
+                        with ui.HStack(height=_ROW4_H):
+                            ui.Spacer(width=12)
+                            rev_cb = _vcenter(14, lambda: ui.CheckBox(
+                                width=14, height=14))
                             rev_cb.model.add_value_changed_fn(self._on_reverse)
-                            ui.Spacer(width=3)
-                            ui.Label("Reverse", width=46, height=14)
-                            ui.Spacer(width=_CHECKBOX_ROW_GAP)     # 두 그룹 사이 gap
-                            loop_cb = ui.CheckBox(width=14, height=14)
+                            ui.Spacer(width=8)
+                            ui.Label("Reverse", height=_ROW4_H,
+                                     alignment=ui.Alignment.LEFT_CENTER,
+                                     style={"font_size": 12})
+                            ui.Spacer(width=20)
+                            loop_cb = _vcenter(14, lambda: ui.CheckBox(
+                                width=14, height=14))
                             loop_cb.model.add_value_changed_fn(self._on_loop)
-                            ui.Spacer(width=3)
-                            ui.Label("Loop", width=30, height=14)
+                            ui.Spacer(width=8)
+                            ui.Label("Loop", height=_ROW4_H,
+                                     alignment=ui.Alignment.LEFT_CENTER,
+                                     style={"font_size": 12})
                             ui.Spacer()
 
         self._body = body
