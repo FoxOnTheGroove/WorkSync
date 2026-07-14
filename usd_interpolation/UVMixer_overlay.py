@@ -122,6 +122,10 @@ class ViewportOverlayPanel:
             position_x=x, position_y=y,
             flags=_WINDOW_FLAGS,
         )
+        # NO_BACKGROUND는 배경/테두리만 지울 뿐, Window의 기본 content padding은
+        # 남아있어 좌/상단에 뿌연 여백으로 보이고 width/height를 갉아먹는다.
+        self._window.padding_x = 0
+        self._window.padding_y = 0
         self._widgets: dict = {}
         self._build()
 
@@ -184,7 +188,8 @@ class ViewportOverlayPanel:
                             spd_btn = _vcenter(24, lambda: ui.Button(
                                 _speed_label(self._speed), width=24, height=24,
                                 alignment=ui.Alignment.CENTER,
-                                clicked_fn=self._on_speed_cycle))
+                                clicked_fn=self._on_speed_cycle,
+                                style={"font_size": 12}))
                             ui.Spacer(width=8)
 
                         # 구분선 (y=46, h=1): 8 | 흰선 164x1 | 8
