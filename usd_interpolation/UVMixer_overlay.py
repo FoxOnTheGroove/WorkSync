@@ -12,15 +12,21 @@ except ImportError:
     _hytwin_vp_wg = None
 
 # 아이콘: 이 파일과 같은 usd_interpolation/ 아래 data/icons/ 에 둔다.
-#   usd_interpolation/data/icons/arrow.png    (최소화 화살표, 펼침 상태)
-#   usd_interpolation/data/icons/arrow_r.png  (180도 회전본, 접힘 상태 — play/stop처럼 상태별 정적 에셋)
-#   usd_interpolation/data/icons/play.png     (재생)
-#   usd_interpolation/data/icons/stop.png     (정지)
-_ICON_DIR     = os.path.join(os.path.dirname(__file__), "data", "icons")
-_ICON_ARROW   = os.path.join(_ICON_DIR, "arrow.png")
-_ICON_ARROW_R = os.path.join(_ICON_DIR, "arrow_r.png")
-_ICON_PLAY    = os.path.join(_ICON_DIR, "play.png")
-_ICON_STOP    = os.path.join(_ICON_DIR, "stop.png")
+#   usd_interpolation/data/icons/arrow.png       (최소화 화살표, 펼침 상태)
+#   usd_interpolation/data/icons/arrow_r.png     (180도 회전본, 접힘 상태)
+#   usd_interpolation/data/icons/play.png        (재생)
+#   usd_interpolation/data/icons/stop.png        (정지)
+#   usd_interpolation/data/icons/checkbox_n.png  (체크박스 기본)
+#   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover)
+#   usd_interpolation/data/icons/checkbox_s.png  (체크박스 선택됨)
+_ICON_DIR       = os.path.join(os.path.dirname(__file__), "data", "icons")
+_ICON_ARROW     = os.path.join(_ICON_DIR, "arrow.png")
+_ICON_ARROW_R   = os.path.join(_ICON_DIR, "arrow_r.png")
+_ICON_PLAY      = os.path.join(_ICON_DIR, "play.png")
+_ICON_STOP      = os.path.join(_ICON_DIR, "stop.png")
+_ICON_CHECKBOX_N = os.path.join(_ICON_DIR, "checkbox_n.png")
+_ICON_CHECKBOX_H = os.path.join(_ICON_DIR, "checkbox_h.png")
+_ICON_CHECKBOX_S = os.path.join(_ICON_DIR, "checkbox_s.png")
 
 # ── 패널 치수 명세 (전체 180x80) ────────────────────────────────────────
 OVERLAY_W = 180
@@ -67,6 +73,13 @@ _STYLE = {
     "Button:hovered":     {"background_color": 0x22FFFFFF},
     "Button:pressed":     {"background_color": 0x44FFFFFF},
     "Label":              {"color": _WHITE, "font_size": 10},
+    # 체크박스: n/h/s 세 상태 이미지. Reverse/Loop 둘 다 같은 모양이라
+    # 인스턴스 구분(.name) 없이 타입 선택자 하나로 전부 적용된다.
+    "CheckBox": {"background_color": 0x00000000, "margin": 0, "padding": 0,
+                "border_width": 0, "image_url": _ICON_CHECKBOX_N,
+                "fill_policy": ui.FillPolicy.STRETCH},
+    "CheckBox:hovered": {"image_url": _ICON_CHECKBOX_H},
+    "CheckBox:checked": {"image_url": _ICON_CHECKBOX_S},
     # 기본 테두리 제거 (Rectangle::* 배경 뒤로 window 기본 테두리가 비치는 것 방지)
     "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
