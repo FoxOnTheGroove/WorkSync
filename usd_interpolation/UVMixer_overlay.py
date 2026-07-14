@@ -27,6 +27,22 @@ def _speed_label(spd: float) -> str:
     return f"x{spd:g}"
 
 
+# ── 스타일시트 ──────────────────────────────────────────────────────────
+# 타입 선택자("Button", "Label")는 그 스타일이 걸린 컨테이너 하위 전체에
+# 캐스케이딩된다. 인스턴스별로 다르게 주려면 위젯에 `.name`을 달고
+# "타입::이름" 형태로 오버라이드한다(CSS의 태그 선택자 / .class 선택자와 대응).
+# 이 dict를 최상위 VStack(_build 안)에 한 번만 걸면 전체에 적용된다.
+_STYLE = {
+    "Button":            {"background_color": 0x00000000, "color": _WHITE, "font_size": 10},
+    "Button:hovered":     {"background_color": 0x22FFFFFF},
+    "Button:pressed":     {"background_color": 0x44FFFFFF},
+    "Label":              {"color": _WHITE, "font_size": 10},
+    "Rectangle::title_bg":  {"background_color": _TITLE_BG},
+    "Rectangle::body_bg":   {"background_color": _BODY_BG},
+    "Rectangle::separator": {"background_color": _WHITE},
+}
+
+
 _WINDOW_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR
     | ui.WINDOW_FLAGS_NO_RESIZE
@@ -89,52 +105,46 @@ class ViewportOverlayPanel:
 
     def _build(self) -> None:
         with self._window.frame:
-            with ui.VStack(spacing=0):
+            with ui.VStack(spacing=0, style=_STYLE):     # 스타일시트는 여기 한 번만
 
-                # 타이틀바: 진한 검정 배경. 최소화 버튼(좌측, 항상 표시) + key 텍스트(최소화 시 숨김)
+                # 타이틀바: 최소화 버튼(좌측, 항상 표시) + key 텍스트(최소화 시 숨김)
                 with ui.ZStack(height=_TITLE_H):
-                    ui.Rectangle(style={"background_color": _TITLE_BG})
+                    ui.Rectangle(name="title_bg")
                     with ui.HStack(spacing=3, style={"margin": 2}):
                         btn_min = ui.Button("▼", width=16, height=14,
-                                            clicked_fn=self._on_toggle_minimize,
-                                            style={"font_size": 10, "color": _WHITE})
+                                            clicked_fn=self._on_toggle_minimize)
                         title_content = ui.HStack(spacing=3)
                         with title_content:
-                            ui.Label(self._key, height=14,
-                                     style={"color": _WHITE, "font_size": 10})
+                            ui.Label(self._key, height=14)
 
-                # 본문: 진한 회색 배경. 최소화 시 배경까지 통째로 숨김(ZStack 전체 토글)
+                # 본문: 최소화 시 배경까지 통째로 숨김(ZStack 전체 토글)
                 body = ui.ZStack()
                 with body:
-                    ui.Rectangle(style={"background_color": _BODY_BG})
+                    ui.Rectangle(name="body_bg")
                     with ui.VStack(spacing=1, style={"margin": 2}):
 
                         # 행1: 재생 버튼 + 진행도(t) 슬라이더 + 속도 순환 버튼
                         with ui.HStack(height=16, spacing=3):
                             btn_play = ui.Button("▶", width=22, height=14,
-                                                 clicked_fn=self._on_play,
-                                                 style={"font_size": 10, "color": _WHITE})
+                                                 clicked_fn=self._on_play)
                             slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
                             slider.model.add_value_changed_fn(self._on_slider)
                             spd_btn = ui.Button(_speed_label(self._speed),
                                                 width=34, height=14,
-                                                clicked_fn=self._on_speed_cycle,
-                                                style={"font_size": 10, "color": _WHITE})
+                                                clicked_fn=self._on_speed_cycle)
 
                         # 행2: 구분선
                         with ui.HStack(height=6):
-                            ui.Rectangle(height=1, style={"background_color": _WHITE})
+                            ui.Rectangle(name="separator", height=1)
 
                         # 행3: Reverse / Loop 체크박스
                         with ui.HStack(height=16, spacing=3):
                             rev_cb = ui.CheckBox(width=14, height=14)
                             rev_cb.model.add_value_changed_fn(self._on_reverse)
-                            ui.Label("Reverse", width=46, height=14,
-                                     style={"font_size": 10, "color": _WHITE})
+                            ui.Label("Reverse", width=46, height=14)
                             loop_cb = ui.CheckBox(width=14, height=14)
                             loop_cb.model.add_value_changed_fn(self._on_loop)
-                            ui.Label("Loop", width=30, height=14,
-                                     style={"font_size": 10, "color": _WHITE})
+                            ui.Label("Loop", width=30, height=14)
 
         self._body = body
         self._title_content = title_content
