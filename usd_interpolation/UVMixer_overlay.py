@@ -15,6 +15,18 @@ OVERLAY_W_MIN = 20          # 최소화 시 너비 (버튼만)
 OVERLAY_H_MIN = 20          # 최소화 시 높이 (버튼만)
 _MARGIN = 8
 
+_TITLE_H = 18
+_TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
+_BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
+_WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
+
+SPEED_CYCLE = [1.0, 2.0, 4.0, 0.5]     # 클릭할 때마다 x1 → x2 → x4 → x0.5 → x1 ...
+
+
+def _speed_label(spd: float) -> str:
+    return f"x{spd:g}"
+
+
 _WINDOW_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR
     | ui.WINDOW_FLAGS_NO_RESIZE
@@ -52,6 +64,7 @@ class ViewportOverlayPanel:
         self._in_sync = False
         self._reposition_task = None
         self._minimized = False
+        self._speed = 1.0
 
         x, y = _calc_overlay_pos(vph)
         self._window = ui.Window(
@@ -60,7 +73,6 @@ class ViewportOverlayPanel:
             position_x=x, position_y=y,
             flags=_WINDOW_FLAGS,
         )
-        self._window.frame.style = {"background_color": 0xCC151515}
         self._widgets: dict = {}
         self._build()
 
@@ -77,56 +89,62 @@ class ViewportOverlayPanel:
 
     def _build(self) -> None:
         with self._window.frame:
-            with ui.VStack(spacing=1, style={"margin": 2}):
+            with ui.VStack(spacing=0):
 
-                # 행1: 나머지(최소화 시 숨김) + 최소화 버튼(우상단 고정)
-                with ui.HStack(height=16, spacing=3):
-                    row1_content = ui.HStack(spacing=3)
-                    with row1_content:
-                        btn_play = ui.Button("▶", width=22, height=14,
-                                             clicked_fn=self._on_play,
-                                             style={"font_size": 10})
-                        rev_cb = ui.CheckBox(width=14, height=14)
-                        rev_cb.model.add_value_changed_fn(self._on_reverse)
-                        ui.Label("Reverse", width=46, height=14,
-                                 style={"font_size": 10})
-                        loop_cb = ui.CheckBox(width=14, height=14)
-                        loop_cb.model.add_value_changed_fn(self._on_loop)
-                        ui.Label("Loop", width=30, height=14,
-                                 style={"font_size": 10})
-                        ui.Label(self._key, height=14,
-                                 style={"color": 0xFF888888, "font_size": 10})
-                    btn_min = ui.Button("▼", width=16, height=14,
-                                        clicked_fn=self._on_toggle_minimize,
-                                        style={"font_size": 10})
+                # 타이틀바: 진한 검정 배경. 최소화 버튼(좌측, 항상 표시) + key 텍스트(최소화 시 숨김)
+                with ui.ZStack(height=_TITLE_H):
+                    ui.Rectangle(style={"background_color": _TITLE_BG})
+                    with ui.HStack(spacing=3, style={"margin": 2}):
+                        btn_min = ui.Button("▼", width=16, height=14,
+                                            clicked_fn=self._on_toggle_minimize,
+                                            style={"font_size": 10, "color": _WHITE})
+                        title_content = ui.HStack(spacing=3)
+                        with title_content:
+                            ui.Label(self._key, height=14,
+                                     style={"color": _WHITE, "font_size": 10})
 
-                # 본문(행2·행3): 최소화 시 숨김
-                body = ui.VStack(spacing=1)
+                # 본문: 진한 회색 배경. 최소화 시 배경까지 통째로 숨김(ZStack 전체 토글)
+                body = ui.ZStack()
                 with body:
-                    # 행2: Weight 슬라이더
-                    with ui.HStack(height=16, spacing=3):
-                        ui.Label("Weight", width=42, height=14,
-                                 style={"font_size": 10})
-                        slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
-                        slider.model.add_value_changed_fn(self._on_slider)
+                    ui.Rectangle(style={"background_color": _BODY_BG})
+                    with ui.VStack(spacing=1, style={"margin": 2}):
 
-                    # 행3: Speed 슬라이더
-                    with ui.HStack(height=16, spacing=3):
-                        ui.Label("Speed ", width=42, height=14,
-                                 style={"font_size": 10})
-                        spd_sl = ui.FloatSlider(min=0.1, max=5.0, step=0.1)
-                        spd_sl.model.set_value(1.0)
-                        spd_sl.model.add_value_changed_fn(self._on_speed)
+                        # 행1: 재생 버튼 + 진행도(t) 슬라이더 + 속도 순환 버튼
+                        with ui.HStack(height=16, spacing=3):
+                            btn_play = ui.Button("▶", width=22, height=14,
+                                                 clicked_fn=self._on_play,
+                                                 style={"font_size": 10, "color": _WHITE})
+                            slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
+                            slider.model.add_value_changed_fn(self._on_slider)
+                            spd_btn = ui.Button(_speed_label(self._speed),
+                                                width=34, height=14,
+                                                clicked_fn=self._on_speed_cycle,
+                                                style={"font_size": 10, "color": _WHITE})
+
+                        # 행2: 구분선
+                        with ui.HStack(height=6):
+                            ui.Rectangle(height=1, style={"background_color": _WHITE})
+
+                        # 행3: Reverse / Loop 체크박스
+                        with ui.HStack(height=16, spacing=3):
+                            rev_cb = ui.CheckBox(width=14, height=14)
+                            rev_cb.model.add_value_changed_fn(self._on_reverse)
+                            ui.Label("Reverse", width=46, height=14,
+                                     style={"font_size": 10, "color": _WHITE})
+                            loop_cb = ui.CheckBox(width=14, height=14)
+                            loop_cb.model.add_value_changed_fn(self._on_loop)
+                            ui.Label("Loop", width=30, height=14,
+                                     style={"font_size": 10, "color": _WHITE})
 
         self._body = body
-        self._row1_content = row1_content
+        self._title_content = title_content
         self._widgets = {
             'btn_play': btn_play,
             'btn_min':  btn_min,
             'rev_cb':   rev_cb,
             'loop_cb':  loop_cb,
             'slider':   slider,
-            'spd_sl':   spd_sl,
+            'spd_btn':  spd_btn,
         }
 
     def _own_player(self):
@@ -215,10 +233,15 @@ class ViewportOverlayPanel:
             if op:
                 op.set_loop(loop)
 
-    def _on_speed(self, model) -> None:
-        if self._in_sync:
+    def _on_speed_cycle(self) -> None:
+        idx = SPEED_CYCLE.index(self._speed) if self._speed in SPEED_CYCLE else -1
+        self._apply_speed(SPEED_CYCLE[(idx + 1) % len(SPEED_CYCLE)])
+
+    def _apply_speed(self, spd: float, broadcast: bool = True) -> None:
+        self._speed = spd
+        self._widgets['spd_btn'].text = _speed_label(spd)
+        if not broadcast:
             return
-        spd = model.get_value_as_float()
         if UVMixerService.is_synced(self._tab_id):
             UVMixerService.get_shared_player(self._tab_id).set_speed(spd)
             self._mgr._sync_speed(self._key, spd)
@@ -240,7 +263,7 @@ class ViewportOverlayPanel:
         self._in_tick = True
         self._widgets['rev_cb'].model.set_value(not p.forward)
         self._widgets['loop_cb'].model.set_value(p.loop)
-        self._widgets['spd_sl'].model.set_value(p.speed)
+        self._apply_speed(p.speed, broadcast=False)
         self._widgets['slider'].model.set_value(p.t)
         self._in_sync = False
         self._in_tick = False
@@ -258,9 +281,7 @@ class ViewportOverlayPanel:
         self._in_sync = False
 
     def sync_speed(self, spd: float) -> None:
-        self._in_sync = True
-        self._widgets['spd_sl'].model.set_value(spd)
-        self._in_sync = False
+        self._apply_speed(spd, broadcast=False)
 
     def sync_play(self, playing: bool) -> None:
         self._widgets['btn_play'].text = "■" if playing else "▶"
@@ -269,7 +290,7 @@ class ViewportOverlayPanel:
 
     def _on_toggle_minimize(self) -> None:
         self._minimized = not self._minimized
-        self._row1_content.visible = not self._minimized
+        self._title_content.visible = not self._minimized
         self._body.visible = not self._minimized
         self._widgets['btn_min'].text = "▲" if self._minimized else "▼"
         if self._minimized:
