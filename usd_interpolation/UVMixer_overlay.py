@@ -16,6 +16,8 @@ OVERLAY_H_MIN = 20          # 최소화 시 높이 (버튼만)
 _MARGIN = 8
 
 _TITLE_H = 18
+_TITLE_MARGIN = 1                       # 타이틀바 위아래 여백(한쪽)
+_TITLE_INNER_H = _TITLE_H - _TITLE_MARGIN * 2   # 버튼/라벨 실제 높이 (넘치면 바 밖으로 삐져나감)
 _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
@@ -113,14 +115,17 @@ class ViewportOverlayPanel:
             with ui.VStack(spacing=0, style=_STYLE):     # 스타일시트는 여기 한 번만
 
                 # 타이틀바: 최소화 버튼(좌측, 항상 표시) + key 텍스트(최소화 시 숨김)
+                # 내부 위젯 높이를 _TITLE_H에서 파생시켜야 한다 — 컨테이너의 height는
+                # 강제 클리핑이 아니라 힌트일 뿐이라, 안쪽이 더 크면 그대로 밖으로
+                # 삐져나와 _TITLE_H를 줄여도 바가 안 줄어든 것처럼 보인다.
                 with ui.ZStack(height=_TITLE_H):
                     ui.Rectangle(name="title_bg")
-                    with ui.HStack(spacing=3, style={"margin": 2}):
-                        btn_min = ui.Button("▼", width=16, height=14,
+                    with ui.HStack(spacing=3, style={"margin": _TITLE_MARGIN}):
+                        btn_min = ui.Button("▼", width=16, height=_TITLE_INNER_H,
                                             clicked_fn=self._on_toggle_minimize)
                         title_content = ui.HStack(spacing=3)
                         with title_content:
-                            ui.Label(self._key, height=14)
+                            ui.Label(self._key, height=_TITLE_INNER_H)
 
                 # 본문: 최소화 시 배경까지 통째로 숨김(ZStack 전체 토글)
                 body = ui.ZStack()
