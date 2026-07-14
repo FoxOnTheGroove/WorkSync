@@ -17,7 +17,7 @@ except ImportError:
 #   usd_interpolation/data/icons/play.png        (재생)
 #   usd_interpolation/data/icons/stop.png        (정지)
 #   usd_interpolation/data/icons/checkbox_n.png  (체크박스 기본)
-#   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover)
+#   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover — 현재 미사용, n/s만 토글)
 #   usd_interpolation/data/icons/checkbox_s.png  (체크박스 선택됨)
 _ICON_DIR       = os.path.join(os.path.dirname(__file__), "data", "icons")
 _ICON_ARROW     = os.path.join(_ICON_DIR, "arrow.png")
@@ -73,13 +73,6 @@ _STYLE = {
     "Button:hovered":     {"background_color": 0x22FFFFFF},
     "Button:pressed":     {"background_color": 0x44FFFFFF},
     "Label":              {"color": _WHITE, "font_size": 10},
-    # 체크박스: n/h/s 세 상태 이미지. Reverse/Loop 둘 다 같은 모양이라
-    # 인스턴스 구분(.name) 없이 타입 선택자 하나로 전부 적용된다.
-    "CheckBox": {"background_color": 0x00000000, "margin": 0, "padding": 0,
-                "border_width": 0, "image_url": _ICON_CHECKBOX_N,
-                "fill_policy": ui.FillPolicy.STRETCH},
-    "CheckBox:hovered": {"image_url": _ICON_CHECKBOX_H},
-    "CheckBox:checked": {"image_url": _ICON_CHECKBOX_S},
     # 기본 테두리 제거 (Rectangle::* 배경 뒤로 window 기본 테두리가 비치는 것 방지)
     "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
@@ -127,6 +120,8 @@ class ViewportOverlayPanel:
         self._reposition_task = None
         self._minimized = False
         self._speed = 1.0
+        self._reverse = False
+        self._loop = False
 
         x, y = _calc_overlay_pos(vph)
         self._window = ui.Window(
@@ -212,19 +207,28 @@ class ViewportOverlayPanel:
                             ui.Spacer(width=8)
 
                         # 행4 (y=47, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
+                        # 체크박스는 재생 버튼과 같은 방식(ui.Button + image_url 인라인 style)으로
+                        # 만든다. ui.CheckBox의 타입 캐스케이딩으로는 이미지가 안 나왔었다
+                        # (CheckBox가 image_url 스타일을 지원 안 하는 것으로 보임).
                         with ui.HStack(height=_ROW4_H):
                             ui.Spacer(width=12)
-                            rev_cb = _vcenter(14, lambda: ui.CheckBox(
-                                width=14, height=14))
-                            rev_cb.model.add_value_changed_fn(self._on_reverse)
+                            rev_cb = _vcenter(14, lambda: ui.Button(
+                                "", width=14, height=14, name="rev_cb",
+                                alignment=ui.Alignment.CENTER,
+                                clicked_fn=self._on_reverse,
+                                style={"image_url": _ICON_CHECKBOX_N,
+                                       "fill_policy": ui.FillPolicy.STRETCH}))
                             ui.Spacer(width=8)
                             ui.Label("Reverse", height=_ROW4_H,
                                      alignment=ui.Alignment.LEFT_CENTER,
                                      style={"font_size": 12})
                             ui.Spacer(width=20)
-                            loop_cb = _vcenter(14, lambda: ui.CheckBox(
-                                width=14, height=14))
-                            loop_cb.model.add_value_changed_fn(self._on_loop)
+                            loop_cb = _vcenter(14, lambda: ui.Button(
+                                "", width=14, height=14, name="loop_cb",
+                                alignment=ui.Alignment.CENTER,
+                                clicked_fn=self._on_loop,
+                                style={"image_url": _ICON_CHECKBOX_N,
+                                       "fill_policy": ui.FillPolicy.STRETCH}))
                             ui.Spacer(width=8)
                             ui.Label("Loop", height=_ROW4_H,
                                      alignment=ui.Alignment.LEFT_CENTER,
@@ -310,29 +314,37 @@ class ViewportOverlayPanel:
             if op and not op.is_playing():
                 op.set_t(t)
 
-    def _on_reverse(self, model) -> None:
-        if self._in_sync:
-            return
-        reverse = model.get_value_as_bool()
-        if UVMixerService.is_synced(self._tab_id):
-            UVMixerService.get_shared_player(self._tab_id).set_forward(not reverse)
-            self._mgr._sync_reverse(self._key, reverse)
-        else:
-            op = self._own_player()
-            if op:
-                op.set_forward(not reverse)
+    def _set_checkbox_icon(self, widget, checked: bool) -> None:
+        widget.style = {
+            "image_url": _ICON_CHECKBOX_S if checked else _ICON_CHECKBOX_N,
+            "fill_policy": ui.FillPolicy.STRETCH,
+        }
 
-    def _on_loop(self, model) -> None:
+    def _on_reverse(self) -> None:
         if self._in_sync:
             return
-        loop = model.get_value_as_bool()
+        self._reverse = not self._reverse
+        self._set_checkbox_icon(self._widgets['rev_cb'], self._reverse)
         if UVMixerService.is_synced(self._tab_id):
-            UVMixerService.get_shared_player(self._tab_id).set_loop(loop)
-            self._mgr._sync_loop(self._key, loop)
+            UVMixerService.get_shared_player(self._tab_id).set_forward(not self._reverse)
+            self._mgr._sync_reverse(self._key, self._reverse)
         else:
             op = self._own_player()
             if op:
-                op.set_loop(loop)
+                op.set_forward(not self._reverse)
+
+    def _on_loop(self) -> None:
+        if self._in_sync:
+            return
+        self._loop = not self._loop
+        self._set_checkbox_icon(self._widgets['loop_cb'], self._loop)
+        if UVMixerService.is_synced(self._tab_id):
+            UVMixerService.get_shared_player(self._tab_id).set_loop(self._loop)
+            self._mgr._sync_loop(self._key, self._loop)
+        else:
+            op = self._own_player()
+            if op:
+                op.set_loop(self._loop)
 
     def _on_speed_cycle(self) -> None:
         idx = SPEED_CYCLE.index(self._speed) if self._speed in SPEED_CYCLE else -1
@@ -362,8 +374,10 @@ class ViewportOverlayPanel:
             p = mixer.own_player if mixer else UVMixerService.get_shared_player(self._tab_id)
         self._in_sync = True
         self._in_tick = True
-        self._widgets['rev_cb'].model.set_value(not p.forward)
-        self._widgets['loop_cb'].model.set_value(p.loop)
+        self._reverse = not p.forward
+        self._set_checkbox_icon(self._widgets['rev_cb'], self._reverse)
+        self._loop = p.loop
+        self._set_checkbox_icon(self._widgets['loop_cb'], self._loop)
         self._apply_speed(p.speed, broadcast=False)
         self._widgets['slider'].model.set_value(p.t)
         self._in_sync = False
@@ -373,12 +387,14 @@ class ViewportOverlayPanel:
 
     def sync_reverse(self, reverse: bool) -> None:
         self._in_sync = True
-        self._widgets['rev_cb'].model.set_value(reverse)
+        self._reverse = reverse
+        self._set_checkbox_icon(self._widgets['rev_cb'], reverse)
         self._in_sync = False
 
     def sync_loop(self, loop: bool) -> None:
         self._in_sync = True
-        self._widgets['loop_cb'].model.set_value(loop)
+        self._loop = loop
+        self._set_checkbox_icon(self._widgets['loop_cb'], loop)
         self._in_sync = False
 
     def sync_speed(self, spd: float) -> None:
