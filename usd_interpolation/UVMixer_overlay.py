@@ -85,20 +85,12 @@ class _ImageSlider:
         self._update_visual()
 
     def _build(self):
-        # 트랙 클릭으로 점프하는 캐처는 없앴다 — 핸들(10x10) 자체만 누르고
-        # 드래그할 수 있다. 핸들 위치는 Rectangle.width 변경으로 잡는다
-        # (Placer.offset_x / Spacer.width는 런타임 변경 시 재배치가 안 걸려서
-        #  핸들이 안 움직이는 문제가 있었음 — Rectangle.width는 fill에서
-        #  이미 검증된 방식이라 이걸로 통일한다).
         with ui.ZStack(width=self._w, height=self._ks):
-            # 드래그 안전망: 트랙 전체(112x10)에서 move/release만 받는다.
-            # press는 없음 — 드래그 '시작'은 반드시 핸들 위에서만 가능하지만,
-            # 일단 드래그가 시작되면 마우스가 10x10 핸들 밖으로 나가도
-            # (트랙 범위 안이면) release를 놓치지 않고 계속 추적한다.
-            # 맨 아래 레이어라 핸들 위에서는 핸들 쪽 핸들러가 우선한다.
-            safety = ui.Rectangle(style={"background_color": 0x00000000})
-            safety.set_mouse_moved_fn(self._on_move)
-            safety.set_mouse_released_fn(self._on_release)
+            # 드래그 안전망: 트랙 전체에서 move/release 받음 (press 없음 →
+            # 드래그 시작은 핸들 위에서만). 맨 아래라 핸들 쪽이 우선.
+            self._safety = ui.Rectangle(style={"background_color": 0x00000000})
+            self._safety.set_mouse_moved_fn(self._on_move)
+            self._safety.set_mouse_released_fn(self._on_release)
 
             # 트랙 + 채움 (세로 중앙)
             with ui.VStack():
@@ -106,19 +98,19 @@ class _ImageSlider:
                 with ui.ZStack(height=self._th):
                     ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG,
                                         "border_radius": self._th / 2})
-                    with ui.HStack():
+                    # 채움: Placer 안에 두고 Rectangle.width로 크기 조절
+                    self._fill_placer = ui.Placer()
+                    with self._fill_placer:
                         self._fill = ui.Rectangle(
-                            width=0, style={"background_color": _SLIDER_FILL_BG,
-                                            "border_radius": self._th / 2})
-                        ui.Spacer()
+                            width=0, height=self._th,
+                            style={"background_color": _SLIDER_FILL_BG,
+                                   "border_radius": self._th / 2})
                 ui.Spacer()
-            # 핸들: lead(왼쪽 여백, width로 위치 결정) + 핸들 + trailing.
-            # 핸들은 n/h 이미지를 둘 다 미리 로드해 겹쳐두고 visible만 토글한다
-            # (source_url 교체는 디스크 재로드라 전환 순간 깜박임 → 미리 로드 후
-            #  visible 토글은 즉시라 깜박임 없음). 맨 위 투명 hit이 마우스 담당.
-            with ui.HStack():
-                self._knob_lead = ui.Rectangle(
-                    width=0, style={"background_color": 0x00000000})
+
+            # 핸들 (맨 위): Placer.offset_x로 위치. n/h 이미지 미리 로드 후
+            # visible 토글(깜박임 없음). 투명 hit이 마우스 담당.
+            self._knob_placer = ui.Placer(width=self._w, height=self._ks)
+            with self._knob_placer:
                 with ui.ZStack(width=self._ks, height=self._ks):
                     self._knob_n = ui.Image(_ICON_OV_N,
                                             width=self._ks, height=self._ks,
@@ -133,25 +125,27 @@ class _ImageSlider:
                     self._knob_hit.set_mouse_pressed_fn(self._on_press)
                     self._knob_hit.set_mouse_moved_fn(self._on_move)
                     self._knob_hit.set_mouse_released_fn(self._on_release)
-                ui.Spacer()
 
     # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
 
     def _t_from_screen_x(self, x: float) -> float:
-        # 커서를 핸들 중앙에 두는 매핑. lead의 screen_position_x는 lead의
-        # 폭과 무관하게 항상 트랙 왼쪽 끝(0)에 고정된다.
-        local = x - self._knob_lead.screen_position_x - self._ks / 2
+        # 커서를 핸들 중앙에 두는 매핑. safety는 트랙 왼쪽 끝(0)에 고정.
+        local = x - self._safety.screen_position_x - self._ks / 2
         span = self._w - self._ks
         return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
 
     def _update_visual(self):
-        t = self.model.get_value_as_float()
-        # border_radius가 걸린 사각형은 width=0이어도 최소 렌더 크기가 있어
-        # 완전히 0일 때 살짝 튀어나와 보인다 — 아예 숨겨서 없앤다.
-        self._fill.visible = t > 0.0
-        self._fill.width = ui.Pixel(t * self._w)
-        # 핸들 왼끝 = t*(w-ks): t=0 → 0(왼끝 덮음), t=1 → w-ks(오른끝 덮음)
-        self._knob_lead.width = ui.Pixel(t * (self._w - self._ks))
+        try:
+            t = self.model.get_value_as_float()
+            self._fill.visible = t > 0.0
+            self._fill.width = ui.Pixel(t * self._w)
+            self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
+            print(f"[_ImageSlider] update t={t:.3f} "
+                  f"fill_w={t*self._w:.1f} knob_off={t*(self._w-self._ks):.1f}")
+        except Exception as e:
+            import traceback
+            print("[_ImageSlider] _update_visual FAILED:", e)
+            traceback.print_exc()
 
     def _refresh_knob_image(self):
         # 미리 로드된 두 이미지의 visible만 토글 (재로드 없음 → 깜박임 없음)
