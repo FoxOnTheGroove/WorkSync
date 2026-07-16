@@ -106,11 +106,12 @@ class _ImageSlider:
             catcher.set_mouse_moved_fn(self._on_move)
             catcher.set_mouse_released_fn(self._on_release)
             self._catcher = catcher
-            # 3) 핸들 (맨 위). 위치는 앞쪽 Spacer 폭으로 결정 → t=0에서
-            #    핸들 왼끝이 트랙 왼끝(0)과 정확히 일치, t=1에서 오른끝 일치.
-            #    좌우 Spacer는 이벤트를 통과시켜 아래 캐처가 트랙 클릭을 받는다.
-            with ui.HStack():
-                self._knob_lead = ui.Spacer(width=0)
+            # 3) 핸들 (맨 위). Placer.offset_x로 위치 결정 — Spacer.width는
+            #    런타임 변경 시 재배치가 안 걸려서(핸들이 안 움직임) 포기.
+            #    width/height를 명시해 좌표 원점을 고정(왼쪽=0)한다.
+            self._knob_placer = ui.Placer(
+                width=self._w, height=self._ks, draggable=False)
+            with self._knob_placer:
                 self._knob = ui.Image(_ICON_OV_N,
                                       width=self._ks, height=self._ks,
                                       fill_policy=ui.FillPolicy.STRETCH)
@@ -118,7 +119,6 @@ class _ImageSlider:
                 self._knob.set_mouse_pressed_fn(self._on_press)
                 self._knob.set_mouse_moved_fn(self._on_move)
                 self._knob.set_mouse_released_fn(self._on_release)
-                ui.Spacer()
 
     # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
 
@@ -130,9 +130,12 @@ class _ImageSlider:
 
     def _update_visual(self):
         t = self.model.get_value_as_float()
+        # border_radius가 걸린 사각형은 width=0이어도 최소 렌더 크기가 있어
+        # 완전히 0일 때 살짝 튀어나와 보인다 — 아예 숨겨서 없앤다.
+        self._fill.visible = t > 0.0
         self._fill.width = ui.Pixel(t * self._w)
         # 핸들 왼끝 = t*(w-ks): t=0 → 0(왼끝 덮음), t=1 → w-ks(오른끝 덮음)
-        self._knob_lead.width = ui.Pixel(t * (self._w - self._ks))
+        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
 
     def _refresh_knob_image(self):
         # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지
