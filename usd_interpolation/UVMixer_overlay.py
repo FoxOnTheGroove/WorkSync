@@ -78,107 +78,88 @@ class _ImageSlider:
     def __init__(self, width=112, track_h=4, knob=10):
         self._w, self._th, self._ks = width, track_h, knob
         self._dragging = False
-        self._hovering = False     # 마우스가 핸들(10x10) 위에 있는지
+        self._hovering = False     # 마우스가 핸들(10x10) 위에 있는지 (press와 무관)
         self.model = ui.SimpleFloatModel(0.0)
-        # 런타임 속성 변경(width/offset_x)은 재배치가 안 걸려 화면이 안 움직임.
-        # 대신 값이 바뀌면 시각 레이어를 통째로 rebuild → 정적 레이아웃으로
-        # 다시 그려서 확실히 갱신한다. (빌드 시점 레이아웃은 정상 동작하므로)
-        self.model.add_value_changed_fn(lambda m: self._redraw())
+        self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
+        self._update_visual()
 
     def _build(self):
         with ui.ZStack(width=self._w, height=self._ks):
-            # 시각 레이어 (rebuild로 갱신) — 마우스 핸들러 없음
-            self._frame = ui.Frame()
-            self._frame.set_build_fn(self._draw_visual)
-            # 입력 레이어 (영구, 맨 위) — rebuild 대상이 아니라 드래그 캡처가
-            # 유지된다. 트랙 전체를 덮지만 press는 핸들 범위에서만 드래그 시작.
+            # 드래그 안전망(맨 아래, 영구): 드래그 중 마우스가 핸들 밖으로 나가도
+            # move/release를 계속 받는다. press/hover는 없음.
             self._catcher = ui.Rectangle(style={"background_color": 0x00000000})
-            self._catcher.set_mouse_pressed_fn(self._on_press)
             self._catcher.set_mouse_moved_fn(self._on_move)
             self._catcher.set_mouse_released_fn(self._on_release)
-            self._catcher.set_mouse_hovered_fn(self._on_catcher_hover)
 
-    def _draw_visual(self):
-        t = self.model.get_value_as_float()
-        fill_w = t * self._w
-        knob_off = t * (self._w - self._ks)
-        hov = self._hovering or self._dragging
-        with ui.ZStack():
-            # 트랙 + 채움 (세로 중앙)
+            # 트랙 + 채움 (세로 중앙). 채움은 Placer 안 왼쪽 고정, width로 크기.
             with ui.VStack():
                 ui.Spacer()
                 with ui.ZStack(height=self._th):
                     ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG,
                                         "border_radius": self._th / 2})
-                    if fill_w > 0:
-                        with ui.HStack():
-                            ui.Rectangle(width=fill_w,
-                                         style={"background_color": _SLIDER_FILL_BG,
-                                                "border_radius": self._th / 2})
-                            ui.Spacer()
-                ui.Spacer()
-            # 핸들: 앞쪽 Spacer 폭으로 위치 (rebuild라 매번 정적으로 배치됨)
-            with ui.HStack():
-                if knob_off > 0:
-                    ui.Spacer(width=knob_off)
-                ui.Image(_ICON_OV_H if hov else _ICON_OV_N,
-                         width=self._ks, height=self._ks,
-                         fill_policy=ui.FillPolicy.STRETCH)
+                    with ui.Placer():
+                        self._fill = ui.Rectangle(
+                            width=0, height=self._th,
+                            style={"background_color": _SLIDER_FILL_BG,
+                                   "border_radius": self._th / 2})
                 ui.Spacer()
 
-    def _redraw(self):
-        self._frame.rebuild()
+            # 핸들: Placer.offset_x로 위치(런타임 이동은 raw 숫자로 대입 — ui.Pixel
+            # 로 감싸면 갱신이 안 됐음). n/h 이미지 미리 로드 후 visible 토글(깜박임 X).
+            self._knob_placer = ui.Placer(width=self._w, height=self._ks)
+            with self._knob_placer:
+                with ui.ZStack(width=self._ks, height=self._ks):
+                    self._knob_n = ui.Image(_ICON_OV_N,
+                                            width=self._ks, height=self._ks,
+                                            fill_policy=ui.FillPolicy.STRETCH)
+                    self._knob_h = ui.Image(_ICON_OV_H,
+                                            width=self._ks, height=self._ks,
+                                            fill_policy=ui.FillPolicy.STRETCH,
+                                            visible=False)
+                    # hit: 핸들 위에서만 hover/press 판정 (핸들과 함께 이동)
+                    self._hit = ui.Rectangle(style={"background_color": 0x00000000})
+                    self._hit.set_mouse_hovered_fn(self._on_hover)
+                    self._hit.set_mouse_pressed_fn(self._on_press)
+                    self._hit.set_mouse_moved_fn(self._on_move)
+                    self._hit.set_mouse_released_fn(self._on_release)
 
-    # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
+    def _update_visual(self):
+        # 위치/크기만 갱신 (rebuild 없음 → 깜박임 없음). raw 숫자로 대입.
+        t = self.model.get_value_as_float()
+        self._fill.visible = t > 0.0
+        self._fill.width = t * self._w
+        self._knob_placer.offset_x = t * (self._w - self._ks)
+
+    def _set_knob_img(self):
+        # hover 여부만 반영 (press/drag와 완전 별개)
+        self._knob_h.visible = self._hovering
+        self._knob_n.visible = not self._hovering
 
     def _t_from_screen_x(self, x: float) -> float:
-        # 커서를 핸들 중앙에 두는 매핑. catcher는 트랙 왼쪽 끝(0)에 고정.
         local = x - self._catcher.screen_position_x - self._ks / 2
         span = self._w - self._ks
         return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
 
-    def _knob_range_screen(self):
-        t = self.model.get_value_as_float()
-        x0 = self._catcher.screen_position_x + t * (self._w - self._ks)
-        return x0, x0 + self._ks
+    # ── hover: 오직 "마우스가 핸들 위" 여부. press와 무관 ──────────────
 
-    def _set_hover(self, on: bool):
-        if on != self._hovering:
-            self._hovering = on
-            self._redraw()
+    def _on_hover(self, hovered: bool):
+        self._hovering = hovered
+        self._set_knob_img()
 
-    # ── 마우스 ───────────────────────────────────────────────────
+    # ── press/drag: hover/이미지를 건드리지 않는다 ────────────────────
 
     def _on_press(self, x, y, button, modifier):
-        if button != 0:
-            return
-        x0, x1 = self._knob_range_screen()
-        if not (x0 <= x <= x1):     # 핸들 위에서만 드래그 시작
-            return
-        self._dragging = True
-        self._redraw()              # hov 이미지 반영
+        if button == 0:
+            self._dragging = True
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
             self.model.set_value(self._t_from_screen_x(x))
-        else:
-            x0, x1 = self._knob_range_screen()
-            self._set_hover(x0 <= x <= x1)
 
     def _on_release(self, x, y, button, modifier):
-        if button != 0:
-            return
-        was = self._dragging
-        self._dragging = False
-        x0, x1 = self._knob_range_screen()
-        self._hovering = (x0 <= x <= x1)
-        if was or self._hovering:
-            self._redraw()
-
-    def _on_catcher_hover(self, hovered: bool):
-        if not hovered:
-            self._set_hover(False)
+        if button == 0:
+            self._dragging = False
 
 
 # ── 스타일시트 ──────────────────────────────────────────────────────────
