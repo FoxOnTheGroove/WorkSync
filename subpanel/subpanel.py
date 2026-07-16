@@ -1,154 +1,241 @@
-# subpanel.py — 260x105 오버레이 스타일 패널 (UVMixer_overlay 디자인 기반)
+# subpanel.py — 참고용 패널 (180x80). mixer 오버레이의 슬라이더 컴포넌트를 이식.
 #
-#   행1: key 라벨 ────────────────── ▼(최소화)
-#   행2: index  [IntSlider]
-#   행3: thick  [FloatSlider]
+#   행1 (y0,h16):  [최소화10x10] Path line(폰트10, h15, 윗점)
+#   행2 (y16,h32): 8 | Iteration(폰트12) | x72 좌'1' | x93 슬라이더58 | 우'20'(-8)
+#   행3 (y48,h32): 8 | Thickness       | x72 좌'0.5'| x93 슬라이더58 | 우'1.0'
 #
-# 최소화 시 20x20 (버튼만 남음)
+# 아이콘: 이 파일과 같은 subpanel/ 아래 data/icons/ 에 둔다 (파일은 별도 준비).
+#   arrow.png / arrow_r.png  (최소화 화살표, 펼침/접힘)
+#   ov_n.png  / ov_h.png     (슬라이더 핸들 기본/hover)
+
+import os
 
 import omni.ui as ui
 
-PANEL_W     = 260
-PANEL_H     = 105
-PANEL_W_MIN = 20          # 최소화 시 너비 (버튼만)
-PANEL_H_MIN = 20          # 최소화 시 높이 (버튼만)
+_ICON_DIR     = os.path.join(os.path.dirname(__file__), "data", "icons")
+_ICON_ARROW   = os.path.join(_ICON_DIR, "arrow.png")
+_ICON_ARROW_R = os.path.join(_ICON_DIR, "arrow_r.png")
+_ICON_OV_N    = os.path.join(_ICON_DIR, "ov_n.png")
+_ICON_OV_H    = os.path.join(_ICON_DIR, "ov_h.png")
+
+# ── 패널 치수 (전체 180x80) ─────────────────────────────────────────────
+PANEL_W = 180
+PANEL_H = 80
+PANEL_W_MIN = 16
+PANEL_H_MIN = 16
+
+_ROW1_H  = 16        # 타이틀
+_ROW_H   = 32        # 행2 / 행3 각각 (합 64)
+
+# 행2/3 공통 x 정렬 (좌→우 폭 누적 = 180)
+_MARGIN_L = 8
+_LABEL_W  = 72 - 8         # Iteration/Thickness 라벨 폭 (x8→72)
+_LIDX_W   = 93 - 72        # 좌 인덱스 폭 (x72→93)
+_SLIDER_W = 58            # 슬라이더 (x93→151)
+_RIDX_W   = 172 - 151     # 우 인덱스 폭 (x151→172)
+_MARGIN_R = 8
+
+_TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
+_BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
+_WHITE    = 0xFFFFFFFF
+
+_SLIDER_TRACK_BG = 0xFF6A6A6A     # #6a6a6a
+_SLIDER_FILL_BG  = 0xFFF18D95     # #958df1 (0xAABBGGRR)
+
+_LABEL_FONT = 12
+_INDEX_FONT = 10
+_TITLE_FONT = 10
 
 _WINDOW_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR
+    | ui.WINDOW_FLAGS_NO_BACKGROUND
     | ui.WINDOW_FLAGS_NO_RESIZE
     | ui.WINDOW_FLAGS_NO_SCROLLBAR
     | ui.WINDOW_FLAGS_NO_COLLAPSE
     | ui.WINDOW_FLAGS_NO_MOVE
 )
 
-# ── 뷰포트 우하단 앵커링 (UVMixer_overlay 이식, 필요 시 주석 해제) ──────────
-# import omni.kit.app
-# import omni.kit.async_engine
-# import morph.hytwin_viewportwidget_extension as _hytwin_vp_wg
-#
-# _MARGIN = 8
-#
-# def _find_vph(target_path: str):
-#     for vph in _hytwin_vp_wg.ViewportWidgetHost.get_instances():
-#         if vph.prim_header_path.rstrip("/") == target_path.rstrip("/"):
-#             return vph
-#     return None
-#
-# def _calc_panel_pos(vph, width=PANEL_W, height=PANEL_H,
-#                     extra_margin_y=0):
-#     frame = vph.frame
-#     x = int(frame.screen_position_x + frame.computed_width  - width - _MARGIN)
-#     y = int(frame.screen_position_y + frame.computed_height - height - _MARGIN - extra_margin_y)
-#     return x, y
-#
-# 사용법:
-#   __init__에서
-#     self._vph = _find_vph(target_path)
-#     self._reposition_task = None
-#   build_ui에서 윈도우 생성 시
-#     x, y = _calc_panel_pos(self._vph)
-#     ui.Window(..., position_x=x, position_y=y, ...)
-#   생성 직후
-#     self._vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
-#
-# def _on_viewport_resized(self):
-#     if self._window and self._vph:
-#         if self._minimized:
-#             x, y = _calc_panel_pos(self._vph, PANEL_W_MIN, PANEL_H_MIN,
-#                                    extra_margin_y=_MARGIN)
-#         else:
-#             x, y = _calc_panel_pos(self._vph)
-#         self._window.position_x = x
-#         self._window.position_y = y
-#
-# def reposition_deferred(self, frames: int = 2):
-#     """show 직후 frame 레이아웃이 stale할 수 있어 몇 프레임 뒤 재배치."""
-#     if self._reposition_task is not None and not self._reposition_task.done():
-#         self._reposition_task.cancel()
-#     self._reposition_task = omni.kit.async_engine.run_coroutine(
-#         self._reposition_async(frames))
-#
-# async def _reposition_async(self, frames: int):
-#     app = omni.kit.app.get_app()
-#     for _ in range(frames):
-#         await app.next_update_async()
-#     self._on_viewport_resized()
-#
-# destroy에서:
-#     if self._reposition_task and not self._reposition_task.done():
-#         self._reposition_task.cancel()
-#     if self._vph:
-#         self._vph.frame.set_computed_content_size_changed_fn(None)
-#         self._vph = None
-# 최소화 토글(_on_toggle_minimize) 끝에서:
-#     self._on_viewport_resized()
-# ────────────────────────────────────────────────────────────────────────
+_STYLE = {
+    "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
+    "Rectangle::title_bg":  {"background_color": _TITLE_BG},
+    "Rectangle::body_bg":   {"background_color": _BODY_BG},
+    "Button":               {"background_color": 0x00000000, "color": _WHITE,
+                             "margin": 0, "padding": 0, "border_width": 0},
+    "Label":                {"color": _WHITE},
+}
 
+
+def _vcenter(width, factory):
+    """고정 크기 위젯을 행 높이 안에서 세로 중앙에 배치하고 반환."""
+    with ui.VStack(width=width):
+        ui.Spacer()
+        w = factory()
+        ui.Spacer()
+    return w
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 슬라이더 컴포넌트 (mixer UVMixer_overlay 에서 이식)
+#   트랙 w x 4 (#6a6a6a) + 채움(#958df1) + 10x10 이미지 핸들(ov_n/ov_h).
+#   hover는 핸들 위 여부만(press와 무관). .model(SimpleFloatModel) 노출.
+# ──────────────────────────────────────────────────────────────────────
+
+class ImageSlider:
+
+    def __init__(self, width=58, track_h=4, knob=10):
+        self._w, self._th, self._ks = width, track_h, knob
+        self._dragging = False
+        self._hovering = False
+        self.model = ui.SimpleFloatModel(0.0)
+        self.model.add_value_changed_fn(lambda m: self._update_visual())
+        self._build()
+        self._update_visual()
+
+    def _build(self):
+        with ui.ZStack(width=self._w, height=self._ks):
+            # 드래그 안전망 (맨 아래, 영구): move/release만
+            self._catcher = ui.Rectangle(style={"background_color": 0x00000000})
+            self._catcher.set_mouse_moved_fn(self._on_move)
+            self._catcher.set_mouse_released_fn(self._on_release)
+
+            # 트랙 + 채움 (세로 중앙)
+            with ui.VStack():
+                ui.Spacer()
+                with ui.ZStack(height=self._th):
+                    ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG,
+                                        "border_radius": self._th / 2})
+                    with ui.Placer():
+                        self._fill = ui.Rectangle(
+                            width=0, height=self._th,
+                            style={"background_color": _SLIDER_FILL_BG,
+                                   "border_radius": self._th / 2})
+                ui.Spacer()
+
+            # 핸들 (Placer.offset_x). n/h 미리 로드 후 visible 토글.
+            self._knob_placer = ui.Placer(width=self._w, height=self._ks)
+            with self._knob_placer:
+                with ui.ZStack(width=self._ks, height=self._ks):
+                    self._knob_n = ui.Image(_ICON_OV_N, width=self._ks,
+                                            height=self._ks,
+                                            fill_policy=ui.FillPolicy.STRETCH)
+                    self._knob_h = ui.Image(_ICON_OV_H, width=self._ks,
+                                            height=self._ks,
+                                            fill_policy=ui.FillPolicy.STRETCH,
+                                            visible=False)
+                    self._hit = ui.Rectangle(style={"background_color": 0x00000000})
+                    self._hit.set_mouse_hovered_fn(self._on_hover)
+                    self._hit.set_mouse_pressed_fn(self._on_press)
+                    self._hit.set_mouse_moved_fn(self._on_move)
+                    self._hit.set_mouse_released_fn(self._on_release)
+
+    def _update_visual(self):
+        t = self.model.get_value_as_float()
+        self._fill.visible = t > 0.0
+        self._fill.width = ui.Pixel(t * self._w)
+        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
+
+    def _set_knob_img(self):
+        self._knob_h.visible = self._hovering
+        self._knob_n.visible = not self._hovering
+
+    def _t_from_screen_x(self, x):
+        local = x - self._catcher.screen_position_x - self._ks / 2
+        span = self._w - self._ks
+        return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
+
+    def _on_hover(self, hovered):
+        self._hovering = hovered
+        self._set_knob_img()
+
+    def _on_press(self, x, y, button, modifier):
+        if button == 0:
+            self._dragging = True
+
+    def _on_move(self, x, y, modifier, pressed):
+        if self._dragging:
+            self.model.set_value(self._t_from_screen_x(x))
+
+    def _on_release(self, x, y, button, modifier):
+        if button == 0:
+            self._dragging = False
+
+
+# ──────────────────────────────────────────────────────────────────────
 
 class SubPanel:
 
-    def __init__(self, key: str = ""):
-        self._key = key
+    def __init__(self, title: str = "Path line"):
+        self._title = title
         self._window = None
         self._body = None
-        self._row1_content = None
+        self._title_content = None
         self._minimized = False
-        self._index_slider = None
-        self._thick_slider = None
         self._btn_min = None
+        self.iter_slider = None
+        self.thick_slider = None
 
-    def build_ui(self, index_min: int = 1, index_max: int = 10):
-        self._window = ui.Window(
-            f"__subpanel_{self._key}__",
-            width=PANEL_W, height=PANEL_H,
-            flags=_WINDOW_FLAGS,
-        )
-        self._window.frame.style = {"background_color": 0xCC151515}
+    def build_ui(self):
+        self._window = ui.Window(f"__subpanel_{self._title}__",
+                                 width=PANEL_W, height=PANEL_H,
+                                 flags=_WINDOW_FLAGS)
+        self._window.padding_x = 0
+        self._window.padding_y = 0
 
         with self._window.frame:
-            with ui.VStack(spacing=1, style={"margin": 2}):
+            with ui.VStack(spacing=0, style=_STYLE):
 
-                # 행1: key 라벨(최소화 시 숨김) + 최소화 버튼(우상단 고정)
-                with ui.HStack(height=16, spacing=3):
-                    self._row1_content = ui.HStack(spacing=3)
-                    with self._row1_content:
-                        ui.Label(self._key, height=14,
-                                 style={"color": 0xFF888888, "font_size": 10})
-                    self._btn_min = ui.Button("▼", width=16, height=14,
-                                              clicked_fn=self._on_toggle_minimize,
-                                              style={"font_size": 10})
+                # ── 행1: 타이틀 ──────────────────────────────────
+                with ui.ZStack(height=_ROW1_H):
+                    ui.Rectangle(name="title_bg")
+                    with ui.HStack():
+                        ui.Spacer(width=3)
+                        self._btn_min = _vcenter(10, lambda: ui.Button(
+                            "", width=10, height=10, name="min_btn",
+                            alignment=ui.Alignment.CENTER,
+                            clicked_fn=self._on_toggle_minimize,
+                            style={"image_url": _ICON_ARROW,
+                                   "fill_policy": ui.FillPolicy.STRETCH}))
+                        ui.Spacer(width=2)
+                        self._title_content = ui.HStack()
+                        with self._title_content:
+                            with ui.VStack():                 # 윗점 정렬
+                                ui.Label(self._title, height=15,
+                                         style={"font_size": _TITLE_FONT})
+                                ui.Spacer()
 
-                # 본문(행2·행3): 최소화 시 숨김
-                self._body = ui.VStack(spacing=1)
+                # ── 본문 (행2 + 행3) ─────────────────────────────
+                self._body = ui.ZStack()
                 with self._body:
-                    # 행2: index 슬라이더
-                    with ui.HStack(height=16, spacing=3):
-                        ui.Label("index", width=42, height=14,
-                                 style={"font_size": 10})
-                        self._index_slider = ui.IntSlider(
-                            min=index_min, max=index_max)
+                    ui.Rectangle(name="body_bg")
+                    with ui.VStack(spacing=0):
+                        self.iter_slider = self._slider_row("Iteration", "1", "20")
+                        self.thick_slider = self._slider_row("Thickness", "0.5", "1.0")
 
-                    # 행3: thick 슬라이더
-                    with ui.HStack(height=16, spacing=3):
-                        ui.Label("thick", width=42, height=14,
-                                 style={"font_size": 10})
-                        self._thick_slider = ui.FloatSlider(
-                            min=0.0, max=1.0, step=0.005)
-
-    # 외부에서 콜백 연결용
-    @property
-    def index_model(self):
-        return self._index_slider.model if self._index_slider else None
-
-    @property
-    def thick_model(self):
-        return self._thick_slider.model if self._thick_slider else None
+    def _slider_row(self, label, left_idx, right_idx):
+        """행2/행3 공통 레이아웃. 반환: 그 행의 ImageSlider."""
+        with ui.HStack(height=_ROW_H):
+            ui.Spacer(width=_MARGIN_L)
+            ui.Label(label, width=_LABEL_W, height=_ROW_H,
+                     alignment=ui.Alignment.LEFT_CENTER,
+                     style={"font_size": _LABEL_FONT})
+            ui.Label(left_idx, width=_LIDX_W, height=_ROW_H,
+                     alignment=ui.Alignment.LEFT_CENTER,
+                     style={"font_size": _INDEX_FONT})
+            slider = _vcenter(_SLIDER_W, lambda: ImageSlider(width=_SLIDER_W))
+            ui.Label(right_idx, width=_RIDX_W, height=_ROW_H,
+                     alignment=ui.Alignment.RIGHT_CENTER,
+                     style={"font_size": _INDEX_FONT})
+            ui.Spacer(width=_MARGIN_R)
+        return slider
 
     def _on_toggle_minimize(self):
         self._minimized = not self._minimized
-        self._row1_content.visible = not self._minimized
+        self._title_content.visible = not self._minimized
         self._body.visible = not self._minimized
-        self._btn_min.text = "▲" if self._minimized else "▼"
+        self._btn_min.style = {
+            "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
+            "fill_policy": ui.FillPolicy.STRETCH,
+        }
         if self._minimized:
             self._window.width = PANEL_W_MIN
             self._window.height = PANEL_H_MIN
@@ -161,7 +248,7 @@ class SubPanel:
             self._window.destroy()
             self._window = None
         self._body = None
-        self._row1_content = None
-        self._index_slider = None
-        self._thick_slider = None
+        self._title_content = None
         self._btn_min = None
+        self.iter_slider = None
+        self.thick_slider = None
