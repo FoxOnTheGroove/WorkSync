@@ -79,7 +79,6 @@ class _ImageSlider:
         self._w, self._th, self._ks = width, track_h, knob
         self._dragging = False
         self._hovering = False     # 마우스가 핸들(10x10) 위에 있는지
-        self._cur_icon = None      # 마지막으로 실제 적용한 아이콘 (중복 대입 방지)
         self.model = ui.SimpleFloatModel(0.0)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
@@ -113,19 +112,27 @@ class _ImageSlider:
                                             "border_radius": self._th / 2})
                         ui.Spacer()
                 ui.Spacer()
-            # 핸들: lead(왼쪽 여백, width로 위치 결정) + 이미지 + trailing.
-            # lead/trailing엔 마우스 핸들러를 안 달아서 클릭이 그대로 통과되고,
-            # 핸들 이미지에만 핸들러가 있어 핸들 위에서만 반응한다.
+            # 핸들: lead(왼쪽 여백, width로 위치 결정) + 핸들 + trailing.
+            # 핸들은 n/h 이미지를 둘 다 미리 로드해 겹쳐두고 visible만 토글한다
+            # (source_url 교체는 디스크 재로드라 전환 순간 깜박임 → 미리 로드 후
+            #  visible 토글은 즉시라 깜박임 없음). 맨 위 투명 hit이 마우스 담당.
             with ui.HStack():
                 self._knob_lead = ui.Rectangle(
                     width=0, style={"background_color": 0x00000000})
-                self._knob = ui.Image(_ICON_OV_N,
-                                      width=self._ks, height=self._ks,
-                                      fill_policy=ui.FillPolicy.STRETCH)
-                self._knob.set_mouse_hovered_fn(self._on_knob_hover)
-                self._knob.set_mouse_pressed_fn(self._on_press)
-                self._knob.set_mouse_moved_fn(self._on_move)
-                self._knob.set_mouse_released_fn(self._on_release)
+                with ui.ZStack(width=self._ks, height=self._ks):
+                    self._knob_n = ui.Image(_ICON_OV_N,
+                                            width=self._ks, height=self._ks,
+                                            fill_policy=ui.FillPolicy.STRETCH)
+                    self._knob_h = ui.Image(_ICON_OV_H,
+                                            width=self._ks, height=self._ks,
+                                            fill_policy=ui.FillPolicy.STRETCH,
+                                            visible=False)
+                    self._knob_hit = ui.Rectangle(
+                        style={"background_color": 0x00000000})
+                    self._knob_hit.set_mouse_hovered_fn(self._on_knob_hover)
+                    self._knob_hit.set_mouse_pressed_fn(self._on_press)
+                    self._knob_hit.set_mouse_moved_fn(self._on_move)
+                    self._knob_hit.set_mouse_released_fn(self._on_release)
                 ui.Spacer()
 
     # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
@@ -147,13 +154,10 @@ class _ImageSlider:
         self._knob_lead.width = ui.Pixel(t * (self._w - self._ks))
 
     def _refresh_knob_image(self):
-        # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지.
-        # 같은 값이어도 매번 source_url을 다시 대입하면 이미지가 재로드되며
-        # 깜박이므로, 실제로 바뀔 때만 대입한다.
-        icon = _ICON_OV_H if (self._hovering or self._dragging) else _ICON_OV_N
-        if icon != self._cur_icon:
-            self._cur_icon = icon
-            self._knob.source_url = icon
+        # 미리 로드된 두 이미지의 visible만 토글 (재로드 없음 → 깜박임 없음)
+        hov = self._hovering or self._dragging
+        self._knob_h.visible = hov
+        self._knob_n.visible = not hov
 
     # ── 마우스 (핸들 위에서만 반응) ────────────────────────────────
 
@@ -175,7 +179,7 @@ class _ImageSlider:
         if button != 0:
             return
         self._dragging = False
-        x0 = self._knob.screen_position_x
+        x0 = self._knob_hit.screen_position_x
         self._hovering = (x0 <= x <= x0 + self._ks)
         self._refresh_knob_image()
 
