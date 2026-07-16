@@ -84,8 +84,11 @@ class _ImageSlider:
         self._update_visual()
 
     def _build(self):
+        # 레이어 순서(아래→위): 트랙/채움 · 클릭 캐처 · 핸들
+        # 핸들을 맨 위에 둬야 hover 이벤트를 핸들이 직접 받는다
+        # (캐처가 위에 있으면 핸들이 이벤트를 못 받아 hover가 안 먹었음).
         with ui.ZStack(width=self._w, height=self._ks):
-            # 트랙 + 채움 (세로 중앙)
+            # 1) 트랙 + 채움 (세로 중앙)
             with ui.VStack():
                 ui.Spacer()
                 with ui.ZStack(height=self._th):
@@ -97,23 +100,30 @@ class _ImageSlider:
                                             "border_radius": self._th / 2})
                         ui.Spacer()
                 ui.Spacer()
-            # 핸들 (Placer offset으로 이동)
-            self._knob_placer = ui.Placer()
-            with self._knob_placer:
-                self._knob = ui.Image(_ICON_OV_N,
-                                      width=self._ks, height=self._ks,
-                                      fill_policy=ui.FillPolicy.STRETCH)
-            # 입력 캐처 (맨 위 투명 — 트랙 어디를 눌러도 점프+드래그)
+            # 2) 트랙 전체 클릭/드래그 캐처 (투명, 핸들 아래)
             catcher = ui.Rectangle(style={"background_color": 0x00000000})
             catcher.set_mouse_pressed_fn(self._on_press)
             catcher.set_mouse_moved_fn(self._on_move)
             catcher.set_mouse_released_fn(self._on_release)
-            catcher.set_mouse_hovered_fn(self._on_hover)
             self._catcher = catcher
+            # 3) 핸들 (맨 위). 위치는 앞쪽 Spacer 폭으로 결정 → t=0에서
+            #    핸들 왼끝이 트랙 왼끝(0)과 정확히 일치, t=1에서 오른끝 일치.
+            #    좌우 Spacer는 이벤트를 통과시켜 아래 캐처가 트랙 클릭을 받는다.
+            with ui.HStack():
+                self._knob_lead = ui.Spacer(width=0)
+                self._knob = ui.Image(_ICON_OV_N,
+                                      width=self._ks, height=self._ks,
+                                      fill_policy=ui.FillPolicy.STRETCH)
+                self._knob.set_mouse_hovered_fn(self._on_knob_hover)
+                self._knob.set_mouse_pressed_fn(self._on_press)
+                self._knob.set_mouse_moved_fn(self._on_move)
+                self._knob.set_mouse_released_fn(self._on_release)
+                ui.Spacer()
 
     # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
 
     def _t_from_screen_x(self, x: float) -> float:
+        # 커서를 핸들 중앙에 두는 매핑
         local = x - self._catcher.screen_position_x - self._ks / 2
         span = self._w - self._ks
         return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
@@ -121,19 +131,8 @@ class _ImageSlider:
     def _update_visual(self):
         t = self.model.get_value_as_float()
         self._fill.width = ui.Pixel(t * self._w)
-        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
-
-    def _knob_x_range(self):
-        """현재 핸들이 화면상 차지하는 x범위 (px)."""
-        t = self.model.get_value_as_float()
-        x0 = self._catcher.screen_position_x + t * (self._w - self._ks)
-        return x0, x0 + self._ks
-
-    def _set_hovering(self, on: bool):
-        if on == self._hovering:
-            return
-        self._hovering = on
-        self._refresh_knob_image()
+        # 핸들 왼끝 = t*(w-ks): t=0 → 0(왼끝 덮음), t=1 → w-ks(오른끝 덮음)
+        self._knob_lead.width = ui.Pixel(t * (self._w - self._ks))
 
     def _refresh_knob_image(self):
         # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지
@@ -141,8 +140,11 @@ class _ImageSlider:
             else _ICON_OV_N
 
     # ── 마우스 ───────────────────────────────────────────────────
-    # 트랙 전체가 클릭/드래그 캐처지만, hover 이미지는 핸들 10x10 범위
-    # 위에 있을 때만 켠다 (드래그 중에는 위치와 무관하게 유지).
+
+    def _on_knob_hover(self, hovered: bool):
+        # 핸들(10x10) 위에 실제로 있을 때만 호출됨 → hover 판정은 여기서만
+        self._hovering = hovered
+        self._refresh_knob_image()
 
     def _on_press(self, x, y, button, modifier):
         if button != 0:
@@ -154,21 +156,15 @@ class _ImageSlider:
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
             self.model.set_value(self._t_from_screen_x(x))
-            return
-        x0, x1 = self._knob_x_range()
-        self._set_hovering(x0 <= x <= x1)
 
     def _on_release(self, x, y, button, modifier):
         if button != 0:
             return
         self._dragging = False
-        x0, x1 = self._knob_x_range()
-        self._set_hovering(x0 <= x <= x1)
+        # 손 뗀 지점이 핸들 밖이면 즉시 기본 이미지로
+        x0 = self._knob.screen_position_x
+        self._hovering = (x0 <= x <= x0 + self._ks)
         self._refresh_knob_image()
-
-    def _on_hover(self, hovered: bool):
-        if not hovered:
-            self._set_hovering(False)
 
 
 # ── 스타일시트 ──────────────────────────────────────────────────────────
