@@ -89,10 +89,12 @@ class _ImageSlider:
             with ui.VStack():
                 ui.Spacer()
                 with ui.ZStack(height=self._th):
-                    ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG})
+                    ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG,
+                                        "border_radius": self._th / 2})
                     with ui.HStack():
                         self._fill = ui.Rectangle(
-                            width=0, style={"background_color": _SLIDER_FILL_BG})
+                            width=0, style={"background_color": _SLIDER_FILL_BG,
+                                            "border_radius": self._th / 2})
                         ui.Spacer()
                 ui.Spacer()
             # 핸들 (Placer offset으로 이동)
