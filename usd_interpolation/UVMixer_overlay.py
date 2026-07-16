@@ -79,6 +79,7 @@ class _ImageSlider:
         self._w, self._th, self._ks = width, track_h, knob
         self._dragging = False
         self._hovering = False     # 마우스가 핸들(10x10) 위에 있는지
+        self._cur_icon = None      # 마지막으로 실제 적용한 아이콘 (중복 대입 방지)
         self.model = ui.SimpleFloatModel(0.0)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
@@ -91,6 +92,15 @@ class _ImageSlider:
         #  핸들이 안 움직이는 문제가 있었음 — Rectangle.width는 fill에서
         #  이미 검증된 방식이라 이걸로 통일한다).
         with ui.ZStack(width=self._w, height=self._ks):
+            # 드래그 안전망: 트랙 전체(112x10)에서 move/release만 받는다.
+            # press는 없음 — 드래그 '시작'은 반드시 핸들 위에서만 가능하지만,
+            # 일단 드래그가 시작되면 마우스가 10x10 핸들 밖으로 나가도
+            # (트랙 범위 안이면) release를 놓치지 않고 계속 추적한다.
+            # 맨 아래 레이어라 핸들 위에서는 핸들 쪽 핸들러가 우선한다.
+            safety = ui.Rectangle(style={"background_color": 0x00000000})
+            safety.set_mouse_moved_fn(self._on_move)
+            safety.set_mouse_released_fn(self._on_release)
+
             # 트랙 + 채움 (세로 중앙)
             with ui.VStack():
                 ui.Spacer()
@@ -137,9 +147,13 @@ class _ImageSlider:
         self._knob_lead.width = ui.Pixel(t * (self._w - self._ks))
 
     def _refresh_knob_image(self):
-        # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지
-        self._knob.source_url = _ICON_OV_H if (self._hovering or self._dragging) \
-            else _ICON_OV_N
+        # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지.
+        # 같은 값이어도 매번 source_url을 다시 대입하면 이미지가 재로드되며
+        # 깜박이므로, 실제로 바뀔 때만 대입한다.
+        icon = _ICON_OV_H if (self._hovering or self._dragging) else _ICON_OV_N
+        if icon != self._cur_icon:
+            self._cur_icon = icon
+            self._knob.source_url = icon
 
     # ── 마우스 (핸들 위에서만 반응) ────────────────────────────────
 
