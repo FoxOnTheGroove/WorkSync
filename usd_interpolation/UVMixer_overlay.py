@@ -64,7 +64,7 @@ def _vcenter(width, factory):
     return w
 
 
-_SLIDER_TRACK_BG   = 0xFF6A6A6A     # 트랙 (#6a6a6a)
+_SLIDER_TRACK_BG   = 0xFF8A8A8A     # 트랙 (밝은 회색 — 어두운 본문 대비 ↑, 캡슐 실루엣 강조. 원래 스펙은 #6a6a6a)
 _SLIDER_FILL_BG    = 0xFFF18D95     # 채움 (#958df1 → 0xAABBGGRR)
 
 
