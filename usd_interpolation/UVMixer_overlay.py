@@ -105,8 +105,7 @@ class _ImageSlider:
                                    "border_radius": self._th / 2})
                 ui.Spacer()
 
-            # 핸들: Placer.offset_x로 위치(런타임 이동은 raw 숫자로 대입 — ui.Pixel
-            # 로 감싸면 갱신이 안 됐음). n/h 이미지 미리 로드 후 visible 토글(깜박임 X).
+            # 핸들: Placer.offset_x로 위치. n/h 이미지 미리 로드 후 visible 토글(깜박임 X).
             self._knob_placer = ui.Placer(width=self._w, height=self._ks)
             with self._knob_placer:
                 with ui.ZStack(width=self._ks, height=self._ks):
@@ -125,11 +124,12 @@ class _ImageSlider:
                     self._hit.set_mouse_released_fn(self._on_release)
 
     def _update_visual(self):
-        # 위치/크기만 갱신 (rebuild 없음 → 깜박임 없음). raw 숫자로 대입.
+        # 위치/크기만 갱신 (rebuild 없음 → 깜박임 없음).
+        # .width / .offset_x 는 ui.Length 필요 (raw 숫자는 타입 에러).
         t = self.model.get_value_as_float()
         self._fill.visible = t > 0.0
-        self._fill.width = t * self._w
-        self._knob_placer.offset_x = t * (self._w - self._ks)
+        self._fill.width = ui.Pixel(t * self._w)
+        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
 
     def _set_knob_img(self):
         # hover 여부만 반영 (press/drag와 완전 별개)
