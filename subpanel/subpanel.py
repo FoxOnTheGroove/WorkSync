@@ -82,14 +82,43 @@ def _vcenter(width, factory):
 
 class ImageSlider:
 
-    def __init__(self, width=58, track_h=4, knob=10):
+    def __init__(self, width=58, track_h=4, knob=10, int_range=None):
+        # int_range=(min,max)면 정수 슬라이더(핸들이 정수 눈금에 스냅).
+        # None이면 0~1 연속 float.
         self._w, self._th, self._ks = width, track_h, knob
+        self._int_range = int_range
         self._dragging = False
         self._hovering = False
-        self.model = ui.SimpleFloatModel(0.0)
+        self.model = ui.SimpleFloatModel(0.0)          # 내부는 항상 0~1 (t)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
         self._update_visual()
+
+    # ── 값 API ───────────────────────────────────────────────────
+
+    def value(self):
+        """int_range면 정수, 아니면 0~1 float."""
+        if self._int_range:
+            lo, hi = self._int_range
+            return int(round(lo + self.model.get_value_as_float() * (hi - lo)))
+        return self.model.get_value_as_float()
+
+    def set_value(self, v):
+        if self._int_range:
+            lo, hi = self._int_range
+            v = (v - lo) / (hi - lo) if hi > lo else 0.0
+        self.model.set_value(max(0.0, min(1.0, v)))
+
+    def on_change(self, fn):
+        """값이 바뀔 때 fn(value) 호출 (value는 위 value()와 동일 규칙)."""
+        self.model.add_value_changed_fn(lambda m: fn(self.value()))
+
+    def _snap(self, t):
+        if not self._int_range:
+            return t
+        lo, hi = self._int_range
+        n = hi - lo
+        return round(t * n) / n if n > 0 else 0.0
 
     def _build(self):
         with ui.ZStack(width=self._w, height=self._ks):
@@ -153,7 +182,7 @@ class ImageSlider:
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
-            self.model.set_value(self._t_from_screen_x(x))
+            self.model.set_value(self._snap(self._t_from_screen_x(x)))
 
     def _on_release(self, x, y, button, modifier):
         if button == 0:
@@ -208,10 +237,13 @@ class SubPanel:
                 with self._body:
                     ui.Rectangle(name="body_bg")
                     with ui.VStack(spacing=0):
-                        self.iter_slider = self._slider_row("Iteration", "1", "20")
-                        self.thick_slider = self._slider_row("Thickness", "0.5", "1.0")
+                        # 위(Iteration)는 정수 슬라이더(1~20), 아래(Thickness)는 float
+                        self.iter_slider = self._slider_row(
+                            "Iteration", "1", "20", int_range=(1, 20))
+                        self.thick_slider = self._slider_row(
+                            "Thickness", "0.5", "1.0")
 
-    def _slider_row(self, label, left_idx, right_idx):
+    def _slider_row(self, label, left_idx, right_idx, int_range=None):
         """행2/행3 공통 레이아웃. 반환: 그 행의 ImageSlider."""
         with ui.HStack(height=_ROW_H):
             ui.Spacer(width=_MARGIN_L)
@@ -221,7 +253,8 @@ class SubPanel:
             ui.Label(left_idx, width=_LIDX_W, height=_ROW_H,
                      alignment=ui.Alignment.LEFT_CENTER,
                      style={"font_size": _INDEX_FONT})
-            slider = _vcenter(_SLIDER_W, lambda: ImageSlider(width=_SLIDER_W))
+            slider = _vcenter(_SLIDER_W, lambda: ImageSlider(
+                width=_SLIDER_W, int_range=int_range))
             ui.Label(right_idx, width=_RIDX_W, height=_ROW_H,
                      alignment=ui.Alignment.RIGHT_CENTER,
                      style={"font_size": _INDEX_FONT})
