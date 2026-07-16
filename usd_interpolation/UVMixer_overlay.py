@@ -71,6 +71,7 @@ _SLIDER_FILL_BG    = 0xFFF18D95     # 채움 (#958df1 → 0xAABBGGRR)
 class _ImageSlider:
     """커스텀 슬라이더 (t 0~1, 값 텍스트 없음).
     트랙 112x4(#6a6a6a) + 채움(#958df1) + 10x10 이미지 핸들(ov_n/ov_h).
+    트랙 클릭으로 점프하는 기능은 없음 — 핸들 자체만 누르고 드래그 가능.
     FloatSlider 대체품 — .model(SimpleFloatModel)을 노출해서
     기존 set_value / add_value_changed_fn 호출부가 그대로 동작한다."""
 
@@ -84,11 +85,13 @@ class _ImageSlider:
         self._update_visual()
 
     def _build(self):
-        # 레이어 순서(아래→위): 트랙/채움 · 클릭 캐처 · 핸들
-        # 핸들을 맨 위에 둬야 hover 이벤트를 핸들이 직접 받는다
-        # (캐처가 위에 있으면 핸들이 이벤트를 못 받아 hover가 안 먹었음).
+        # 트랙 클릭으로 점프하는 캐처는 없앴다 — 핸들(10x10) 자체만 누르고
+        # 드래그할 수 있다. 핸들 위치는 Rectangle.width 변경으로 잡는다
+        # (Placer.offset_x / Spacer.width는 런타임 변경 시 재배치가 안 걸려서
+        #  핸들이 안 움직이는 문제가 있었음 — Rectangle.width는 fill에서
+        #  이미 검증된 방식이라 이걸로 통일한다).
         with ui.ZStack(width=self._w, height=self._ks):
-            # 1) 트랙 + 채움 (세로 중앙)
+            # 트랙 + 채움 (세로 중앙)
             with ui.VStack():
                 ui.Spacer()
                 with ui.ZStack(height=self._th):
@@ -100,18 +103,12 @@ class _ImageSlider:
                                             "border_radius": self._th / 2})
                         ui.Spacer()
                 ui.Spacer()
-            # 2) 트랙 전체 클릭/드래그 캐처 (투명, 핸들 아래)
-            catcher = ui.Rectangle(style={"background_color": 0x00000000})
-            catcher.set_mouse_pressed_fn(self._on_press)
-            catcher.set_mouse_moved_fn(self._on_move)
-            catcher.set_mouse_released_fn(self._on_release)
-            self._catcher = catcher
-            # 3) 핸들 (맨 위). Placer.offset_x로 위치 결정 — Spacer.width는
-            #    런타임 변경 시 재배치가 안 걸려서(핸들이 안 움직임) 포기.
-            #    width/height를 명시해 좌표 원점을 고정(왼쪽=0)한다.
-            self._knob_placer = ui.Placer(
-                width=self._w, height=self._ks, draggable=False)
-            with self._knob_placer:
+            # 핸들: lead(왼쪽 여백, width로 위치 결정) + 이미지 + trailing.
+            # lead/trailing엔 마우스 핸들러를 안 달아서 클릭이 그대로 통과되고,
+            # 핸들 이미지에만 핸들러가 있어 핸들 위에서만 반응한다.
+            with ui.HStack():
+                self._knob_lead = ui.Rectangle(
+                    width=0, style={"background_color": 0x00000000})
                 self._knob = ui.Image(_ICON_OV_N,
                                       width=self._ks, height=self._ks,
                                       fill_policy=ui.FillPolicy.STRETCH)
@@ -119,12 +116,14 @@ class _ImageSlider:
                 self._knob.set_mouse_pressed_fn(self._on_press)
                 self._knob.set_mouse_moved_fn(self._on_move)
                 self._knob.set_mouse_released_fn(self._on_release)
+                ui.Spacer()
 
     # ── 값 ↔ 픽셀 ────────────────────────────────────────────────
 
     def _t_from_screen_x(self, x: float) -> float:
-        # 커서를 핸들 중앙에 두는 매핑
-        local = x - self._catcher.screen_position_x - self._ks / 2
+        # 커서를 핸들 중앙에 두는 매핑. lead의 screen_position_x는 lead의
+        # 폭과 무관하게 항상 트랙 왼쪽 끝(0)에 고정된다.
+        local = x - self._knob_lead.screen_position_x - self._ks / 2
         span = self._w - self._ks
         return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
 
@@ -135,17 +134,16 @@ class _ImageSlider:
         self._fill.visible = t > 0.0
         self._fill.width = ui.Pixel(t * self._w)
         # 핸들 왼끝 = t*(w-ks): t=0 → 0(왼끝 덮음), t=1 → w-ks(오른끝 덮음)
-        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
+        self._knob_lead.width = ui.Pixel(t * (self._w - self._ks))
 
     def _refresh_knob_image(self):
         # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지
         self._knob.source_url = _ICON_OV_H if (self._hovering or self._dragging) \
             else _ICON_OV_N
 
-    # ── 마우스 ───────────────────────────────────────────────────
+    # ── 마우스 (핸들 위에서만 반응) ────────────────────────────────
 
     def _on_knob_hover(self, hovered: bool):
-        # 핸들(10x10) 위에 실제로 있을 때만 호출됨 → hover 판정은 여기서만
         self._hovering = hovered
         self._refresh_knob_image()
 
@@ -153,7 +151,6 @@ class _ImageSlider:
         if button != 0:
             return
         self._dragging = True
-        self.model.set_value(self._t_from_screen_x(x))
         self._refresh_knob_image()
 
     def _on_move(self, x, y, modifier, pressed):
@@ -164,7 +161,6 @@ class _ImageSlider:
         if button != 0:
             return
         self._dragging = False
-        # 손 뗀 지점이 핸들 밖이면 즉시 기본 이미지로
         x0 = self._knob.screen_position_x
         self._hovering = (x0 <= x <= x0 + self._ks)
         self._refresh_knob_image()
