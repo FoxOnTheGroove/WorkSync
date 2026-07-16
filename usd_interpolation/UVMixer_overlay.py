@@ -77,6 +77,7 @@ class _ImageSlider:
     def __init__(self, width=112, track_h=4, knob=10):
         self._w, self._th, self._ks = width, track_h, knob
         self._dragging = False
+        self._hovering = False     # 마우스가 핸들(10x10) 위에 있는지
         self.model = ui.SimpleFloatModel(0.0)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
@@ -120,25 +121,52 @@ class _ImageSlider:
         self._fill.width = ui.Pixel(t * self._w)
         self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
 
+    def _knob_x_range(self):
+        """현재 핸들이 화면상 차지하는 x범위 (px)."""
+        t = self.model.get_value_as_float()
+        x0 = self._catcher.screen_position_x + t * (self._w - self._ks)
+        return x0, x0 + self._ks
+
+    def _set_hovering(self, on: bool):
+        if on == self._hovering:
+            return
+        self._hovering = on
+        self._refresh_knob_image()
+
+    def _refresh_knob_image(self):
+        # 드래그 중이거나 핸들 위에 있을 때만 hover 이미지
+        self._knob.source_url = _ICON_OV_H if (self._hovering or self._dragging) \
+            else _ICON_OV_N
+
     # ── 마우스 ───────────────────────────────────────────────────
+    # 트랙 전체가 클릭/드래그 캐처지만, hover 이미지는 핸들 10x10 범위
+    # 위에 있을 때만 켠다 (드래그 중에는 위치와 무관하게 유지).
 
     def _on_press(self, x, y, button, modifier):
         if button != 0:
             return
         self._dragging = True
         self.model.set_value(self._t_from_screen_x(x))
+        self._refresh_knob_image()
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
             self.model.set_value(self._t_from_screen_x(x))
+            return
+        x0, x1 = self._knob_x_range()
+        self._set_hovering(x0 <= x <= x1)
 
     def _on_release(self, x, y, button, modifier):
-        if button == 0:
-            self._dragging = False
+        if button != 0:
+            return
+        self._dragging = False
+        x0, x1 = self._knob_x_range()
+        self._set_hovering(x0 <= x <= x1)
+        self._refresh_knob_image()
 
     def _on_hover(self, hovered: bool):
-        self._knob.source_url = _ICON_OV_H if (hovered or self._dragging) \
-            else _ICON_OV_N
+        if not hovered:
+            self._set_hovering(False)
 
 
 # ── 스타일시트 ──────────────────────────────────────────────────────────
