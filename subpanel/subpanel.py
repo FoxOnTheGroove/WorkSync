@@ -17,6 +17,11 @@ _ICON_ARROW   = os.path.join(_ICON_DIR, "arrow.png")
 _ICON_ARROW_R = os.path.join(_ICON_DIR, "arrow_r.png")
 _ICON_OV_N    = os.path.join(_ICON_DIR, "ov_n.png")
 _ICON_OV_H    = os.path.join(_ICON_DIR, "ov_h.png")
+_ICON_TOOLTIP = os.path.join(_ICON_DIR, "tooltip.png")   # press 시 값 말풍선
+
+_TIP_W = 30           # 말풍선 폭 (tooltip.png 크기에 맞게 조정)
+_TIP_H = 20           # 말풍선 높이
+_TIP_FONT = 10
 
 # ── 패널 치수 (전체 180x80) ─────────────────────────────────────────────
 PANEL_W = 180
@@ -157,11 +162,31 @@ class ImageSlider:
                     self._hit.set_mouse_moved_fn(self._on_move)
                     self._hit.set_mouse_released_fn(self._on_release)
 
+            # 값 말풍선 (press 중에만 표시, 노브 위쪽에 따라다님). 맨 위 레이어.
+            self._tip_placer = ui.Placer(width=self._w, height=self._ks)
+            with self._tip_placer:
+                self._tip = ui.ZStack(width=_TIP_W, height=_TIP_H, visible=False)
+                with self._tip:
+                    ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
+                             fill_policy=ui.FillPolicy.STRETCH)
+                    self._tip_label = ui.Label(
+                        "", alignment=ui.Alignment.CENTER,
+                        style={"font_size": _TIP_FONT, "color": _WHITE})
+
+    def _value_text(self):
+        v = self.value()
+        return str(v) if self._int_range else f"{v:.2f}"
+
     def _update_visual(self):
         t = self.model.get_value_as_float()
         self._fill.visible = t > 0.0
         self._fill.width = ui.Pixel(t * self._w)
-        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
+        knob_off = t * (self._w - self._ks)
+        self._knob_placer.offset_x = ui.Pixel(knob_off)
+        # 말풍선: 노브 중앙 위쪽에 정렬 + 현재 값 표시
+        self._tip_placer.offset_x = ui.Pixel(knob_off + self._ks / 2 - _TIP_W / 2)
+        self._tip_placer.offset_y = ui.Pixel(-(_TIP_H + 2))
+        self._tip_label.text = self._value_text()
 
     def _set_knob_img(self):
         self._knob_h.visible = self._hovering
@@ -179,6 +204,8 @@ class ImageSlider:
     def _on_press(self, x, y, button, modifier):
         if button == 0:
             self._dragging = True
+            self._tip_label.text = self._value_text()   # 즉시 현재 값 반영
+            self._tip.visible = True
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
@@ -187,6 +214,7 @@ class ImageSlider:
     def _on_release(self, x, y, button, modifier):
         if button == 0:
             self._dragging = False
+            self._tip.visible = False
 
 
 # ──────────────────────────────────────────────────────────────────────
