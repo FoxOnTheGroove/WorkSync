@@ -19,6 +19,7 @@ except ImportError:
 #   usd_interpolation/data/icons/checkbox_n.png  (체크박스 기본)
 #   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover — 현재 미사용, n/s만 토글)
 #   usd_interpolation/data/icons/checkbox_s.png  (체크박스 선택됨)
+#   usd_interpolation/data/icons/tooltip.png     (슬라이더 press 시 값 말풍선)
 _ICON_DIR       = os.path.join(os.path.dirname(__file__), "data", "icons")
 _ICON_ARROW     = os.path.join(_ICON_DIR, "arrow.png")
 _ICON_ARROW_R   = os.path.join(_ICON_DIR, "arrow_r.png")
@@ -29,6 +30,23 @@ _ICON_CHECKBOX_H = os.path.join(_ICON_DIR, "checkbox_h.png")
 _ICON_CHECKBOX_S = os.path.join(_ICON_DIR, "checkbox_s.png")
 _ICON_OV_N       = os.path.join(_ICON_DIR, "ov_n.png")      # 슬라이더 핸들 기본
 _ICON_OV_H       = os.path.join(_ICON_DIR, "ov_h.png")      # 슬라이더 핸들 hover
+_ICON_TOOLTIP    = os.path.join(_ICON_DIR, "tooltip.png")
+
+_TIP_W = 30           # 말풍선 폭 (tooltip.png 크기에 맞게 조정)
+_TIP_H = 20           # 말풍선 높이
+_TIP_FONT = 10
+_TIP_LABEL_OFFSET_Y = -2   # 라벨 세로 미세조정(px). 음수=위로, 양수=아래로
+
+# 툴팁은 패널 밖(윗선)으로 넘어가야 해서 별도 최상위 윈도우로 띄운다.
+_TIP_FLAGS = (
+    ui.WINDOW_FLAGS_NO_TITLE_BAR
+    | ui.WINDOW_FLAGS_NO_BACKGROUND
+    | ui.WINDOW_FLAGS_NO_RESIZE
+    | ui.WINDOW_FLAGS_NO_SCROLLBAR
+    | ui.WINDOW_FLAGS_NO_COLLAPSE
+    | ui.WINDOW_FLAGS_NO_MOVE
+    | ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING
+)
 
 # ── 패널 치수 명세 (전체 180x80) ────────────────────────────────────────
 OVERLAY_W = 180
@@ -79,10 +97,17 @@ class _ImageSlider:
         self._w, self._th, self._ks = width, track_h, knob
         self._dragging = False
         self._hovering = False     # 마우스가 핸들(10x10) 위에 있는지 (press와 무관)
+        self._tip_win = None       # 값 말풍선 (별도 윈도우, 최초 press 때 생성)
+        self._tip_label = None
         self.model = ui.SimpleFloatModel(0.0)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
         self._update_visual()
+
+    def destroy(self):
+        if self._tip_win:
+            self._tip_win.destroy()
+            self._tip_win = None
 
     def _build(self):
         with ui.ZStack(width=self._w, height=self._ks):
@@ -141,6 +166,34 @@ class _ImageSlider:
         span = self._w - self._ks
         return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
 
+    # ── 값 말풍선 (별도 최상위 윈도우, press 중에만 표시) ───────────────
+
+    def _ensure_tip_win(self):
+        if self._tip_win is not None:
+            return
+        self._tip_win = ui.Window(f"__slider_tip_{id(self)}__",
+                                  width=_TIP_W, height=_TIP_H, flags=_TIP_FLAGS)
+        self._tip_win.padding_x = 0
+        self._tip_win.padding_y = 0
+        self._tip_win.visible = False
+        with self._tip_win.frame:
+            with ui.ZStack():
+                ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
+                         fill_policy=ui.FillPolicy.STRETCH)
+                with ui.Placer(offset_x=0, offset_y=ui.Pixel(_TIP_LABEL_OFFSET_Y)):
+                    self._tip_label = ui.Label(
+                        "", width=_TIP_W, height=_TIP_H,
+                        alignment=ui.Alignment.CENTER,
+                        style={"font_size": _TIP_FONT, "color": _WHITE})
+
+    def _position_tip(self):
+        kx = self._catcher.screen_position_x + \
+            self.model.get_value_as_float() * (self._w - self._ks)
+        ky = self._catcher.screen_position_y
+        self._tip_win.position_x = kx + self._ks / 2 - _TIP_W / 2
+        self._tip_win.position_y = ky - _TIP_H - 2
+        self._tip_label.text = f"{self.model.get_value_as_float():.2f}"
+
     # ── hover: 오직 "마우스가 핸들 위" 여부. press와 무관 ──────────────
 
     def _on_hover(self, hovered: bool):
@@ -152,14 +205,20 @@ class _ImageSlider:
     def _on_press(self, x, y, button, modifier):
         if button == 0:
             self._dragging = True
+            self._ensure_tip_win()
+            self._position_tip()
+            self._tip_win.visible = True
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
             self.model.set_value(self._t_from_screen_x(x))
+            self._position_tip()
 
     def _on_release(self, x, y, button, modifier):
         if button == 0:
             self._dragging = False
+            if self._tip_win:
+                self._tip_win.visible = False
 
 
 # ── 스타일시트 ──────────────────────────────────────────────────────────
@@ -563,6 +622,9 @@ class ViewportOverlayPanel:
         if mixer:
             mixer.own_player.unsubscribe_tick(self._on_own_tick)
             mixer.own_player.unsubscribe_stopped(self._on_own_stopped)
+        slider = self._widgets.get('slider')
+        if slider:
+            slider.destroy()          # 슬라이더 툴팁 윈도우 정리
         if self._window:
             self._window.destroy()
             self._window = None
