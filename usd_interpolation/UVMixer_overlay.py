@@ -364,118 +364,128 @@ class ViewportOverlayPanel:
                                          style={"font_size": 10})
                                 ui.Spacer()
 
-                # ── 본문 (행2·구분선·행4). 최소화 시 통째로 숨김 ─────────
-                body = ui.ZStack()
-                with body:
-                    ui.Rectangle(name="body_bg")
-                    with ui.VStack(spacing=0):
+                # ── 본문 (행2·구분선·행4). Frame + rebuild로 관리한다 —
+                # .visible=False는 레이아웃 공간을 접어주지 않아(숨겨도 자리를
+                # 계속 차지), 최소화해도 창이 안 줄어들고 우측/아래로 투명하게
+                # 튀어나와 보이는 원인이었다. 최소화 시엔 build_fn이 아무것도
+                # 그리지 않아 공간 자체가 사라지고, 복원 시 새로 지어 붙인다.
+                self._body_frame = ui.Frame()
+                self._body_frame.set_build_fn(self._build_body)
 
-                        # 행2 (y=16, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
-                        with ui.HStack(height=_ROW2_H):
-                            ui.Spacer(width=12)
-                            # 재생/정지 아이콘 미리 로드 + visible 토글(깜박임 없음, 노브와 동일
-                            # 패턴). hover는 반투명 오버레이, press는 흰 아이콘에 빨강 tint.
-                            def _build_play():
-                                with ui.ZStack(width=16, height=16):
-                                    self._play_img = ui.Image(
-                                        _ICON_PLAY, width=16, height=16,
-                                        fill_policy=ui.FillPolicy.STRETCH,
-                                        style={"color": _WHITE})
-                                    self._stop_img = ui.Image(
-                                        _ICON_STOP, width=16, height=16,
-                                        fill_policy=ui.FillPolicy.STRETCH,
-                                        style={"color": _WHITE}, visible=False)
-                                    self._play_hover_ov = ui.Rectangle(
-                                        style={"background_color": _HOVER_OVERLAY},
-                                        visible=False)
-                                    hit = ui.Rectangle(
-                                        style={"background_color": 0x00000000})
-                                    hit.set_mouse_hovered_fn(self._on_play_hover)
-                                    hit.set_mouse_pressed_fn(self._on_play_press)
-                                    hit.set_mouse_released_fn(self._on_play_release)
-                                    self._play_hit = hit
-                                return hit
-                            btn_play = _vcenter(16, _build_play)
-                            ui.Spacer(width=5)
-                            slider = _vcenter(112, lambda: _ImageSlider(
-                                width=112, track_h=4, knob=10))
-                            slider.model.add_value_changed_fn(self._on_slider)
-                            ui.Spacer(width=3)
-                            # play와 동일 구성: hover=반투명 흰 오버레이, press=빨강.
-                            # 이미지가 아니라 텍스트라 tint 대신 라벨 색을 바꾼다.
-                            def _build_spd():
-                                with ui.ZStack(width=24, height=24):
-                                    self._spd_label = ui.Label(
-                                        _speed_label(self._speed),
-                                        alignment=ui.Alignment.CENTER,
-                                        style={"font_size": 12, "color": _WHITE})
-                                    self._spd_hover_ov = ui.Rectangle(
-                                        style={"background_color": _HOVER_OVERLAY},
-                                        visible=False)
-                                    hit = ui.Rectangle(
-                                        style={"background_color": 0x00000000})
-                                    hit.set_mouse_hovered_fn(self._on_spd_hover)
-                                    hit.set_mouse_pressed_fn(self._on_spd_press)
-                                    hit.set_mouse_released_fn(self._on_spd_release)
-                                    self._spd_hit = hit
-                                return hit
-                            spd_btn = _vcenter(24, _build_spd)
-                            ui.Spacer(width=8)
-
-                        # 구분선 (y=46, h=1): 8 | 흰선 164x1 | 8
-                        with ui.HStack(height=_DIV_H):
-                            ui.Spacer(width=8)
-                            ui.Rectangle(name="separator", width=164, height=1)
-                            ui.Spacer(width=8)
-
-                        # 행4 (y=47, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
-                        # 체크박스는 n(기본)/h(hover)/s(체크됨 또는 press) 세 이미지를
-                        # 미리 로드해 visible만 토글한다(깜박임 없음, 노브와 동일 패턴).
-                        with ui.HStack(height=_ROW4_H):
-                            ui.Spacer(width=12)
-                            def _build_rev():
-                                n, h, s, hit = _build_tri_icon(
-                                    14, 14, _ICON_CHECKBOX_N,
-                                    _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
-                                self._rev_imgs = (n, h, s)
-                                hit.set_mouse_hovered_fn(self._on_rev_hover)
-                                hit.set_mouse_pressed_fn(self._on_rev_press)
-                                hit.set_mouse_released_fn(self._on_rev_release)
-                                self._rev_hit = hit
-                                return hit
-                            rev_cb = _vcenter(14, _build_rev)
-                            ui.Spacer(width=8)
-                            ui.Label("Reverse", height=_ROW4_H,
-                                     alignment=ui.Alignment.LEFT_CENTER,
-                                     style={"font_size": 12})
-                            ui.Spacer(width=20)
-                            def _build_loop():
-                                n, h, s, hit = _build_tri_icon(
-                                    14, 14, _ICON_CHECKBOX_N,
-                                    _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
-                                self._loop_imgs = (n, h, s)
-                                hit.set_mouse_hovered_fn(self._on_loop_hover)
-                                hit.set_mouse_pressed_fn(self._on_loop_press)
-                                hit.set_mouse_released_fn(self._on_loop_release)
-                                self._loop_hit = hit
-                                return hit
-                            loop_cb = _vcenter(14, _build_loop)
-                            ui.Spacer(width=8)
-                            ui.Label("Loop", height=_ROW4_H,
-                                     alignment=ui.Alignment.LEFT_CENTER,
-                                     style={"font_size": 12})
-                            ui.Spacer()
-
-        self._body = body
         self._title_content = title_content
-        self._widgets = {
+        self._widgets = {'btn_min': btn_min}
+        self._body_frame.rebuild()
+
+    def _build_body(self) -> None:
+        if self._minimized:
+            return      # 아무것도 안 그림 → Frame이 공간을 차지하지 않는다
+        with ui.ZStack():
+            ui.Rectangle(name="body_bg")
+            with ui.VStack(spacing=0):
+
+                # 행2 (y=16, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
+                with ui.HStack(height=_ROW2_H):
+                    ui.Spacer(width=12)
+                    # 재생/정지 아이콘 미리 로드 + visible 토글(깜박임 없음, 노브와 동일
+                    # 패턴). hover는 반투명 오버레이, press는 흰 아이콘에 빨강 tint.
+                    def _build_play():
+                        with ui.ZStack(width=16, height=16):
+                            self._play_img = ui.Image(
+                                _ICON_PLAY, width=16, height=16,
+                                fill_policy=ui.FillPolicy.STRETCH,
+                                style={"color": _WHITE})
+                            self._stop_img = ui.Image(
+                                _ICON_STOP, width=16, height=16,
+                                fill_policy=ui.FillPolicy.STRETCH,
+                                style={"color": _WHITE}, visible=False)
+                            self._play_hover_ov = ui.Rectangle(
+                                style={"background_color": _HOVER_OVERLAY},
+                                visible=False)
+                            hit = ui.Rectangle(
+                                style={"background_color": 0x00000000})
+                            hit.set_mouse_hovered_fn(self._on_play_hover)
+                            hit.set_mouse_pressed_fn(self._on_play_press)
+                            hit.set_mouse_released_fn(self._on_play_release)
+                            self._play_hit = hit
+                        return hit
+                    btn_play = _vcenter(16, _build_play)
+                    ui.Spacer(width=5)
+                    slider = _vcenter(112, lambda: _ImageSlider(
+                        width=112, track_h=4, knob=10))
+                    slider.model.add_value_changed_fn(self._on_slider)
+                    ui.Spacer(width=3)
+                    # play와 동일 구성: hover=반투명 흰 오버레이, press=빨강.
+                    # 이미지가 아니라 텍스트라 tint 대신 라벨 색을 바꾼다.
+                    def _build_spd():
+                        with ui.ZStack(width=24, height=24):
+                            self._spd_label = ui.Label(
+                                _speed_label(self._speed),
+                                alignment=ui.Alignment.CENTER,
+                                style={"font_size": 12, "color": _WHITE})
+                            self._spd_hover_ov = ui.Rectangle(
+                                style={"background_color": _HOVER_OVERLAY},
+                                visible=False)
+                            hit = ui.Rectangle(
+                                style={"background_color": 0x00000000})
+                            hit.set_mouse_hovered_fn(self._on_spd_hover)
+                            hit.set_mouse_pressed_fn(self._on_spd_press)
+                            hit.set_mouse_released_fn(self._on_spd_release)
+                            self._spd_hit = hit
+                        return hit
+                    spd_btn = _vcenter(24, _build_spd)
+                    ui.Spacer(width=8)
+
+                # 구분선 (y=46, h=1): 8 | 흰선 164x1 | 8
+                with ui.HStack(height=_DIV_H):
+                    ui.Spacer(width=8)
+                    ui.Rectangle(name="separator", width=164, height=1)
+                    ui.Spacer(width=8)
+
+                # 행4 (y=47, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
+                # 체크박스는 n(기본)/h(hover)/s(체크됨 또는 press) 세 이미지를
+                # 미리 로드해 visible만 토글한다(깜박임 없음, 노브와 동일 패턴).
+                with ui.HStack(height=_ROW4_H):
+                    ui.Spacer(width=12)
+                    def _build_rev():
+                        n, h, s, hit = _build_tri_icon(
+                            14, 14, _ICON_CHECKBOX_N,
+                            _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
+                        self._rev_imgs = (n, h, s)
+                        hit.set_mouse_hovered_fn(self._on_rev_hover)
+                        hit.set_mouse_pressed_fn(self._on_rev_press)
+                        hit.set_mouse_released_fn(self._on_rev_release)
+                        self._rev_hit = hit
+                        return hit
+                    rev_cb = _vcenter(14, _build_rev)
+                    ui.Spacer(width=8)
+                    ui.Label("Reverse", height=_ROW4_H,
+                             alignment=ui.Alignment.LEFT_CENTER,
+                             style={"font_size": 12})
+                    ui.Spacer(width=20)
+                    def _build_loop():
+                        n, h, s, hit = _build_tri_icon(
+                            14, 14, _ICON_CHECKBOX_N,
+                            _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
+                        self._loop_imgs = (n, h, s)
+                        hit.set_mouse_hovered_fn(self._on_loop_hover)
+                        hit.set_mouse_pressed_fn(self._on_loop_press)
+                        hit.set_mouse_released_fn(self._on_loop_release)
+                        self._loop_hit = hit
+                        return hit
+                    loop_cb = _vcenter(14, _build_loop)
+                    ui.Spacer(width=8)
+                    ui.Label("Loop", height=_ROW4_H,
+                             alignment=ui.Alignment.LEFT_CENTER,
+                             style={"font_size": 12})
+                    ui.Spacer()
+
+        self._widgets.update({
             'btn_play': btn_play,
-            'btn_min':  btn_min,
             'rev_cb':   rev_cb,
             'loop_cb':  loop_cb,
             'slider':   slider,
             'spd_btn':  spd_btn,
-        }
+        })
 
     def _own_player(self):
         mixer = UVMixerService.get_instance(self._key)
@@ -486,6 +496,8 @@ class ViewportOverlayPanel:
     def _on_tick(self, t: float, correction: bool) -> None:
         if not UVMixerService.is_synced(self._tab_id):
             return
+        if self._minimized:        # 본문이 빌드 안 된 상태 — 위젯이 없다
+            return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
         self._in_tick = False
@@ -493,12 +505,16 @@ class ViewportOverlayPanel:
     def _on_own_tick(self, t: float, correction: bool) -> None:
         if UVMixerService.is_synced(self._tab_id):
             return
+        if self._minimized:
+            return
         self._in_tick = True
         self._widgets['slider'].model.set_value(t)
         self._in_tick = False
 
     def _set_play_icon(self, playing: bool) -> None:
         # 재생/정지 어느 아이콘을 보여줄지만 결정 (visible 토글, 깜박임 없음)
+        if self._minimized:        # 본문이 빌드 안 된 상태 — 위젯이 없다
+            return
         self._stop_img.visible = playing
         self._play_img.visible = not playing
 
@@ -611,10 +627,14 @@ class ViewportOverlayPanel:
         n.visible = not (show_s or show_h)
 
     def _refresh_rev(self) -> None:
+        if self._minimized:        # 본문이 빌드 안 된 상태 — 위젯이 없다
+            return
         self._paint_tri(self._rev_imgs, self._reverse,
                         self._rev_hovering, self._rev_pressing)
 
     def _refresh_loop(self) -> None:
+        if self._minimized:
+            return
         self._paint_tri(self._loop_imgs, self._loop,
                         self._loop_hovering, self._loop_pressing)
 
@@ -692,7 +712,8 @@ class ViewportOverlayPanel:
 
     def _apply_speed(self, spd: float, broadcast: bool = True) -> None:
         self._speed = spd
-        self._spd_label.text = _speed_label(spd)
+        if not self._minimized:    # 본문이 빌드 안 된 상태면 라벨 위젯이 없다
+            self._spd_label.text = _speed_label(spd)
         if not broadcast:
             return
         if UVMixerService.is_synced(self._tab_id):
@@ -719,7 +740,9 @@ class ViewportOverlayPanel:
         self._loop = p.loop
         self._refresh_loop()
         self._apply_speed(p.speed, broadcast=False)
-        self._widgets['slider'].model.set_value(p.t)
+        self._set_play_icon(p.is_playing())
+        if not self._minimized:    # 본문이 빌드 안 된 상태면 슬라이더 위젯이 없다
+            self._widgets['slider'].model.set_value(p.t)
         self._in_sync = False
         self._in_tick = False
 
@@ -748,7 +771,12 @@ class ViewportOverlayPanel:
     def _on_toggle_minimize(self) -> None:
         self._minimized = not self._minimized
         self._title_content.visible = not self._minimized
-        self._body.visible = not self._minimized
+        # .visible=False는 레이아웃 공간을 접어주지 않아 body가 계속 자리를
+        # 차지하는 문제가 있었다 — rebuild로 아예 다시 짓거나(펼침) 비워서
+        # (최소화) 공간 자체를 없앤다.
+        self._body_frame.rebuild()
+        if not self._minimized:
+            self.refresh_from_player()   # 새로 지어진 위젯에 현재 상태 반영
         self._widgets['btn_min'].style = {
             "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
             "fill_policy": ui.FillPolicy.STRETCH,
