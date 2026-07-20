@@ -308,6 +308,8 @@ class ViewportOverlayPanel:
         # 재생/체크박스 hover·press 상태 (default/hover/press 3단 표현용)
         self._play_hovering = False
         self._play_pressing = False
+        self._spd_hovering = False
+        self._spd_pressing = False
         self._rev_hovering = False
         self._rev_pressing = False
         self._loop_hovering = False
@@ -399,11 +401,25 @@ class ViewportOverlayPanel:
                                 width=112, track_h=4, knob=10))
                             slider.model.add_value_changed_fn(self._on_slider)
                             ui.Spacer(width=3)
-                            spd_btn = _vcenter(24, lambda: ui.Button(
-                                _speed_label(self._speed), width=24, height=24,
-                                alignment=ui.Alignment.CENTER,
-                                clicked_fn=self._on_speed_cycle,
-                                style={"font_size": 12}))
+                            # play와 동일 구성: hover=반투명 흰 오버레이, press=빨강.
+                            # 이미지가 아니라 텍스트라 tint 대신 라벨 색을 바꾼다.
+                            def _build_spd():
+                                with ui.ZStack(width=24, height=24):
+                                    self._spd_label = ui.Label(
+                                        _speed_label(self._speed),
+                                        alignment=ui.Alignment.CENTER,
+                                        style={"font_size": 12, "color": _WHITE})
+                                    self._spd_hover_ov = ui.Rectangle(
+                                        style={"background_color": _HOVER_OVERLAY},
+                                        visible=False)
+                                    hit = ui.Rectangle(
+                                        style={"background_color": 0x00000000})
+                                    hit.set_mouse_hovered_fn(self._on_spd_hover)
+                                    hit.set_mouse_pressed_fn(self._on_spd_press)
+                                    hit.set_mouse_released_fn(self._on_spd_release)
+                                    self._spd_hit = hit
+                                return hit
+                            spd_btn = _vcenter(24, _build_spd)
                             ui.Spacer(width=8)
 
                         # 구분선 (y=46, h=1): 8 | 흰선 164x1 | 8
@@ -524,6 +540,32 @@ class ViewportOverlayPanel:
         self._play_hover_ov.visible = inside
         if was_pressing and inside:
             self._on_play()
+
+    # ── 배속 버튼 hover/press (play와 동일 색상: hover=반투명 흰색, press=빨강) ──
+
+    def _on_spd_hover(self, hovered: bool) -> None:
+        self._spd_hovering = hovered
+        if not self._spd_pressing:
+            self._spd_hover_ov.visible = hovered
+
+    def _on_spd_press(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        self._spd_pressing = True
+        self._spd_hover_ov.visible = False
+        self._spd_label.style = {"font_size": 12, "color": _PRESS_TINT}
+
+    def _on_spd_release(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        was_pressing = self._spd_pressing
+        self._spd_pressing = False
+        self._spd_label.style = {"font_size": 12, "color": _WHITE}
+        inside = _point_in_widget(self._spd_hit, x, y, 24, 24)
+        self._spd_hovering = inside
+        self._spd_hover_ov.visible = inside
+        if was_pressing and inside:
+            self._on_speed_cycle()
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
@@ -650,7 +692,7 @@ class ViewportOverlayPanel:
 
     def _apply_speed(self, spd: float, broadcast: bool = True) -> None:
         self._speed = spd
-        self._widgets['spd_btn'].text = _speed_label(spd)
+        self._spd_label.text = _speed_label(spd)
         if not broadcast:
             return
         if UVMixerService.is_synced(self._tab_id):
