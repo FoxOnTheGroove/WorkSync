@@ -91,11 +91,15 @@ def _vcenter(width, factory):
 
 class ImageSlider:
 
-    def __init__(self, width=58, track_h=4, knob=10, int_range=None, init_t=0.0):
+    def __init__(self, width=58, track_h=4, knob=10, int_range=None,
+                 float_range=None, init_t=0.0):
         # int_range=(min,max)면 정수 슬라이더(핸들이 정수 눈금에 스냅).
-        # None이면 0~1 연속 float. init_t: 초기 위치(0~1, 0=좌끝 1=우끝).
+        # float_range=(min,max)면 그 구간을 스냅 없이 연속으로 매핑(예: 0.5~1.0).
+        # 둘 다 None이면 0~1 연속 float. int_range가 우선.
+        # init_t: 초기 위치(0~1, 0=좌끝 1=우끝) — range 매핑 후 값이 아니라 위치 기준.
         self._w, self._th, self._ks = width, track_h, knob
         self._int_range = int_range
+        self._float_range = float_range
         self._dragging = False
         self._hovering = False
         self._tip_win = None       # 값 말풍선 (별도 윈도우, 최초 press 때 생성)
@@ -109,15 +113,22 @@ class ImageSlider:
     # ── 값 API ───────────────────────────────────────────────────
 
     def value(self):
-        """int_range면 정수, 아니면 0~1 float."""
+        """int_range면 정수, float_range면 그 구간의 float, 둘 다 없으면 0~1 float."""
+        t = self.model.get_value_as_float()
         if self._int_range:
             lo, hi = self._int_range
-            return int(round(lo + self.model.get_value_as_float() * (hi - lo)))
-        return self.model.get_value_as_float()
+            return int(round(lo + t * (hi - lo)))
+        if self._float_range:
+            lo, hi = self._float_range
+            return lo + t * (hi - lo)
+        return t
 
     def set_value(self, v):
         if self._int_range:
             lo, hi = self._int_range
+            v = (v - lo) / (hi - lo) if hi > lo else 0.0
+        elif self._float_range:
+            lo, hi = self._float_range
             v = (v - lo) / (hi - lo) if hi > lo else 0.0
         self.model.set_value(max(0.0, min(1.0, v)))
 
@@ -306,13 +317,15 @@ class SubPanel:
                     ui.Rectangle(name="body_bg")
                     with ui.VStack(spacing=0):
                         # 위(Iteration)는 정수 슬라이더(1~20, 좌끝 기본).
-                        # 아래(Thickness)는 float, 기본값 우측 끝(1.0).
+                        # 아래(Thickness)는 float 0.5~1.0, 기본값 우측 끝(1.0).
                         self.iter_slider = self._slider_row(
                             "Iteration", "1", "20", int_range=(1, 20))
                         self.thick_slider = self._slider_row(
-                            "Thickness", "0.5", "1.0", init_t=1.0)
+                            "Thickness", "0.5", "1.0",
+                            float_range=(0.5, 1.0), init_t=1.0)
 
-    def _slider_row(self, label, left_idx, right_idx, int_range=None, init_t=0.0):
+    def _slider_row(self, label, left_idx, right_idx,
+                    int_range=None, float_range=None, init_t=0.0):
         """행2/행3 공통 레이아웃. 반환: 그 행의 ImageSlider."""
         with ui.HStack(height=_ROW_H):
             ui.Spacer(width=_MARGIN_L)
@@ -323,7 +336,8 @@ class SubPanel:
                      alignment=ui.Alignment.LEFT_CENTER,
                      style={"font_size": _INDEX_FONT})
             slider = _vcenter(_SLIDER_W, lambda: ImageSlider(
-                width=_SLIDER_W, int_range=int_range, init_t=init_t))
+                width=_SLIDER_W, int_range=int_range,
+                float_range=float_range, init_t=init_t))
             ui.Label(right_idx, width=_RIDX_W, height=_ROW_H,
                      alignment=ui.Alignment.RIGHT_CENTER,
                      style={"font_size": _INDEX_FONT})
