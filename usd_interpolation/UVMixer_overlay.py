@@ -329,6 +329,32 @@ class ViewportOverlayPanel:
         self._widgets: dict = {}
         self._build()
 
+        # 최소화 상태 창(16x16, 복원 버튼만). 본 창과 visible을 순환시킨다 —
+        # 런타임 window 리사이즈가 안 먹어서, 리사이즈 대신 두 창을 스왑한다.
+        mx, my = _calc_overlay_pos(vph, width=OVERLAY_W_MIN, height=OVERLAY_H_MIN,
+                                   extra_margin_y=_MARGIN)
+        self._min_window = ui.Window(
+            f"__overlay_min_{key}__",
+            width=OVERLAY_W_MIN, height=OVERLAY_H_MIN,
+            position_x=mx, position_y=my,
+            flags=_WINDOW_FLAGS,
+        )
+        self._min_window.padding_x = 0
+        self._min_window.padding_y = 0
+        self._min_window.visible = False
+        with self._min_window.frame:
+            with ui.ZStack(style=_STYLE):
+                ui.Rectangle(name="title_bg")     # 타이틀바와 같은 검정 배경
+                with ui.HStack():
+                    ui.Spacer(width=3)
+                    _vcenter(10, lambda: ui.Button(
+                        "", width=10, height=10, name="min_btn",
+                        alignment=ui.Alignment.CENTER,
+                        clicked_fn=self._on_toggle_minimize,
+                        style={"image_url": _ICON_ARROW_R,
+                               "fill_policy": ui.FillPolicy.STRETCH}))
+                    ui.Spacer()
+
         vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
 
         sp = UVMixerService.get_shared_player(self._tab_id)
@@ -746,32 +772,27 @@ class ViewportOverlayPanel:
     # ── 뷰포트 리사이즈 대응 ────────────────────────────────────
 
     def _on_toggle_minimize(self) -> None:
+        # 런타임 window 리사이즈가 안 먹으므로, 본 창 ↔ 16x16 mini 창을 스왑한다.
         self._minimized = not self._minimized
-        self._title_content.visible = not self._minimized
-        self._body.visible = not self._minimized
-        self._widgets['btn_min'].style = {
-            "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
-            "fill_policy": ui.FillPolicy.STRETCH,
-        }
-        if self._minimized:
-            self._window.width = OVERLAY_W_MIN
-            self._window.height = OVERLAY_H_MIN
-        else:
-            self._window.width = OVERLAY_W
-            self._window.height = OVERLAY_H
+        self._window.visible = not self._minimized
+        self._min_window.visible = self._minimized
         self._on_viewport_resized()
 
     def _on_viewport_resized(self) -> None:
-        if self._window and self._vph:
-            if self._minimized:
-                x, y = _calc_overlay_pos(self._vph,
-                                         width=OVERLAY_W_MIN,
-                                         height=OVERLAY_H_MIN,
-                                         extra_margin_y=_MARGIN)
-            else:
-                x, y = _calc_overlay_pos(self._vph)
+        # 두 창 모두 우하단 앵커. 각자 자기 크기 기준으로 위치 계산.
+        if not self._vph:
+            return
+        if self._window:
+            x, y = _calc_overlay_pos(self._vph)
             self._window.position_x = x
             self._window.position_y = y
+        if self._min_window:
+            mx, my = _calc_overlay_pos(self._vph,
+                                       width=OVERLAY_W_MIN,
+                                       height=OVERLAY_H_MIN,
+                                       extra_margin_y=_MARGIN)
+            self._min_window.position_x = mx
+            self._min_window.position_y = my
 
     def reposition_deferred(self, frames: int = 2) -> None:
         """show 직후 frame이 새 레이아웃을 반영하기 전이라 위치가 stale할 수 있다.
@@ -787,6 +808,17 @@ class ViewportOverlayPanel:
         for _ in range(frames):
             await app.next_update_async()
         self._on_viewport_resized()
+
+    # ── 표시/숨김 (최소화 상태에 맞는 창만) ──────────────────────────
+
+    def set_visible(self, visible: bool) -> None:
+        # 현재 최소화 상태에 맞는 창만 보이게 한다.
+        if not visible:
+            self._window.visible = False
+            self._min_window.visible = False
+            return
+        self._window.visible = not self._minimized
+        self._min_window.visible = self._minimized
 
     # ── 라이프사이클 ────────────────────────────────────────────
 
@@ -807,6 +839,9 @@ class ViewportOverlayPanel:
         slider = self._widgets.get('slider')
         if slider:
             slider.destroy()          # 슬라이더 툴팁 윈도우 정리
+        if self._min_window:
+            self._min_window.destroy()
+            self._min_window = None
         if self._window:
             self._window.destroy()
             self._window = None
@@ -833,7 +868,7 @@ class OverlayManager:
         panel = ViewportOverlayPanel(key, vph, mgr=self, tab_id=tab_id)
         panel.refresh_from_player()
         if not visible:
-            panel._window.visible = False
+            panel.set_visible(False)
         self._panels[key] = panel
 
     def on_mixer_destroyed(self, key: str) -> None:
@@ -841,15 +876,15 @@ class OverlayManager:
 
     def show(self, key: str) -> None:
         panel = self._panels.get(key)
-        if panel and panel._window:
-            panel._window.visible = True
+        if panel:
+            panel.set_visible(True)
             panel._on_viewport_resized()
             panel.reposition_deferred()
 
     def hide(self, key: str) -> None:
         panel = self._panels.get(key)
-        if panel and panel._window:
-            panel._window.visible = False
+        if panel:
+            panel.set_visible(False)
 
     def _remove_panel(self, key: str) -> None:
         panel = self._panels.pop(key, None)
