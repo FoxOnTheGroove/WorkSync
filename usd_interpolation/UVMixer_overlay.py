@@ -17,7 +17,7 @@ except ImportError:
 #   usd_interpolation/data/icons/play.png        (재생)
 #   usd_interpolation/data/icons/stop.png        (정지)
 #   usd_interpolation/data/icons/checkbox_n.png  (체크박스 기본)
-#   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover — 현재 미사용, n/s만 토글)
+#   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover)
 #   usd_interpolation/data/icons/checkbox_s.png  (체크박스 선택됨)
 #   usd_interpolation/data/icons/tooltip.png     (슬라이더 press 시 값 말풍선)
 _ICON_DIR       = os.path.join(os.path.dirname(__file__), "data", "icons")
@@ -65,6 +65,10 @@ _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
 
+# 색은 이 파일 전체에서 0xAABBGGRR 순서 (예: #958df1 → 0xFFF18D95).
+_HOVER_OVERLAY = 0x22FFFFFF        # 반투명 흰색 (hover 오버레이)
+_PRESS_TINT    = 0xFF0000FF        # 빨강 (press 시 흰 아이콘에 씌우는 tint)
+
 SPEED_CYCLE = [1.0, 2.0, 4.0, 0.5]     # 클릭할 때마다 x1 → x2 → x4 → x0.5 → x1 ...
 
 
@@ -80,6 +84,26 @@ def _vcenter(width, factory):
         w = factory()
         ui.Spacer()
     return w
+
+
+def _point_in_widget(widget, x, y, w, h) -> bool:
+    wx, wy = widget.screen_position_x, widget.screen_position_y
+    return wx <= x <= wx + w and wy <= y <= wy + h
+
+
+def _build_tri_icon(width, height, img_n, img_h, img_s):
+    """n/h/s 세 이미지를 미리 로드해 겹쳐두고(깜박임 없는 visible 토글용) 그
+    위에 투명 hit Rectangle을 얹어 (n, h, s, hit) 튜플로 반환.
+    마우스 핸들러는 호출부에서 hit에 건다."""
+    with ui.ZStack(width=width, height=height):
+        n = ui.Image(img_n, width=width, height=height,
+                     fill_policy=ui.FillPolicy.STRETCH)
+        h = ui.Image(img_h, width=width, height=height,
+                     fill_policy=ui.FillPolicy.STRETCH, visible=False)
+        s = ui.Image(img_s, width=width, height=height,
+                     fill_policy=ui.FillPolicy.STRETCH, visible=False)
+        hit = ui.Rectangle(style={"background_color": 0x00000000})
+    return n, h, s, hit
 
 
 _SLIDER_TRACK_BG   = 0xFF8A8A8A     # 트랙 (밝은 회색 — 어두운 본문 대비 ↑, 캡슐 실루엣 강조. 원래 스펙은 #6a6a6a)
@@ -281,6 +305,13 @@ class ViewportOverlayPanel:
         self._speed = 1.0
         self._reverse = False
         self._loop = False
+        # 재생/체크박스 hover·press 상태 (default/hover/press 3단 표현용)
+        self._play_hovering = False
+        self._play_pressing = False
+        self._rev_hovering = False
+        self._rev_pressing = False
+        self._loop_hovering = False
+        self._loop_pressing = False
 
         x, y = _calc_overlay_pos(vph)
         self._window = ui.Window(
@@ -340,12 +371,29 @@ class ViewportOverlayPanel:
                         # 행2 (y=16, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
                         with ui.HStack(height=_ROW2_H):
                             ui.Spacer(width=12)
-                            btn_play = _vcenter(16, lambda: ui.Button(
-                                "", width=16, height=16,
-                                alignment=ui.Alignment.CENTER,
-                                clicked_fn=self._on_play,
-                                style={"image_url": _ICON_PLAY,
-                                       "fill_policy": ui.FillPolicy.STRETCH}))
+                            # 재생/정지 아이콘 미리 로드 + visible 토글(깜박임 없음, 노브와 동일
+                            # 패턴). hover는 반투명 오버레이, press는 흰 아이콘에 빨강 tint.
+                            def _build_play():
+                                with ui.ZStack(width=16, height=16):
+                                    self._play_img = ui.Image(
+                                        _ICON_PLAY, width=16, height=16,
+                                        fill_policy=ui.FillPolicy.STRETCH,
+                                        style={"color": _WHITE})
+                                    self._stop_img = ui.Image(
+                                        _ICON_STOP, width=16, height=16,
+                                        fill_policy=ui.FillPolicy.STRETCH,
+                                        style={"color": _WHITE}, visible=False)
+                                    self._play_hover_ov = ui.Rectangle(
+                                        style={"background_color": _HOVER_OVERLAY},
+                                        visible=False)
+                                    hit = ui.Rectangle(
+                                        style={"background_color": 0x00000000})
+                                    hit.set_mouse_hovered_fn(self._on_play_hover)
+                                    hit.set_mouse_pressed_fn(self._on_play_press)
+                                    hit.set_mouse_released_fn(self._on_play_release)
+                                    self._play_hit = hit
+                                return hit
+                            btn_play = _vcenter(16, _build_play)
                             ui.Spacer(width=5)
                             slider = _vcenter(112, lambda: _ImageSlider(
                                 width=112, track_h=4, knob=10))
@@ -365,28 +413,37 @@ class ViewportOverlayPanel:
                             ui.Spacer(width=8)
 
                         # 행4 (y=47, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
-                        # 체크박스는 재생 버튼과 같은 방식(ui.Button + image_url 인라인 style)으로
-                        # 만든다. ui.CheckBox의 타입 캐스케이딩으로는 이미지가 안 나왔었다
-                        # (CheckBox가 image_url 스타일을 지원 안 하는 것으로 보임).
+                        # 체크박스는 n(기본)/h(hover)/s(체크됨 또는 press) 세 이미지를
+                        # 미리 로드해 visible만 토글한다(깜박임 없음, 노브와 동일 패턴).
                         with ui.HStack(height=_ROW4_H):
                             ui.Spacer(width=12)
-                            rev_cb = _vcenter(14, lambda: ui.Button(
-                                "", width=14, height=14, name="rev_cb",
-                                alignment=ui.Alignment.CENTER,
-                                clicked_fn=self._on_reverse,
-                                style={"image_url": _ICON_CHECKBOX_N,
-                                       "fill_policy": ui.FillPolicy.STRETCH}))
+                            def _build_rev():
+                                n, h, s, hit = _build_tri_icon(
+                                    14, 14, _ICON_CHECKBOX_N,
+                                    _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
+                                self._rev_imgs = (n, h, s)
+                                hit.set_mouse_hovered_fn(self._on_rev_hover)
+                                hit.set_mouse_pressed_fn(self._on_rev_press)
+                                hit.set_mouse_released_fn(self._on_rev_release)
+                                self._rev_hit = hit
+                                return hit
+                            rev_cb = _vcenter(14, _build_rev)
                             ui.Spacer(width=8)
                             ui.Label("Reverse", height=_ROW4_H,
                                      alignment=ui.Alignment.LEFT_CENTER,
                                      style={"font_size": 12})
                             ui.Spacer(width=20)
-                            loop_cb = _vcenter(14, lambda: ui.Button(
-                                "", width=14, height=14, name="loop_cb",
-                                alignment=ui.Alignment.CENTER,
-                                clicked_fn=self._on_loop,
-                                style={"image_url": _ICON_CHECKBOX_N,
-                                       "fill_policy": ui.FillPolicy.STRETCH}))
+                            def _build_loop():
+                                n, h, s, hit = _build_tri_icon(
+                                    14, 14, _ICON_CHECKBOX_N,
+                                    _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
+                                self._loop_imgs = (n, h, s)
+                                hit.set_mouse_hovered_fn(self._on_loop_hover)
+                                hit.set_mouse_pressed_fn(self._on_loop_press)
+                                hit.set_mouse_released_fn(self._on_loop_release)
+                                self._loop_hit = hit
+                                return hit
+                            loop_cb = _vcenter(14, _build_loop)
                             ui.Spacer(width=8)
                             ui.Label("Loop", height=_ROW4_H,
                                      alignment=ui.Alignment.LEFT_CENTER,
@@ -425,10 +482,14 @@ class ViewportOverlayPanel:
         self._in_tick = False
 
     def _set_play_icon(self, playing: bool) -> None:
-        self._widgets['btn_play'].style = {
-            "image_url": _ICON_STOP if playing else _ICON_PLAY,
-            "fill_policy": ui.FillPolicy.STRETCH,
-        }
+        # 재생/정지 어느 아이콘을 보여줄지만 결정 (visible 토글, 깜박임 없음)
+        self._stop_img.visible = playing
+        self._play_img.visible = not playing
+
+    def _set_play_tint(self, color: int) -> None:
+        # color 스타일만 바꾸는 건 이미지 재로드가 아니라 즉시 반영됨(깜박임 없음)
+        self._play_img.style = {"color": color}
+        self._stop_img.style = {"color": color}
 
     def _on_stopped(self) -> None:
         if UVMixerService.is_synced(self._tab_id):
@@ -437,6 +498,32 @@ class ViewportOverlayPanel:
     def _on_own_stopped(self) -> None:
         if not UVMixerService.is_synced(self._tab_id):
             self._set_play_icon(False)
+
+    # ── 재생 버튼 hover/press (default/hover/press 3단) ────────────────
+
+    def _on_play_hover(self, hovered: bool) -> None:
+        self._play_hovering = hovered
+        if not self._play_pressing:
+            self._play_hover_ov.visible = hovered
+
+    def _on_play_press(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        self._play_pressing = True
+        self._play_hover_ov.visible = False
+        self._set_play_tint(_PRESS_TINT)
+
+    def _on_play_release(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        was_pressing = self._play_pressing
+        self._play_pressing = False
+        self._set_play_tint(_WHITE)
+        inside = _point_in_widget(self._play_hit, x, y, 16, 16)
+        self._play_hovering = inside
+        self._play_hover_ov.visible = inside
+        if was_pressing and inside:
+            self._on_play()
 
     # ── 컨트롤 콜백 ────────────────────────────────────────────
 
@@ -472,17 +559,70 @@ class ViewportOverlayPanel:
             if op and not op.is_playing():
                 op.set_t(t)
 
-    def _set_checkbox_icon(self, widget, checked: bool) -> None:
-        widget.style = {
-            "image_url": _ICON_CHECKBOX_S if checked else _ICON_CHECKBOX_N,
-            "fill_policy": ui.FillPolicy.STRETCH,
-        }
+    def _paint_tri(self, imgs, checked: bool, hovering: bool, pressing: bool) -> None:
+        # 체크됨 또는 누르는 중 → s(선택), 아니면 hover 중 → h, 아니면 n.
+        n, h, s = imgs
+        show_s = checked or pressing
+        show_h = hovering and not show_s
+        s.visible = show_s
+        h.visible = show_h
+        n.visible = not (show_s or show_h)
+
+    def _refresh_rev(self) -> None:
+        self._paint_tri(self._rev_imgs, self._reverse,
+                        self._rev_hovering, self._rev_pressing)
+
+    def _refresh_loop(self) -> None:
+        self._paint_tri(self._loop_imgs, self._loop,
+                        self._loop_hovering, self._loop_pressing)
+
+    # ── 체크박스 hover/press (default/hover/press+checked) ─────────────
+
+    def _on_rev_hover(self, hovered: bool) -> None:
+        self._rev_hovering = hovered
+        self._refresh_rev()
+
+    def _on_rev_press(self, x, y, button, modifier) -> None:
+        if button == 0:
+            self._rev_pressing = True
+            self._refresh_rev()
+
+    def _on_rev_release(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        was_pressing = self._rev_pressing
+        self._rev_pressing = False
+        self._rev_hovering = _point_in_widget(self._rev_hit, x, y, 14, 14)
+        if was_pressing and self._rev_hovering:
+            self._on_reverse()      # 내부에서 _refresh_rev() 호출됨
+        else:
+            self._refresh_rev()
+
+    def _on_loop_hover(self, hovered: bool) -> None:
+        self._loop_hovering = hovered
+        self._refresh_loop()
+
+    def _on_loop_press(self, x, y, button, modifier) -> None:
+        if button == 0:
+            self._loop_pressing = True
+            self._refresh_loop()
+
+    def _on_loop_release(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        was_pressing = self._loop_pressing
+        self._loop_pressing = False
+        self._loop_hovering = _point_in_widget(self._loop_hit, x, y, 14, 14)
+        if was_pressing and self._loop_hovering:
+            self._on_loop()         # 내부에서 _refresh_loop() 호출됨
+        else:
+            self._refresh_loop()
 
     def _on_reverse(self) -> None:
         if self._in_sync:
             return
         self._reverse = not self._reverse
-        self._set_checkbox_icon(self._widgets['rev_cb'], self._reverse)
+        self._refresh_rev()
         if UVMixerService.is_synced(self._tab_id):
             UVMixerService.get_shared_player(self._tab_id).set_forward(not self._reverse)
             self._mgr._sync_reverse(self._key, self._reverse)
@@ -495,7 +635,7 @@ class ViewportOverlayPanel:
         if self._in_sync:
             return
         self._loop = not self._loop
-        self._set_checkbox_icon(self._widgets['loop_cb'], self._loop)
+        self._refresh_loop()
         if UVMixerService.is_synced(self._tab_id):
             UVMixerService.get_shared_player(self._tab_id).set_loop(self._loop)
             self._mgr._sync_loop(self._key, self._loop)
@@ -533,9 +673,9 @@ class ViewportOverlayPanel:
         self._in_sync = True
         self._in_tick = True
         self._reverse = not p.forward
-        self._set_checkbox_icon(self._widgets['rev_cb'], self._reverse)
+        self._refresh_rev()
         self._loop = p.loop
-        self._set_checkbox_icon(self._widgets['loop_cb'], self._loop)
+        self._refresh_loop()
         self._apply_speed(p.speed, broadcast=False)
         self._widgets['slider'].model.set_value(p.t)
         self._in_sync = False
@@ -546,13 +686,13 @@ class ViewportOverlayPanel:
     def sync_reverse(self, reverse: bool) -> None:
         self._in_sync = True
         self._reverse = reverse
-        self._set_checkbox_icon(self._widgets['rev_cb'], reverse)
+        self._refresh_rev()
         self._in_sync = False
 
     def sync_loop(self, loop: bool) -> None:
         self._in_sync = True
         self._loop = loop
-        self._set_checkbox_icon(self._widgets['loop_cb'], loop)
+        self._refresh_loop()
         self._in_sync = False
 
     def sync_speed(self, spd: float) -> None:
