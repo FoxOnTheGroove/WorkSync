@@ -60,6 +60,9 @@ _WINDOW_FLAGS = (
     | ui.WINDOW_FLAGS_NO_MOVE
 )
 
+# 툴팁은 패널 밖(윗선)으로 넘어가야 해서 별도 최상위 윈도우로 띄운다.
+_TIP_FLAGS = _WINDOW_FLAGS | ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING
+
 _STYLE = {
     "Rectangle":            {"border_width": 0, "border_color": 0x00000000},
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
@@ -94,6 +97,8 @@ class ImageSlider:
         self._int_range = int_range
         self._dragging = False
         self._hovering = False
+        self._tip_win = None       # 값 말풍선 (별도 윈도우, 최초 press 때 생성)
+        self._tip_label = None
         self.model = ui.SimpleFloatModel(max(0.0, min(1.0, init_t)))   # 내부는 항상 0~1 (t)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
@@ -146,9 +151,6 @@ class ImageSlider:
                 ui.Spacer()
 
             # 핸들 (Placer.offset_x). n/h 미리 로드 후 visible 토글.
-            # 말풍선을 이 안에 함께 넣어 노브와 같이 움직이게 한다 — 별도로
-            # offset을 매번 갱신하면 안 따라오는 문제가 있어, 노브 stack에
-            # 편승시켜 knob_placer.offset_x 하나로 둘 다 이동시킨다.
             self._knob_placer = ui.Placer(width=self._w, height=self._ks)
             with self._knob_placer:
                 with ui.ZStack(width=self._ks, height=self._ks):
@@ -165,20 +167,6 @@ class ImageSlider:
                     self._hit.set_mouse_moved_fn(self._on_move)
                     self._hit.set_mouse_released_fn(self._on_release)
 
-                    # 값 말풍선: 노브 기준 위-중앙에 고정(오프셋 상수). 노브와 함께 이동.
-                    tip_placer = ui.Placer()
-                    with tip_placer:
-                        self._tip = ui.ZStack(width=_TIP_W, height=_TIP_H,
-                                              visible=False)
-                        with self._tip:
-                            ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
-                                     fill_policy=ui.FillPolicy.STRETCH)
-                            self._tip_label = ui.Label(
-                                "", alignment=ui.Alignment.CENTER,
-                                style={"font_size": _TIP_FONT, "color": _WHITE})
-                    tip_placer.offset_x = ui.Pixel(-(_TIP_W - self._ks) / 2)
-                    tip_placer.offset_y = ui.Pixel(-(_TIP_H + 2))
-
     def _value_text(self):
         v = self.value()
         return str(v) if self._int_range else f"{v:.2f}"
@@ -188,7 +176,38 @@ class ImageSlider:
         self._fill.visible = t > 0.0
         self._fill.width = ui.Pixel(t * self._w)
         self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
+
+    # ── 값 말풍선 (별도 최상위 윈도우) ────────────────────────────────
+
+    def _ensure_tip_win(self):
+        if self._tip_win is not None:
+            return
+        self._tip_win = ui.Window(f"__slider_tip_{id(self)}__",
+                                  width=_TIP_W, height=_TIP_H, flags=_TIP_FLAGS)
+        self._tip_win.padding_x = 0
+        self._tip_win.padding_y = 0
+        self._tip_win.visible = False
+        with self._tip_win.frame:
+            with ui.ZStack():
+                ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
+                         fill_policy=ui.FillPolicy.STRETCH)
+                self._tip_label = ui.Label(
+                    "", alignment=ui.Alignment.CENTER,
+                    style={"font_size": _TIP_FONT, "color": _WHITE})
+
+    def _position_tip(self):
+        # 노브 화면좌표 기준으로 말풍선을 위-중앙에 배치
+        kx = self._catcher.screen_position_x + \
+            self.model.get_value_as_float() * (self._w - self._ks)
+        ky = self._catcher.screen_position_y
+        self._tip_win.position_x = kx + self._ks / 2 - _TIP_W / 2
+        self._tip_win.position_y = ky - _TIP_H - 2
         self._tip_label.text = self._value_text()
+
+    def destroy(self):
+        if self._tip_win:
+            self._tip_win.destroy()
+            self._tip_win = None
 
     def _set_knob_img(self):
         self._knob_h.visible = self._hovering
@@ -206,17 +225,20 @@ class ImageSlider:
     def _on_press(self, x, y, button, modifier):
         if button == 0:
             self._dragging = True
-            self._tip_label.text = self._value_text()   # 즉시 현재 값 반영
-            self._tip.visible = True
+            self._ensure_tip_win()
+            self._position_tip()
+            self._tip_win.visible = True
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
             self.model.set_value(self._snap(self._t_from_screen_x(x)))
+            self._position_tip()          # 노브 따라 말풍선 이동 + 값 갱신
 
     def _on_release(self, x, y, button, modifier):
         if button == 0:
             self._dragging = False
-            self._tip.visible = False
+            if self._tip_win:
+                self._tip_win.visible = False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -308,6 +330,9 @@ class SubPanel:
             self._window.height = PANEL_H
 
     def destroy(self):
+        for s in (self.iter_slider, self.thick_slider):
+            if s:
+                s.destroy()            # 슬라이더 툴팁 윈도우 정리
         if self._window:
             self._window.destroy()
             self._window = None
