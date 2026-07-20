@@ -22,6 +22,7 @@ _ICON_TOOLTIP = os.path.join(_ICON_DIR, "tooltip.png")   # press 시 값 말풍�
 _TIP_W = 30           # 말풍선 폭 (tooltip.png 크기에 맞게 조정)
 _TIP_H = 20           # 말풍선 높이
 _TIP_FONT = 10
+_TIP_LABEL_OFFSET_Y = -2   # 라벨 세로 미세조정(px). 음수=위로, 양수=아래로
 
 # ── 패널 치수 (전체 180x80) ─────────────────────────────────────────────
 PANEL_W = 180
@@ -99,6 +100,7 @@ class ImageSlider:
         self._hovering = False
         self._tip_win = None       # 값 말풍선 (별도 윈도우, 최초 press 때 생성)
         self._tip_label = None
+        self._committed_fns = []   # release 시점에만 값 확정 통지
         self.model = ui.SimpleFloatModel(max(0.0, min(1.0, init_t)))   # 내부는 항상 0~1 (t)
         self.model.add_value_changed_fn(lambda m: self._update_visual())
         self._build()
@@ -120,8 +122,13 @@ class ImageSlider:
         self.model.set_value(max(0.0, min(1.0, v)))
 
     def on_change(self, fn):
-        """값이 바뀔 때 fn(value) 호출 (value는 위 value()와 동일 규칙)."""
+        """값이 바뀔 때마다(드래그 중 매 프레임 포함) fn(value) 호출."""
         self.model.add_value_changed_fn(lambda m: fn(self.value()))
+
+    def on_change_committed(self, fn):
+        """press~release 사이 드래그가 끝나 값이 확정된 순간에만 fn(value) 호출
+        (드래그 도중에는 호출 안 됨)."""
+        self._committed_fns.append(fn)
 
     def _snap(self, t):
         if not self._int_range:
@@ -191,9 +198,13 @@ class ImageSlider:
             with ui.ZStack():
                 ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
                          fill_policy=ui.FillPolicy.STRETCH)
-                self._tip_label = ui.Label(
-                    "", alignment=ui.Alignment.CENTER,
-                    style={"font_size": _TIP_FONT, "color": _WHITE})
+                # alignment만으로는 세로 위치가 애매해서(CENTER=낮음, CENTER_TOP=높음),
+                # Placer로 감싸 픽셀 단위로 미세조정한다 (_TIP_LABEL_OFFSET_Y).
+                with ui.Placer(offset_x=0, offset_y=ui.Pixel(_TIP_LABEL_OFFSET_Y)):
+                    self._tip_label = ui.Label(
+                        "", width=_TIP_W, height=_TIP_H,
+                        alignment=ui.Alignment.CENTER,
+                        style={"font_size": _TIP_FONT, "color": _WHITE})
 
     def _position_tip(self):
         # 노브 화면좌표 기준으로 말풍선을 위-중앙에 배치
@@ -236,9 +247,14 @@ class ImageSlider:
 
     def _on_release(self, x, y, button, modifier):
         if button == 0:
+            was_dragging = self._dragging
             self._dragging = False
             if self._tip_win:
                 self._tip_win.visible = False
+            if was_dragging:
+                v = self.value()
+                for fn in self._committed_fns:
+                    fn(v)
 
 
 # ──────────────────────────────────────────────────────────────────────
