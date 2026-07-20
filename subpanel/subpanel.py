@@ -146,6 +146,9 @@ class ImageSlider:
                 ui.Spacer()
 
             # 핸들 (Placer.offset_x). n/h 미리 로드 후 visible 토글.
+            # 말풍선을 이 안에 함께 넣어 노브와 같이 움직이게 한다 — 별도로
+            # offset을 매번 갱신하면 안 따라오는 문제가 있어, 노브 stack에
+            # 편승시켜 knob_placer.offset_x 하나로 둘 다 이동시킨다.
             self._knob_placer = ui.Placer(width=self._w, height=self._ks)
             with self._knob_placer:
                 with ui.ZStack(width=self._ks, height=self._ks):
@@ -162,16 +165,19 @@ class ImageSlider:
                     self._hit.set_mouse_moved_fn(self._on_move)
                     self._hit.set_mouse_released_fn(self._on_release)
 
-            # 값 말풍선 (press 중에만 표시, 노브 위쪽에 따라다님). 맨 위 레이어.
-            self._tip_placer = ui.Placer(width=self._w, height=self._ks)
-            with self._tip_placer:
-                self._tip = ui.ZStack(width=_TIP_W, height=_TIP_H, visible=False)
-                with self._tip:
-                    ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
-                             fill_policy=ui.FillPolicy.STRETCH)
-                    self._tip_label = ui.Label(
-                        "", alignment=ui.Alignment.CENTER,
-                        style={"font_size": _TIP_FONT, "color": _WHITE})
+                    # 값 말풍선: 노브 기준 위-중앙에 고정(오프셋 상수). 노브와 함께 이동.
+                    tip_placer = ui.Placer()
+                    with tip_placer:
+                        self._tip = ui.ZStack(width=_TIP_W, height=_TIP_H,
+                                              visible=False)
+                        with self._tip:
+                            ui.Image(_ICON_TOOLTIP, width=_TIP_W, height=_TIP_H,
+                                     fill_policy=ui.FillPolicy.STRETCH)
+                            self._tip_label = ui.Label(
+                                "", alignment=ui.Alignment.CENTER,
+                                style={"font_size": _TIP_FONT, "color": _WHITE})
+                    tip_placer.offset_x = ui.Pixel(-(_TIP_W - self._ks) / 2)
+                    tip_placer.offset_y = ui.Pixel(-(_TIP_H + 2))
 
     def _value_text(self):
         v = self.value()
@@ -181,11 +187,7 @@ class ImageSlider:
         t = self.model.get_value_as_float()
         self._fill.visible = t > 0.0
         self._fill.width = ui.Pixel(t * self._w)
-        knob_off = t * (self._w - self._ks)
-        self._knob_placer.offset_x = ui.Pixel(knob_off)
-        # 말풍선: 노브 중앙 위쪽에 정렬 + 현재 값 표시
-        self._tip_placer.offset_x = ui.Pixel(knob_off + self._ks / 2 - _TIP_W / 2)
-        self._tip_placer.offset_y = ui.Pixel(-(_TIP_H + 2))
+        self._knob_placer.offset_x = ui.Pixel(t * (self._w - self._ks))
         self._tip_label.text = self._value_text()
 
     def _set_knob_img(self):
