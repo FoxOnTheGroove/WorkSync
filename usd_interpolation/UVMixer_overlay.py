@@ -342,18 +342,27 @@ class ViewportOverlayPanel:
         self._min_window.padding_x = 0
         self._min_window.padding_y = 0
         self._min_window.visible = False
+        # 창에는 최소 크기 clamp가 있어(정확한 값은 미확인, ImGui 기본은 32x32)
+        # 16x16 지정에도 창 자체는 더 크게 남는다. 창은 NO_BACKGROUND라 투명하니,
+        # 보이는 콘텐츠만 16x16으로 좌상단에
+        # 고정하고 나머지는 비워 시각적으로 16x16이 되게 한다.
         with self._min_window.frame:
-            with ui.ZStack(style=_STYLE):
-                ui.Rectangle(name="title_bg")     # 타이틀바와 같은 검정 배경
-                with ui.HStack():
-                    ui.Spacer(width=3)
-                    _vcenter(10, lambda: ui.Button(
-                        "", width=10, height=10, name="min_btn",
-                        alignment=ui.Alignment.CENTER,
-                        clicked_fn=self._on_toggle_minimize,
-                        style={"image_url": _ICON_ARROW_R,
-                               "fill_policy": ui.FillPolicy.STRETCH}))
-                    ui.Spacer()
+            with ui.VStack():
+                with ui.HStack(height=OVERLAY_H_MIN):
+                    with ui.ZStack(width=OVERLAY_W_MIN, height=OVERLAY_H_MIN,
+                                   style=_STYLE):
+                        ui.Rectangle(name="title_bg")   # 타이틀바와 같은 검정 배경
+                        with ui.HStack():
+                            ui.Spacer(width=3)
+                            _vcenter(10, lambda: ui.Button(
+                                "", width=10, height=10, name="min_btn",
+                                alignment=ui.Alignment.CENTER,
+                                clicked_fn=self._on_toggle_minimize,
+                                style={"image_url": _ICON_ARROW_R,
+                                       "fill_policy": ui.FillPolicy.STRETCH}))
+                            ui.Spacer()
+                    ui.Spacer()      # 우측 나머지(투명)
+                ui.Spacer()          # 하단 나머지(투명)
 
         vph.frame.set_computed_content_size_changed_fn(self._on_viewport_resized)
 
