@@ -92,16 +92,18 @@ def _vcenter(width, factory):
 class ImageSlider:
 
     def __init__(self, width=58, track_h=4, knob=10, int_range=None,
-                 float_range=None, init_t=0.0):
+                 float_range=None, init_t=0.0, tooltip=True):
         # int_range=(min,max)면 정수 슬라이더(핸들이 정수 눈금에 스냅).
         # float_range=(min,max)면 그 구간을 스냅 없이 연속으로 매핑(예: 0.5~1.0).
         # 둘 다 None이면 0~1 연속 float. int_range가 우선.
         # init_t: 초기 위치(0~1, 0=좌끝 1=우끝) — range 매핑 후 값이 아니라 위치 기준.
+        # tooltip: False면 드래그 중 값 말풍선을 띄우지 않는다. set_tooltip_enabled로 나중에도 변경 가능.
         self._w, self._th, self._ks = width, track_h, knob
         self._int_range = int_range
         self._float_range = float_range
         self._dragging = False
         self._hovering = False
+        self._tooltip_enabled = tooltip
         self._tip_win = None       # 값 말풍선 (별도 윈도우, 최초 press 때 생성)
         self._tip_label = None
         self._committed_fns = []   # release 시점에만 값 확정 통지
@@ -140,6 +142,15 @@ class ImageSlider:
         """press~release 사이 드래그가 끝나 값이 확정된 순간에만 fn(value) 호출
         (드래그 도중에는 호출 안 됨)."""
         self._committed_fns.append(fn)
+
+    def set_tooltip_enabled(self, enabled: bool):
+        """드래그 중 값 말풍선 노출 여부를 켜고 끈다."""
+        self._tooltip_enabled = enabled
+        if not enabled and self._tip_win:
+            self._tip_win.visible = False
+
+    def tooltip_enabled(self) -> bool:
+        return self._tooltip_enabled
 
     def _snap(self, t):
         if not self._int_range:
@@ -247,14 +258,16 @@ class ImageSlider:
     def _on_press(self, x, y, button, modifier):
         if button == 0:
             self._dragging = True
-            self._ensure_tip_win()
-            self._position_tip()
-            self._tip_win.visible = True
+            if self._tooltip_enabled:
+                self._ensure_tip_win()
+                self._position_tip()
+                self._tip_win.visible = True
 
     def _on_move(self, x, y, modifier, pressed):
         if self._dragging:
             self.model.set_value(self._snap(self._t_from_screen_x(x)))
-            self._position_tip()          # 노브 따라 말풍선 이동 + 값 갱신
+            if self._tooltip_enabled:
+                self._position_tip()      # 노브 따라 말풍선 이동 + 값 갱신
 
     def _on_release(self, x, y, button, modifier):
         if button == 0:
@@ -325,7 +338,7 @@ class SubPanel:
                             float_range=(0.5, 1.0), init_t=1.0)
 
     def _slider_row(self, label, left_idx, right_idx,
-                    int_range=None, float_range=None, init_t=0.0):
+                    int_range=None, float_range=None, init_t=0.0, tooltip=True):
         """행2/행3 공통 레이아웃. 반환: 그 행의 ImageSlider."""
         with ui.HStack(height=_ROW_H):
             ui.Spacer(width=_MARGIN_L)
@@ -337,7 +350,7 @@ class SubPanel:
                      style={"font_size": _INDEX_FONT})
             slider = _vcenter(_SLIDER_W, lambda: ImageSlider(
                 width=_SLIDER_W, int_range=int_range,
-                float_range=float_range, init_t=init_t))
+                float_range=float_range, init_t=init_t, tooltip=tooltip))
             ui.Label(right_idx, width=_RIDX_W, height=_ROW_H,
                      alignment=ui.Alignment.RIGHT_CENTER,
                      style={"font_size": _INDEX_FONT})
