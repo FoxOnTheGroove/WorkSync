@@ -28,9 +28,9 @@ MAX_OVERLAYS     = 5
 PANEL_ENABLED = False
 
 # subpanel과 같은 규칙: 이 파일과 같은 폴더 아래 data/icons/ 에 둔다.
-#   overlay_panel/data/icons/marker.png
+#   overlay_panel/data/icons/marker.svg
 _ICON_DIR    = os.path.join(os.path.dirname(__file__), "data", "icons")
-_ICON_MARKER = os.path.join(_ICON_DIR, "marker.png")
+_ICON_MARKER = os.path.join(_ICON_DIR, "marker.svg")
 IMG_W        = 32
 IMG_H        = 32
 
