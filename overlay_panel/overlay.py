@@ -224,6 +224,7 @@ class ColorpickOverlay:
         self._vis_vp       = True
         self._viewport_api = None
         self._frame        = None
+        self._frame_overlay = None
         self._slots: list[dict] = []
         self._active: OrderedDict[int, int] = OrderedDict()
         self._update_sub   = None
@@ -238,6 +239,7 @@ class ColorpickOverlay:
                 return
             self._viewport_api = vph.viewport.viewport_api
             self._frame        = vph.frame
+            self._frame_overlay = """추가예정"""
             self._create_slots()
             self._update_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
                 self._on_update, name=f"colorpick_overlay_{vp_api_id}"
@@ -313,28 +315,14 @@ class ColorpickOverlay:
                             ui.Spacer(height=PANEL_PAD)
                         ui.Spacer(width=PANEL_PAD)
 
-            # 패널과 같은 위치에 뜨는 마커 이미지 창 (PANEL_ENABLED=False일 때 대신 표시).
-            img_win = ui.Window(
-                f"_cpoverlay_img_{self._vp_api_id}_{i}",
-                flags=_WIN_FLAGS,
-                width=IMG_W, height=IMG_H,
-                visible=False,
-            )
-            img_win.frame.style = {"background_color": 0x00000000}
-            img_win.frame.opaque_for_mouse_events = False
-            img_win.padding_x = 0
-            img_win.padding_y = 0
-            with img_win.frame:
-                ui.Image(_ICON_MARKER, width=IMG_W, height=IMG_H,
-                         fill_policy=ui.FillPolicy.STRETCH)
-
             self._slots.append({
                 "key"             : None,
                 "index"           : None,
                 "group_id"        : None,
                 "viewport_api_id" : None,
                 "window"          : win,
-                "img_window"      : img_win,
+                "img_placer"      : None,   # 뷰포트 프레임 오버레이 안의 마커 위치 (아래에서 채움)
+                "img_image"       : None,   # 마커 이미지 위젯 (visible 토글로 표시)
                 "swatch"          : swatch,
                 "color_dot"       : dot,
                 "hex"             : None,
@@ -346,6 +334,28 @@ class ColorpickOverlay:
                 "world_pos"       : None,
                 "marker_path"     : None,
             })
+
+        self._build_marker_overlay()
+
+    def _build_marker_overlay(self):
+        # 패널과 같은 위치에 뜨는 마커 이미지. ui.Window 대신 뷰포트 프레임
+        # (self._frame_overlay) 위에 겹쳐 그린다. Frame 안의 위젯이라 창 테두리/
+        # 그림자(투명 윤곽) 아티팩트가 없다. 위치는 슬롯별 Placer.offset 으로 잡되,
+        # 프레임 로컬 좌표계라 화면 오프셋(ox, oy)을 더하지 않는다 — 기존 창 위치와
+        # 동일한 지점에 찍히도록 _on_update 에서 계산해 넣는다.
+        with self._frame_overlay:
+            with ui.ZStack():
+                for slot in self._slots:
+                    placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+                    with placer:
+                        img = ui.Image(
+                            _ICON_MARKER,
+                            width=IMG_W, height=IMG_H,
+                            fill_policy=ui.FillPolicy.STRETCH,
+                            visible=False,
+                        )
+                    slot["img_placer"] = placer
+                    slot["img_image"]  = img
 
     # ------------------------------------------------------------------
 
@@ -379,8 +389,12 @@ class ColorpickOverlay:
                 raw_y = py + PANEL_OFFSET_Y
                 slot["window"].position_x = max(ox, min(ox + dw - PANEL_W, raw_x))
                 slot["window"].position_y = max(oy, min(oy + dh - PANEL_H, raw_y))
-                slot["img_window"].position_x = max(ox, min(ox + dw - IMG_W, raw_x))
-                slot["img_window"].position_y = max(oy, min(oy + dh - IMG_H, raw_y))
+                # 마커는 프레임 로컬 좌표 (창 위치에서 프레임 오프셋 ox, oy 만큼 뺀 값).
+                # 창(raw_x, raw_y)과 정확히 같은 화면 지점에 찍힌다.
+                lx = sp[0] * sx + PANEL_OFFSET_X
+                ly = sp[1] * sy + PANEL_OFFSET_Y
+                slot["img_placer"].offset_x = ui.Pixel(max(0.0, min(dw - IMG_W, lx)))
+                slot["img_placer"].offset_y = ui.Pixel(max(0.0, min(dh - IMG_H, ly)))
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
         try:
@@ -479,8 +493,8 @@ class ColorpickOverlay:
         slot_idx = self._active.pop(key, None)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["window"].visible     = False
-            slot["img_window"].visible = False
+            slot["window"].visible    = False
+            slot["img_image"].visible = False
             slot["world_pos"]      = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
@@ -493,8 +507,8 @@ class ColorpickOverlay:
         show = ColorpickOverlay._vis_suppress and self._vis_vp
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
-            slot["window"].visible     = show and PANEL_ENABLED
-            slot["img_window"].visible = show and not PANEL_ENABLED
+            slot["window"].visible    = show and PANEL_ENABLED
+            slot["img_image"].visible = show and not PANEL_ENABLED
 
     def _get_slots(self):
         return list(self._slots)
@@ -548,8 +562,7 @@ class ColorpickOverlay:
             win = slot.get("window")
             if win:
                 win.destroy()
-            img_win = slot.get("img_window")
-            if img_win:
-                img_win.destroy()
+        # 마커는 뷰포트 프레임(self._frame_overlay) 소유라 여기서 파괴하지 않는다.
+        # _deactivate_all() 로 이미 숨겨졌다.
         self._update_sub = None
         self._slots.clear()
