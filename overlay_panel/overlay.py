@@ -391,10 +391,11 @@ class ColorpickOverlay:
                 slot["window"].position_y = max(oy, min(oy + dh - PANEL_H, raw_y))
                 # 마커는 프레임 로컬 좌표 (창 위치에서 프레임 오프셋 ox, oy 만큼 뺀 값).
                 # 창(raw_x, raw_y)과 정확히 같은 화면 지점에 찍힌다.
+                # 뷰포트 경계 클램프 off: 원본 좌표 그대로 사용, 프레임 밖으로도 나갈 수 있다.
                 lx = sp[0] * sx + PANEL_OFFSET_X
                 ly = sp[1] * sy + PANEL_OFFSET_Y
-                slot["img_placer"].offset_x = ui.Pixel(max(0.0, min(dw - IMG_W, lx)))
-                slot["img_placer"].offset_y = ui.Pixel(max(0.0, min(dh - IMG_H, ly)))
+                slot["img_placer"].offset_x = ui.Pixel(lx)
+                slot["img_placer"].offset_y = ui.Pixel(ly)
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
         try:
