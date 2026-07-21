@@ -22,6 +22,18 @@ PANEL_OFFSET_X   = 12
 PANEL_OFFSET_Y   = 12
 MAX_OVERLAYS     = 5
 
+# 패널 일괄 비활성화 스위치. False면 정보 패널(swatch/라벨) 대신 마커 이미지
+# 한 장만 표시한다. 기존 패널 코드/데이터는 그대로 두고 창 표시 여부만 갈라서,
+# True로 되돌리면 원래 동작으로 즉시 복귀한다.
+PANEL_ENABLED = False
+
+# subpanel과 같은 규칙: 이 파일과 같은 폴더 아래 data/icons/ 에 둔다.
+#   overlay_panel/data/icons/marker.png
+_ICON_DIR    = os.path.join(os.path.dirname(__file__), "data", "icons")
+_ICON_MARKER = os.path.join(_ICON_DIR, "marker.png")
+IMG_W        = 32
+IMG_H        = 32
+
 _WIN_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR          |
     ui.WINDOW_FLAGS_NO_SCROLLBAR          |
@@ -296,12 +308,28 @@ class ColorpickOverlay:
                             ui.Spacer(height=PANEL_PAD)
                         ui.Spacer(width=PANEL_PAD)
 
+            # 패널과 같은 위치에 뜨는 마커 이미지 창 (PANEL_ENABLED=False일 때 대신 표시).
+            img_win = ui.Window(
+                f"_cpoverlay_img_{self._vp_api_id}_{i}",
+                flags=_WIN_FLAGS,
+                width=IMG_W, height=IMG_H,
+                visible=False,
+            )
+            img_win.frame.style = {"background_color": 0x00000000}
+            img_win.frame.opaque_for_mouse_events = False
+            img_win.padding_x = 0
+            img_win.padding_y = 0
+            with img_win.frame:
+                ui.Image(_ICON_MARKER, width=IMG_W, height=IMG_H,
+                         fill_policy=ui.FillPolicy.STRETCH)
+
             self._slots.append({
                 "key"             : None,
                 "index"           : None,
                 "group_id"        : None,
                 "viewport_api_id" : None,
                 "window"          : win,
+                "img_window"      : img_win,
                 "swatch"          : swatch,
                 "color_dot"       : dot,
                 "hex"             : None,
@@ -346,6 +374,8 @@ class ColorpickOverlay:
                 raw_y = py + PANEL_OFFSET_Y
                 slot["window"].position_x = max(ox, min(ox + dw - PANEL_W, raw_x))
                 slot["window"].position_y = max(oy, min(oy + dh - PANEL_H, raw_y))
+                slot["img_window"].position_x = max(ox, min(ox + dw - IMG_W, raw_x))
+                slot["img_window"].position_y = max(oy, min(oy + dh - IMG_H, raw_y))
 
     def _world_to_screen(self, world_pos: tuple, stage) -> "tuple | None":
         try:
@@ -443,7 +473,8 @@ class ColorpickOverlay:
         slot_idx = self._active.pop(key, None)
         if slot_idx is not None:
             slot = self._slots[slot_idx]
-            slot["window"].visible = False
+            slot["window"].visible     = False
+            slot["img_window"].visible = False
             slot["world_pos"]      = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
@@ -455,7 +486,9 @@ class ColorpickOverlay:
     def _refresh_visible(self):
         show = ColorpickOverlay._vis_suppress and self._vis_vp
         for slot_idx in self._active.values():
-            self._slots[slot_idx]["window"].visible = show
+            slot = self._slots[slot_idx]
+            slot["window"].visible     = show and PANEL_ENABLED
+            slot["img_window"].visible = show and not PANEL_ENABLED
 
     def _get_slots(self):
         return list(self._slots)
@@ -509,5 +542,8 @@ class ColorpickOverlay:
             win = slot.get("window")
             if win:
                 win.destroy()
+            img_win = slot.get("img_window")
+            if img_win:
+                img_win.destroy()
         self._update_sub = None
         self._slots.clear()
