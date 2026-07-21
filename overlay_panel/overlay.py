@@ -27,6 +27,11 @@ MAX_OVERLAYS     = 5
 # True로 되돌리면 원래 동작으로 즉시 복귀한다.
 PANEL_ENABLED = False
 
+# 3D 충돌 지점의 빨간 구체 마커 일괄 비활성화 스위치. False면 구체 prim을
+# 아예 만들지 않는다. 생성 코드는 그대로 두고 호출만 건너뛰므로,
+# True로 되돌리면 원래 동작으로 즉시 복귀한다.
+MARKER_ENABLED = False
+
 # subpanel과 같은 규칙: 이 파일과 같은 폴더 아래 data/icons/ 에 둔다.
 #   overlay_panel/data/icons/marker.svg
 _ICON_DIR    = os.path.join(os.path.dirname(__file__), "data", "icons")
@@ -462,7 +467,8 @@ class ColorpickOverlay:
             slot["plotv_label"].visible = False
 
         self._remove_slot_marker(slot)
-        self._create_slot_marker(slot, prim_path, pos3d)
+        if MARKER_ENABLED:
+            self._create_slot_marker(slot, prim_path, pos3d)
 
         self._active[key] = slot_idx
         ColorpickOverlay._key_to_vp[key] = self._vp_api_id
