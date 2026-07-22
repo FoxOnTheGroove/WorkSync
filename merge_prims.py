@@ -32,6 +32,35 @@ def _slot_suffix_index(name: str):
     return None
 
 
+def _remap_subtree_paths(layer, prim_path, old_prefix, new_prefix):
+    """dst 서브트리 안 relationship/connection target 중 old_prefix(=복사 전
+    src 경로)로 시작하는 걸 new_prefix(=dst 경로)로 바꾼다.
+    CopySpec은 스펙만 복사하고 참조 경로는 그대로 두므로, material:binding이나
+    셰이더 그래프 connection이 계속 옛 절대경로(world/원본소스/...)를 가리켜
+    언바인딩(회색)되는 문제를 여기서 고친다."""
+    prim_spec = layer.GetPrimAtPath(prim_path)
+    if prim_spec is None:
+        return
+
+    def _remap(path):
+        return path.ReplacePrefix(old_prefix, new_prefix) if path.HasPrefix(old_prefix) else path
+
+    for rel_spec in prim_spec.relationships.values():
+        items = rel_spec.targetPathList.explicitItems
+        remapped = [_remap(p) for p in items]
+        if remapped != list(items):
+            rel_spec.targetPathList.explicitItems[:] = remapped
+
+    for attr_spec in prim_spec.attributes.values():
+        items = attr_spec.connectionPathList.explicitItems
+        remapped = [_remap(p) for p in items]
+        if remapped != list(items):
+            attr_spec.connectionPathList.explicitItems[:] = remapped
+
+    for child in prim_spec.nameChildren:
+        _remap_subtree_paths(layer, child.path, old_prefix, new_prefix)
+
+
 def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
     """반환: (소스 개수, dest 경로). 실패 시 (0, None)."""
     if stage is None:
@@ -68,6 +97,7 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                     dst = f"{dest}/{rel}/{name}{SLOT_SUFFIX}{i:02d}"
                     Sdf.CreatePrimInLayer(root_layer, dst)
                     Sdf.CopySpec(flat, src, root_layer, dst)
+                    _remap_subtree_paths(root_layer, dst, Sdf.Path(src), Sdf.Path(dst))
                     UsdGeom.Imageable(
                         stage.GetPrimAtPath(dst)).GetVisibilityAttr().Set(
                         UsdGeom.Tokens.invisible)          # 삽입 시 off, 원본(slot 1)만 보임
