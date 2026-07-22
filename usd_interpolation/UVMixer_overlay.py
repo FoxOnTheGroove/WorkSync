@@ -133,6 +133,20 @@ class _ImageSlider:
             self._tip_win.destroy()
             self._tip_win = None
 
+    def _crisp_caps(self, color):
+        """현재 컨테이너(폭은 부모가 결정)에 crisp 캡슐 실루엣을 그린다.
+        세로로 꽉 찬 몸통(좌우 1px 인셋) + 세로 중앙 밴드(풀 폭)의 합집합이라
+        네 끝 모서리 1px만 비고 나머지는 꽉 찬다. border_radius를 안 써서
+        안티앨리어싱 없이 픽셀이 딱 잘린다(4px 기준 각 끝 위/아래 1px씩 컷)."""
+        with ui.HStack():                       # 몸통: 좌우 1px 들어감, 세로 풀
+            ui.Spacer(width=1)
+            ui.Rectangle(style={"background_color": color})
+            ui.Spacer(width=1)
+        with ui.VStack():                       # 밴드: 세로 중앙 (th-2)px, 가로 풀
+            ui.Spacer(height=1)
+            ui.Rectangle(height=self._th - 2, style={"background_color": color})
+            ui.Spacer(height=1)
+
     def _build(self):
         with ui.ZStack(width=self._w, height=self._ks):
             # 드래그 안전망(맨 아래, 영구): 드래그 중 마우스가 핸들 밖으로 나가도
@@ -142,16 +156,16 @@ class _ImageSlider:
             self._catcher.set_mouse_released_fn(self._on_release)
 
             # 트랙 + 채움 (세로 중앙). 채움은 Placer 안 왼쪽 고정, width로 크기.
+            # border_radius(항상 AA되어 4px에선 흐릿)는 안 쓰고, 일반 Rectangle
+            # 조합으로 양 끝 모서리 1px만 하드하게 잘라낸다(crisp, AA 없음).
             with ui.VStack():
                 ui.Spacer()
                 with ui.ZStack(height=self._th):
-                    ui.Rectangle(style={"background_color": _SLIDER_TRACK_BG,
-                                        "border_radius": self._th / 2})
+                    self._crisp_caps(_SLIDER_TRACK_BG)          # 트랙 (풀 폭)
                     with ui.Placer():
-                        self._fill = ui.Rectangle(
-                            width=0, height=self._th,
-                            style={"background_color": _SLIDER_FILL_BG,
-                                   "border_radius": self._th / 2})
+                        self._fill = ui.ZStack(width=0, height=self._th)
+                        with self._fill:
+                            self._crisp_caps(_SLIDER_FILL_BG)   # 채움 (폭 동적)
                 ui.Spacer()
 
             # 핸들: Placer.offset_x로 위치. n/h 이미지 미리 로드 후 visible 토글(깜박임 X).
