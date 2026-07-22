@@ -32,33 +32,60 @@ def _slot_suffix_index(name: str):
     return None
 
 
-def _remap_subtree_paths(layer, prim_path, old_prefix, new_prefix):
-    """dst 서브트리 안 relationship/connection target 중 old_prefix(=복사 전
-    src 경로)로 시작하는 걸 new_prefix(=dst 경로)로 바꾼다.
-    CopySpec은 스펙만 복사하고 참조 경로는 그대로 두므로, material:binding이나
-    셰이더 그래프 connection이 계속 옛 절대경로(world/원본소스/...)를 가리켜
-    언바인딩(회색)되는 문제를 여기서 고친다."""
+def _make_boundary_remap(src_boundary, dst_boundary, slot_idx):
+    """경계(boundary) 하위를 가리키는 target 경로를 dst 경계 하위 대응 경로로
+    바꾸는 함수를 만든다.
+
+    CopySpec은 스펙만 복사하고 relationship/connection target 의 절대경로는
+    그대로 둔다. mesh 의 material:binding 은 보통 형제 스코프(예:
+    world/원본/경계/Looks/Mat)를 가리키는데, 각 경계 직속 자식은 복사 시
+    이름에 _slot_NN 이 붙어(Looks → Looks_slot_02) 옮겨진다. 따라서 단순 prefix
+    치환이 아니라, 경계 바로 아래 첫 컴포넌트에 그 suffix 를 끼워 재작성해야
+    바인딩이 유지된다(안 그러면 언바인딩되어 회색으로 나옴).
+
+        world/원본/경계/Looks/Mat  →  dest/경계/Looks_slot_02/Mat
+    """
+    src_str = src_boundary.pathString
+
+    def _remap(path):
+        if not path.HasPrefix(src_boundary):
+            return path
+        if path == src_boundary:
+            return dst_boundary
+        # 경계 바로 아래 첫 컴포넌트 이름(형제 스코프명, 예: Looks) 추출.
+        # 프로퍼티 target 도 있으므로 prim 경로 기준으로 자른다.
+        remainder = path.GetPrimPath().pathString[len(src_str) + 1:]
+        if not remainder:
+            return path
+        first     = remainder.split("/", 1)[0]
+        src_child = src_boundary.AppendChild(first)
+        dst_child = dst_boundary.AppendChild(f"{first}{SLOT_SUFFIX}{slot_idx:02d}")
+        return path.ReplacePrefix(src_child, dst_child)
+
+    return _remap
+
+
+def _remap_subtree_paths(layer, prim_path, remap):
+    """dst 서브트리를 순회하며 relationship target 과 attribute connection 을
+    remap 함수로 재작성한다."""
     prim_spec = layer.GetPrimAtPath(prim_path)
     if prim_spec is None:
         return
 
-    def _remap(path):
-        return path.ReplacePrefix(old_prefix, new_prefix) if path.HasPrefix(old_prefix) else path
-
     for rel_spec in prim_spec.relationships.values():
         items = rel_spec.targetPathList.explicitItems
-        remapped = [_remap(p) for p in items]
+        remapped = [remap(p) for p in items]
         if remapped != list(items):
             rel_spec.targetPathList.explicitItems[:] = remapped
 
     for attr_spec in prim_spec.attributes.values():
         items = attr_spec.connectionPathList.explicitItems
-        remapped = [_remap(p) for p in items]
+        remapped = [remap(p) for p in items]
         if remapped != list(items):
             attr_spec.connectionPathList.explicitItems[:] = remapped
 
     for child in prim_spec.nameChildren:
-        _remap_subtree_paths(layer, child.path, old_prefix, new_prefix)
+        _remap_subtree_paths(layer, child.path, remap)
 
 
 def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
@@ -83,9 +110,13 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
 
             # 2번째 소스부터: 경계 자식 → dest 경계 아래 name_slot_NN 으로 복제
             for i, root in enumerate(prim_paths[1:], start=2):
-                boundary = stage.GetPrimAtPath(f"{root.rstrip('/')}/{rel}")
+                src_boundary = Sdf.Path(f"{root.rstrip('/')}/{rel}")
+                dst_boundary = Sdf.Path(f"{dest}/{rel}")
+                boundary = stage.GetPrimAtPath(src_boundary)
                 if not boundary.IsValid():
                     continue
+                # 경계 하위 target(형제 Looks 등 포함)을 dst 경계 하위로 리매핑.
+                remap = _make_boundary_remap(src_boundary, dst_boundary, i)
                 for child in list(boundary.GetChildren()):
                     name = child.GetName()
                     if _slot_suffix_index(name) is not None:
@@ -97,7 +128,7 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True):
                     dst = f"{dest}/{rel}/{name}{SLOT_SUFFIX}{i:02d}"
                     Sdf.CreatePrimInLayer(root_layer, dst)
                     Sdf.CopySpec(flat, src, root_layer, dst)
-                    _remap_subtree_paths(root_layer, dst, Sdf.Path(src), Sdf.Path(dst))
+                    _remap_subtree_paths(root_layer, dst, remap)
                     UsdGeom.Imageable(
                         stage.GetPrimAtPath(dst)).GetVisibilityAttr().Set(
                         UsdGeom.Tokens.invisible)          # 삽입 시 off, 원본(slot 1)만 보임
