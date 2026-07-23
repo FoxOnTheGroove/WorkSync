@@ -8,14 +8,14 @@
 #   - 경계 아래 자식들만 대상. 경계 밖/ dest 레퍼런스는 안 건드림.
 #   - dest 원본 자식은 복사/개명 없이 그대로 slot 1.
 #
-# use_slot=True (slot_NN Scope, 원본 포함 전부 슬롯):
+# use_slot=True (slot_NN Xform 컨테이너):
 #   aplane/
-#       slot_01/이하a...  ← dest(prim1) 원본도 첫 슬롯에 들어감 (visible)
-#       slot_02/이하a...  ← prim2 (invisible)
-#   - 경계 서브트리를 이름 그대로 통째로 slot_NN 아래로 복사 → 리맵이 단순
-#     prefix 치환으로 끝남(이름 충돌/변형 없음).
-#   - 주의: dest 레퍼런스를 지우므로 '경계 밖' 콘텐츠는 사라진다.
-#     경계 위 조상(scene/vec 등)의 변환도 보존하지 않는다(조직용 스코프 가정).
+#       이하a            ← dest(prim1) 원본 = slot 1 (그대로 둠)
+#       slot_02/이하a    ← prim2의 이하a (invisible Xform 하위)
+#       slot_03/이하a    ← prim3의 이하a (invisible Xform 하위)
+#   - suffix 방식과 흐름/부작용 완전 동일. 복사본을 name_slot_NN(형제) 대신
+#     slot_NN Xform 컨테이너 아래에 넣기만 한다(이름 안 바꿈 → 리맵은 prefix 치환).
+#   - dest 레퍼런스/경계 스켈레톤 안 건드림 → Fabric 안전. 원본은 제자리 slot 1.
 #
 # - 기록은 루트 레이어에만 (Usd.EditContext).
 # - 병합 후 prim_paths[1:] 는 통째로 삭제.
@@ -127,54 +127,47 @@ def _make_prefix_remap(src_prefix, dst_prefix):
     return _remap
 
 
-def _ensure_slot_skeleton(root_layer, dest, rel):
-    """dest~경계 사이 조상 경로를 root layer 에 def Scope 로 확보한다.
-    dest 레퍼런스를 지운 뒤에도 경계 경로가 살아있게 하기 위함
-    (경계 위 조상의 변환은 보존하지 않는다)."""
-    cur = dest.rstrip("/")
-    for part in rel.strip("/").split("/"):
-        cur = f"{cur}/{part}"
-        spec = Sdf.CreatePrimInLayer(root_layer, cur)
-        if spec.specifier != Sdf.SpecifierDef:
-            spec.specifier = Sdf.SpecifierDef
-        if not spec.typeName:
-            spec.typeName = "Scope"
-
-
 def _merge_slots(stage, flat, root_layer, dest, prim_paths, rels, delete_rest):
-    """use_slot=True 경로. 소스 콘텐츠는 flat 스냅샷에 이미 구워져 있으므로,
-    '합성 충돌을 피하려' dest 레퍼런스/소스를 먼저 지운다(그래야 root 레이어가
-    유일 오피니언). 그 다음 경계 스켈레톤을 세우고, 각 소스의 경계 노드를
-    slot_NN 아래로 통째 복사한다. 원본(prim1)=slot_01(visible), 나머지 invisible."""
+    """use_slot=True 경로. suffix 방식과 '흐름·부작용 전부 동일'하되, 복사본을
+    name_slot_NN(형제)이 아니라 slot_NN Xform 컨테이너 '아래'에 넣기만 한다.
+    dest 레퍼런스/경계 스켈레톤은 안 건드린다(그래서 Fabric 에러 없음).
+    dest 원본은 제자리 = slot 1, 복사된 prim2..N = slot_02..NN(invisible)."""
     with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
-        # 1) 소스는 flat에 보존됨 → dest 레퍼런스 제거 + 나머지 소스 삭제 (먼저)
-        dp = stage.GetPrimAtPath(dest)
-        if dp.IsValid():
-            dp.GetReferences().ClearReferences()
-            dp.GetPayloads().ClearPayloads()
+        for rel in rels:
+            if not stage.GetPrimAtPath(f"{dest}/{rel}").IsValid():
+                print(f"[merge] 경계 없음: {dest}/{rel}")
+                continue
+
+            # 2번째 소스부터: 경계 자식 → dest 경계 아래 slot_NN Xform 하위로 복제
+            for i, root in enumerate(prim_paths[1:], start=2):
+                src_boundary = Sdf.Path(f"{root.rstrip('/')}/{rel}")
+                boundary = stage.GetPrimAtPath(src_boundary)
+                if not boundary.IsValid():
+                    continue
+                slot_path = Sdf.Path(f"{dest}/{rel}/{_slot_name(i)}")
+                # slot Xform 컨테이너 (invisible로 삽입, 원본 slot 1만 보임)
+                slot_prim = UsdGeom.Xform.Define(stage, slot_path)
+                UsdGeom.Imageable(slot_prim).GetVisibilityAttr().Set(
+                    UsdGeom.Tokens.invisible)
+                # 경계 하위 target(형제 Looks 등 포함)을 slot_NN 하위로 prefix 치환
+                remap = _make_prefix_remap(src_boundary, slot_path)
+                for child in list(boundary.GetChildren()):
+                    name = child.GetName()
+                    if _slot_prefix_index(name) is not None:
+                        continue
+                    src = str(child.GetPath())
+                    if flat.GetPrimAtPath(src) is None:
+                        print(f"[merge] flat에 없음: {src}")
+                        continue
+                    dst = f"{slot_path}/{name}"
+                    Sdf.CreatePrimInLayer(root_layer, dst)
+                    Sdf.CopySpec(flat, src, root_layer, dst)
+                    _remap_subtree_paths(root_layer, dst, remap)
+
         if delete_rest:
             for p in dict.fromkeys(x.rstrip("/") for x in prim_paths[1:]):
                 if p != dest and stage.GetPrimAtPath(p).IsValid():
                     stage.RemovePrim(p)
-
-        # 2) 이제 root 레이어만 오피니언 → 스켈레톤 + slot 복사(전부 flat에서)
-        for rel in rels:
-            if flat.GetPrimAtPath(f"{dest}/{rel}") is None:
-                print(f"[merge] flat에 경계 없음: {dest}/{rel}")
-                continue
-            _ensure_slot_skeleton(root_layer, dest, rel)
-            for i, root in enumerate(prim_paths, start=1):
-                src_boundary = Sdf.Path(f"{root.rstrip('/')}/{rel}")
-                if flat.GetPrimAtPath(src_boundary) is None:
-                    continue
-                slot_path = Sdf.Path(f"{dest}/{rel}/{_slot_name(i)}")
-                Sdf.CreatePrimInLayer(root_layer, slot_path)
-                Sdf.CopySpec(flat, src_boundary, root_layer, slot_path)  # 경계 노드+자식 통째
-                _remap_subtree_paths(root_layer, slot_path,
-                                     _make_prefix_remap(src_boundary, slot_path))
-                UsdGeom.Imageable(
-                    stage.GetPrimAtPath(slot_path)).GetVisibilityAttr().Set(
-                    UsdGeom.Tokens.inherited if i == 1 else UsdGeom.Tokens.invisible)
     return len(prim_paths), dest
 
 
@@ -182,10 +175,9 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
                      use_slot=False):
     """반환: (소스 개수, dest 경로). 실패 시 (0, None).
 
-    use_slot=False(기본): 경계 자식을 dest 경계 아래 name_slot_NN 으로 복제,
-      dest 원본은 제자리 slot 1. dest 레퍼런스/경계 밖 콘텐츠는 그대로 둔다.
-    use_slot=True: 경계 서브트리를 원본 포함 전부 slot_NN Scope 로 처박는다
-      (원본=slot_01). dest 레퍼런스를 지우므로 경계 밖 콘텐츠는 사라진다."""
+    use_slot=False(기본): 경계 자식을 dest 경계 아래 name_slot_NN(형제)으로 복제.
+    use_slot=True: 같은 걸 slot_NN Xform 컨테이너 아래에 넣는다(이름 안 바꿈).
+    둘 다 dest 원본은 제자리 slot 1, dest 레퍼런스/경계 밖은 안 건드린다."""
     if stage is None:
         stage = omni.usd.get_context().get_stage()
     if stage is None or not prim_paths:
@@ -246,30 +238,29 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
 # 가시성 (idx 슬롯만 on / suffix 없는 원본 = slot 1)
 # ----------------------------------------------------------------------
 
+def _child_slot_index(name: str):
+    """자식 이름에서 슬롯 번호. slot_NN Xform(use_slot=True) / name_slot_NN
+    suffix(기본) 둘 다 인식. 어느 쪽도 아니면 None(=원본, slot 1)."""
+    idx = _slot_prefix_index(name)              # slot_NN Xform
+    return idx if idx is not None else _slot_suffix_index(name)   # name_slot_NN
+
+
 def set_slot_visible(container_path, idx, stage=None):
     """container(경계) 자식 중 idx 슬롯만 visible.
-    slot_NN Scope(use_slot=True)면 그 인덱스로, 아니면 name_slot_NN suffix로
-    판정한다(suffix 없는 자식은 slot 1로 취급)."""
+    slot_NN Xform / name_slot_NN suffix 둘 다 인식하고, 어느 쪽도 아닌 원본
+    자식은 slot 1로 취급한다."""
     if stage is None:
         stage = omni.usd.get_context().get_stage()
     container = stage.GetPrimAtPath(container_path)
     if not container.IsValid():
         return
-    children = list(container.GetChildren())
-    # slot_NN Scope 자식이 하나라도 있으면 slot 모드로 취급.
-    slot_mode = any(_slot_prefix_index(c.GetName()) is not None for c in children)
-    for child in children:
+    for child in container.GetChildren():
         imageable = UsdGeom.Imageable(child)
         if not imageable:
             continue
-        if slot_mode:
-            slot_idx = _slot_prefix_index(child.GetName())
-            if slot_idx is None:
-                continue                        # slot_NN 아닌 잔여물은 안 건드림
-        else:
-            slot_idx = _slot_suffix_index(child.GetName())
-            if slot_idx is None:
-                slot_idx = 1                    # 원본 = slot 1 (suffix 모드)
+        slot_idx = _child_slot_index(child.GetName())
+        if slot_idx is None:
+            slot_idx = 1                        # 원본 = slot 1
         vis = (UsdGeom.Tokens.inherited if slot_idx == idx
                else UsdGeom.Tokens.invisible)
         imageable.GetVisibilityAttr().Set(vis)
