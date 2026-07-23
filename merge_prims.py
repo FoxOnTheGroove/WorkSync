@@ -141,32 +141,41 @@ def _ensure_slot_skeleton(root_layer, dest, rel):
             spec.typeName = "Scope"
 
 
-def _author_visibility(root_layer, prim_path, visible):
-    spec = root_layer.GetPrimAtPath(prim_path)
-    if spec is None:
-        return
-    vis = spec.attributes.get(UsdGeom.Tokens.visibility)
-    if vis is None:
-        vis = Sdf.AttributeSpec(spec, UsdGeom.Tokens.visibility,
-                                Sdf.ValueTypeNames.Token)
-    vis.default = UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
+def _merge_slots(stage, flat, root_layer, dest, prim_paths, rels, delete_rest):
+    """use_slot=True 경로. 소스 콘텐츠는 flat 스냅샷에 이미 구워져 있으므로,
+    '합성 충돌을 피하려' dest 레퍼런스/소스를 먼저 지운다(그래야 root 레이어가
+    유일 오피니언). 그 다음 경계 스켈레톤을 세우고, 각 소스의 경계 노드를
+    slot_NN 아래로 통째 복사한다. 원본(prim1)=slot_01(visible), 나머지 invisible."""
+    with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
+        # 1) 소스는 flat에 보존됨 → dest 레퍼런스 제거 + 나머지 소스 삭제 (먼저)
+        dp = stage.GetPrimAtPath(dest)
+        if dp.IsValid():
+            dp.GetReferences().ClearReferences()
+            dp.GetPayloads().ClearPayloads()
+        if delete_rest:
+            for p in dict.fromkeys(x.rstrip("/") for x in prim_paths[1:]):
+                if p != dest and stage.GetPrimAtPath(p).IsValid():
+                    stage.RemovePrim(p)
 
-
-def _copy_boundary_into_slots(flat, root_layer, dest, rel, prim_paths):
-    """경계 서브트리를 소스별 slot_NN Scope 로 통째 복사. 원본(prim1)=slot_01,
-    prim2=slot_02 ... slot_01 만 보이고 나머지는 invisible."""
-    _ensure_slot_skeleton(root_layer, dest, rel)
-    for i, root in enumerate(prim_paths, start=1):
-        src_boundary = Sdf.Path(f"{root.rstrip('/')}/{rel}")
-        if flat.GetPrimAtPath(src_boundary) is None:
-            print(f"[merge] flat에 없음: {src_boundary}")
-            continue
-        slot_path = Sdf.Path(f"{dest}/{rel}/{_slot_name(i)}")
-        Sdf.CreatePrimInLayer(root_layer, slot_path)
-        Sdf.CopySpec(flat, src_boundary, root_layer, slot_path)   # 경계 노드+자식 통째
-        _remap_subtree_paths(root_layer, slot_path,
-                             _make_prefix_remap(src_boundary, slot_path))
-        _author_visibility(root_layer, slot_path, visible=(i == 1))
+        # 2) 이제 root 레이어만 오피니언 → 스켈레톤 + slot 복사(전부 flat에서)
+        for rel in rels:
+            if flat.GetPrimAtPath(f"{dest}/{rel}") is None:
+                print(f"[merge] flat에 경계 없음: {dest}/{rel}")
+                continue
+            _ensure_slot_skeleton(root_layer, dest, rel)
+            for i, root in enumerate(prim_paths, start=1):
+                src_boundary = Sdf.Path(f"{root.rstrip('/')}/{rel}")
+                if flat.GetPrimAtPath(src_boundary) is None:
+                    continue
+                slot_path = Sdf.Path(f"{dest}/{rel}/{_slot_name(i)}")
+                Sdf.CreatePrimInLayer(root_layer, slot_path)
+                Sdf.CopySpec(flat, src_boundary, root_layer, slot_path)  # 경계 노드+자식 통째
+                _remap_subtree_paths(root_layer, slot_path,
+                                     _make_prefix_remap(src_boundary, slot_path))
+                UsdGeom.Imageable(
+                    stage.GetPrimAtPath(slot_path)).GetVisibilityAttr().Set(
+                    UsdGeom.Tokens.inherited if i == 1 else UsdGeom.Tokens.invisible)
+    return len(prim_paths), dest
 
 
 def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
@@ -188,16 +197,16 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
     # → 합성 결과를 구운 flat 스냅샷에서 CopySpec으로 가져온다
     flat = stage.Flatten()
     root_layer = stage.GetRootLayer()
+    rels = [b.strip("/") for b in boundaries]
+
+    if use_slot:
+        return _merge_slots(stage, flat, root_layer, dest, prim_paths, rels,
+                            delete_rest)
 
     with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
-        for rel in [b.strip("/") for b in boundaries]:
+        for rel in rels:
             if not stage.GetPrimAtPath(f"{dest}/{rel}").IsValid():
                 print(f"[merge] 경계 없음: {dest}/{rel}")
-                continue
-
-            if use_slot:
-                # 원본 포함 전 소스를 slot_NN Scope 하위로 통째 복사.
-                _copy_boundary_into_slots(flat, root_layer, dest, rel, prim_paths)
                 continue
 
             # 2번째 소스부터: 경계 자식 → dest 경계 아래 name_slot_NN 으로 복제
@@ -224,13 +233,6 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
                     UsdGeom.Imageable(
                         stage.GetPrimAtPath(dst)).GetVisibilityAttr().Set(
                         UsdGeom.Tokens.invisible)          # 삽입 시 off, 원본(slot 1)만 보임
-
-        # use_slot: 원본 직속 자식은 이미 slot_01 로 복사됨 → dest 레퍼런스 제거
-        if use_slot:
-            dp = stage.GetPrimAtPath(dest)
-            if dp.IsValid():
-                dp.GetReferences().ClearReferences()
-                dp.GetPayloads().ClearPayloads()
 
         if delete_rest:
             for p in dict.fromkeys(x.rstrip("/") for x in prim_paths[1:]):
