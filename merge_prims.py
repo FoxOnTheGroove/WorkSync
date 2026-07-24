@@ -18,9 +18,18 @@
 #   - dest 레퍼런스/경계 스켈레톤 안 건드림 → Fabric 안전. 원본은 제자리 slot 1.
 #
 # - 기록은 루트 레이어에만 (Usd.EditContext).
-# - 병합 후 prim_paths[1:] 는 통째로 삭제.
+# - eager 병합은 prim_paths[1:] 를 통째로 삭제.
 #
-# 사용 예:
+# 지연 로딩 (SlotLoader) — N개 한꺼번에 로드가 무거울 때:
+#   메인 프림(=slot 1)만 로드해 두고, 2..N 은 USD 경로만 받아 둔다. 슬라이더
+#   committed(k) 때 slot k 가 아직이면 {main}/__slotload_NN 에 비동기 로드하고
+#   각 경계를 slot_k 로 복사(계층 분리) 후 임시 로드본 삭제. 이미 있으면 토글만.
+#   구조/부작용은 use_slot 과 동일(검증된 복사 경로) → Fabric 안전.
+#     loader = SlotLoader(main_prim, usd_paths, BOUNDARIES,
+#                         load_fn=myclass.usdload, busy_fn=set_slider_enabled)
+#     slider.on_change_committed(loader.show_slot)     # k=1..N
+#
+# 사용 예 (eager):
 #   BOUNDARIES = ["scene/vec/aplane", "scene/vec/bplane"]
 #   count, merged = merge_into_first([p1, p2], BOUNDARIES)               # suffix 방식
 #   count, merged = merge_into_first([p1, p2], BOUNDARIES, use_slot=True) # slot 방식
@@ -29,6 +38,8 @@
 #   # IntSlider 연결:
 #   slider.model.add_value_changed_fn(
 #       lambda m: set_slot_visible_all(merged, m.get_value_as_int(), BOUNDARIES))
+
+import asyncio
 
 import omni.usd
 from pxr import Usd, UsdGeom, Sdf
@@ -127,42 +138,44 @@ def _make_prefix_remap(src_prefix, dst_prefix):
     return _remap
 
 
+def _fill_slot(stage, flat, root_layer, dest, rel, i, src_root):
+    """src_root 아래 경계(rel) 자식들을 dest 경계 아래 slot_i Xform 하위로 복사한다
+    (slot_i 는 invisible). 이름 그대로 통째로 내리므로 리맵은 prefix 치환.
+    반환: 복사 대상 경계가 있었는지(True/False)."""
+    src_boundary = Sdf.Path(f"{src_root.rstrip('/')}/{rel}")
+    boundary = stage.GetPrimAtPath(src_boundary)
+    if not boundary.IsValid():
+        return False
+    slot_path = Sdf.Path(f"{dest}/{rel}/{_slot_name(i)}")
+    slot_prim = UsdGeom.Xform.Define(stage, slot_path)              # 컨테이너
+    UsdGeom.Imageable(slot_prim).GetVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+    remap = _make_prefix_remap(src_boundary, slot_path)
+    for child in list(boundary.GetChildren()):
+        name = child.GetName()
+        if _slot_prefix_index(name) is not None:
+            continue
+        src = str(child.GetPath())
+        if flat.GetPrimAtPath(src) is None:
+            print(f"[merge] flat에 없음: {src}")
+            continue
+        dst = f"{slot_path}/{name}"
+        Sdf.CreatePrimInLayer(root_layer, dst)
+        Sdf.CopySpec(flat, src, root_layer, dst)
+        _remap_subtree_paths(root_layer, dst, remap)
+    return True
+
+
 def _merge_slots(stage, flat, root_layer, dest, prim_paths, rels, delete_rest):
-    """use_slot=True 경로. suffix 방식과 '흐름·부작용 전부 동일'하되, 복사본을
-    name_slot_NN(형제)이 아니라 slot_NN Xform 컨테이너 '아래'에 넣기만 한다.
-    dest 레퍼런스/경계 스켈레톤은 안 건드린다(그래서 Fabric 에러 없음).
-    dest 원본은 제자리 = slot 1, 복사된 prim2..N = slot_02..NN(invisible)."""
+    """use_slot=True(eager) 경로. 복사본을 name_slot_NN(형제)이 아니라 slot_NN
+    Xform 컨테이너 아래에 넣는다. dest 원본은 제자리 = slot 1, prim2..N=slot_02..NN.
+    dest 레퍼런스/경계 스켈레톤 안 건드림(Fabric 안전)."""
     with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
         for rel in rels:
             if not stage.GetPrimAtPath(f"{dest}/{rel}").IsValid():
                 print(f"[merge] 경계 없음: {dest}/{rel}")
                 continue
-
-            # 2번째 소스부터: 경계 자식 → dest 경계 아래 slot_NN Xform 하위로 복제
             for i, root in enumerate(prim_paths[1:], start=2):
-                src_boundary = Sdf.Path(f"{root.rstrip('/')}/{rel}")
-                boundary = stage.GetPrimAtPath(src_boundary)
-                if not boundary.IsValid():
-                    continue
-                slot_path = Sdf.Path(f"{dest}/{rel}/{_slot_name(i)}")
-                # slot Xform 컨테이너 (invisible로 삽입, 원본 slot 1만 보임)
-                slot_prim = UsdGeom.Xform.Define(stage, slot_path)
-                UsdGeom.Imageable(slot_prim).GetVisibilityAttr().Set(
-                    UsdGeom.Tokens.invisible)
-                # 경계 하위 target(형제 Looks 등 포함)을 slot_NN 하위로 prefix 치환
-                remap = _make_prefix_remap(src_boundary, slot_path)
-                for child in list(boundary.GetChildren()):
-                    name = child.GetName()
-                    if _slot_prefix_index(name) is not None:
-                        continue
-                    src = str(child.GetPath())
-                    if flat.GetPrimAtPath(src) is None:
-                        print(f"[merge] flat에 없음: {src}")
-                        continue
-                    dst = f"{slot_path}/{name}"
-                    Sdf.CreatePrimInLayer(root_layer, dst)
-                    Sdf.CopySpec(flat, src, root_layer, dst)
-                    _remap_subtree_paths(root_layer, dst, remap)
+                _fill_slot(stage, flat, root_layer, dest, rel, i, root)
 
         if delete_rest:
             for p in dict.fromkeys(x.rstrip("/") for x in prim_paths[1:]):
@@ -270,3 +283,106 @@ def set_slot_visible_all(merged_root, idx, boundaries, stage=None):
     merged_root = merged_root.rstrip("/")
     for rel in boundaries:
         set_slot_visible(f"{merged_root}/{rel.strip('/')}", idx, stage)
+
+
+# ----------------------------------------------------------------------
+# 지연 로딩 슬롯 (N개 한꺼번에 로드가 무거워, 메인 프림만 두고 2..N은 온디맨드)
+# ----------------------------------------------------------------------
+
+class SlotLoader:
+    """슬라이더 change_committed(동기)에 show_slot(k) 를 연결해 쓴다.
+
+      main_prim  : 1번 메인 프림 경로. 이미 로드됨 = slot 1 (제자리, 복사 안 함).
+      usd_paths  : 1..N USD 경로 리스트 (usd_paths[0]=slot1은 이미 로드라 안 씀).
+      boundaries : 경계 상대경로 리스트.
+      load_fn    : async load_fn(usd_path, target_path) — target_path 에 USD 로드(await).
+                   예) myclass.usdload.  로드만 하면 됨(반환값 안 씀).
+      busy_fn    : (선택) busy_fn(bool) — 로드 시작 True / 끝 False.
+                   UI가 로드 중 슬라이더를 잠그는 용도.
+
+    슬롯 번호(1-based): 1 = main_prim, k(>=2) = usd_paths[k-1].
+    slot k 첫 방문 시 {main_prim}/__slotload_NN 에 로드 → 각 경계를 slot_k 로 복사 →
+    임시 로드본 삭제. 이후엔 visibility 토글만. 로드 진행 중엔 새 요청을 무시(차단)."""
+
+    def __init__(self, main_prim, usd_paths, boundaries, load_fn,
+                 busy_fn=None, stage=None):
+        self._dest = main_prim.rstrip("/")
+        self._usd_paths = list(usd_paths)
+        self._boundaries = [b.strip("/") for b in boundaries]
+        self._load_fn = load_fn
+        self._busy_fn = busy_fn
+        self._stage = stage or omni.usd.get_context().get_stage()
+        self._loaded = {1}          # slot 1 = main_prim 이미 존재
+        self._busy = False
+        self._prebuild_slots()
+
+    @property
+    def slot_count(self):
+        return len(self._usd_paths)
+
+    def is_loaded(self, k) -> bool:
+        return k in self._loaded
+
+    @property
+    def busy(self) -> bool:
+        return self._busy
+
+    def _prebuild_slots(self):
+        # 빈 slot_NN Xform(invisible)을 각 경계 아래 미리 만들어 둔다(2..N).
+        stage = self._stage
+        if stage is None:
+            return
+        root_layer = stage.GetRootLayer()
+        with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
+            for rel in self._boundaries:
+                if not stage.GetPrimAtPath(f"{self._dest}/{rel}").IsValid():
+                    continue
+                for k in range(2, self.slot_count + 1):
+                    slot_path = f"{self._dest}/{rel}/{_slot_name(k)}"
+                    if not stage.GetPrimAtPath(slot_path).IsValid():
+                        p = UsdGeom.Xform.Define(stage, slot_path)
+                        UsdGeom.Imageable(p).GetVisibilityAttr().Set(
+                            UsdGeom.Tokens.invisible)
+
+    def show_slot(self, k):
+        """슬라이더 committed 콜백(동기). 로드 중이면 무시(차단).
+        이미 로드된 슬롯은 즉시 토글, 아니면 비동기 로드 후 토글."""
+        if self._busy:
+            return
+        if k in self._loaded:
+            set_slot_visible_all(self._dest, k, self._boundaries, self._stage)
+            return
+        if k < 2 or k > self.slot_count:
+            return
+        asyncio.ensure_future(self._load_and_show(k))
+
+    async def _load_and_show(self, k):
+        self._busy = True
+        if self._busy_fn:
+            self._busy_fn(True)
+        try:
+            target = f"{self._dest}/__slotload_{k:02d}"
+            await self._load_fn(self._usd_paths[k - 1], target)   # 외부 async 로드
+            self._fill_from_target(k, target)
+            self._loaded.add(k)
+            set_slot_visible_all(self._dest, k, self._boundaries, self._stage)
+        except Exception as e:
+            print(f"[SlotLoader] slot {k} 로드/복사 실패: {e}")
+        finally:
+            self._busy = False
+            if self._busy_fn:
+                self._busy_fn(False)
+
+    def _fill_from_target(self, k, target):
+        # target 아래 각 경계를 slot_k 로 복사한 뒤 target(임시 로드본) 삭제.
+        stage = self._stage
+        flat = stage.Flatten()                       # 방금 로드된 target 포함해 굽기
+        root_layer = stage.GetRootLayer()
+        with Usd.EditContext(stage, Usd.EditTarget(root_layer)):
+            for rel in self._boundaries:
+                if not stage.GetPrimAtPath(f"{self._dest}/{rel}").IsValid():
+                    print(f"[SlotLoader] 경계 없음: {self._dest}/{rel}")
+                    continue
+                _fill_slot(stage, flat, root_layer, self._dest, rel, k, target)
+            if stage.GetPrimAtPath(target).IsValid():
+                stage.RemovePrim(target)             # 복사 후 임시 원본 삭제
