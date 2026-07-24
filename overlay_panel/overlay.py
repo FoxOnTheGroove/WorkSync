@@ -41,14 +41,14 @@ IMG_H        = 32
 
 # 마커 이미지 우하단 숫자 배지. 활성 마커의 '찍힌 순서'를 표시한다
 # (가장 오래된=1 … 최신=MAX_OVERLAYS). 새 마커가 한도 초과로 들어오면 1이 빠지고
-# 나머지가 하나씩 당겨진다(_renumber). omni.ui엔 텍스트 외곽선이 없어서, 흰 라벨을
-# 8방향 1px 오프셋으로 깔고 그 위에 검정 라벨을 올려 흰 외곽선을 낸다.
-NUM_FONT      = 15
-NUM_COLOR     = 0xFF000000     # 검정 (0xAABBGGRR)
-NUM_OUTLINE   = 0xFFFFFFFF     # 흰 외곽선
-NUM_MARGIN    = 2              # 우하단 여백(px)
-_OUTLINE_OFFSETS = [(-1, -1), (0, -1), (1, -1), (-1, 0),
-                    (1, 0), (-1, 1), (0, 1), (1, 1)]
+# 나머지가 하나씩 당겨진다(_renumber). omni.ui엔 텍스트 외곽선이 없어서, 본문보다
+# 큰 흰 라벨을 뒤에 깔아(우하단으로 살짝 밀어 사방으로 삐져나오게) 외곽선을 낸다.
+NUM_FONT           = 15
+NUM_COLOR          = 0xFF000000   # 검정 (0xAABBGGRR)
+NUM_OUTLINE        = 0xFFFFFFFF   # 흰 외곽선
+NUM_MARGIN         = 2            # 우하단 여백(px)
+NUM_OUTLINE_BUMP   = 2            # 외곽선 라벨 폰트 크기 가산(+pt)
+NUM_OUTLINE_SHIFT  = 1            # 큰 외곽선 라벨을 우하단으로 미는 양(px) — 사방 halo
 
 _WIN_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR          |
@@ -378,21 +378,24 @@ class ColorpickOverlay:
 
     def _build_number_badge(self):
         # 이미지 우하단(RIGHT_BOTTOM) 숫자. omni.ui엔 텍스트 외곽선이 없어서,
-        # 흰 라벨을 8방향 1px 오프셋으로 깔고 그 위에 검정 라벨을 올려 흰 외곽선을
-        # 낸다. 반환: 텍스트 갱신용 라벨 리스트(전부 같은 숫자를 표시).
-        base = {"font_size": NUM_FONT,
-                "margin_width": NUM_MARGIN, "margin_height": NUM_MARGIN}
+        # 본문(15pt 검정)보다 큰 흰 라벨(+NUM_OUTLINE_BUMP)을 뒤에 깔고 우하단으로
+        # NUM_OUTLINE_SHIFT 만큼 밀어, 흰색이 사방으로 삐져나오게 해 외곽선을 낸다.
+        # 반환: 텍스트 갱신용 라벨 리스트(전부 같은 숫자를 표시).
+        base = {"margin_width": NUM_MARGIN, "margin_height": NUM_MARGIN}
         labels = []
-        for dx, dy in _OUTLINE_OFFSETS:
-            with ui.Placer(offset_x=ui.Pixel(dx), offset_y=ui.Pixel(dy)):
-                labels.append(ui.Label(
-                    "", width=IMG_W, height=IMG_H,
-                    alignment=ui.Alignment.RIGHT_BOTTOM,
-                    style={**base, "color": NUM_OUTLINE}))
-        labels.append(ui.Label(                       # 검정 본문 (맨 위)
+        # 외곽선: 큰 흰 라벨 (뒤에 깔림)
+        with ui.Placer(offset_x=ui.Pixel(NUM_OUTLINE_SHIFT),
+                       offset_y=ui.Pixel(NUM_OUTLINE_SHIFT)):
+            labels.append(ui.Label(
+                "", width=IMG_W, height=IMG_H,
+                alignment=ui.Alignment.RIGHT_BOTTOM,
+                style={**base, "font_size": NUM_FONT + NUM_OUTLINE_BUMP,
+                       "color": NUM_OUTLINE}))
+        # 본문: 검정 (위)
+        labels.append(ui.Label(
             "", width=IMG_W, height=IMG_H,
             alignment=ui.Alignment.RIGHT_BOTTOM,
-            style={**base, "color": NUM_COLOR}))
+            style={**base, "font_size": NUM_FONT, "color": NUM_COLOR}))
         return labels
 
     # ------------------------------------------------------------------
