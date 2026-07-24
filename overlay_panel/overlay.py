@@ -39,6 +39,16 @@ _ICON_MARKER = os.path.join(_ICON_DIR, "marker.svg")
 IMG_W        = 32
 IMG_H        = 32
 
+# 마커 이미지 우하단 숫자 배지 (1~4 순환). omni.ui엔 텍스트 외곽선이 없어서
+# 흰 라벨을 8방향 1px 오프셋으로 깔고 그 위에 검정 라벨을 올려 흰 외곽선을 낸다.
+NUM_FONT      = 15
+NUM_COLOR     = 0xFF000000     # 검정 (0xAABBGGRR)
+NUM_OUTLINE   = 0xFFFFFFFF     # 흰 외곽선
+NUM_MARGIN    = 2              # 우하단 여백(px)
+NUM_CYCLE_MAX = 4              # 1..4 순환
+_OUTLINE_OFFSETS = [(-1, -1), (0, -1), (1, -1), (-1, 0),
+                    (1, 0), (-1, 1), (0, 1), (1, 1)]
+
 _WIN_FLAGS = (
     ui.WINDOW_FLAGS_NO_TITLE_BAR          |
     ui.WINDOW_FLAGS_NO_SCROLLBAR          |
@@ -99,6 +109,7 @@ class ColorpickOverlay:
     _instances: dict  = {}
     _key_to_vp: dict  = {}
     _next_key: int    = 0
+    _num_cycle: int   = 0                               # 마커 숫자 1..NUM_CYCLE_MAX 순환용
     _vis_suppress: bool = True
     _vp_datatype_key: dict[str, str]     = {}          # vp_api_id → "pressure"|"velocity"|"temperature"
     _velocity_range: tuple[float, float] = (0.01, 10.0)
@@ -108,6 +119,12 @@ class ColorpickOverlay:
         k = cls._next_key
         cls._next_key += 1
         return k
+
+    @classmethod
+    def _next_number(cls) -> int:
+        # 1, 2, 3, 4, 1, 2, ... 순환
+        cls._num_cycle = cls._num_cycle % NUM_CYCLE_MAX + 1
+        return cls._num_cycle
 
     # ------------------------------------------------------------------
     # classmethod API
@@ -322,7 +339,10 @@ class ColorpickOverlay:
                 "viewport_api_id" : None,
                 "window"          : win,
                 "img_placer"      : None,   # 뷰포트 프레임 오버레이 안의 마커 위치 (아래에서 채움)
-                "img_image"       : None,   # 마커 이미지 위젯 (visible 토글로 표시)
+                "img_group"       : None,   # 마커 이미지+숫자 묶음 (visible 토글 대상)
+                "img_image"       : None,   # 마커 이미지 위젯
+                "num_labels"      : None,   # 우하단 숫자 라벨들 (외곽선+본문)
+                "number"          : None,   # 현재 표시 숫자 (1..NUM_CYCLE_MAX)
                 "swatch"          : swatch,
                 "color_dot"       : dot,
                 "hex"             : None,
@@ -348,14 +368,38 @@ class ColorpickOverlay:
                 for slot in self._slots:
                     placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
                     with placer:
-                        img = ui.Image(
-                            _ICON_MARKER,
-                            width=IMG_W, height=IMG_H,
-                            fill_policy=ui.FillPolicy.STRETCH,
-                            visible=False,
-                        )
+                        # 이미지 + 우하단 숫자를 한 묶음으로. visible 토글은 묶음에.
+                        group = ui.ZStack(width=IMG_W, height=IMG_H, visible=False)
+                        with group:
+                            img = ui.Image(
+                                _ICON_MARKER,
+                                width=IMG_W, height=IMG_H,
+                                fill_policy=ui.FillPolicy.STRETCH,
+                            )
+                            num_labels = self._build_number_badge()
                     slot["img_placer"] = placer
+                    slot["img_group"]  = group
                     slot["img_image"]  = img
+                    slot["num_labels"] = num_labels
+
+    def _build_number_badge(self):
+        # 이미지 우하단(RIGHT_BOTTOM) 숫자. omni.ui엔 텍스트 외곽선이 없어서,
+        # 흰 라벨을 8방향 1px 오프셋으로 깔고 그 위에 검정 라벨을 올려 흰 외곽선을
+        # 낸다. 반환: 텍스트 갱신용 라벨 리스트(전부 같은 숫자를 표시).
+        base = {"font_size": NUM_FONT,
+                "margin_width": NUM_MARGIN, "margin_height": NUM_MARGIN}
+        labels = []
+        for dx, dy in _OUTLINE_OFFSETS:
+            with ui.Placer(offset_x=ui.Pixel(dx), offset_y=ui.Pixel(dy)):
+                labels.append(ui.Label(
+                    "", width=IMG_W, height=IMG_H,
+                    alignment=ui.Alignment.RIGHT_BOTTOM,
+                    style={**base, "color": NUM_OUTLINE}))
+        labels.append(ui.Label(                       # 검정 본문 (맨 위)
+            "", width=IMG_W, height=IMG_H,
+            alignment=ui.Alignment.RIGHT_BOTTOM,
+            style={**base, "color": NUM_COLOR}))
+        return labels
 
     # ------------------------------------------------------------------
 
@@ -481,6 +525,12 @@ class ColorpickOverlay:
         else:
             slot["plotv_label"].visible = False
 
+        # 마커 우하단 숫자 (1..4 순환)
+        n = ColorpickOverlay._next_number()
+        slot["number"] = n
+        for lbl in slot["num_labels"]:
+            lbl.text = str(n)
+
         self._remove_slot_marker(slot)
         if MARKER_ENABLED:
             self._create_slot_marker(slot, prim_path, pos3d)
@@ -495,7 +545,7 @@ class ColorpickOverlay:
         if slot_idx is not None:
             slot = self._slots[slot_idx]
             slot["window"].visible    = False
-            slot["img_image"].visible = False
+            slot["img_group"].visible = False
             slot["world_pos"]      = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
@@ -509,7 +559,7 @@ class ColorpickOverlay:
         for slot_idx in self._active.values():
             slot = self._slots[slot_idx]
             slot["window"].visible    = show and PANEL_ENABLED
-            slot["img_image"].visible = show and not PANEL_ENABLED
+            slot["img_group"].visible = show and not PANEL_ENABLED
 
     def _get_slots(self):
         return list(self._slots)
