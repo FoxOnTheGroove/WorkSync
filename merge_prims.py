@@ -367,7 +367,9 @@ class SlotLoader:
             self._loaded.add(k)
             set_slot_visible_all(self._dest, k, self._boundaries, self._stage)
         except Exception as e:
+            import traceback
             print(f"[SlotLoader] slot {k} 로드/복사 실패: {e}")
+            traceback.print_exc()          # 정확한 파일:줄 확인용
         finally:
             self._busy = False
             if self._busy_fn:
