@@ -20,7 +20,7 @@ PANEL_PAD        = 6
 ITEM_GAP         = 5
 PANEL_OFFSET_X   = 12
 PANEL_OFFSET_Y   = 12
-MAX_OVERLAYS     = 5
+MAX_OVERLAYS     = 4
 
 # 패널 일괄 비활성화 스위치. False면 정보 패널(swatch/라벨) 대신 마커 이미지
 # 한 장만 표시한다. 기존 패널 코드/데이터는 그대로 두고 창 표시 여부만 갈라서,
@@ -39,13 +39,14 @@ _ICON_MARKER = os.path.join(_ICON_DIR, "marker.svg")
 IMG_W        = 32
 IMG_H        = 32
 
-# 마커 이미지 우하단 숫자 배지 (1~4 순환). omni.ui엔 텍스트 외곽선이 없어서
-# 흰 라벨을 8방향 1px 오프셋으로 깔고 그 위에 검정 라벨을 올려 흰 외곽선을 낸다.
+# 마커 이미지 우하단 숫자 배지. 활성 마커의 '찍힌 순서'를 표시한다
+# (가장 오래된=1 … 최신=MAX_OVERLAYS). 새 마커가 한도 초과로 들어오면 1이 빠지고
+# 나머지가 하나씩 당겨진다(_renumber). omni.ui엔 텍스트 외곽선이 없어서, 흰 라벨을
+# 8방향 1px 오프셋으로 깔고 그 위에 검정 라벨을 올려 흰 외곽선을 낸다.
 NUM_FONT      = 15
 NUM_COLOR     = 0xFF000000     # 검정 (0xAABBGGRR)
 NUM_OUTLINE   = 0xFFFFFFFF     # 흰 외곽선
 NUM_MARGIN    = 2              # 우하단 여백(px)
-NUM_CYCLE_MAX = 4              # 1..4 순환
 _OUTLINE_OFFSETS = [(-1, -1), (0, -1), (1, -1), (-1, 0),
                     (1, 0), (-1, 1), (0, 1), (1, 1)]
 
@@ -109,7 +110,6 @@ class ColorpickOverlay:
     _instances: dict  = {}
     _key_to_vp: dict  = {}
     _next_key: int    = 0
-    _num_cycle: int   = 0                               # 마커 숫자 1..NUM_CYCLE_MAX 순환용
     _vis_suppress: bool = True
     _vp_datatype_key: dict[str, str]     = {}          # vp_api_id → "pressure"|"velocity"|"temperature"
     _velocity_range: tuple[float, float] = (0.01, 10.0)
@@ -119,12 +119,6 @@ class ColorpickOverlay:
         k = cls._next_key
         cls._next_key += 1
         return k
-
-    @classmethod
-    def _next_number(cls) -> int:
-        # 1, 2, 3, 4, 1, 2, ... 순환
-        cls._num_cycle = cls._num_cycle % NUM_CYCLE_MAX + 1
-        return cls._num_cycle
 
     # ------------------------------------------------------------------
     # classmethod API
@@ -342,7 +336,7 @@ class ColorpickOverlay:
                 "img_group"       : None,   # 마커 이미지+숫자 묶음 (visible 토글 대상)
                 "img_image"       : None,   # 마커 이미지 위젯
                 "num_labels"      : None,   # 우하단 숫자 라벨들 (외곽선+본문)
-                "number"          : None,   # 현재 표시 숫자 (1..NUM_CYCLE_MAX)
+                "number"          : None,   # 현재 표시 숫자 (찍힌 순서 1..MAX_OVERLAYS)
                 "swatch"          : swatch,
                 "color_dot"       : dot,
                 "hex"             : None,
@@ -525,20 +519,27 @@ class ColorpickOverlay:
         else:
             slot["plotv_label"].visible = False
 
-        # 마커 우하단 숫자 (1..4 순환)
-        n = ColorpickOverlay._next_number()
-        slot["number"] = n
-        for lbl in slot["num_labels"]:
-            lbl.text = str(n)
-
         self._remove_slot_marker(slot)
         if MARKER_ENABLED:
             self._create_slot_marker(slot, prim_path, pos3d)
 
         self._active[key] = slot_idx
         ColorpickOverlay._key_to_vp[key] = self._vp_api_id
+        self._renumber()          # 찍힌 순서대로 1..N 재부여 (새 것이 최신 번호)
         self._refresh_visible()
         return key
+
+    def _renumber(self):
+        # 활성 마커를 찍힌 순서(가장 오래된=1 … 최신=마지막)로 다시 번호 매김.
+        # _active 는 OrderedDict라 삽입 순서를 유지한다.
+        for pos, slot_idx in enumerate(self._active.values(), start=1):
+            slot = self._slots[slot_idx]
+            slot["number"] = pos
+            labels = slot["num_labels"]
+            if labels:
+                text = str(pos)
+                for lbl in labels:
+                    lbl.text = text
 
     def _deactivate(self, key: int):
         slot_idx = self._active.pop(key, None)
@@ -549,6 +550,7 @@ class ColorpickOverlay:
             slot["world_pos"]      = None
             self._remove_slot_marker(slot)
         ColorpickOverlay._key_to_vp.pop(key, None)
+        self._renumber()          # 하나 빠지면 남은 것들 번호를 당겨서 다시 매김
 
     def _deactivate_all(self):
         for key in list(self._active.keys()):
