@@ -185,8 +185,12 @@ def _merge_slots(stage, flat, root_layer, dest, prim_paths, rels, delete_rest):
 
 
 def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
-                     use_slot=False):
+                     use_slot=False, main_prim=None):
     """반환: (소스 개수, dest 경로). 실패 시 (0, None).
+
+    dest(메인 프림)는 main_prim 으로 따로 받는다. 입력 리스트가 전부 USD 경로로
+    바뀌어 prim_paths[0] 이 더는 dest 가 아니기 때문. main_prim 을 안 주면 예전처럼
+    prim_paths[0] 을 dest 로 쓴다(하위호환).
 
     use_slot=False(기본): 경계 자식을 dest 경계 아래 name_slot_NN(형제)으로 복제.
     use_slot=True: 같은 걸 slot_NN Xform 컨테이너 아래에 넣는다(이름 안 바꿈).
@@ -196,7 +200,7 @@ def merge_into_first(prim_paths, boundaries, stage=None, delete_rest=True,
     if stage is None or not prim_paths:
         return 0, None
 
-    dest = prim_paths[0].rstrip("/")
+    dest = (main_prim if main_prim else prim_paths[0]).rstrip("/")
 
     # reference 합성 콘텐츠는 로컬 레이어에 spec이 없어 그대로 복사가 안 됨
     # → 합성 결과를 구운 flat 스냅샷에서 CopySpec으로 가져온다
