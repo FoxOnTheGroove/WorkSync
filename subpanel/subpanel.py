@@ -103,6 +103,7 @@ class ImageSlider:
         self._float_range = float_range
         self._dragging = False
         self._hovering = False
+        self._enabled = True       # False면 입력 자체를 안 받는다(set_enabled)
         self._tooltip_enabled = tooltip
         self._tip_win = None       # 값 말풍선 (별도 윈도우, 최초 press 때 생성)
         self._tip_label = None
@@ -142,6 +143,24 @@ class ImageSlider:
         """press~release 사이 드래그가 끝나 값이 확정된 순간에만 fn(value) 호출
         (드래그 도중에는 호출 안 됨)."""
         self._committed_fns.append(fn)
+
+    def set_enabled(self, enabled: bool):
+        """False면 슬라이더 조작 자체를 막는다(노브가 안 잡힘). 로드 중 잠금용.
+        위젯 enabled 로 마우스 이벤트를 끊고, 핸들러에도 가드를 둔다(이중 안전).
+        비활성화 시 진행 중이던 드래그와 hover/말풍선 상태도 정리한다."""
+        self._enabled = enabled
+        for w in (self._hit, self._catcher):
+            if w:
+                w.enabled = enabled
+        if not enabled:
+            self._dragging = False
+            self._hovering = False
+            self._set_knob_img()
+            if self._tip_win:
+                self._tip_win.visible = False
+
+    def enabled(self) -> bool:
+        return self._enabled
 
     def set_tooltip_enabled(self, enabled: bool):
         """드래그 중 값 말풍선 노출 여부를 켜고 끈다."""
@@ -252,10 +271,14 @@ class ImageSlider:
         return max(0.0, min(1.0, local / span)) if span > 0 else 0.0
 
     def _on_hover(self, hovered):
+        if not self._enabled:
+            return
         self._hovering = hovered
         self._set_knob_img()
 
     def _on_press(self, x, y, button, modifier):
+        if not self._enabled:
+            return
         if button == 0:
             self._dragging = True
             if self._tooltip_enabled:
@@ -264,12 +287,16 @@ class ImageSlider:
                 self._tip_win.visible = True
 
     def _on_move(self, x, y, modifier, pressed):
+        if not self._enabled:
+            return
         if self._dragging:
             self.model.set_value(self._snap(self._t_from_screen_x(x)))
             if self._tooltip_enabled:
                 self._position_tip()      # 노브 따라 말풍선 이동 + 값 갱신
 
     def _on_release(self, x, y, button, modifier):
+        if not self._enabled:
+            return
         if button == 0:
             was_dragging = self._dragging
             self._dragging = False
