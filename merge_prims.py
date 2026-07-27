@@ -366,9 +366,12 @@ class SlotLoader:
             self._busy_fn(True)
         try:
             target = f"{self._dest}/__slotload_{k:02d}"
+            self._hide_target(target)        # 로드 전: 나올 자리를 invisible 로 확보
             await self._load_fn(self._usd_paths[k - 1], target)   # 외부 async 로드
+            self._hide_target(target)        # 안전망: 로드가 재정의했을 수 있음
             self._fill_from_target(k, target)
             self._loaded.add(k)
+            # 로드 완료 → 이 시점에 slot_k 를 켠다(그전까진 현재 슬롯이 계속 보임)
             set_slot_visible_all(self._dest, k, self._boundaries, self._stage)
         except Exception as e:
             import traceback
@@ -378,6 +381,23 @@ class SlotLoader:
             self._busy = False
             if self._busy_fn:
                 self._busy_fn(False)
+
+    def _hide_target(self, target):
+        """로드 임시 위치를 invisible 컨테이너로 확보/유지한다.
+        미리 잡아두면 외부 로드가 콘텐츠를 스트리밍하는 동안에도(await 사이에
+        프레임이 그려짐) 새 슬롯이 화면에 튀어나오지 않는다. 로드가 끝나 slot_k 로
+        복사된 뒤에야 켜진다. invisible 은 이 컨테이너에만 걸리므로(자식 아님)
+        slot_k 로 복사되는 자식 스펙에는 영향이 없다."""
+        stage = self._stage
+        if stage is None:
+            return
+        with Usd.EditContext(stage, Usd.EditTarget(stage.GetRootLayer())):
+            prim = stage.GetPrimAtPath(target)
+            if not prim.IsValid():
+                prim = UsdGeom.Xform.Define(stage, target).GetPrim()
+            imageable = UsdGeom.Imageable(prim)
+            if imageable:
+                imageable.GetVisibilityAttr().Set(UsdGeom.Tokens.invisible)
 
     def _fill_from_target(self, k, target):
         # target 아래 각 경계를 slot_k 로 복사한 뒤 target(임시 로드본) 삭제.
