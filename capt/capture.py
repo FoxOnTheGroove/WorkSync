@@ -194,11 +194,8 @@ class ScreenCapture:
         key = f"{cls._s3_prefix}/{filename}" if cls._s3_prefix else filename
 
         # boto3는 블로킹 호출이므로 스레드로 넘겨 렌더 루프를 막지 않음
-        loop = asyncio.get_event_loop()
         try:
-            url = await loop.run_in_executor(
-                None, cls._upload_and_presign, buf, key, expires_in
-            )
+            url = await asyncio.to_thread(cls._upload_and_presign, buf, key, expires_in)
         except Exception as exc:
             print(f"[capt] S3 업로드 실패: {exc}")
             return None
