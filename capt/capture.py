@@ -21,10 +21,20 @@ class ScreenCapture:
     _last_image: Optional[PILImage.Image] = None
     # 스왑체인 채널 순서. 색이 뒤집혀 보이면 "RGBA"로 변경
     _raw_mode: str = "BGRA"
+    _s3_bucket: Optional[str] = None
+    _s3_prefix: str = ""
+    _s3_client = None
 
     @classmethod
     def set_prefix(cls, prefix: str) -> None:
         cls._prefix = prefix
+
+    @classmethod
+    def set_s3(cls, bucket: str, prefix: str = "") -> None:
+        cls._s3_bucket = bucket
+        cls._s3_prefix = prefix.strip("/")
+        # 설정이 바뀌면 클라이언트를 다시 만들도록 초기화
+        cls._s3_client = None
 
     @classmethod
     def _next_filename(cls) -> str:
@@ -141,3 +151,57 @@ class ScreenCapture:
         omni.client.write_file(file_path, memoryview(buf.getvalue()))
         print(f"[capt] nucleus 저장 -> {file_path}")
         return True
+
+    @classmethod
+    def _get_s3_client(cls):
+        # boto3가 없는 Kit 환경에서도 익스텐션이 로드되도록 지연 임포트
+        if cls._s3_client is None:
+            import boto3
+            cls._s3_client = boto3.client("s3")
+        return cls._s3_client
+
+    @classmethod
+    def _upload_and_presign(cls, buf: io.BytesIO, key: str, expires_in: int) -> str:
+        client = cls._get_s3_client()
+        # upload_file은 경로를 받지만 upload_fileobj는 파일 객체를 받음 → 메모리에서 바로 전송
+        client.upload_fileobj(
+            buf, cls._s3_bucket, key, ExtraArgs={"ContentType": "image/png"}
+        )
+        return client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": cls._s3_bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
+
+    @classmethod
+    async def upload_s3_async(
+        cls,
+        image: Optional[PILImage.Image],
+        filename: str,
+        expires_in: int = 3600,
+    ) -> Optional[str]:
+        if image is None:
+            print("[capt] 업로드할 이미지가 없음")
+            return None
+        if not cls._s3_bucket:
+            print("[capt] S3 버킷이 설정되지 않음: set_s3() 먼저 호출")
+            return None
+
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        buf.seek(0)
+
+        key = f"{cls._s3_prefix}/{filename}" if cls._s3_prefix else filename
+
+        # boto3는 블로킹 호출이므로 스레드로 넘겨 렌더 루프를 막지 않음
+        loop = asyncio.get_event_loop()
+        try:
+            url = await loop.run_in_executor(
+                None, cls._upload_and_presign, buf, key, expires_in
+            )
+        except Exception as exc:
+            print(f"[capt] S3 업로드 실패: {exc}")
+            return None
+
+        print(f"[capt] S3 업로드 -> s3://{cls._s3_bucket}/{key}")
+        return url

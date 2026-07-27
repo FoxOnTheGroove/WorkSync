@@ -18,3 +18,16 @@ class ScreenCaptureService:
     @classmethod
     def save_to_nucleus(cls, folder_path: str) -> bool:
         return ScreenCapture.save_to_nucleus(folder_path)
+
+    @classmethod
+    def set_s3(cls, bucket: str, prefix: str = "") -> None:
+        return ScreenCapture.set_s3(bucket, prefix)
+
+    @classmethod
+    async def upload_s3_async(
+        cls,
+        image: Optional[PILImage.Image],
+        filename: str,
+        expires_in: int = 3600,
+    ) -> Optional[str]:
+        return await ScreenCapture.upload_s3_async(image, filename, expires_in)
