@@ -1,7 +1,6 @@
 import io
-import os
+import ctypes
 import asyncio
-import tempfile
 from datetime import datetime
 from typing import Optional, Tuple
 
@@ -20,6 +19,8 @@ class ScreenCapture:
     _last_second: str = ""
     _last_filename: Optional[str] = None
     _last_image: Optional[PILImage.Image] = None
+    # 스왑체인 채널 순서. 색이 뒤집혀 보이면 "RGBA"로 변경
+    _raw_mode: str = "BGRA"
 
     @classmethod
     def set_prefix(cls, prefix: str) -> None:
@@ -47,6 +48,18 @@ class ScreenCapture:
         return left, top, width, height
 
     @classmethod
+    def _buffer_to_image(cls, buffer, buffer_size: int, width: int, height: int) -> PILImage.Image:
+        # 콜백 버퍼는 PyCapsule로 전달되므로 원시 주소를 꺼내야 함
+        ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+        ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+        ptr = ctypes.pythonapi.PyCapsule_GetPointer(buffer, None)
+        data = bytes(ctypes.cast(ptr, ctypes.POINTER(ctypes.c_byte * buffer_size)).contents)
+
+        # 행 패딩이 있을 수 있으므로 실제 stride를 buffer_size에서 역산
+        stride = buffer_size // height if height else width * 4
+        return PILImage.frombytes("RGBA", (width, height), data, "raw", cls._raw_mode, stride)
+
+    @classmethod
     async def capture_image(cls) -> Optional[PILImage.Image]:
         # 캡처가 진행 중이면 끝날 때까지 대기 후 순서대로 실행
         async with cls._sem:
@@ -68,37 +81,34 @@ class ScreenCapture:
         # 레이아웃 갱신을 위해 한 프레임 대기
         await app.next_update_async()
 
-        tmp_path = os.path.join(tempfile.gettempdir(), f"capt_swapchain_{os.getpid()}.png")
-
-        # 이전 실행이 남긴 파일을 지워야 폴링이 새 캡처를 기다림
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-        capture_iface.capture_next_frame_swapchain(tmp_path)
-
-        # 파일이 실제로 기록될 때까지 프레임마다 확인 (최대 60프레임)
-        for _ in range(60):
-            await app.next_update_async()
-            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
-                break
-        else:
-            print("[capt] 캡처 타임아웃: 스왑체인 파일이 생성되지 않음")
-            return None
-
+        # 크롭 좌표는 캡처를 요청하는 시점에 읽어야 찍힌 프레임과 어긋나지 않음
         left, top, width, height = cls._window_rect_px()
 
-        # Kit이 파일 핸들을 닫기 전에 열면 Windows에서 PermissionError 발생 → 재시도
-        for _ in range(10):
+        done = {}
+
+        def _on_capture(buffer, buffer_size, img_w, img_h, format_):
+            # 버퍼는 콜백이 반환되는 순간 무효해지므로 여기서 즉시 복사
             try:
-                img = PILImage.open(tmp_path)
-                img.load()
+                done["image"] = cls._buffer_to_image(buffer, buffer_size, img_w, img_h)
+            except Exception as exc:
+                done["error"] = exc
+
+        capture_iface.capture_next_frame_swapchain_callback(_on_capture)
+
+        # 콜백이 올 때까지 프레임을 돌림 (최대 60프레임)
+        for _ in range(60):
+            await app.next_update_async()
+            if done:
                 break
-            except PermissionError:
-                await app.next_update_async()
         else:
-            print("[capt] 파일 접근 실패: 렌더러가 파일을 잠그고 있음")
+            print("[capt] 캡처 타임아웃: 스왑체인 콜백이 호출되지 않음")
             return None
 
+        if "error" in done:
+            print(f"[capt] 버퍼 변환 실패: {done['error']}")
+            return None
+
+        img = done["image"]
         img_w, img_h = img.size
 
         # 창이 화면 밖으로 걸친 경우를 대비해 이미지 범위로 클램프
@@ -106,16 +116,11 @@ class ScreenCapture:
         t = max(0, min(top, img_h))
         r = max(l, min(left + width, img_w))
         b = max(t, min(top + height, img_h))
+        if r <= l or b <= t:
+            print("[capt] 크롭 영역이 비어 있음: 창이 화면 밖에 있음")
+            return None
 
-        cropped = img.crop((l, t, r, b))
-        img.close()
-
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-
-        return cropped
+        return img.crop((l, t, r, b))
 
     @classmethod
     def save_to_nucleus(cls, folder_path: str) -> bool:
