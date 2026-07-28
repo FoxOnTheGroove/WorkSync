@@ -3,11 +3,13 @@
 Everything outside this package should go through MeasureService and nothing
 else. The classmethods are pure delegation; all state lives in measure.py.
 
-Viewport ids are viewport window names, e.g. "Viewport" or "Viewport 2".
+Viewport ids are ViewportAPI.id, not window names. Discover them with
+list_viewport_ids().
 
-    MeasureService.set_enabled("Viewport", True)
+    vp = MeasureService.list_viewport_ids()[0]
+    MeasureService.set_enabled(vp, True)
     MeasureService.set_snap_mode(SnapMode.VERTEX | SnapMode.EDGE)
-    MeasureService.pick_one("Viewport")          # next two clicks make a line
+    MeasureService.pick_one(vp)                  # next two clicks make a line
 """
 
 from __future__ import annotations
@@ -43,6 +45,11 @@ class MeasureService:
     @classmethod
     def is_enabled(cls, viewport_id: str) -> bool:
         return MeasureCore.is_enabled(viewport_id)
+
+    @classmethod
+    def list_viewport_ids(cls) -> tuple:
+        """Ids of every open viewport, in the form every other call expects."""
+        return MeasureCore.list_viewport_ids()
 
     # ------------------------------------------------------ b. snap mode
 

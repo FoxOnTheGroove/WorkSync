@@ -154,7 +154,10 @@ class MeasureCore:
                 return
             viewport_api, window = _resolve_viewport(viewport_id)
             if viewport_api is None or window is None:
-                carb.log_warn(f"[measure] unknown viewport '{viewport_id}'")
+                carb.log_warn(
+                    f"[measure] no viewport with id '{viewport_id}'. "
+                    f"open ids: {_list_viewport_ids()}"
+                )
                 return
             overlay = MeasureOverlay(
                 viewport_id,
@@ -173,6 +176,11 @@ class MeasureCore:
     @classmethod
     def is_enabled(cls, viewport_id: str) -> bool:
         return viewport_id in cls._viewports
+
+    @classmethod
+    def list_viewport_ids(cls) -> tuple:
+        """ViewportAPI.id of every open viewport window."""
+        return _list_viewport_ids()
 
     # ----------------------------------------------------------------- snap
 
@@ -544,15 +552,39 @@ def _pixel_distance(world: Gf.Vec3d, cursor_px, view, proj, viewport_api):
     return ((px[0] - cursor_px[0]) ** 2 + (px[1] - cursor_px[1]) ** 2) ** 0.5
 
 
-def _resolve_viewport(viewport_id: str):
-    """(viewport_api, window) for a viewport window name, or (None, None)."""
-    from omni.kit.viewport.utility import get_active_viewport_and_window
-
+def _iter_viewport_windows():
+    """Every open viewport window. Empty list if the API is unavailable."""
     try:
-        return get_active_viewport_and_window(window_name=viewport_id)
+        from omni.kit.viewport.window import get_viewport_window_instances
+
+        return list(get_viewport_window_instances())
     except Exception as exc:
-        carb.log_warn(f"[measure] viewport lookup failed for '{viewport_id}': {exc}")
-        return None, None
+        carb.log_warn(f"[measure] cannot enumerate viewport windows: {exc}")
+        return []
+
+
+def _viewport_id_of(window) -> str:
+    api = getattr(window, "viewport_api", None)
+    return "" if api is None else str(getattr(api, "id", ""))
+
+
+def _list_viewport_ids() -> tuple:
+    return tuple(
+        vid for vid in (_viewport_id_of(w) for w in _iter_viewport_windows()) if vid
+    )
+
+
+def _resolve_viewport(viewport_id: str):
+    """(viewport_api, window) for a ViewportAPI.id, or (None, None).
+
+    omni.kit.viewport.utility only offers name-based lookup, so match on id by
+    walking the open viewport windows.
+    """
+    wanted = str(viewport_id)
+    for window in _iter_viewport_windows():
+        if _viewport_id_of(window) == wanted:
+            return window.viewport_api, window
+    return None, None
 
 
 def _format_length(meters: float) -> str:

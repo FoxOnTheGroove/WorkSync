@@ -21,10 +21,12 @@ _SNAP_FLAGS = (
 class MeasureDummyUI:
     def __init__(self):
         self._window = None
-        self._viewport_id = "Viewport"
+        self._viewport_id = ""
+        self._viewport_ids = ()
         self._sub = None
         self._snap_checks = {}
         self._enabled_check = None
+        self._viewport_frame = None
         self._list_frame = None
 
     def build_ui(self):
@@ -52,11 +54,8 @@ class MeasureDummyUI:
     def _build_viewport_row(self):
         with ui.HStack(height=24, spacing=6):
             ui.Label("Viewport", width=64)
-            field = ui.StringField()
-            field.model.set_value(self._viewport_id)
-            field.model.add_value_changed_fn(
-                lambda m: setattr(self, "_viewport_id", m.get_value_as_string())
-            )
+            self._viewport_frame = ui.Frame(build_fn=self._build_viewport_combo)
+            ui.Button("R", width=28, clicked_fn=self._refresh_viewports)
         with ui.HStack(height=24, spacing=6):
             ui.Label("Enabled", width=64)
             self._enabled_check = ui.CheckBox()
@@ -65,6 +64,32 @@ class MeasureDummyUI:
                     self._viewport_id, m.get_value_as_bool()
                 )
             )
+
+    def _build_viewport_combo(self):
+        self._viewport_ids = MeasureService.list_viewport_ids()
+        if not self._viewport_ids:
+            ui.Label("(no viewport)", style={"color": 0xFF999999})
+            return
+        if self._viewport_id not in self._viewport_ids:
+            self._viewport_id = self._viewport_ids[0]
+        combo = ui.ComboBox(
+            self._viewport_ids.index(self._viewport_id), *self._viewport_ids
+        )
+        combo.model.add_item_changed_fn(self._on_viewport_changed)
+
+    def _on_viewport_changed(self, model, _item):
+        index = model.get_item_value_model().get_value_as_int()
+        if not 0 <= index < len(self._viewport_ids):
+            return
+        self._viewport_id = self._viewport_ids[index]
+        if self._enabled_check is not None:
+            self._enabled_check.model.set_value(
+                MeasureService.is_enabled(self._viewport_id)
+            )
+
+    def _refresh_viewports(self):
+        if self._viewport_frame is not None:
+            self._viewport_frame.rebuild()
 
     def _build_snap_row(self):
         ui.Label("Snap (global)", height=20)
@@ -166,6 +191,7 @@ class MeasureDummyUI:
         self._sub = None
         self._snap_checks.clear()
         self._enabled_check = None
+        self._viewport_frame = None
         self._list_frame = None
         if self._window is not None:
             self._window.destroy()
