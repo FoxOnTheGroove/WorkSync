@@ -134,6 +134,9 @@ class MeasureCore:
     # Global. Gates making new measurements only: show/hide/remove/clear keep
     # working while off, and existing lines stay on screen.
     _enabled = True
+    # True once the host feeds clicks in. The overlay then never grabs input,
+    # so it cannot fight the extension that already owns the mouse.
+    _host_input = False
 
     # ------------------------------------------------------------------ life
 
@@ -175,6 +178,61 @@ class MeasureCore:
     @classmethod
     def is_enabled(cls) -> bool:
         return cls._enabled
+
+    # ----------------------------------------------------------- host input
+
+    @classmethod
+    def set_host_input(cls, host_input: bool):
+        """Hand mouse input over to the host, or take it back.
+
+        While on, the overlay never activates its own click capture; clicks
+        arrive only through on_external_click().
+        """
+        cls._host_input = bool(host_input)
+        if cls._host_input:
+            for state in cls._viewports.values():
+                state.overlay.set_input_active(False)
+
+    @classmethod
+    def is_host_input(cls) -> bool:
+        return cls._host_input
+
+    @classmethod
+    def on_external_click(cls, viewport_id: str, x, y=None, space: str = "pixel"):
+        """A click the host captured. Ignored unless that viewport is armed."""
+        if not cls._host_input:
+            cls.set_host_input(True)  # first external click settles ownership
+        ndc = cls._to_ndc(viewport_id, x, y, space)
+        if ndc is not None:
+            cls._on_click(viewport_id, ndc)
+
+    @classmethod
+    def on_external_hover(cls, viewport_id: str, x, y=None, space: str = "pixel"):
+        """Cursor moved. Drives the snap marker and the rubber-band preview."""
+        ndc = cls._to_ndc(viewport_id, x, y, space)
+        if ndc is not None:
+            cls._on_hover(viewport_id, ndc)
+
+    @classmethod
+    def _to_ndc(cls, viewport_id: str, x, y, space: str):
+        """Accepts (x, y) or a single (x, y) sequence, in pixels or NDC."""
+        if y is None:
+            try:
+                x, y = x[0], x[1]
+            except (TypeError, IndexError):
+                carb.log_warn(f"[measure] cannot read mouse coords: {x!r}")
+                return None
+        x, y = float(x), float(y)
+        if space == "ndc":
+            return (x, y)
+        state = cls._viewports.get(viewport_id)
+        if state is None:
+            return None
+        width, height = _resolution(state.viewport_api)
+        if width <= 0 or height <= 0:
+            return None
+        # Pixels are measured from the viewport's top-left.
+        return ((x / width) * 2.0 - 1.0, 1.0 - (y / height) * 2.0)
 
     # --------------------------------------------------------- registration
 
@@ -360,7 +418,8 @@ class MeasureCore:
         state.armed = True
         state.pending = None
         state.on_done = on_done
-        state.overlay.set_input_active(True)
+        if not cls._host_input:
+            state.overlay.set_input_active(True)
 
     @classmethod
     def cancel_pick(cls, viewport_id=None):
@@ -454,8 +513,8 @@ class MeasureCore:
     @classmethod
     def _on_hover(cls, viewport_id: str, ndc):
         state = cls._viewports.get(viewport_id)
-        if state is None:
-            return
+        if state is None or not state.armed:
+            return  # no raycast per mouse move unless a pick is in progress
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_hover(state, snap))
 
     @classmethod

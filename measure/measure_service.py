@@ -14,6 +14,12 @@ else needs wiring:
     MeasureService.on_viewport_maximized(viewport_id)
     MeasureService.on_viewport_minimized(viewport_id)
 
+When another extension owns viewport input, forward the mouse instead of
+letting the overlay capture it:
+
+    MeasureService.on_viewport_click(viewport_id, coords)
+    MeasureService.on_viewport_hover(viewport_id, coords)
+
 Then measuring is two calls:
 
     MeasureService.set_snap_mode(SnapMode.VERTEX | SnapMode.EDGE)
@@ -119,6 +125,41 @@ class MeasureService:
     def on_viewport_selected(cls, viewport_id: str) -> None:
         """Becomes the target of pick_one() when called without an id."""
         MeasureCore.set_selected_viewport(viewport_id)
+
+    @classmethod
+    def on_viewport_click(cls, viewport_id: str, x, y=None, space="pixel") -> None:
+        """Feed in a click the host's own mouse handling captured.
+
+        Use this when another extension owns viewport input. Coordinates are
+        pixels from the viewport's top-left by default; pass space="ndc" if the
+        event already reports normalised coords. Either form works:
+
+            MeasureService.on_viewport_click(vp_id, coords)
+            MeasureService.on_viewport_click(vp_id, x, y)
+
+        Safe to call for every click: it is ignored unless that viewport is
+        armed by pick_one(). The first call hands input ownership to the host,
+        so the overlay stops capturing clicks itself.
+        """
+        MeasureCore.on_external_click(viewport_id, x, y, space)
+
+    @classmethod
+    def on_viewport_hover(cls, viewport_id: str, x, y=None, space="pixel") -> None:
+        """Feed in cursor movement, for the snap marker and preview line.
+
+        Same coordinate rules as on_viewport_click. Only does work while a
+        pick is in progress, so it is cheap to call on every mouse move.
+        """
+        MeasureCore.on_external_hover(viewport_id, x, y, space)
+
+    @classmethod
+    def set_host_input(cls, host_input: bool) -> None:
+        """Force input ownership. on_viewport_click() turns this on by itself."""
+        MeasureCore.set_host_input(host_input)
+
+    @classmethod
+    def is_host_input(cls) -> bool:
+        return MeasureCore.is_host_input()
 
     @classmethod
     def on_viewport_maximized(cls, viewport_id: str) -> None:
