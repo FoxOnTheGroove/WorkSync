@@ -216,6 +216,7 @@ class MeasureCore:
             viewport_id, tab_id, viewport_api, overlay
         )
         cls._refresh(viewport_id)
+        cls._notify()
         return viewport_id
 
     @classmethod
@@ -269,6 +270,7 @@ class MeasureCore:
         cls._active_tab = None if tab_id is None else str(tab_id)
         for viewport_id in list(cls._viewports):
             cls._refresh(viewport_id)
+        cls._notify()
 
     @classmethod
     def get_active_tab(cls):
@@ -302,6 +304,7 @@ class MeasureCore:
     def set_selected_viewport(cls, viewport_id: str):
         """The viewport pick_one() targets when called without an id."""
         cls._selected = str(viewport_id or "")
+        cls._notify()
 
     @classmethod
     def get_selected_viewport(cls) -> str:
@@ -345,7 +348,12 @@ class MeasureCore:
         viewport_id = viewport_id or cls._selected
         state = cls._viewports.get(viewport_id)
         if state is None:
-            carb.log_warn(f"[measure] pick_one on disabled viewport '{viewport_id}'")
+            carb.log_warn(
+                f"[measure] pick_one: no viewport '{viewport_id}'. "
+                f"registered: {tuple(cls._viewports) or '(none)'}. "
+                f"The host must call MeasureService.on_tab_created(tab_id, vphs) "
+                f"and on_viewport_selected(viewport_id)."
+            )
             return
         # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()

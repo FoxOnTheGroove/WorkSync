@@ -15,23 +15,31 @@ import omni.ui as ui
 
 from .measure_service import MeasureService, SnapMode
 
-_SNAP_FLAGS = (
-    ("Vertex", SnapMode.VERTEX),
-    ("Edge", SnapMode.EDGE),
-    ("Mid-point", SnapMode.MIDPOINT),
+# Snap priority is absolute (vertex > edge > mid-point > surface), so the
+# useful choices are levels on that ladder rather than free combinations.
+_SNAP_LEVELS = (
+    ("Vertex + Edge + Mid", SnapMode.ALL),
+    ("Vertex + Edge", SnapMode.VERTEX | SnapMode.EDGE),
+    ("Vertex only", SnapMode.VERTEX),
+    ("Surface only", SnapMode.NONE),
 )
+
+_MUTED = {"color": 0xFF999999}
 
 
 class MeasureDummyUI:
     def __init__(self):
         self._window = None
         self._sub = None
+        self._status_frame = None
         self._list_frame = None
 
     def build_ui(self):
-        self._window = ui.Window("Measure (dummy)", width=320, height=420)
+        self._window = ui.Window("Measure (dummy)", width=320, height=470)
         with self._window.frame:
             with ui.VStack(spacing=6, height=0):
+                self._status_frame = ui.Frame(build_fn=self._build_status, height=0)
+                ui.Separator()
                 self._build_enabled_row()
                 ui.Separator()
                 self._build_snap_row()
@@ -46,7 +54,33 @@ class MeasureDummyUI:
                     # omni.ui warns about as "addChild during draw callback".
                     self._list_frame = ui.Frame(build_fn=self._build_list)
 
-        self._sub = MeasureService.subscribe_changed(self._refresh_list)
+        self._sub = MeasureService.subscribe_changed(self._on_changed)
+
+    # ---------------------------------------------------------------- status
+
+    def _build_status(self):
+        """Read-only. Everything here arrives through the host events."""
+        active = MeasureService.get_active_tab()
+        selected = MeasureService.get_selected_viewport()
+        viewports = MeasureService.list_viewport_ids(active) if active else ()
+        with ui.VStack(spacing=2, height=0):
+            self._status_line("Active tab", active or "-")
+            self._status_line("Selected", selected or "-")
+            if viewports:
+                for viewport_id in viewports:
+                    mark = " *" if viewport_id == selected else ""
+                    self._status_line("", f"{viewport_id}{mark}")
+            else:
+                ui.Label(
+                    "no viewport registered - waiting for on_tab_created()",
+                    height=18,
+                    style=_MUTED,
+                )
+
+    def _status_line(self, label: str, value: str):
+        with ui.HStack(height=18, spacing=6):
+            ui.Label(label, width=72, style=_MUTED)
+            ui.Label(value)
 
     # ------------------------------------------------------------------ rows
 
@@ -65,20 +99,19 @@ class MeasureDummyUI:
         )
 
     def _build_snap_row(self):
-        ui.Label("Snap (global)", height=20)
         mode = MeasureService.get_snap_mode()
-        for label, flag in _SNAP_FLAGS:
-            with ui.HStack(height=22, spacing=6):
-                ui.Label(label, width=80)
-                check = ui.CheckBox()
-                check.model.set_value(bool(mode & flag))
-                check.model.add_value_changed_fn(
-                    lambda m, f=flag: self._toggle_snap(f, m.get_value_as_bool())
-                )
+        index = next(
+            (i for i, (_, m) in enumerate(_SNAP_LEVELS) if m == mode),
+            0,
+        )
+        with ui.HStack(height=24, spacing=6):
+            ui.Label("Snap", width=80)
+            combo = ui.ComboBox(index, *[label for label, _ in _SNAP_LEVELS])
+            combo.model.add_item_changed_fn(self._on_snap_picked)
         ui.Label(
-            "Surface is always on as the fallback.",
+            "Strongest match wins. Surface is always the fallback.",
             height=18,
-            style={"color": 0xFF999999},
+            style=_MUTED,
         )
 
     def _build_actions(self):
@@ -92,9 +125,10 @@ class MeasureDummyUI:
 
     # --------------------------------------------------------------- actions
 
-    def _toggle_snap(self, flag: SnapMode, on: bool):
-        mode = MeasureService.get_snap_mode()
-        MeasureService.set_snap_mode(mode | flag if on else mode & ~flag)
+    def _on_snap_picked(self, model, _item):
+        index = model.get_item_value_model().get_value_as_int()
+        if 0 <= index < len(_SNAP_LEVELS):
+            MeasureService.set_snap_mode(_SNAP_LEVELS[index][1])
 
     def _pick_one(self):
         MeasureService.pick_one(on_done=self._on_line_done)
@@ -104,7 +138,9 @@ class MeasureDummyUI:
 
     # ------------------------------------------------------------------ list
 
-    def _refresh_list(self):
+    def _on_changed(self):
+        if self._status_frame is not None:
+            self._status_frame.rebuild()
         if self._list_frame is not None:
             self._list_frame.rebuild()
 
@@ -135,6 +171,7 @@ class MeasureDummyUI:
 
     def destroy(self):
         self._sub = None
+        self._status_frame = None
         self._list_frame = None
         if self._window is not None:
             self._window.destroy()
