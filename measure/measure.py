@@ -29,13 +29,35 @@ from .measure_overlay import MeasureOverlay
 # feel identical at every zoom level.
 SNAP_RADIUS_PX = 12.0
 
+# Cap on the whole-mesh vertex scan used when no face id is available.
+_MAX_SCAN_POINTS = 200_000
+
 # 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
 TRACE = True
+
+_dumped_result_attrs = False
 
 
 def _trace(msg: str):
     if TRACE:
         print(f"[measure] {msg}")
+
+
+def _dump_result_attrs(result):
+    """Print the raycast result's fields once, to identify the face id name."""
+    global _dumped_result_attrs
+    if _dumped_result_attrs or not TRACE:
+        return
+    _dumped_result_attrs = True
+    names = [n for n in dir(result) if not n.startswith("_")]
+    print(f"[measure] raycast result fields: {names}")
+    for name in names:
+        try:
+            value = getattr(result, name)
+        except Exception:
+            continue
+        if not callable(value):
+            print(f"[measure]   {name} = {value!r}")
 
 
 class SnapKind(IntEnum):
@@ -131,6 +153,8 @@ class MeasureCore:
     _snap_mode = SnapMode.ALL  # global, not per viewport
     _changed_callbacks: list = []
     _mesh_cache: dict = {}
+    _world_cache: dict = {}
+    _snap_radius = SNAP_RADIUS_PX
     # viewport id -> (viewport_api, frame, tab_id), from register_vph.
     # ViewportWidget has no ViewportWindow to enumerate or to draw into, so the
     # host supplies both.
@@ -165,6 +189,7 @@ class MeasureCore:
         cls._lines.clear()
         cls._changed_callbacks.clear()
         cls._mesh_cache.clear()
+        cls._world_cache.clear()
         cls._next_line_id = 1
         cls._started = False
 
@@ -312,6 +337,8 @@ class MeasureCore:
                 )
             ids.append(cls.register_vph(vph))
         cls._tabs.setdefault(str(tab_id), [])
+        # A freshly created tab is the one on screen, so make it active.
+        cls.set_active_tab(tab_id)
         _trace(
             f"on_tab_created done tab='{tab_id}' ids={tuple(ids)} "
             f"all tabs={tuple(cls._tabs)} active={cls._active_tab!r}"
@@ -423,6 +450,15 @@ class MeasureCore:
         return cls._snap_mode
 
     @classmethod
+    def set_snap_radius(cls, pixels: float):
+        """Capture radius in render pixels. Raise it if snapping feels dead."""
+        cls._snap_radius = max(1.0, float(pixels))
+
+    @classmethod
+    def get_snap_radius(cls) -> float:
+        return cls._snap_radius
+
+    @classmethod
     def get_current_snap(cls, viewport_id: str):
         state = cls._viewports.get(viewport_id)
         return state.current_snap if state else None
@@ -447,6 +483,7 @@ class MeasureCore:
             return
         # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()
+        cls._world_cache.clear()
         state.armed = True
         state.pending = None
         state.on_done = on_done
@@ -634,7 +671,10 @@ class MeasureCore:
     @classmethod
     def _snap_from_hit(cls, state, result, ndc, view, proj):
         if not getattr(result, "valid", False):
+            _trace("snap: raycast miss")
             return None
+
+        _dump_result_attrs(result)
 
         hit = Gf.Vec3d(*result.hit_position)
         normal = Gf.Vec3d(*getattr(result, "normal", (0.0, 1.0, 0.0)))
@@ -642,58 +682,131 @@ class MeasureCore:
         face_index = _face_index_of(result)
 
         surface = SnapPoint(hit, SnapKind.SURFACE, path, face_index, -1, normal)
-        if cls._snap_mode == SnapMode.NONE or face_index < 0:
+        if cls._snap_mode == SnapMode.NONE:
+            _trace("snap: mode is NONE, surface only")
             return surface
 
         verts = cls._face_vertices(path, face_index)
-        if not verts:
+        cursor_px = _ndc_to_px(ndc, state.viewport_api)
+        _trace(
+            f"snap: path='{path}' face={face_index} face_verts={len(verts)} "
+            f"cursor_px={cursor_px} radius={cls._snap_radius}"
+        )
+
+        if verts:
+            # Priority is absolute: the first class with any candidate in range
+            # wins, distance only breaks ties inside that class.
+            for flag, kind in _FLAG_TO_KIND:
+                if not (cls._snap_mode & flag):
+                    continue
+                best = None
+                nearest = None
+                for index, candidate in _candidates(kind, verts, hit):
+                    dist = _pixel_distance(
+                        candidate, cursor_px, view, proj, state.viewport_api
+                    )
+                    if dist is None:
+                        continue
+                    if nearest is None or dist < nearest:
+                        nearest = dist
+                    if dist > cls._snap_radius:
+                        continue
+                    if best is None or dist < best[0]:
+                        best = (dist, index, candidate)
+                _trace(f"snap:   {kind.name} nearest={nearest} hit={best is not None}")
+                if best is not None:
+                    return SnapPoint(best[2], kind, path, face_index, best[1], normal)
             return surface
 
-        cursor_px = _ndc_to_px(ndc, state.viewport_api)
-
-        # Priority is absolute: the first class with any candidate in range wins,
-        # distance only breaks ties inside that class.
-        for flag, kind in _FLAG_TO_KIND:
-            if not (cls._snap_mode & flag):
-                continue
-            best = None
-            for index, candidate in _candidates(kind, verts, hit):
-                dist = _pixel_distance(candidate, cursor_px, view, proj, state.viewport_api)
-                if dist is None or dist > SNAP_RADIUS_PX:
-                    continue
-                if best is None or dist < best[0]:
-                    best = (dist, index, candidate)
-            if best is not None:
-                return SnapPoint(best[2], kind, path, face_index, best[1], normal)
-
+        # No face topology available, usually because the raycast result does
+        # not expose a face id on this Kit build. Vertex snapping still works by
+        # scanning the whole mesh; edge and mid-point need a face.
+        if cls._snap_mode & SnapMode.VERTEX:
+            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state)
+            if snap is not None:
+                return snap
         return surface
 
     @classmethod
-    def _face_vertices(cls, prim_path: str, face_index: int) -> list:
-        """World-space vertices of one face. Cached per prim."""
-        entry = cls._mesh_cache.get(prim_path)
-        if entry is None:
-            stage = omni.usd.get_context().get_stage()
-            if stage is None:
-                return []
-            prim = stage.GetPrimAtPath(prim_path)
-            if not prim or not prim.IsA(UsdGeom.Mesh):
-                return []
-            mesh = UsdGeom.Mesh(prim)
-            points = mesh.GetPointsAttr().Get()
-            counts = mesh.GetFaceVertexCountsAttr().Get()
-            indices = mesh.GetFaceVertexIndicesAttr().Get()
-            if not points or not counts or not indices:
-                return []
-            offsets = [0]
-            for c in counts:
-                offsets.append(offsets[-1] + c)
-            xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
-                Usd.TimeCode.Default()
-            )
-            entry = (points, counts, indices, offsets, xform)
-            cls._mesh_cache[prim_path] = entry
+    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state):
+        """Nearest vertex over the whole mesh, within the snap radius."""
+        points = cls._world_points(prim_path)
+        if not points:
+            return None
+        best = None
+        for index, candidate in enumerate(points):
+            dist = _pixel_distance(candidate, cursor_px, view, proj, state.viewport_api)
+            if dist is None or dist > cls._snap_radius:
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, index, candidate)
+        _trace(f"snap:   whole-mesh VERTEX over {len(points)} pts hit={best is not None}")
+        if best is None:
+            return None
+        return SnapPoint(best[2], SnapKind.VERTEX, prim_path, -1, best[1])
 
+    @classmethod
+    def _world_points(cls, prim_path: str) -> list:
+        """Every mesh point in world space. Cached; skips very heavy meshes."""
+        cached = cls._world_cache.get(prim_path)
+        if cached is not None:
+            return cached
+        entry = cls._mesh_entry(prim_path)
+        if entry is None:
+            cls._world_cache[prim_path] = []
+            return []
+        points, _counts, _indices, _offsets, xform = entry
+        if len(points) > _MAX_SCAN_POINTS:
+            carb.log_warn(
+                f"[measure] '{prim_path}' has {len(points)} points, too many to "
+                f"scan without a face id; snapping stays on the surface"
+            )
+            cls._world_cache[prim_path] = []
+            return []
+        world = [xform.Transform(Gf.Vec3d(p)) for p in points]
+        cls._world_cache[prim_path] = world
+        return world
+
+    @classmethod
+    def _mesh_entry(cls, prim_path: str):
+        """(points, counts, indices, offsets, xform) for a mesh prim, cached."""
+        entry = cls._mesh_cache.get(prim_path)
+        if entry is not None:
+            return entry or None
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return None
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsA(UsdGeom.Mesh):
+            _trace(f"snap: '{prim_path}' is not a UsdGeom.Mesh")
+            cls._mesh_cache[prim_path] = ()
+            return None
+        mesh = UsdGeom.Mesh(prim)
+        points = mesh.GetPointsAttr().Get()
+        counts = mesh.GetFaceVertexCountsAttr().Get()
+        indices = mesh.GetFaceVertexIndicesAttr().Get()
+        if not points or not counts or not indices:
+            _trace(f"snap: '{prim_path}' has no points/topology")
+            cls._mesh_cache[prim_path] = ()
+            return None
+        offsets = [0]
+        for c in counts:
+            offsets.append(offsets[-1] + c)
+        xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        entry = (points, counts, indices, offsets, xform)
+        cls._mesh_cache[prim_path] = entry
+        return entry
+
+    @classmethod
+    def _face_vertices(cls, prim_path: str, face_index: int) -> list:
+        """World-space vertices of one face, or [] without a usable face id."""
+        if face_index < 0:
+            return []
+        entry = cls._mesh_entry(prim_path)
+        if entry is None:
+            return []
         points, counts, indices, offsets, xform = entry
         if face_index < 0 or face_index >= len(counts):
             return []
@@ -705,8 +818,10 @@ class MeasureCore:
     def invalidate_mesh_cache(cls, prim_path=None):
         if prim_path is None:
             cls._mesh_cache.clear()
+            cls._world_cache.clear()
         else:
             cls._mesh_cache.pop(prim_path, None)
+            cls._world_cache.pop(prim_path, None)
 
     # ---------------------------------------------------------------- draw
 

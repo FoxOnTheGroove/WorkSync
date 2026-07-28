@@ -206,6 +206,19 @@ class MeasureService:
         return MeasureCore.get_snap_mode()
 
     @classmethod
+    def set_snap_radius(cls, pixels: float) -> None:
+        """스냅 반경(렌더 픽셀). 기본 12. 스냅이 안 걸리면 올려보세요.
+
+        렌더 해상도 기준이라, 위젯보다 렌더 해상도가 훨씬 크면 체감 반경이
+        작아집니다.
+        """
+        MeasureCore.set_snap_radius(pixels)
+
+    @classmethod
+    def get_snap_radius(cls) -> float:
+        return MeasureCore.get_snap_radius()
+
+    @classmethod
     def get_current_snap(cls, viewport_id: str):
         """직전 hover 스냅 결과. 캐시를 읽으므로 쌉니다."""
         return MeasureCore.get_current_snap(viewport_id)
