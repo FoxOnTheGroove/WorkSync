@@ -4,15 +4,20 @@ Everything outside this package should go through MeasureService and nothing
 else. The classmethods are pure delegation; all state lives in measure.py.
 
 Viewports are keyed by ViewportAPI.id and grouped by the tab that owns them.
-A tab holds 1, 2 or 4 viewport widget hosts; register them when the tab is
-built, and tell the service which tab is active so only that tab draws.
+A tab holds 1, 2 or 4 viewport widget hosts. Hook the host events and nothing
+else needs wiring:
 
-    MeasureService.register_tab(tab.id, tab.vphs)
-    MeasureService.set_tab_enabled(tab.id, True)
-    MeasureService.set_active_tab(tab.id)        # on tab switch
+    MeasureService.on_tab_created(tab_id, vphs)
+    MeasureService.on_tab_activated(tab_id)
+    MeasureService.on_tab_closed(tab_id)
+    MeasureService.on_viewport_selected(viewport_id)
+    MeasureService.on_viewport_maximized(viewport_id)
+    MeasureService.on_viewport_minimized(viewport_id)
+
+Then measuring is two calls:
 
     MeasureService.set_snap_mode(SnapMode.VERTEX | SnapMode.EDGE)
-    MeasureService.pick_one(vp)                  # next two clicks make a line
+    MeasureService.pick_one()                    # next two clicks make a line
 """
 
 from __future__ import annotations
@@ -83,6 +88,48 @@ class MeasureService:
         """Drop one viewport, disabling it and removing its lines."""
         MeasureCore.unregister_viewport(viewport_id)
 
+    # ------------------------------------------------------- host events
+    #
+    # Call these from the tab/viewport events. They are the whole integration
+    # surface: everything below is available directly, but nothing else has to
+    # be wired up if these are hooked in.
+
+    @classmethod
+    def on_tab_created(cls, tab_id: str, vphs) -> tuple:
+        """A tab was built. Registers its hosts and turns the tool on there.
+
+        Enabling does not steal viewport input: the overlay only captures
+        clicks between pick_one() and the second click.
+        """
+        ids = MeasureCore.register_tab(tab_id, vphs)
+        MeasureCore.set_tab_enabled(tab_id, True)
+        return ids
+
+    @classmethod
+    def on_tab_activated(cls, tab_id: str) -> None:
+        """A tab came to the front. Everything else stops drawing."""
+        MeasureCore.set_active_tab(tab_id)
+
+    @classmethod
+    def on_tab_closed(cls, tab_id: str) -> None:
+        """A tab went away for good. Its lines go with it."""
+        MeasureCore.unregister_tab(tab_id)
+
+    @classmethod
+    def on_viewport_selected(cls, viewport_id: str) -> None:
+        """Becomes the target of pick_one() when called without an id."""
+        MeasureCore.set_selected_viewport(viewport_id)
+
+    @classmethod
+    def on_viewport_maximized(cls, viewport_id: str) -> None:
+        """One viewport grew over its siblings; only it draws in that tab."""
+        MeasureCore.set_maximized(viewport_id)
+
+    @classmethod
+    def on_viewport_minimized(cls, viewport_id: str) -> None:
+        """Back to the normal grid; every viewport in the tab draws again."""
+        MeasureCore.clear_maximized(MeasureCore.get_tab_of(viewport_id))
+
     # ------------------------------------------------------------- a2. tabs
 
     @classmethod
@@ -110,6 +157,15 @@ class MeasureService:
     def get_tab_of(cls, viewport_id: str) -> str:
         return MeasureCore.get_tab_of(viewport_id)
 
+    @classmethod
+    def get_maximized(cls, tab_id: str):
+        """The viewport eclipsing its siblings in that tab, or None."""
+        return MeasureCore.get_maximized(tab_id)
+
+    @classmethod
+    def get_selected_viewport(cls) -> str:
+        return MeasureCore.get_selected_viewport()
+
     # ------------------------------------------------------ b. snap mode
 
     @classmethod
@@ -129,8 +185,10 @@ class MeasureService:
     # ----------------------------------------------------------- c. pick
 
     @classmethod
-    def pick_one(cls, viewport_id: str, on_done=None) -> None:
+    def pick_one(cls, viewport_id=None, on_done=None) -> None:
         """Arm the viewport: the next two clicks place one line.
+
+        Defaults to the viewport last passed to on_viewport_selected().
 
         The line is drawn and registered on its own. on_done(line) is an
         optional hook for extra work at completion; it is not called if the
@@ -139,7 +197,7 @@ class MeasureService:
         MeasureCore.pick_one(viewport_id, on_done)
 
     @classmethod
-    def cancel_pick(cls, viewport_id: str) -> None:
+    def cancel_pick(cls, viewport_id=None) -> None:
         MeasureCore.cancel_pick(viewport_id)
 
     # --------------------------------------------------------- d. lines

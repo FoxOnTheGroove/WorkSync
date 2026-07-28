@@ -38,6 +38,7 @@ class MeasureOverlay:
         self._on_click = on_click
 
         self._scene_view = None
+        self._screen = None
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
@@ -54,13 +55,16 @@ class MeasureOverlay:
         with self._frame:
             self._scene_view = sc.SceneView()
             with self._scene_view.scene:
-                # Screen covers the viewport and is what receives the gestures.
-                sc.Screen(
+                # Screen covers the viewport and swallows clicks, so it stays
+                # hidden until a pick is armed. Otherwise merely enabling the
+                # tool would break normal viewport navigation.
+                self._screen = sc.Screen(
                     gestures=[
                         sc.ClickGesture(self._forward_click),
                         sc.HoverGesture(on_changed_fn=self._forward_hover),
                     ]
                 )
+                self._screen.visible = False
                 self._lines_root = sc.Transform()
                 self._preview_root = sc.Transform()
                 self._marker_root = sc.Transform()
@@ -136,6 +140,13 @@ class MeasureOverlay:
         if self._scene_view is not None:
             self._scene_view.visible = visible
 
+    def set_input_active(self, active: bool):
+        """Only capture viewport clicks while a pick is in progress."""
+        if self._screen is not None:
+            self._screen.visible = active
+        if not active:
+            self.set_snap_marker(None)
+
     # --------------------------------------------------------------- teardown
 
     def destroy(self):
@@ -149,6 +160,7 @@ class MeasureOverlay:
             except Exception:
                 pass
             self._scene_view = None
+        self._screen = None
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None

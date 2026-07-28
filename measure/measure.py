@@ -129,6 +129,8 @@ class MeasureCore:
     _registered: dict = {}
     _tabs: dict = {}  # tab id -> [viewport id]
     _active_tab = None  # None means "no tab filter", every tab draws
+    _maximized: dict = {}  # tab id -> the one viewport id eclipsing its siblings
+    _selected = ""  # viewport pick_one defaults to
 
     # ------------------------------------------------------------------ life
 
@@ -143,7 +145,9 @@ class MeasureCore:
         cls._viewports.clear()
         cls._registered.clear()
         cls._tabs.clear()
+        cls._maximized.clear()
         cls._active_tab = None
+        cls._selected = ""
         cls._lines.clear()
         cls._changed_callbacks.clear()
         cls._mesh_cache.clear()
@@ -199,6 +203,7 @@ class MeasureCore:
         for viewport_id in list(cls._tabs.get(tab_id, [])):
             cls.unregister_viewport(viewport_id)
         cls._tabs.pop(tab_id, None)
+        cls._maximized.pop(tab_id, None)
         if cls._active_tab == tab_id:
             cls._active_tab = None
         cls._notify()
@@ -231,6 +236,35 @@ class MeasureCore:
     @classmethod
     def list_tabs(cls) -> tuple:
         return tuple(cls._tabs)
+
+    @classmethod
+    def set_maximized(cls, viewport_id: str):
+        """One viewport eclipses its siblings inside its own tab."""
+        tab_id = cls.get_tab_of(viewport_id)
+        cls._maximized[tab_id] = viewport_id
+        for vp in list(cls._tabs.get(tab_id, [])):
+            cls._refresh(vp)
+
+    @classmethod
+    def clear_maximized(cls, tab_id: str):
+        """Back to the normal grid: every viewport in the tab draws again."""
+        tab_id = str(tab_id)
+        cls._maximized.pop(tab_id, None)
+        for vp in list(cls._tabs.get(tab_id, [])):
+            cls._refresh(vp)
+
+    @classmethod
+    def get_maximized(cls, tab_id: str):
+        return cls._maximized.get(str(tab_id))
+
+    @classmethod
+    def set_selected_viewport(cls, viewport_id: str):
+        """The viewport pick_one() targets when called without an id."""
+        cls._selected = str(viewport_id or "")
+
+    @classmethod
+    def get_selected_viewport(cls) -> str:
+        return cls._selected
 
     @classmethod
     def set_tab_enabled(cls, tab_id: str, enabled: bool):
@@ -323,8 +357,9 @@ class MeasureCore:
     # ----------------------------------------------------------------- pick
 
     @classmethod
-    def pick_one(cls, viewport_id: str, on_done=None):
+    def pick_one(cls, viewport_id=None, on_done=None):
         cls._require_started()
+        viewport_id = viewport_id or cls._selected
         state = cls._viewports.get(viewport_id)
         if state is None:
             carb.log_warn(f"[measure] pick_one on disabled viewport '{viewport_id}'")
@@ -334,9 +369,11 @@ class MeasureCore:
         state.armed = True
         state.pending = None
         state.on_done = on_done
+        state.overlay.set_input_active(True)
 
     @classmethod
-    def cancel_pick(cls, viewport_id: str):
+    def cancel_pick(cls, viewport_id=None):
+        viewport_id = viewport_id or cls._selected
         state = cls._viewports.get(viewport_id)
         if state is None:
             return
@@ -344,6 +381,7 @@ class MeasureCore:
         state.pending = None
         state.on_done = None
         state.overlay.set_preview(None, None, "")
+        state.overlay.set_input_active(False)
 
     # ---------------------------------------------------------------- lines
 
@@ -470,6 +508,7 @@ class MeasureCore:
         state.pending = None
         state.on_done = None
         state.overlay.set_preview(None, None, "")
+        state.overlay.set_input_active(False)
         cls._refresh(state.viewport_id)
         cls._notify()
 
@@ -596,7 +635,8 @@ class MeasureCore:
         # Two independent gates: the active tab, and user intent. Hiding the
         # scene also stops gestures, so an inactive tab cannot be clicked into.
         tab_active = cls._active_tab is None or state.tab_id == cls._active_tab
-        state.overlay.set_scene_visible(state.visible and tab_active)
+        eclipsed = cls._maximized.get(state.tab_id) not in (None, viewport_id)
+        state.overlay.set_scene_visible(state.visible and tab_active and not eclipsed)
         lines = [
             ln
             for ln in cls._lines.values()
