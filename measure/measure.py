@@ -694,18 +694,19 @@ class MeasureCore:
         hit = Gf.Vec3d(*result.hit_position)
         normal = Gf.Vec3d(*getattr(result, "normal", (0.0, 1.0, 0.0)))
         path = result.get_target_usd_path()
-        face_index = _face_index_of(result)
+        primitive_id = _face_index_of(result)
 
-        surface = SnapPoint(hit, SnapKind.SURFACE, path, face_index, -1, normal)
+        surface = SnapPoint(hit, SnapKind.SURFACE, path, primitive_id, -1, normal)
         if cls._snap_mode == SnapMode.NONE:
             _trace("snap: mode is NONE, surface only")
             return surface
 
-        verts = cls._face_vertices(path, face_index)
+        face_index, verts, note = cls._face_vertices(path, primitive_id, hit)
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
-            f"snap: path='{path}' face={face_index} face_verts={len(verts)} "
-            f"cursor_px={cursor_px} radius={cls._snap_radius}"
+            f"snap: path='{path}' id={primitive_id} face={face_index} "
+            f"face_verts={len(verts)} cursor_px={cursor_px} "
+            f"radius={cls._snap_radius}{' | ' + note if note else ''}"
         )
 
         if verts:
@@ -815,19 +816,44 @@ class MeasureCore:
         return entry
 
     @classmethod
-    def _face_vertices(cls, prim_path: str, face_index: int) -> list:
-        """World-space vertices of one face, or [] without a usable face id."""
-        if face_index < 0:
-            return []
+    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None):
+        """Resolve a raycast primitive id to one face's world-space vertices.
+
+        Returns (face_index, verts, reason). The id is not always a USD face
+        index: renderers fan-triangulate, so on a quad or n-gon mesh it can be
+        a triangle index instead. Both readings are tried and the one the hit
+        point actually sits on wins.
+        """
+        if primitive_id < 0:
+            return -1, [], "no face id"
         entry = cls._mesh_entry(prim_path)
         if entry is None:
-            return []
+            return -1, [], "not a mesh, or no points/topology"
         points, counts, indices, offsets, xform = entry
-        if face_index < 0 or face_index >= len(counts):
-            return []
-        start = offsets[face_index]
-        end = start + counts[face_index]
-        return [xform.Transform(Gf.Vec3d(points[i])) for i in indices[start:end]]
+
+        candidates = []
+        if primitive_id < len(counts):
+            candidates.append(primitive_id)
+        as_triangle = _triangle_to_face(counts, primitive_id)
+        if as_triangle is not None and as_triangle not in candidates:
+            candidates.append(as_triangle)
+        if not candidates:
+            return (
+                -1,
+                [],
+                f"id {primitive_id} out of range "
+                f"(faces={len(counts)}, triangles={_triangle_total(counts)})",
+            )
+
+        best = None
+        for face in candidates:
+            verts = _face_world_verts(points, counts, indices, offsets, xform, face)
+            score = _face_score(verts, hit) if hit is not None else 0.0
+            if best is None or score < best[0]:
+                best = (score, face, verts)
+        _, face, verts = best
+        note = "" if len(candidates) == 1 else f"chose {face} from {candidates}"
+        return face, verts, note
 
     @classmethod
     def invalidate_mesh_cache(cls, prim_path=None):
@@ -890,6 +916,47 @@ def _candidates(kind: SnapKind, verts: list, hit: Gf.Vec3d):
                 continue
             t = max(0.0, min(1.0, Gf.Dot(hit - a, ab) / denom))
             yield i, a + ab * t
+
+
+def _triangle_total(counts) -> int:
+    return sum(max(1, c - 2) for c in counts)
+
+
+def _triangle_to_face(counts, tri_index: int):
+    """Fan triangulation: a face of n verts becomes n-2 triangles."""
+    if tri_index < 0:
+        return None
+    seen = 0
+    for face, count in enumerate(counts):
+        seen += max(1, count - 2)
+        if tri_index < seen:
+            return face
+    return None
+
+
+def _face_world_verts(points, counts, indices, offsets, xform, face: int) -> list:
+    start = offsets[face]
+    end = start + counts[face]
+    return [xform.Transform(Gf.Vec3d(points[i])) for i in indices[start:end]]
+
+
+def _face_score(verts, hit: Gf.Vec3d) -> float:
+    """How well the hit sits on this face. Lower is better.
+
+    Distance to the face's plane, plus a penalty when the hit falls outside
+    its bounding box. That separates the two readings of a primitive id.
+    """
+    if len(verts) < 3:
+        return float("inf")
+    normal = Gf.Cross(verts[1] - verts[0], verts[2] - verts[0])
+    length = normal.GetLength()
+    plane = abs(Gf.Dot(hit - verts[0], normal / length)) if length > 1e-12 else 0.0
+    lo = [min(v[i] for v in verts) for i in range(3)]
+    hi = [max(v[i] for v in verts) for i in range(3)]
+    diag = max(hi[i] - lo[i] for i in range(3)) or 1.0
+    margin = diag * 0.01
+    outside = any(hit[i] < lo[i] - margin or hit[i] > hi[i] + margin for i in range(3))
+    return plane + (diag if outside else 0.0)
 
 
 def _face_index_of(result) -> int:
