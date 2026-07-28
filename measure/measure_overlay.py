@@ -38,7 +38,8 @@ class MeasureOverlay:
         self._on_click = on_click
 
         self._scene_view = None
-        self._screen = None
+        self._hover_screen = None
+        self._click_screen = None
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
@@ -55,16 +56,17 @@ class MeasureOverlay:
         with self._frame:
             self._scene_view = sc.SceneView()
             with self._scene_view.scene:
-                # Screen covers the viewport and swallows clicks, so it stays
-                # hidden until a pick is armed. Otherwise merely enabling the
-                # tool would break normal viewport navigation.
-                self._screen = sc.Screen(
-                    gestures=[
-                        sc.ClickGesture(self._forward_click),
-                        sc.HoverGesture(on_changed_fn=self._forward_hover),
-                    ]
+                # Hover and click are separate Screens on purpose. Hover can
+                # stay live harmlessly, but a click Screen swallows the button
+                # press, so it only appears while a pick is armed and never
+                # when the host owns input.
+                self._hover_screen = sc.Screen(
+                    gestures=[sc.HoverGesture(on_changed_fn=self._forward_hover)]
                 )
-                self._screen.visible = False
+                self._click_screen = sc.Screen(
+                    gestures=[sc.ClickGesture(self._forward_click)]
+                )
+                self._click_screen.visible = False
                 self._lines_root = sc.Transform()
                 self._preview_root = sc.Transform()
                 self._marker_root = sc.Transform()
@@ -140,10 +142,10 @@ class MeasureOverlay:
         if self._scene_view is not None:
             self._scene_view.visible = visible
 
-    def set_input_active(self, active: bool):
-        """Only capture viewport clicks while a pick is in progress."""
-        if self._screen is not None:
-            self._screen.visible = active
+    def set_click_active(self, active: bool):
+        """Only swallow viewport clicks while a pick is in progress."""
+        if self._click_screen is not None:
+            self._click_screen.visible = active
         if not active:
             self.set_snap_marker(None)
 
@@ -160,7 +162,8 @@ class MeasureOverlay:
             except Exception:
                 pass
             self._scene_view = None
-        self._screen = None
+        self._hover_screen = None
+        self._click_screen = None
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None

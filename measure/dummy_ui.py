@@ -60,19 +60,30 @@ class MeasureDummyUI:
 
     def _build_status(self):
         """Read-only. Everything here arrives through the host events."""
+        tabs = MeasureService.list_tabs()
         active = MeasureService.get_active_tab()
         selected = MeasureService.get_selected_viewport()
-        viewports = MeasureService.list_viewport_ids(active) if active else ()
         with ui.VStack(spacing=2, height=0):
             self._status_line("Active tab", active or "-")
             self._status_line("Selected", selected or "-")
-            if viewports:
-                for viewport_id in viewports:
-                    mark = " *" if viewport_id == selected else ""
-                    self._status_line("", f"{viewport_id}{mark}")
-            else:
+            if not tabs:
                 ui.Label(
-                    "no viewport registered - waiting for on_tab_created()",
+                    "no tab registered - waiting for on_tab_created()",
+                    height=18,
+                    style=_MUTED,
+                )
+                return
+            # Every registered tab, not just the active one: a tab can be
+            # registered before anything activates it.
+            for tab_id in tabs:
+                mark = " (active)" if tab_id == active else ""
+                self._status_line("tab", f"{tab_id}{mark}")
+                for viewport_id in MeasureService.list_viewport_ids(tab_id):
+                    sel = " *" if viewport_id == selected else ""
+                    self._status_line("", f"    {viewport_id}{sel}")
+            if active is None:
+                ui.Label(
+                    "no active tab - call on_tab_activated()",
                     height=18,
                     style=_MUTED,
                 )

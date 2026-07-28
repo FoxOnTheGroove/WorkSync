@@ -29,6 +29,14 @@ from .measure_overlay import MeasureOverlay
 # feel identical at every zoom level.
 SNAP_RADIUS_PX = 12.0
 
+# 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
+TRACE = True
+
+
+def _trace(msg: str):
+    if TRACE:
+        print(f"[measure] {msg}")
+
 
 class SnapKind(IntEnum):
     """Snap class. Higher value wins when several candidates are in range."""
@@ -189,25 +197,31 @@ class MeasureCore:
         arrive only through on_external_click().
         """
         cls._host_input = bool(host_input)
+        _trace(f"set_host_input({cls._host_input}) - hover stays on the overlay")
         if cls._host_input:
             for state in cls._viewports.values():
-                state.overlay.set_input_active(False)
+                state.overlay.set_click_active(False)
 
     @classmethod
     def is_host_input(cls) -> bool:
         return cls._host_input
 
     @classmethod
-    def on_external_click(cls, viewport_id: str, x, y=None, space: str = "pixel"):
+    def on_external_click(cls, viewport_id: str, x, y=None, space: str = "ndc"):
         """A click the host captured. Ignored unless that viewport is armed."""
         if not cls._host_input:
             cls.set_host_input(True)  # first external click settles ownership
+        state = cls._viewports.get(viewport_id)
         ndc = cls._to_ndc(viewport_id, x, y, space)
+        _trace(
+            f"on_viewport_click vp='{viewport_id}' raw={x!r},{y!r} space={space} "
+            f"-> ndc={ndc} armed={getattr(state, 'armed', None)}"
+        )
         if ndc is not None:
             cls._on_click(viewport_id, ndc)
 
     @classmethod
-    def on_external_hover(cls, viewport_id: str, x, y=None, space: str = "pixel"):
+    def on_external_hover(cls, viewport_id: str, x, y=None, space: str = "ndc"):
         """Cursor moved. Drives the snap marker and the rubber-band preview."""
         ndc = cls._to_ndc(viewport_id, x, y, space)
         if ndc is not None:
@@ -215,11 +229,11 @@ class MeasureCore:
 
     @classmethod
     def _to_ndc(cls, viewport_id: str, x, y, space: str):
-        """Accepts (x, y) or a single (x, y) sequence, in pixels or NDC."""
+        """(x, y) 또는 (x, y) 시퀀스를 받습니다. space 는 'ndc' 또는 'pixel'."""
         if y is None:
             try:
                 x, y = x[0], x[1]
-            except (TypeError, IndexError):
+            except (TypeError, IndexError, KeyError):
                 carb.log_warn(f"[measure] cannot read mouse coords: {x!r}")
                 return None
         x, y = float(x), float(y)
@@ -251,6 +265,10 @@ class MeasureCore:
             raise ValueError("vph.viewport_api has no usable id")
         tab_id = str(vph.tab_id)
         frame = vph.ui_frame
+        _trace(
+            f"register_vph id='{viewport_id}' tab='{tab_id}' "
+            f"frame={type(frame).__name__ if frame is not None else None}"
+        )
         if frame is None:
             raise ValueError(f"vph '{viewport_id}' has no ui_frame to draw into")
 
@@ -284,6 +302,8 @@ class MeasureCore:
         tab_id is taken from each vph, so it only has to agree with what the
         hosts report; a mismatch is a caller bug and is logged.
         """
+        vphs = list(vphs)
+        _trace(f"on_tab_created tab='{tab_id}' vph count={len(vphs)}")
         ids = []
         for vph in vphs:
             if str(vph.tab_id) != str(tab_id):
@@ -292,6 +312,10 @@ class MeasureCore:
                 )
             ids.append(cls.register_vph(vph))
         cls._tabs.setdefault(str(tab_id), [])
+        _trace(
+            f"on_tab_created done tab='{tab_id}' ids={tuple(ids)} "
+            f"all tabs={tuple(cls._tabs)} active={cls._active_tab!r}"
+        )
         return tuple(ids)
 
     @classmethod
@@ -326,6 +350,10 @@ class MeasureCore:
     def set_active_tab(cls, tab_id):
         """Only the active tab draws. None lifts the filter entirely."""
         cls._active_tab = None if tab_id is None else str(tab_id)
+        _trace(
+            f"on_tab_activated active='{cls._active_tab}' "
+            f"members={tuple(cls._tabs.get(cls._active_tab or '', ()))}"
+        )
         for viewport_id in list(cls._viewports):
             cls._refresh(viewport_id)
         cls._notify()
@@ -362,6 +390,10 @@ class MeasureCore:
     def set_selected_viewport(cls, viewport_id: str):
         """The viewport pick_one() targets when called without an id."""
         cls._selected = str(viewport_id or "")
+        _trace(
+            f"on_viewport_selected '{cls._selected}' "
+            f"registered={cls._selected in cls._viewports}"
+        )
         cls._notify()
 
     @classmethod
@@ -419,7 +451,7 @@ class MeasureCore:
         state.pending = None
         state.on_done = on_done
         if not cls._host_input:
-            state.overlay.set_input_active(True)
+            state.overlay.set_click_active(True)
 
     @classmethod
     def cancel_pick(cls, viewport_id=None):
@@ -431,7 +463,7 @@ class MeasureCore:
         state.pending = None
         state.on_done = None
         state.overlay.set_preview(None, None, "")
-        state.overlay.set_input_active(False)
+        state.overlay.set_click_active(False)
 
     # ---------------------------------------------------------------- lines
 
@@ -502,6 +534,7 @@ class MeasureCore:
 
     @classmethod
     def _notify(cls):
+        _trace(f"notify -> {len(cls._changed_callbacks)} listener(s)")
         for fn in list(cls._changed_callbacks):
             try:
                 fn()
@@ -558,7 +591,7 @@ class MeasureCore:
         state.pending = None
         state.on_done = None
         state.overlay.set_preview(None, None, "")
-        state.overlay.set_input_active(False)
+        state.overlay.set_click_active(False)
         cls._refresh(state.viewport_id)
         cls._notify()
 
@@ -686,7 +719,12 @@ class MeasureCore:
         # scene also stops gestures, so an inactive tab cannot be clicked into.
         tab_active = cls._active_tab is None or state.tab_id == cls._active_tab
         eclipsed = cls._maximized.get(state.tab_id) not in (None, viewport_id)
-        state.overlay.set_scene_visible(state.visible and tab_active and not eclipsed)
+        shown = state.visible and tab_active and not eclipsed
+        _trace(
+            f"refresh vp='{viewport_id}' tab='{state.tab_id}' shown={shown} "
+            f"(tab_active={tab_active} eclipsed={eclipsed} user={state.visible})"
+        )
+        state.overlay.set_scene_visible(shown)
         lines = [
             ln
             for ln in cls._lines.values()
