@@ -38,10 +38,14 @@ class MeasureDummyUI:
                 self._build_actions()
                 ui.Separator()
                 ui.Label("Lines", height=20)
-                self._list_frame = ui.ScrollingFrame(height=200)
+                with ui.ScrollingFrame(height=200):
+                    # build_fn + rebuild() so the list is rebuilt on the next
+                    # frame. Rebuilding it inline would mean replacing the
+                    # container from inside its own button callback, which
+                    # omni.ui warns about as "addChild during draw callback".
+                    self._list_frame = ui.Frame(build_fn=self._build_list)
 
         self._sub = MeasureService.subscribe_changed(self._refresh_list)
-        self._refresh_list()
 
     # ------------------------------------------------------------------ rows
 
@@ -129,31 +133,32 @@ class MeasureDummyUI:
     # ------------------------------------------------------------------ list
 
     def _refresh_list(self):
-        if self._list_frame is None:
-            return
+        if self._list_frame is not None:
+            self._list_frame.rebuild()
+
+    def _build_list(self):
         lines = MeasureService.get_lines()
-        with self._list_frame:
-            with ui.VStack(spacing=2, height=0):
-                if not lines:
-                    ui.Label("(none)", height=20, style={"color": 0xFF999999})
-                    return
-                for line in lines:
-                    with ui.HStack(height=22, spacing=4):
-                        ui.Label(f"#{line.id}", width=36)
-                        ui.Label(line.viewport_id, width=70)
-                        ui.Label(f"{line.length_m:.3f} m", width=80)
-                        ui.Button(
-                            "hide" if line.visible else "show",
-                            width=44,
-                            clicked_fn=lambda i=line.id, v=line.visible: (
-                                MeasureService.set_visible(not v, line_id=i)
-                            ),
-                        )
-                        ui.Button(
-                            "x",
-                            width=24,
-                            clicked_fn=lambda i=line.id: MeasureService.remove(i),
-                        )
+        with ui.VStack(spacing=2, height=0):
+            if not lines:
+                ui.Label("(none)", height=20, style={"color": 0xFF999999})
+                return
+            for line in lines:
+                with ui.HStack(height=22, spacing=4):
+                    ui.Label(f"#{line.id}", width=36)
+                    ui.Label(line.viewport_id, width=70)
+                    ui.Label(f"{line.length_m:.3f} m", width=80)
+                    ui.Button(
+                        "hide" if line.visible else "show",
+                        width=44,
+                        clicked_fn=lambda i=line.id, v=line.visible: (
+                            MeasureService.set_visible(not v, line_id=i)
+                        ),
+                    )
+                    ui.Button(
+                        "x",
+                        width=24,
+                        clicked_fn=lambda i=line.id: MeasureService.remove(i),
+                    )
 
     # -------------------------------------------------------------- teardown
 
