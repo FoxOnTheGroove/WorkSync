@@ -121,6 +121,9 @@ class MeasureCore:
     _snap_mode = SnapMode.ALL  # global, not per viewport
     _changed_callbacks: list = []
     _mesh_cache: dict = {}
+    # id -> (viewport_api, frame). Explicitly registered viewports, needed for
+    # ViewportWidget which has no ViewportWindow to enumerate or draw into.
+    _registered: dict = {}
 
     # ------------------------------------------------------------------ life
 
@@ -133,6 +136,7 @@ class MeasureCore:
         for state in list(cls._viewports.values()):
             state.overlay.destroy()
         cls._viewports.clear()
+        cls._registered.clear()
         cls._lines.clear()
         cls._changed_callbacks.clear()
         cls._mesh_cache.clear()
@@ -147,22 +151,51 @@ class MeasureCore:
     # --------------------------------------------------------------- enable
 
     @classmethod
+    def register_viewport(cls, viewport_api, frame=None) -> str:
+        """Make a viewport addressable by id.
+
+        Required for ViewportWidget, which has no ViewportWindow: pass the
+        widget's viewport_api plus an omni.ui container to draw the overlay
+        into. Viewports that live in a ViewportWindow are found automatically
+        and need no registration.
+
+        Returns the id to use for every other call.
+        """
+        viewport_id = str(getattr(viewport_api, "id", "") or "")
+        if not viewport_id:
+            raise ValueError("viewport_api has no usable id")
+        cls._registered[viewport_id] = (viewport_api, frame)
+        return viewport_id
+
+    @classmethod
+    def unregister_viewport(cls, viewport_id: str):
+        cls.set_enabled(viewport_id, False)
+        cls._registered.pop(viewport_id, None)
+
+    @classmethod
     def set_enabled(cls, viewport_id: str, enabled: bool):
         cls._require_started()
         if enabled:
             if viewport_id in cls._viewports:
                 return
-            viewport_api, window = _resolve_viewport(viewport_id)
-            if viewport_api is None or window is None:
+            viewport_api, frame = cls._resolve_target(viewport_id)
+            if viewport_api is None:
                 carb.log_warn(
                     f"[measure] no viewport with id '{viewport_id}'. "
-                    f"open ids: {_list_viewport_ids()}"
+                    f"known ids: {cls.list_viewport_ids()}. "
+                    f"For a ViewportWidget, call register_viewport() first."
+                )
+                return
+            if frame is None:
+                carb.log_warn(
+                    f"[measure] viewport '{viewport_id}' has nowhere to draw. "
+                    f"Pass a frame to register_viewport()."
                 )
                 return
             overlay = MeasureOverlay(
                 viewport_id,
                 viewport_api,
-                window,
+                frame,
                 on_hover=lambda ndc, v=viewport_id: cls._on_hover(v, ndc),
                 on_click=lambda ndc, v=viewport_id: cls._on_click(v, ndc),
             )
@@ -179,8 +212,23 @@ class MeasureCore:
 
     @classmethod
     def list_viewport_ids(cls) -> tuple:
-        """ViewportAPI.id of every open viewport window."""
-        return _list_viewport_ids()
+        """Registered ids first, then any found in open viewport windows."""
+        ids = list(cls._registered)
+        for vid in _list_viewport_ids():
+            if vid not in ids:
+                ids.append(vid)
+        return tuple(ids)
+
+    @classmethod
+    def _resolve_target(cls, viewport_id: str):
+        """(viewport_api, frame) for an id. Registration wins over discovery."""
+        entry = cls._registered.get(viewport_id)
+        if entry is not None:
+            return entry
+        viewport_api, window = _resolve_viewport(viewport_id)
+        if viewport_api is None or window is None:
+            return None, None
+        return viewport_api, window.get_frame(f"measure.overlay.{viewport_id}")
 
     # ----------------------------------------------------------------- snap
 

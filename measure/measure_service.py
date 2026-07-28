@@ -48,8 +48,34 @@ class MeasureService:
 
     @classmethod
     def list_viewport_ids(cls) -> tuple:
-        """Ids of every open viewport, in the form every other call expects."""
+        """Ids of every known viewport, in the form every other call expects."""
         return MeasureCore.list_viewport_ids()
+
+    @classmethod
+    def register_viewport(cls, viewport_api, frame=None) -> str:
+        """Make a viewport addressable, and say where to draw its overlay.
+
+        Needed for ViewportWidget, which has no ViewportWindow to discover or
+        to host the overlay:
+
+            widget = ViewportWidget(...)
+            with ui.ZStack():
+                ...                       # the widget
+                overlay_frame = ui.Frame()
+            vp = MeasureService.register_viewport(
+                widget.viewport_api, overlay_frame
+            )
+            MeasureService.set_enabled(vp, True)
+
+        Viewports inside a ViewportWindow are found on their own; registering
+        one anyway is harmless and takes precedence.
+        """
+        return MeasureCore.register_viewport(viewport_api, frame)
+
+    @classmethod
+    def unregister_viewport(cls, viewport_id: str) -> None:
+        """Drop a registration, disabling the tool there first."""
+        MeasureCore.unregister_viewport(viewport_id)
 
     # ------------------------------------------------------ b. snap mode
 

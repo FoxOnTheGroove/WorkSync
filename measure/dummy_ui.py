@@ -26,6 +26,7 @@ class MeasureDummyUI:
         self._sub = None
         self._snap_checks = {}
         self._enabled_check = None
+        self._id_field = None
         self._viewport_frame = None
         self._list_frame = None
 
@@ -52,8 +53,16 @@ class MeasureDummyUI:
     # ------------------------------------------------------------------ rows
 
     def _build_viewport_row(self):
+        # The field is authoritative so an id can always be typed in directly;
+        # the combo below is only a convenience that fills it.
         with ui.HStack(height=24, spacing=6):
-            ui.Label("Viewport", width=64)
+            ui.Label("Viewport id", width=76)
+            self._id_field = ui.StringField()
+            self._id_field.model.add_value_changed_fn(
+                lambda m: setattr(self, "_viewport_id", m.get_value_as_string().strip())
+            )
+        with ui.HStack(height=24, spacing=6):
+            ui.Label("Known", width=76)
             self._viewport_frame = ui.Frame(build_fn=self._build_viewport_combo)
             ui.Button("R", width=28, clicked_fn=self._refresh_viewports)
         with ui.HStack(height=24, spacing=6):
@@ -68,24 +77,29 @@ class MeasureDummyUI:
     def _build_viewport_combo(self):
         self._viewport_ids = MeasureService.list_viewport_ids()
         if not self._viewport_ids:
-            ui.Label("(no viewport)", style={"color": 0xFF999999})
+            ui.Label("(none discovered - type an id above)", style={"color": 0xFF999999})
             return
-        if self._viewport_id not in self._viewport_ids:
-            self._viewport_id = self._viewport_ids[0]
-        combo = ui.ComboBox(
-            self._viewport_ids.index(self._viewport_id), *self._viewport_ids
+        index = (
+            self._viewport_ids.index(self._viewport_id)
+            if self._viewport_id in self._viewport_ids
+            else 0
         )
-        combo.model.add_item_changed_fn(self._on_viewport_changed)
+        combo = ui.ComboBox(index, *self._viewport_ids)
+        combo.model.add_item_changed_fn(self._on_viewport_picked)
+        if not self._viewport_id:
+            self._set_viewport_id(self._viewport_ids[0])
 
-    def _on_viewport_changed(self, model, _item):
+    def _on_viewport_picked(self, model, _item):
         index = model.get_item_value_model().get_value_as_int()
-        if not 0 <= index < len(self._viewport_ids):
-            return
-        self._viewport_id = self._viewport_ids[index]
+        if 0 <= index < len(self._viewport_ids):
+            self._set_viewport_id(self._viewport_ids[index])
+
+    def _set_viewport_id(self, viewport_id: str):
+        self._viewport_id = viewport_id
+        if self._id_field is not None:
+            self._id_field.model.set_value(viewport_id)
         if self._enabled_check is not None:
-            self._enabled_check.model.set_value(
-                MeasureService.is_enabled(self._viewport_id)
-            )
+            self._enabled_check.model.set_value(MeasureService.is_enabled(viewport_id))
 
     def _refresh_viewports(self):
         if self._viewport_frame is not None:
@@ -191,6 +205,7 @@ class MeasureDummyUI:
         self._sub = None
         self._snap_checks.clear()
         self._enabled_check = None
+        self._id_field = None
         self._viewport_frame = None
         self._list_frame = None
         if self._window is not None:

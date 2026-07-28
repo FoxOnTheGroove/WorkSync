@@ -29,16 +29,15 @@ _LINE_THICKNESS = 2.0
 
 class MeasureOverlay:
     def __init__(
-        self, viewport_id: str, viewport_api, window, on_hover=None, on_click=None
+        self, viewport_id: str, viewport_api, frame, on_hover=None, on_click=None
     ):
         self._viewport_id = viewport_id
         self._viewport_api = viewport_api
-        self._window = window
+        self._frame = frame  # supplied by the caller, never looked up here
         self._on_hover = on_hover
         self._on_click = on_click
 
         self._scene_view = None
-        self._frame = None
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
@@ -48,11 +47,10 @@ class MeasureOverlay:
     # ----------------------------------------------------------------- build
 
     def _build(self):
-        if self._window is None:
-            carb.log_warn(f"[measure] no viewport window for '{self._viewport_id}'")
+        if self._frame is None:
+            carb.log_warn(f"[measure] no frame to draw '{self._viewport_id}' into")
             return
 
-        self._frame = self._window.get_frame(f"measure.overlay.{self._viewport_id}")
         with self._frame:
             self._scene_view = sc.SceneView()
             with self._scene_view.scene:
@@ -155,7 +153,6 @@ class MeasureOverlay:
         self._marker_root = None
         self._preview_root = None
         self._frame = None
-        self._window = None
 
 
 # --------------------------------------------------------------------- utils
