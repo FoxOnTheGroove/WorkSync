@@ -18,6 +18,9 @@ Then measuring is two calls:
 
     MeasureService.set_snap_mode(SnapMode.VERTEX | SnapMode.EDGE)
     MeasureService.pick_one()                    # next two clicks make a line
+
+set_enabled() is a single global switch, and only gates new picks: hiding,
+removing and clearing lines work whether it is on or off.
 """
 
 from __future__ import annotations
@@ -46,36 +49,35 @@ class MeasureService:
     # --------------------------------------------------------- a. on / off
 
     @classmethod
-    def set_enabled(cls, viewport_id: str, enabled: bool) -> None:
-        """Turn the tool on or off for one viewport."""
-        MeasureCore.set_enabled(viewport_id, enabled)
+    def set_enabled(cls, enabled: bool) -> None:
+        """Global on/off for measuring. There is no per-viewport switch.
+
+        Off only stops new picks. Existing lines stay on screen, and
+        set_visible / remove / clear all keep working.
+        """
+        MeasureCore.set_enabled(enabled)
 
     @classmethod
-    def is_enabled(cls, viewport_id: str) -> bool:
-        return MeasureCore.is_enabled(viewport_id)
+    def is_enabled(cls) -> bool:
+        return MeasureCore.is_enabled()
 
     @classmethod
     def list_viewport_ids(cls, tab_id=None) -> tuple:
-        """Every known viewport id, or only those belonging to one tab."""
+        """Every registered viewport id, or only those belonging to one tab."""
         return MeasureCore.list_viewport_ids(tab_id)
 
     @classmethod
     def register_vph(cls, vph) -> str:
         """Register one viewport widget host. Returns its viewport id.
 
-        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame.
+        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame, and builds the
+        overlay. Normally reached through on_tab_created().
         """
         return MeasureCore.register_vph(vph)
 
     @classmethod
     def register_tab(cls, tab_id: str, vphs) -> tuple:
-        """Register a tab and all of its hosts at creation time.
-
-            ids = MeasureService.register_tab(tab.id, tab.vphs)
-            MeasureService.set_tab_enabled(tab.id, True)
-
-        Returns the viewport ids, in the order the hosts were given.
-        """
+        """Register a tab and all of its hosts. Returns the viewport ids."""
         return MeasureCore.register_tab(tab_id, vphs)
 
     @classmethod
@@ -85,7 +87,7 @@ class MeasureService:
 
     @classmethod
     def unregister_viewport(cls, viewport_id: str) -> None:
-        """Drop one viewport, disabling it and removing its lines."""
+        """Drop one viewport and its lines."""
         MeasureCore.unregister_viewport(viewport_id)
 
     # ------------------------------------------------------- host events
@@ -96,14 +98,12 @@ class MeasureService:
 
     @classmethod
     def on_tab_created(cls, tab_id: str, vphs) -> tuple:
-        """A tab was built. Registers its hosts and turns the tool on there.
+        """A tab was built. Registers its hosts and builds their overlays.
 
-        Enabling does not steal viewport input: the overlay only captures
-        clicks between pick_one() and the second click.
+        This does not steal viewport input: the overlay only captures clicks
+        between pick_one() and the second click.
         """
-        ids = MeasureCore.register_tab(tab_id, vphs)
-        MeasureCore.set_tab_enabled(tab_id, True)
-        return ids
+        return MeasureCore.register_tab(tab_id, vphs)
 
     @classmethod
     def on_tab_activated(cls, tab_id: str) -> None:
@@ -147,11 +147,6 @@ class MeasureService:
     @classmethod
     def list_tabs(cls) -> tuple:
         return MeasureCore.list_tabs()
-
-    @classmethod
-    def set_tab_enabled(cls, tab_id: str, enabled: bool) -> None:
-        """Turn the tool on or off for every viewport in a tab."""
-        MeasureCore.set_tab_enabled(tab_id, enabled)
 
     @classmethod
     def get_tab_of(cls, viewport_id: str) -> str:

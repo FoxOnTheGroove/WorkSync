@@ -131,6 +131,9 @@ class MeasureCore:
     _active_tab = None  # None means "no tab filter", every tab draws
     _maximized: dict = {}  # tab id -> the one viewport id eclipsing its siblings
     _selected = ""  # viewport pick_one defaults to
+    # Global. Gates making new measurements only: show/hide/remove/clear keep
+    # working while off, and existing lines stay on screen.
+    _enabled = True
 
     # ------------------------------------------------------------------ life
 
@@ -162,21 +165,57 @@ class MeasureCore:
     # --------------------------------------------------------------- enable
 
     @classmethod
+    def set_enabled(cls, enabled: bool):
+        """Global. Off means no new picks; everything else keeps working."""
+        cls._enabled = bool(enabled)
+        if not cls._enabled:
+            for viewport_id in list(cls._viewports):
+                cls.cancel_pick(viewport_id)
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        return cls._enabled
+
+    # --------------------------------------------------------- registration
+
+    @classmethod
     def register_vph(cls, vph) -> str:
         """Register one viewport widget host. Returns its viewport id.
 
-        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame.
+        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame, and builds the
+        overlay straight away. Registration is the only way a viewport becomes
+        known: there is nothing to discover for a ViewportWidget.
         """
+        cls._require_started()
         viewport_api = vph.viewport_api
         viewport_id = str(getattr(viewport_api, "id", "") or "")
         if not viewport_id:
             raise ValueError("vph.viewport_api has no usable id")
         tab_id = str(vph.tab_id)
+        frame = vph.ui_frame
+        if frame is None:
+            raise ValueError(f"vph '{viewport_id}' has no ui_frame to draw into")
 
-        cls._registered[viewport_id] = (viewport_api, vph.ui_frame, tab_id)
+        old = cls._viewports.pop(viewport_id, None)
+        if old is not None:  # re-registered, e.g. the tab was rebuilt
+            old.overlay.destroy()
+
+        cls._registered[viewport_id] = (viewport_api, frame, tab_id)
         members = cls._tabs.setdefault(tab_id, [])
         if viewport_id not in members:
             members.append(viewport_id)
+
+        overlay = MeasureOverlay(
+            viewport_id,
+            viewport_api,
+            frame,
+            on_hover=lambda ndc, v=viewport_id: cls._on_hover(v, ndc),
+            on_click=lambda ndc, v=viewport_id: cls._on_click(v, ndc),
+        )
+        cls._viewports[viewport_id] = _ViewportState(
+            viewport_id, tab_id, viewport_api, overlay
+        )
+        cls._refresh(viewport_id)
         return viewport_id
 
     @classmethod
@@ -210,7 +249,9 @@ class MeasureCore:
 
     @classmethod
     def unregister_viewport(cls, viewport_id: str):
-        cls.set_enabled(viewport_id, False)
+        state = cls._viewports.pop(viewport_id, None)
+        if state is not None:
+            state.overlay.destroy()
         entry = cls._registered.pop(viewport_id, None)
         if entry is not None:
             members = cls._tabs.get(entry[2])
@@ -267,77 +308,16 @@ class MeasureCore:
         return cls._selected
 
     @classmethod
-    def set_tab_enabled(cls, tab_id: str, enabled: bool):
-        """Turn the tool on or off for every viewport in a tab."""
-        for viewport_id in list(cls._tabs.get(str(tab_id), [])):
-            cls.set_enabled(viewport_id, enabled)
-
-    @classmethod
-    def set_enabled(cls, viewport_id: str, enabled: bool):
-        cls._require_started()
-        if enabled:
-            if viewport_id in cls._viewports:
-                return
-            viewport_api, frame, tab_id = cls._resolve_target(viewport_id)
-            if viewport_api is None:
-                carb.log_warn(
-                    f"[measure] no viewport with id '{viewport_id}'. "
-                    f"known ids: {cls.list_viewport_ids()}. "
-                    f"For a ViewportWidget, call register_vph() first."
-                )
-                return
-            if frame is None:
-                carb.log_warn(
-                    f"[measure] viewport '{viewport_id}' has nowhere to draw"
-                )
-                return
-            overlay = MeasureOverlay(
-                viewport_id,
-                viewport_api,
-                frame,
-                on_hover=lambda ndc, v=viewport_id: cls._on_hover(v, ndc),
-                on_click=lambda ndc, v=viewport_id: cls._on_click(v, ndc),
-            )
-            cls._viewports[viewport_id] = _ViewportState(
-                viewport_id, tab_id, viewport_api, overlay
-            )
-            cls._refresh(viewport_id)
-        else:
-            state = cls._viewports.pop(viewport_id, None)
-            if state is not None:
-                state.overlay.destroy()
-
-    @classmethod
-    def is_enabled(cls, viewport_id: str) -> bool:
-        return viewport_id in cls._viewports
-
-    @classmethod
     def list_viewport_ids(cls, tab_id=None) -> tuple:
-        """Registered ids first, then any found in open viewport windows."""
+        """Every registered viewport id, or only one tab's."""
         if tab_id is not None:
             return tuple(cls._tabs.get(str(tab_id), []))
-        ids = list(cls._registered)
-        for vid in _list_viewport_ids():
-            if vid not in ids:
-                ids.append(vid)
-        return tuple(ids)
+        return tuple(cls._registered)
 
     @classmethod
     def get_tab_of(cls, viewport_id: str) -> str:
         entry = cls._registered.get(viewport_id)
         return entry[2] if entry is not None else ""
-
-    @classmethod
-    def _resolve_target(cls, viewport_id: str):
-        """(viewport_api, frame, tab_id). Registration wins over discovery."""
-        entry = cls._registered.get(viewport_id)
-        if entry is not None:
-            return entry
-        viewport_api, window = _resolve_viewport(viewport_id)
-        if viewport_api is None or window is None:
-            return None, None, ""
-        frame = window.get_frame(f"measure.overlay.{viewport_id}")
-        return viewport_api, frame, ""
 
     # ----------------------------------------------------------------- snap
 
@@ -359,6 +339,9 @@ class MeasureCore:
     @classmethod
     def pick_one(cls, viewport_id=None, on_done=None):
         cls._require_started()
+        if not cls._enabled:
+            carb.log_warn("[measure] pick_one ignored: the tool is disabled")
+            return
         viewport_id = viewport_id or cls._selected
         state = cls._viewports.get(viewport_id)
         if state is None:
@@ -725,41 +708,6 @@ def _pixel_distance(world: Gf.Vec3d, cursor_px, view, proj, viewport_api):
         return None
     px = _ndc_to_px((clip[0], clip[1]), viewport_api)
     return ((px[0] - cursor_px[0]) ** 2 + (px[1] - cursor_px[1]) ** 2) ** 0.5
-
-
-def _iter_viewport_windows():
-    """Every open viewport window. Empty list if the API is unavailable."""
-    try:
-        from omni.kit.viewport.window import get_viewport_window_instances
-
-        return list(get_viewport_window_instances())
-    except Exception as exc:
-        carb.log_warn(f"[measure] cannot enumerate viewport windows: {exc}")
-        return []
-
-
-def _viewport_id_of(window) -> str:
-    api = getattr(window, "viewport_api", None)
-    return "" if api is None else str(getattr(api, "id", ""))
-
-
-def _list_viewport_ids() -> tuple:
-    return tuple(
-        vid for vid in (_viewport_id_of(w) for w in _iter_viewport_windows()) if vid
-    )
-
-
-def _resolve_viewport(viewport_id: str):
-    """(viewport_api, window) for a ViewportAPI.id, or (None, None).
-
-    omni.kit.viewport.utility only offers name-based lookup, so match on id by
-    walking the open viewport windows.
-    """
-    wanted = str(viewport_id)
-    for window in _iter_viewport_windows():
-        if _viewport_id_of(window) == wanted:
-            return window.viewport_api, window
-    return None, None
 
 
 def _format_length(meters: float) -> str:
