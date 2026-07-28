@@ -152,13 +152,14 @@ class MeasureCore:
         if enabled:
             if viewport_id in cls._viewports:
                 return
-            viewport_api = _resolve_viewport_api(viewport_id)
-            if viewport_api is None:
+            viewport_api, window = _resolve_viewport(viewport_id)
+            if viewport_api is None or window is None:
                 carb.log_warn(f"[measure] unknown viewport '{viewport_id}'")
                 return
             overlay = MeasureOverlay(
                 viewport_id,
                 viewport_api,
+                window,
                 on_hover=lambda ndc, v=viewport_id: cls._on_hover(v, ndc),
                 on_click=lambda ndc, v=viewport_id: cls._on_click(v, ndc),
             )
@@ -543,14 +544,15 @@ def _pixel_distance(world: Gf.Vec3d, cursor_px, view, proj, viewport_api):
     return ((px[0] - cursor_px[0]) ** 2 + (px[1] - cursor_px[1]) ** 2) ** 0.5
 
 
-def _resolve_viewport_api(viewport_id: str):
-    from omni.kit.viewport.utility import get_viewport_from_window_name
+def _resolve_viewport(viewport_id: str):
+    """(viewport_api, window) for a viewport window name, or (None, None)."""
+    from omni.kit.viewport.utility import get_active_viewport_and_window
 
     try:
-        return get_viewport_from_window_name(viewport_id)
+        return get_active_viewport_and_window(window_name=viewport_id)
     except Exception as exc:
         carb.log_warn(f"[measure] viewport lookup failed for '{viewport_id}': {exc}")
-        return None
+        return None, None
 
 
 def _format_length(meters: float) -> str:

@@ -28,9 +28,12 @@ _LINE_THICKNESS = 2.0
 
 
 class MeasureOverlay:
-    def __init__(self, viewport_id: str, viewport_api, on_hover=None, on_click=None):
+    def __init__(
+        self, viewport_id: str, viewport_api, window, on_hover=None, on_click=None
+    ):
         self._viewport_id = viewport_id
         self._viewport_api = viewport_api
+        self._window = window
         self._on_hover = on_hover
         self._on_click = on_click
 
@@ -45,12 +48,11 @@ class MeasureOverlay:
     # ----------------------------------------------------------------- build
 
     def _build(self):
-        window = _viewport_window_for(self._viewport_id)
-        if window is None:
+        if self._window is None:
             carb.log_warn(f"[measure] no viewport window for '{self._viewport_id}'")
             return
 
-        self._frame = window.get_frame(f"measure.overlay.{self._viewport_id}")
+        self._frame = self._window.get_frame(f"measure.overlay.{self._viewport_id}")
         with self._frame:
             self._scene_view = sc.SceneView()
             with self._scene_view.scene:
@@ -153,6 +155,7 @@ class MeasureOverlay:
         self._marker_root = None
         self._preview_root = None
         self._frame = None
+        self._window = None
 
 
 # --------------------------------------------------------------------- utils
@@ -163,16 +166,6 @@ def _draw_label(a, b, text, color):
     mid = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*mid)):
         sc.Label(text, alignment=ui.Alignment.CENTER, color=color, size=18)
-
-
-def _viewport_window_for(viewport_id: str):
-    from omni.kit.viewport.utility import get_viewport_window_from_name
-
-    try:
-        return get_viewport_window_from_name(viewport_id)
-    except Exception as exc:
-        carb.log_warn(f"[measure] viewport window lookup failed: {exc}")
-        return None
 
 
 def _ndc_from(sender):
