@@ -71,10 +71,11 @@ class SnapPoint:
 class Line:
     id: int
     viewport_id: str
+    tab_id: str
     start: SnapPoint
     end: SnapPoint
     length_m: float
-    visible: bool = True
+    visible: bool = True  # user intent; the active tab gates drawing on top
 
 
 class Subscription:
@@ -100,8 +101,9 @@ class Subscription:
 class _ViewportState:
     """Per-viewport tool state. One of these per enabled viewport."""
 
-    def __init__(self, viewport_id: str, viewport_api, overlay: MeasureOverlay):
+    def __init__(self, viewport_id: str, tab_id: str, viewport_api, overlay: MeasureOverlay):
         self.viewport_id = viewport_id
+        self.tab_id = tab_id
         self.viewport_api = viewport_api
         self.overlay = overlay
         self.armed = False  # pick_one issued, waiting for clicks
@@ -121,9 +123,12 @@ class MeasureCore:
     _snap_mode = SnapMode.ALL  # global, not per viewport
     _changed_callbacks: list = []
     _mesh_cache: dict = {}
-    # id -> (viewport_api, frame). Explicitly registered viewports, needed for
-    # ViewportWidget which has no ViewportWindow to enumerate or draw into.
+    # viewport id -> (viewport_api, frame, tab_id), from register_vph.
+    # ViewportWidget has no ViewportWindow to enumerate or to draw into, so the
+    # host supplies both.
     _registered: dict = {}
+    _tabs: dict = {}  # tab id -> [viewport id]
+    _active_tab = None  # None means "no tab filter", every tab draws
 
     # ------------------------------------------------------------------ life
 
@@ -137,6 +142,8 @@ class MeasureCore:
             state.overlay.destroy()
         cls._viewports.clear()
         cls._registered.clear()
+        cls._tabs.clear()
+        cls._active_tab = None
         cls._lines.clear()
         cls._changed_callbacks.clear()
         cls._mesh_cache.clear()
@@ -151,26 +158,85 @@ class MeasureCore:
     # --------------------------------------------------------------- enable
 
     @classmethod
-    def register_viewport(cls, viewport_api, frame=None) -> str:
-        """Make a viewport addressable by id.
+    def register_vph(cls, vph) -> str:
+        """Register one viewport widget host. Returns its viewport id.
 
-        Required for ViewportWidget, which has no ViewportWindow: pass the
-        widget's viewport_api plus an omni.ui container to draw the overlay
-        into. Viewports that live in a ViewportWindow are found automatically
-        and need no registration.
-
-        Returns the id to use for every other call.
+        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame.
         """
+        viewport_api = vph.viewport_api
         viewport_id = str(getattr(viewport_api, "id", "") or "")
         if not viewport_id:
-            raise ValueError("viewport_api has no usable id")
-        cls._registered[viewport_id] = (viewport_api, frame)
+            raise ValueError("vph.viewport_api has no usable id")
+        tab_id = str(vph.tab_id)
+
+        cls._registered[viewport_id] = (viewport_api, vph.ui_frame, tab_id)
+        members = cls._tabs.setdefault(tab_id, [])
+        if viewport_id not in members:
+            members.append(viewport_id)
         return viewport_id
+
+    @classmethod
+    def register_tab(cls, tab_id: str, vphs) -> tuple:
+        """Register a whole tab at creation time. Returns its viewport ids.
+
+        tab_id is taken from each vph, so it only has to agree with what the
+        hosts report; a mismatch is a caller bug and is logged.
+        """
+        ids = []
+        for vph in vphs:
+            if str(vph.tab_id) != str(tab_id):
+                carb.log_warn(
+                    f"[measure] vph reports tab '{vph.tab_id}', expected '{tab_id}'"
+                )
+            ids.append(cls.register_vph(vph))
+        cls._tabs.setdefault(str(tab_id), [])
+        return tuple(ids)
+
+    @classmethod
+    def unregister_tab(cls, tab_id: str):
+        """Tab closed: drop its viewports and every line drawn in them."""
+        tab_id = str(tab_id)
+        for viewport_id in list(cls._tabs.get(tab_id, [])):
+            cls.unregister_viewport(viewport_id)
+        cls._tabs.pop(tab_id, None)
+        if cls._active_tab == tab_id:
+            cls._active_tab = None
+        cls._notify()
 
     @classmethod
     def unregister_viewport(cls, viewport_id: str):
         cls.set_enabled(viewport_id, False)
-        cls._registered.pop(viewport_id, None)
+        entry = cls._registered.pop(viewport_id, None)
+        if entry is not None:
+            members = cls._tabs.get(entry[2])
+            if members and viewport_id in members:
+                members.remove(viewport_id)
+        cls._lines = {
+            i: ln for i, ln in cls._lines.items() if ln.viewport_id != viewport_id
+        }
+
+    # ------------------------------------------------------------------ tabs
+
+    @classmethod
+    def set_active_tab(cls, tab_id):
+        """Only the active tab draws. None lifts the filter entirely."""
+        cls._active_tab = None if tab_id is None else str(tab_id)
+        for viewport_id in list(cls._viewports):
+            cls._refresh(viewport_id)
+
+    @classmethod
+    def get_active_tab(cls):
+        return cls._active_tab
+
+    @classmethod
+    def list_tabs(cls) -> tuple:
+        return tuple(cls._tabs)
+
+    @classmethod
+    def set_tab_enabled(cls, tab_id: str, enabled: bool):
+        """Turn the tool on or off for every viewport in a tab."""
+        for viewport_id in list(cls._tabs.get(str(tab_id), [])):
+            cls.set_enabled(viewport_id, enabled)
 
     @classmethod
     def set_enabled(cls, viewport_id: str, enabled: bool):
@@ -178,18 +244,17 @@ class MeasureCore:
         if enabled:
             if viewport_id in cls._viewports:
                 return
-            viewport_api, frame = cls._resolve_target(viewport_id)
+            viewport_api, frame, tab_id = cls._resolve_target(viewport_id)
             if viewport_api is None:
                 carb.log_warn(
                     f"[measure] no viewport with id '{viewport_id}'. "
                     f"known ids: {cls.list_viewport_ids()}. "
-                    f"For a ViewportWidget, call register_viewport() first."
+                    f"For a ViewportWidget, call register_vph() first."
                 )
                 return
             if frame is None:
                 carb.log_warn(
-                    f"[measure] viewport '{viewport_id}' has nowhere to draw. "
-                    f"Pass a frame to register_viewport()."
+                    f"[measure] viewport '{viewport_id}' has nowhere to draw"
                 )
                 return
             overlay = MeasureOverlay(
@@ -199,7 +264,9 @@ class MeasureCore:
                 on_hover=lambda ndc, v=viewport_id: cls._on_hover(v, ndc),
                 on_click=lambda ndc, v=viewport_id: cls._on_click(v, ndc),
             )
-            cls._viewports[viewport_id] = _ViewportState(viewport_id, viewport_api, overlay)
+            cls._viewports[viewport_id] = _ViewportState(
+                viewport_id, tab_id, viewport_api, overlay
+            )
             cls._refresh(viewport_id)
         else:
             state = cls._viewports.pop(viewport_id, None)
@@ -211,8 +278,10 @@ class MeasureCore:
         return viewport_id in cls._viewports
 
     @classmethod
-    def list_viewport_ids(cls) -> tuple:
+    def list_viewport_ids(cls, tab_id=None) -> tuple:
         """Registered ids first, then any found in open viewport windows."""
+        if tab_id is not None:
+            return tuple(cls._tabs.get(str(tab_id), []))
         ids = list(cls._registered)
         for vid in _list_viewport_ids():
             if vid not in ids:
@@ -220,15 +289,21 @@ class MeasureCore:
         return tuple(ids)
 
     @classmethod
+    def get_tab_of(cls, viewport_id: str) -> str:
+        entry = cls._registered.get(viewport_id)
+        return entry[2] if entry is not None else ""
+
+    @classmethod
     def _resolve_target(cls, viewport_id: str):
-        """(viewport_api, frame) for an id. Registration wins over discovery."""
+        """(viewport_api, frame, tab_id). Registration wins over discovery."""
         entry = cls._registered.get(viewport_id)
         if entry is not None:
             return entry
         viewport_api, window = _resolve_viewport(viewport_id)
         if viewport_api is None or window is None:
-            return None, None
-        return viewport_api, window.get_frame(f"measure.overlay.{viewport_id}")
+            return None, None, ""
+        frame = window.get_frame(f"measure.overlay.{viewport_id}")
+        return viewport_api, frame, ""
 
     # ----------------------------------------------------------------- snap
 
@@ -273,10 +348,12 @@ class MeasureCore:
     # ---------------------------------------------------------------- lines
 
     @classmethod
-    def get_lines(cls, viewport_id=None) -> tuple:
-        lines = cls._lines.values()
+    def get_lines(cls, viewport_id=None, tab_id=None) -> tuple:
+        lines = list(cls._lines.values())
         if viewport_id is not None:
             lines = [ln for ln in lines if ln.viewport_id == viewport_id]
+        if tab_id is not None:
+            lines = [ln for ln in lines if ln.tab_id == str(tab_id)]
         return tuple(lines)
 
     @classmethod
@@ -289,37 +366,43 @@ class MeasureCore:
         return True
 
     @classmethod
-    def clear(cls, viewport_id=None):
-        if viewport_id is None:
-            touched = {ln.viewport_id for ln in cls._lines.values()}
-            cls._lines.clear()
-        else:
-            touched = {viewport_id}
-            cls._lines = {
-                i: ln for i, ln in cls._lines.items() if ln.viewport_id != viewport_id
-            }
-        for vp in touched:
+    def clear(cls, viewport_id=None, tab_id=None):
+        doomed = [
+            ln
+            for ln in cls._lines.values()
+            if (viewport_id is None or ln.viewport_id == viewport_id)
+            and (tab_id is None or ln.tab_id == str(tab_id))
+        ]
+        for line in doomed:
+            cls._lines.pop(line.id, None)
+        for vp in {ln.viewport_id for ln in doomed}:
             cls._refresh(vp)
         cls._notify()
 
     @classmethod
-    def set_visible(cls, visible: bool, line_id=None, viewport_id=None):
-        """Three tiers: one line, one viewport, or everything."""
+    def set_visible(cls, visible: bool, line_id=None, viewport_id=None, tab_id=None):
+        """Four tiers, most specific first: line, viewport, tab, everything.
+
+        This is user intent only. The active tab gates drawing independently,
+        so making something visible here does not show it in an inactive tab.
+        """
         if line_id is not None:
             line = cls._lines.get(line_id)
             if line is None:
                 return
             line.visible = visible
             cls._refresh(line.viewport_id)
-        elif viewport_id is not None:
-            state = cls._viewports.get(viewport_id)
-            if state is not None:
-                state.visible = visible
-            cls._refresh(viewport_id)
         else:
-            for state in cls._viewports.values():
-                state.visible = visible
-            for vp in list(cls._viewports):
+            if viewport_id is not None:
+                targets = [viewport_id]
+            elif tab_id is not None:
+                targets = list(cls._tabs.get(str(tab_id), []))
+            else:
+                targets = list(cls._viewports)
+            for vp in targets:
+                state = cls._viewports.get(vp)
+                if state is not None:
+                    state.visible = visible
                 cls._refresh(vp)
         cls._notify()
 
@@ -374,6 +457,7 @@ class MeasureCore:
         line = Line(
             id=cls._next_line_id,
             viewport_id=state.viewport_id,
+            tab_id=state.tab_id,
             start=state.pending,
             end=snap,
             length_m=cls._length_m(state.pending.position, snap.position),
@@ -509,7 +593,10 @@ class MeasureCore:
         state = cls._viewports.get(viewport_id)
         if state is None:
             return
-        state.overlay.set_scene_visible(state.visible)
+        # Two independent gates: the active tab, and user intent. Hiding the
+        # scene also stops gestures, so an inactive tab cannot be clicked into.
+        tab_active = cls._active_tab is None or state.tab_id == cls._active_tab
+        state.overlay.set_scene_visible(state.visible and tab_active)
         lines = [
             ln
             for ln in cls._lines.values()

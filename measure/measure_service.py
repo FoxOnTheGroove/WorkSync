@@ -3,11 +3,14 @@
 Everything outside this package should go through MeasureService and nothing
 else. The classmethods are pure delegation; all state lives in measure.py.
 
-Viewport ids are ViewportAPI.id, not window names. Discover them with
-list_viewport_ids().
+Viewports are keyed by ViewportAPI.id and grouped by the tab that owns them.
+A tab holds 1, 2 or 4 viewport widget hosts; register them when the tab is
+built, and tell the service which tab is active so only that tab draws.
 
-    vp = MeasureService.list_viewport_ids()[0]
-    MeasureService.set_enabled(vp, True)
+    MeasureService.register_tab(tab.id, tab.vphs)
+    MeasureService.set_tab_enabled(tab.id, True)
+    MeasureService.set_active_tab(tab.id)        # on tab switch
+
     MeasureService.set_snap_mode(SnapMode.VERTEX | SnapMode.EDGE)
     MeasureService.pick_one(vp)                  # next two clicks make a line
 """
@@ -47,35 +50,65 @@ class MeasureService:
         return MeasureCore.is_enabled(viewport_id)
 
     @classmethod
-    def list_viewport_ids(cls) -> tuple:
-        """Ids of every known viewport, in the form every other call expects."""
-        return MeasureCore.list_viewport_ids()
+    def list_viewport_ids(cls, tab_id=None) -> tuple:
+        """Every known viewport id, or only those belonging to one tab."""
+        return MeasureCore.list_viewport_ids(tab_id)
 
     @classmethod
-    def register_viewport(cls, viewport_api, frame=None) -> str:
-        """Make a viewport addressable, and say where to draw its overlay.
+    def register_vph(cls, vph) -> str:
+        """Register one viewport widget host. Returns its viewport id.
 
-        Needed for ViewportWidget, which has no ViewportWindow to discover or
-        to host the overlay:
-
-            widget = ViewportWidget(...)
-            with ui.ZStack():
-                ...                       # the widget
-                overlay_frame = ui.Frame()
-            vp = MeasureService.register_viewport(
-                widget.viewport_api, overlay_frame
-            )
-            MeasureService.set_enabled(vp, True)
-
-        Viewports inside a ViewportWindow are found on their own; registering
-        one anyway is harmless and takes precedence.
+        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame.
         """
-        return MeasureCore.register_viewport(viewport_api, frame)
+        return MeasureCore.register_vph(vph)
+
+    @classmethod
+    def register_tab(cls, tab_id: str, vphs) -> tuple:
+        """Register a tab and all of its hosts at creation time.
+
+            ids = MeasureService.register_tab(tab.id, tab.vphs)
+            MeasureService.set_tab_enabled(tab.id, True)
+
+        Returns the viewport ids, in the order the hosts were given.
+        """
+        return MeasureCore.register_tab(tab_id, vphs)
+
+    @classmethod
+    def unregister_tab(cls, tab_id: str) -> None:
+        """Tab closed: drops its viewports and every line drawn in them."""
+        MeasureCore.unregister_tab(tab_id)
 
     @classmethod
     def unregister_viewport(cls, viewport_id: str) -> None:
-        """Drop a registration, disabling the tool there first."""
+        """Drop one viewport, disabling it and removing its lines."""
         MeasureCore.unregister_viewport(viewport_id)
+
+    # ------------------------------------------------------------- a2. tabs
+
+    @classmethod
+    def set_active_tab(cls, tab_id) -> None:
+        """Only the active tab draws and accepts clicks.
+
+        Pass None to lift the filter so every tab draws.
+        """
+        MeasureCore.set_active_tab(tab_id)
+
+    @classmethod
+    def get_active_tab(cls):
+        return MeasureCore.get_active_tab()
+
+    @classmethod
+    def list_tabs(cls) -> tuple:
+        return MeasureCore.list_tabs()
+
+    @classmethod
+    def set_tab_enabled(cls, tab_id: str, enabled: bool) -> None:
+        """Turn the tool on or off for every viewport in a tab."""
+        MeasureCore.set_tab_enabled(tab_id, enabled)
+
+    @classmethod
+    def get_tab_of(cls, viewport_id: str) -> str:
+        return MeasureCore.get_tab_of(viewport_id)
 
     # ------------------------------------------------------ b. snap mode
 
@@ -112,9 +145,9 @@ class MeasureService:
     # --------------------------------------------------------- d. lines
 
     @classmethod
-    def get_lines(cls, viewport_id=None) -> tuple:
-        """All lines, or only those belonging to one viewport."""
-        return MeasureCore.get_lines(viewport_id)
+    def get_lines(cls, viewport_id=None, tab_id=None) -> tuple:
+        """All lines, narrowed by viewport and/or tab."""
+        return MeasureCore.get_lines(viewport_id, tab_id)
 
     @classmethod
     def remove(cls, line_id: int) -> bool:
@@ -122,21 +155,29 @@ class MeasureService:
         return MeasureCore.remove(line_id)
 
     @classmethod
-    def clear(cls, viewport_id=None) -> None:
-        """Remove every line, or every line in one viewport."""
-        MeasureCore.clear(viewport_id)
+    def clear(cls, viewport_id=None, tab_id=None) -> None:
+        """Remove every line, narrowed by viewport and/or tab."""
+        MeasureCore.clear(viewport_id, tab_id)
 
     # ---------------------------------------------------- e. visibility
 
     @classmethod
-    def set_visible(cls, visible: bool, line_id=None, viewport_id=None) -> None:
-        """Three tiers, most specific first:
+    def set_visible(
+        cls, visible: bool, line_id=None, viewport_id=None, tab_id=None
+    ) -> None:
+        """Four tiers, most specific first:
 
         line_id     -> that one line
         viewport_id -> everything in that viewport
-        neither     -> everything, everywhere
+        tab_id      -> everything in that tab
+        none of them-> everything, everywhere
+
+        This is user intent. The active tab gates drawing on top of it, so a
+        line made visible here still stays hidden while its tab is inactive.
         """
-        MeasureCore.set_visible(visible, line_id=line_id, viewport_id=viewport_id)
+        MeasureCore.set_visible(
+            visible, line_id=line_id, viewport_id=viewport_id, tab_id=tab_id
+        )
 
     # -------------------------------------------------------- change feed
 

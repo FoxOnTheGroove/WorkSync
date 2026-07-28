@@ -28,12 +28,17 @@ class MeasureDummyUI:
         self._enabled_check = None
         self._id_field = None
         self._viewport_frame = None
+        self._tab_id = ""
+        self._tab_ids = ()
+        self._tab_frame = None
         self._list_frame = None
 
     def build_ui(self):
         self._window = ui.Window("Measure (dummy)", width=340, height=460)
         with self._window.frame:
             with ui.VStack(spacing=6, height=0):
+                self._build_tab_row()
+                ui.Separator()
                 self._build_viewport_row()
                 ui.Separator()
                 self._build_snap_row()
@@ -51,6 +56,43 @@ class MeasureDummyUI:
         self._sub = MeasureService.subscribe_changed(self._refresh_list)
 
     # ------------------------------------------------------------------ rows
+
+    def _build_tab_row(self):
+        with ui.HStack(height=24, spacing=6):
+            ui.Label("Active tab", width=76)
+            self._tab_frame = ui.Frame(build_fn=self._build_tab_combo)
+            ui.Button("R", width=28, clicked_fn=self._refresh_tabs)
+        with ui.HStack(height=26, spacing=6):
+            ui.Button("Enable tab", clicked_fn=lambda: self._set_tab_enabled(True))
+            ui.Button("Disable tab", clicked_fn=lambda: self._set_tab_enabled(False))
+            ui.Button(
+                "Clear tab",
+                clicked_fn=lambda: MeasureService.clear(tab_id=self._tab_id),
+            )
+
+    def _build_tab_combo(self):
+        self._tab_ids = MeasureService.list_tabs()
+        if not self._tab_ids:
+            ui.Label("(no tab registered)", style={"color": 0xFF999999})
+            return
+        if self._tab_id not in self._tab_ids:
+            self._tab_id = self._tab_ids[0]
+        combo = ui.ComboBox(self._tab_ids.index(self._tab_id), *self._tab_ids)
+        combo.model.add_item_changed_fn(self._on_tab_picked)
+
+    def _on_tab_picked(self, model, _item):
+        index = model.get_item_value_model().get_value_as_int()
+        if 0 <= index < len(self._tab_ids):
+            self._tab_id = self._tab_ids[index]
+            MeasureService.set_active_tab(self._tab_id)
+
+    def _set_tab_enabled(self, enabled: bool):
+        if self._tab_id:
+            MeasureService.set_tab_enabled(self._tab_id, enabled)
+
+    def _refresh_tabs(self):
+        if self._tab_frame is not None:
+            self._tab_frame.rebuild()
 
     def _build_viewport_row(self):
         # The field is authoritative so an id can always be typed in directly;
@@ -183,8 +225,9 @@ class MeasureDummyUI:
                 return
             for line in lines:
                 with ui.HStack(height=22, spacing=4):
-                    ui.Label(f"#{line.id}", width=36)
-                    ui.Label(line.viewport_id, width=70)
+                    ui.Label(f"#{line.id}", width=32)
+                    ui.Label(line.tab_id or "-", width=52)
+                    ui.Label(line.viewport_id, width=60)
                     ui.Label(f"{line.length_m:.3f} m", width=80)
                     ui.Button(
                         "hide" if line.visible else "show",
@@ -207,6 +250,9 @@ class MeasureDummyUI:
         self._enabled_check = None
         self._id_field = None
         self._viewport_frame = None
+        self._tab_id = ""
+        self._tab_ids = ()
+        self._tab_frame = None
         self._list_frame = None
         if self._window is not None:
             self._window.destroy()
