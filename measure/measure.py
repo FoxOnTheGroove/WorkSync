@@ -169,6 +169,7 @@ class MeasureCore:
     # True once the host feeds clicks in. The overlay then never grabs input,
     # so it cannot fight the extension that already owns the mouse.
     _host_input = False
+    _hover_seen = False  # has any hover event reached us at all
 
     # ------------------------------------------------------------------ life
 
@@ -489,6 +490,12 @@ class MeasureCore:
         state.on_done = on_done
         if not cls._host_input:
             state.overlay.set_click_active(True)
+        if not cls._hover_seen:
+            _trace(
+                "pick_one: no hover has ever arrived. The snap marker and the "
+                "preview line need on_viewport_hover(vp_id, coords) forwarded "
+                "when the host owns viewport input. Clicks snap regardless."
+            )
 
     @classmethod
     def cancel_pick(cls, viewport_id=None):
@@ -585,6 +592,7 @@ class MeasureCore:
         state = cls._viewports.get(viewport_id)
         if state is None or not state.armed:
             return  # no raycast per mouse move unless a pick is in progress
+        cls._hover_seen = True
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_hover(state, snap))
 
     @classmethod
@@ -607,7 +615,14 @@ class MeasureCore:
     @classmethod
     def _apply_click(cls, state, snap):
         if snap is None:  # clicked empty space, nothing to anchor to
+            _trace("click resolved: nothing hit")
             return
+        _trace(
+            f"click resolved: kind={snap.kind.name} elem={snap.element_index} "
+            f"pos={tuple(round(v, 4) for v in snap.position)}"
+        )
+        # Show where it landed even when hover never reaches us.
+        state.overlay.set_snap_marker(snap)
         if state.pending is None:
             state.pending = snap
             return
