@@ -707,12 +707,15 @@ class MeasureCore:
             _trace("snap: mode is NONE, surface only")
             return surface
 
-        face_index, verts, note = cls._face_vertices(path, primitive_id, hit)
+        time = _time_of(state.viewport_api)
+        face_index, verts, note = cls._face_vertices(
+            path, primitive_id, hit, time
+        )
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
             f"snap: path='{path}' id={primitive_id} face={face_index} "
             f"face_verts={len(verts)} cursor_px={cursor_px} "
-            f"radius={cls._snap_radius}"
+            f"radius={cls._snap_radius} time={time}"
             f"{' | ' + note if note else ''}"
         )
 
@@ -745,15 +748,15 @@ class MeasureCore:
         # not expose a face id on this Kit build. Vertex snapping still works by
         # scanning the whole mesh; edge and mid-point need a face.
         if cls._snap_mode & SnapMode.VERTEX:
-            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state)
+            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state, time)
             if snap is not None:
                 return snap
         return surface
 
     @classmethod
-    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state):
+    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state, time=None):
         """Nearest vertex over the whole mesh, within the snap radius."""
-        points = cls._world_points(prim_path)
+        points = cls._world_points(prim_path, time)
         if not points:
             return None
         best = None
@@ -769,13 +772,13 @@ class MeasureCore:
         return SnapPoint(best[2], SnapKind.VERTEX, prim_path, -1, best[1])
 
     @classmethod
-    def _world_points(cls, prim_path: str) -> list:
+    def _world_points(cls, prim_path: str, time=None) -> list:
         """Every mesh point in world space. Cached; skips very heavy meshes."""
-        key = (_stage_key(omni.usd.get_context().get_stage()), prim_path)
+        key = (_stage_key(omni.usd.get_context().get_stage()), prim_path, str(time))
         cached = cls._world_cache.get(key)
         if cached is not None:
             return cached
-        entry = cls._mesh_entry(prim_path)
+        entry = cls._mesh_entry(prim_path, None, time)
         if entry is None:
             cls._world_cache[key] = []
             return []
@@ -792,7 +795,7 @@ class MeasureCore:
         return world
 
     @classmethod
-    def _mesh_entry(cls, prim_path: str, hit=None):
+    def _mesh_entry(cls, prim_path: str, hit=None, time=None):
         """(points, counts, indices, offsets, xform) for the hit geometry.
 
         Cached by the prim it resolves to, never by the path that was hit:
@@ -803,18 +806,18 @@ class MeasureCore:
             _trace("snap: no stage")
             return None
 
-        prim, why = _resolve_mesh_prim(stage, prim_path, hit)
+        prim, why = _resolve_mesh_prim(stage, prim_path, hit, time)
         if why:
             _trace(f"snap: {why}")
         if prim is None:
             return None
 
-        key = (_stage_key(stage), str(prim.GetPath()))
+        key = (_stage_key(stage), str(prim.GetPath()), str(time))
         entry = cls._mesh_cache.get(key)
         if entry is not None:
             return entry or None
 
-        entry = _build_entry(prim)
+        entry = _build_entry(prim, time)
         if entry is None:
             _trace(f"snap: '{prim.GetPath()}' has no points")
             cls._mesh_cache[key] = ()
@@ -828,7 +831,7 @@ class MeasureCore:
         return entry
 
     @classmethod
-    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None):
+    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None, time=None):
         """Resolve a raycast primitive id to one face's world-space vertices.
 
         Returns (face_index, verts, reason). The id is not always a USD face
@@ -838,7 +841,7 @@ class MeasureCore:
         """
         if primitive_id < 0 and hit is None:
             return -1, [], "no face id and no hit to search by"
-        entry = cls._mesh_entry(prim_path, hit)
+        entry = cls._mesh_entry(prim_path, hit, time)
         if entry is None:
             return -1, [], "no geometry found for this hit"
         points, counts, indices, offsets, xform = entry
@@ -957,8 +960,42 @@ def _stage_key(stage) -> str:
         return str(id(stage))
 
 
-def _points_of(prim):
-    """Authored points of any point-based prim, or None.
+def _time_of(viewport_api):
+    """The time the viewport is showing, as a Usd.TimeCode."""
+    time = getattr(viewport_api, "time", None)
+    if time is not None:
+        return time
+    try:
+        import omni.timeline
+
+        stage = omni.usd.get_context().get_stage()
+        seconds = omni.timeline.get_timeline_interface().get_current_time()
+        return Usd.TimeCode(seconds * stage.GetTimeCodesPerSecond())
+    except Exception:
+        return Usd.TimeCode.Default()
+
+
+def _times_to_try(attr, time):
+    """Current time first, then default, then the first authored sample.
+
+    Points are often authored only at time samples, so reading at the default
+    time code comes back empty even though the mesh clearly has geometry.
+    """
+    times = []
+    if time is not None:
+        times.append(time)
+    times.append(Usd.TimeCode.Default())
+    try:
+        samples = attr.GetTimeSamples()
+        if samples:
+            times.append(Usd.TimeCode(samples[0]))
+    except Exception:
+        pass
+    return times
+
+
+def _points_of(prim, time=None):
+    """Points of any point-based prim, or None.
 
     PointBased rather than Mesh, so Points and BasisCurves work too. Implicit
     gprims (Cube, Sphere, Cylinder, ...) are procedural and have none.
@@ -969,12 +1006,15 @@ def _points_of(prim):
         return None
     if not attr:
         return None
-    points = attr.Get()
-    return points if points else None
+    for when in _times_to_try(attr, time):
+        points = attr.Get(when)
+        if points:
+            return points
+    return None
 
 
-def _has_points(prim) -> bool:
-    return _points_of(prim) is not None
+def _has_points(prim, time=None) -> bool:
+    return _points_of(prim, time) is not None
 
 
 def _descendants(prim):
@@ -985,9 +1025,9 @@ def _descendants(prim):
         return list(Usd.PrimRange(prim))
 
 
-def _build_entry(prim):
+def _build_entry(prim, time=None):
     """(points, counts, indices, offsets, xform), counts None without topology."""
-    points = _points_of(prim)
+    points = _points_of(prim, time)
     if points is None:
         return None
     mesh = UsdGeom.Mesh(prim)
@@ -1000,7 +1040,9 @@ def _build_entry(prim):
             offsets.append(offsets[-1] + c)
     else:
         counts = indices = None
-    xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+        time if time is not None else Usd.TimeCode.Default()
+    )
     return points, counts, indices, offsets, xform
 
 
@@ -1020,9 +1062,9 @@ def _best_face_by_hit(entry, hit, cap=_MAX_FACE_SCAN):
     return best
 
 
-def _mesh_hit_score(prim, hit) -> float:
+def _mesh_hit_score(prim, hit, time=None) -> float:
     """How close the hit is to this prim's surface. Lower is better."""
-    entry = _build_entry(prim)
+    entry = _build_entry(prim, time)
     if entry is None:
         return float("inf")
     best = _best_face_by_hit(entry, hit)
@@ -1038,12 +1080,21 @@ def _describe(prim) -> str:
     try:
         kind = prim.GetTypeName() or "<untyped>"
         kids = [f"{c.GetName()}:{c.GetTypeName() or '?'}" for c in prim.GetChildren()]
-        return f"type={kind} proxy={prim.IsInstanceProxy()} children={kids[:8]}"
+        detail = f"type={kind} proxy={prim.IsInstanceProxy()} children={kids[:8]}"
+        attr = UsdGeom.PointBased(prim).GetPointsAttr()
+        if not attr:
+            return detail + " points_attr=absent"
+        samples = attr.GetTimeSamples()
+        return (
+            f"{detail} points_attr=present authored={attr.HasAuthoredValue()} "
+            f"samples={len(samples)}{samples[:3] if samples else ''} "
+            f"loaded={prim.IsLoaded()} active={prim.IsActive()}"
+        )
     except Exception as exc:
         return f"<undescribable: {exc}>"
 
 
-def _resolve_mesh_prim(stage, prim_path, hit=None):
+def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
     """(prim, note). Walks to the prim that actually carries the topology.
 
     A raycast can report a GeomSubset, an instance proxy or a wrapping Xform
@@ -1057,16 +1108,16 @@ def _resolve_mesh_prim(stage, prim_path, hit=None):
             f"'{path}' ({type(prim_path).__name__}) not found on "
             f"stage '{_stage_key(stage)}'"
         )
-    if _has_points(prim):
+    if _has_points(prim, time):
         return prim, ""
 
     detail = _describe(prim)
     parent = prim.GetParent()
     while parent and parent.IsValid() and not parent.IsPseudoRoot():
-        if _has_points(parent):
+        if _has_points(parent, time):
             return parent, f"'{path}' had no points, used ancestor {parent.GetPath()}"
         parent = parent.GetParent()
-    meshes = [d for d in _descendants(prim) if _has_points(d)]
+    meshes = [d for d in _descendants(prim) if _has_points(d, time)]
     if len(meshes) == 1:
         return meshes[0], f"'{path}' had no points, used child {meshes[0].GetPath()}"
     if meshes:
@@ -1074,7 +1125,7 @@ def _resolve_mesh_prim(stage, prim_path, hit=None):
             return None, f"'{path}' has {len(meshes)} meshes under it, no hit to pick by"
         # Intersecting planes overlap in space, so pick by distance to the
         # actual surface rather than by bounds.
-        scored = sorted((_mesh_hit_score(m, hit), i) for i, m in enumerate(meshes))
+        scored = sorted((_mesh_hit_score(m, hit, time), i) for i, m in enumerate(meshes))
         score, index = scored[0]
         chosen = meshes[index]
         if score == float("inf"):
