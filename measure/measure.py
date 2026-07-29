@@ -32,6 +32,12 @@ SNAP_RADIUS_PX = 12.0
 # Cap on the whole-mesh vertex scan used when no face id is available.
 _MAX_SCAN_POINTS = 200_000
 
+# Cap on searching a mesh's faces for the one the hit sits on.
+_MAX_FACE_SCAN = 20_000
+
+# A hit this close to a face's plane and inside its bounds is on that face.
+_ON_FACE_EPS = 1e-6
+
 # 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
 TRACE = True
 
@@ -786,51 +792,38 @@ class MeasureCore:
         return world
 
     @classmethod
-    def _mesh_entry(cls, prim_path: str):
-        """(points, counts, indices, offsets, xform) for a mesh prim, cached."""
+    def _mesh_entry(cls, prim_path: str, hit=None):
+        """(points, counts, indices, offsets, xform) for the hit geometry.
+
+        Cached by the prim it resolves to, never by the path that was hit:
+        one path can cover several meshes and the hit decides which.
+        """
         stage = omni.usd.get_context().get_stage()
-        key = (_stage_key(stage), prim_path)
-        entry = cls._mesh_cache.get(key)
-        if entry is not None:
-            return entry or None
         if stage is None:
             _trace("snap: no stage")
             return None
 
-        prim, why = _resolve_mesh_prim(stage, prim_path)
-        if prim is None:
+        prim, why = _resolve_mesh_prim(stage, prim_path, hit)
+        if why:
             _trace(f"snap: {why}")
-            cls._mesh_cache[key] = ()
+        if prim is None:
             return None
 
-        points = _points_of(prim)
-        if points is None:
+        key = (_stage_key(stage), str(prim.GetPath()))
+        entry = cls._mesh_cache.get(key)
+        if entry is not None:
+            return entry or None
+
+        entry = _build_entry(prim)
+        if entry is None:
             _trace(f"snap: '{prim.GetPath()}' has no points")
             cls._mesh_cache[key] = ()
             return None
-
-        # Topology is Mesh-only. Without it, vertex snapping still works and
-        # edge / mid-point do not, so keep the entry rather than discard it.
-        mesh = UsdGeom.Mesh(prim)
-        counts = mesh.GetFaceVertexCountsAttr().Get() if mesh else None
-        indices = mesh.GetFaceVertexIndicesAttr().Get() if mesh else None
-        if not counts or not indices:
+        if entry[1] is None:
             _trace(
-                f"snap: '{prim.GetPath()}' has {len(points)} points but no face "
+                f"snap: '{prim.GetPath()}' has {len(entry[0])} points but no face "
                 f"topology; vertex snapping only"
             )
-            counts = indices = None
-            offsets = None
-        else:
-            offsets = [0]
-            for c in counts:
-                offsets.append(offsets[-1] + c)
-        xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
-            Usd.TimeCode.Default()
-        )
-        if why:
-            _trace(f"snap: {why}")
-        entry = (points, counts, indices, offsets, xform)
         cls._mesh_cache[key] = entry
         return entry
 
@@ -843,9 +836,9 @@ class MeasureCore:
         a triangle index instead. Both readings are tried and the one the hit
         point actually sits on wins.
         """
-        if primitive_id < 0:
-            return -1, [], "no face id"
-        entry = cls._mesh_entry(prim_path)
+        if primitive_id < 0 and hit is None:
+            return -1, [], "no face id and no hit to search by"
+        entry = cls._mesh_entry(prim_path, hit)
         if entry is None:
             return -1, [], "no geometry found for this hit"
         points, counts, indices, offsets, xform = entry
@@ -858,13 +851,6 @@ class MeasureCore:
         as_triangle = _triangle_to_face(counts, primitive_id)
         if as_triangle is not None and as_triangle not in candidates:
             candidates.append(as_triangle)
-        if not candidates:
-            return (
-                -1,
-                [],
-                f"id {primitive_id} out of range "
-                f"(faces={len(counts)}, triangles={_triangle_total(counts)})",
-            )
 
         best = None
         for face in candidates:
@@ -872,8 +858,29 @@ class MeasureCore:
             score = _face_score(verts, hit) if hit is not None else 0.0
             if best is None or score < best[0]:
                 best = (score, face, verts)
+
+        # The id is only a hint. If it names no face the hit actually sits on,
+        # find that face directly, which also covers ids we cannot interpret.
+        searched = False
+        if hit is not None and (best is None or best[0] > _ON_FACE_EPS):
+            found = _best_face_by_hit(entry, hit)
+            if found is not None and (best is None or found[0] < best[0]):
+                best, searched = found, True
+
+        if best is None:
+            return (
+                -1,
+                [],
+                f"id {primitive_id} out of range "
+                f"(faces={len(counts)}, triangles={_triangle_total(counts)})",
+            )
         _, face, verts = best
-        note = "" if len(candidates) == 1 else f"chose {face} from {candidates}"
+        if searched:
+            note = f"id {primitive_id} did not fit, searched to face {face}"
+        elif len(candidates) > 1:
+            note = f"chose {face} from {candidates}"
+        else:
+            note = ""
         return face, verts, note
 
     @classmethod
@@ -978,6 +985,55 @@ def _descendants(prim):
         return list(Usd.PrimRange(prim))
 
 
+def _build_entry(prim):
+    """(points, counts, indices, offsets, xform), counts None without topology."""
+    points = _points_of(prim)
+    if points is None:
+        return None
+    mesh = UsdGeom.Mesh(prim)
+    counts = mesh.GetFaceVertexCountsAttr().Get() if mesh else None
+    indices = mesh.GetFaceVertexIndicesAttr().Get() if mesh else None
+    offsets = None
+    if counts and indices:
+        offsets = [0]
+        for c in counts:
+            offsets.append(offsets[-1] + c)
+    else:
+        counts = indices = None
+    xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    return points, counts, indices, offsets, xform
+
+
+def _best_face_by_hit(entry, hit, cap=_MAX_FACE_SCAN):
+    """(score, face, verts) for the face the hit sits on. Ignores any face id."""
+    points, counts, indices, offsets, xform = entry
+    if counts is None:
+        return None
+    best = None
+    for face in range(min(len(counts), cap)):
+        verts = _face_world_verts(points, counts, indices, offsets, xform, face)
+        score = _face_score(verts, hit)
+        if best is None or score < best[0]:
+            best = (score, face, verts)
+            if score <= _ON_FACE_EPS:
+                break  # sitting on it, no better answer exists
+    return best
+
+
+def _mesh_hit_score(prim, hit) -> float:
+    """How close the hit is to this prim's surface. Lower is better."""
+    entry = _build_entry(prim)
+    if entry is None:
+        return float("inf")
+    best = _best_face_by_hit(entry, hit)
+    if best is not None:
+        return best[0]
+    points, _c, _i, _o, xform = entry
+    return min(
+        (xform.Transform(Gf.Vec3d(p)) - hit).GetLength() for p in points[: _MAX_FACE_SCAN]
+    )
+
+
 def _describe(prim) -> str:
     try:
         kind = prim.GetTypeName() or "<untyped>"
@@ -987,11 +1043,12 @@ def _describe(prim) -> str:
         return f"<undescribable: {exc}>"
 
 
-def _resolve_mesh_prim(stage, prim_path):
+def _resolve_mesh_prim(stage, prim_path, hit=None):
     """(prim, note). Walks to the prim that actually carries the topology.
 
     A raycast can report a GeomSubset, an instance proxy or a wrapping Xform
-    rather than the mesh itself.
+    rather than the mesh itself. When several meshes sit under the reported
+    path, the one the hit point lies on wins.
     """
     path = str(prim_path)
     prim = stage.GetPrimAtPath(path)
@@ -1013,7 +1070,19 @@ def _resolve_mesh_prim(stage, prim_path):
     if len(meshes) == 1:
         return meshes[0], f"'{path}' had no points, used child {meshes[0].GetPath()}"
     if meshes:
-        return None, f"'{path}' has {len(meshes)} meshes under it, ambiguous | {detail}"
+        if hit is None:
+            return None, f"'{path}' has {len(meshes)} meshes under it, no hit to pick by"
+        # Intersecting planes overlap in space, so pick by distance to the
+        # actual surface rather than by bounds.
+        scored = sorted((_mesh_hit_score(m, hit), i) for i, m in enumerate(meshes))
+        score, index = scored[0]
+        chosen = meshes[index]
+        if score == float("inf"):
+            return None, f"'{path}': none of its {len(meshes)} meshes fit the hit"
+        return chosen, (
+            f"'{path}' has {len(meshes)} meshes, hit lands on "
+            f"{chosen.GetPath()} (score {score:.6g})"
+        )
     kind = str(prim.GetTypeName() or "<untyped>")
     if kind in ("Cube", "Sphere", "Cylinder", "Cone", "Capsule", "Plane"):
         return None, (
