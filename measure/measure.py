@@ -5,13 +5,16 @@ Owns all state. Everything public goes through measure_service.MeasureService.
 Snap resolution per click/hover:
 
     cursor pixel -> Ray -> submit_raycast_query
-        -> hit_position / normal / usd_path / face index
-        -> candidates built from that face only
-             vertex   : each face vertex
-             edge     : closest point on each face edge
-             midpoint : midpoint of each face edge
-        -> project candidates to screen, keep those within SNAP_RADIUS_PX
-        -> pick by priority VERTEX > EDGE > MIDPOINT, else fall back to SURFACE
+        -> hit_position / normal / usd_path
+        -> the hit mesh's outline: edges used by a single face, and the
+           boundary vertices where that outline turns a corner
+             vertex : each outline corner
+             edge   : closest point on each outline edge
+        -> project candidates to screen, keep those within the snap radius
+        -> pick by priority VERTEX > EDGE, else fall back to SURFACE
+
+Interior vertices and interior edges are deliberately not snappable: a
+subdivided plane should offer its four corners, not its whole grid.
 """
 
 from __future__ import annotations
@@ -30,14 +33,15 @@ from .measure_overlay import MeasureOverlay
 # feel identical at every zoom level.
 SNAP_RADIUS_PX = 12.0
 
-# Cap on the whole-mesh vertex scan used when no face id is available.
-_MAX_SCAN_POINTS = 200_000
-
 # How many faces nearest the hit get scored when searching for its face.
 _FACE_SHORTLIST = 64
 
 # A hit this close to a face's plane and inside its bounds is on that face.
 _ON_FACE_EPS = 1e-6
+
+# Cosine above which a boundary vertex counts as a corner rather than a point
+# partway along a straight run of the outline. -cos(15 degrees).
+_CORNER_COS = -0.9659
 
 # 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
 TRACE = True
@@ -71,26 +75,23 @@ class SnapKind(IntEnum):
     """Snap class. Higher value wins when several candidates are in range."""
 
     SURFACE = 0  # fallback, always available, cannot be masked off
-    MIDPOINT = 1
-    EDGE = 2
-    VERTEX = 3
+    EDGE = 1
+    VERTEX = 2
 
 
 class SnapMode(IntFlag):
     """Which snap classes are active. SURFACE is absent: it is the floor."""
 
     NONE = 0
-    MIDPOINT = 1 << 0
-    EDGE = 1 << 1
-    VERTEX = 1 << 2
-    ALL = MIDPOINT | EDGE | VERTEX
+    EDGE = 1 << 0
+    VERTEX = 1 << 1
+    ALL = EDGE | VERTEX
 
 
 # Highest priority first, so resolution can stop at the first class that hits.
 _FLAG_TO_KIND = (
     (SnapMode.VERTEX, SnapKind.VERTEX),
     (SnapMode.EDGE, SnapKind.EDGE),
-    (SnapMode.MIDPOINT, SnapKind.MIDPOINT),
 )
 
 
@@ -698,99 +699,60 @@ class MeasureCore:
         hit = Gf.Vec3d(*result.hit_position)
         normal = Gf.Vec3d(*getattr(result, "normal", (0.0, 1.0, 0.0)))
         path = result.get_target_usd_path()
-        primitive_id = _face_index_of(result)
 
-        surface = SnapPoint(hit, SnapKind.SURFACE, path, primitive_id, -1, normal)
+        surface = SnapPoint(hit, SnapKind.SURFACE, path, -1, -1, normal)
         if cls._snap_mode == SnapMode.NONE:
             _trace("snap: mode is NONE, surface only")
             return surface
 
         time = _time_of(state.viewport_api)
-        face_index, verts, note = cls._face_vertices(
-            path, primitive_id, hit, time
-        )
+        geom = cls._mesh_entry(path, hit, time)
+        if geom is None:
+            return surface
+        corners, edges = geom.boundary
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
-            f"snap: path='{path}' id={primitive_id} face={face_index} "
-            f"face_verts={len(verts)} cursor_px={cursor_px} "
+            f"snap: path='{path}' corners={len(corners)} "
+            f"outline_edges={len(edges)} cursor_px={cursor_px} "
             f"radius={cls._snap_radius} time={time}"
-            f"{' | ' + note if note else ''}"
         )
 
-        if verts:
-            # Priority is absolute: the first class with any candidate in range
-            # wins, distance only breaks ties inside that class.
-            for flag, kind in _FLAG_TO_KIND:
-                if not (cls._snap_mode & flag):
+        # Priority is absolute: the first class with a candidate in range wins,
+        # distance only breaks ties inside that class.
+        view_proj = _matrix_np(view * proj)
+        width, height = _resolution(state.viewport_api)
+        for flag, kind in _FLAG_TO_KIND:
+            if not (cls._snap_mode & flag):
+                continue
+            if kind == SnapKind.VERTEX:
+                if len(corners) == 0:
                     continue
-                best = None
-                nearest = None
-                for index, candidate in _candidates(kind, verts, hit):
-                    dist = _pixel_distance(
-                        candidate, cursor_px, view, proj, state.viewport_api
-                    )
-                    if dist is None:
-                        continue
-                    if nearest is None or dist < nearest:
-                        nearest = dist
-                    if dist > cls._snap_radius:
-                        continue
-                    if best is None or dist < best[0]:
-                        best = (dist, index, candidate)
-                _trace(f"snap:   {kind.name} nearest={nearest} hit={best is not None}")
-                if best is not None:
-                    return SnapPoint(best[2], kind, path, face_index, best[1], normal)
-            return surface
+                points, elements = geom.world[corners], corners
+            else:
+                if len(edges) == 0:
+                    continue
+                points = _closest_on_segments(
+                    geom.world[edges[:, 0]], geom.world[edges[:, 1]], hit
+                )
+                elements = np.arange(len(edges))
 
-        # No face topology available, usually because the raycast result does
-        # not expose a face id on this Kit build. Vertex snapping still works by
-        # scanning the whole mesh; edge and mid-point need a face.
-        if cls._snap_mode & SnapMode.VERTEX:
-            snap = cls._snap_any_vertex(
-                path, cursor_px, view, proj, state, time, hit
+            pixels, valid = _project_px(points, view_proj, width, height)
+            distances = np.where(
+                valid, np.linalg.norm(pixels - np.asarray(cursor_px), axis=1), np.inf
             )
-            if snap is not None:
-                return snap
+            index = int(np.argmin(distances))
+            nearest = float(distances[index])
+            _trace(
+                f"snap:   {kind.name} over {len(points)} nearest={nearest:.1f} "
+                f"hit={nearest <= cls._snap_radius}"
+            )
+            if nearest <= cls._snap_radius:
+                return SnapPoint(
+                    Gf.Vec3d(*points[index]), kind, path, -1,
+                    int(elements[index]), normal,
+                )
         return surface
 
-    @classmethod
-    def _snap_any_vertex(
-        cls, prim_path, cursor_px, view, proj, state, time=None, hit=None
-    ):
-        """Nearest vertex over the whole mesh, within the snap radius.
-
-        Vectorised: this runs on every mouse move, and the per-point Python
-        version made a dense mesh unusable.
-        """
-        geom = cls._mesh_entry(prim_path, None, time)
-        if geom is None or len(geom.world) == 0:
-            return None
-        if len(geom.world) > _MAX_SCAN_POINTS:
-            carb.log_warn(
-                f"[measure] '{prim_path}' has {len(geom.world)} points, too many "
-                f"to scan without a face id; snapping stays on the surface"
-            )
-            return None
-
-        # Projecting every point outright, with no 3D pre-filter: measured, the
-        # filter cost more than the projection it saved, and perspective means
-        # the 3D-nearest vertices are not reliably the nearest on screen.
-        width, height = _resolution(state.viewport_api)
-        pixels, valid = _project_px(geom.world, _matrix_np(view * proj), width, height)
-        distances = np.where(
-            valid, np.linalg.norm(pixels - np.asarray(cursor_px), axis=1), np.inf
-        )
-        index = int(np.argmin(distances))
-        nearest = distances[index]
-        _trace(
-            f"snap:   whole-mesh VERTEX over {len(geom.world)} pts "
-            f"nearest={nearest:.1f} hit={nearest <= cls._snap_radius}"
-        )
-        if nearest > cls._snap_radius:
-            return None
-        return SnapPoint(
-            Gf.Vec3d(*geom.world[index]), SnapKind.VERTEX, prim_path, -1, index
-        )
 
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
@@ -831,61 +793,6 @@ class MeasureCore:
         cls._mesh_cache[key] = entry
         return entry
 
-    @classmethod
-    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None, time=None):
-        """Resolve a raycast primitive id to one face's world-space vertices.
-
-        Returns (face_index, verts, reason). The id is not always a USD face
-        index: renderers fan-triangulate, so on a quad or n-gon mesh it can be
-        a triangle index instead. Both readings are tried and the one the hit
-        point actually sits on wins.
-        """
-        if primitive_id < 0 and hit is None:
-            return -1, [], "no face id and no hit to search by"
-        geom = cls._mesh_entry(prim_path, hit, time)
-        if geom is None:
-            return -1, [], "no geometry found for this hit"
-        counts = geom.counts
-        if counts is None:
-            return -1, [], "point-based but not a mesh; vertex snapping only"
-
-        candidates = []
-        if 0 <= primitive_id < len(counts):
-            candidates.append(primitive_id)
-        as_triangle = _triangle_to_face(counts, primitive_id)
-        if as_triangle is not None and as_triangle not in candidates:
-            candidates.append(as_triangle)
-
-        best = None
-        for face in candidates:
-            verts = geom.face_verts(face)
-            score = _face_score(verts, hit) if hit is not None else 0.0
-            if best is None or score < best[0]:
-                best = (score, face, verts)
-
-        # The id is only a hint. If it names no face the hit actually sits on,
-        # find that face directly, which also covers ids we cannot interpret.
-        searched = False
-        if hit is not None and (best is None or best[0] > _ON_FACE_EPS):
-            found = _best_face_by_hit(geom, hit)
-            if found is not None and (best is None or found[0] < best[0]):
-                best, searched = found, True
-
-        if best is None:
-            return (
-                -1,
-                [],
-                f"id {primitive_id} out of range "
-                f"(faces={len(counts)}, triangles={_triangle_total(counts)})",
-            )
-        _, face, verts = best
-        if searched:
-            note = f"id {primitive_id} did not fit, searched to face {face}"
-        elif len(candidates) > 1:
-            note = f"chose {face} from {candidates}"
-        else:
-            note = ""
-        return face, verts, note
 
     @classmethod
     def invalidate_mesh_cache(cls, prim_path=None):
@@ -928,26 +835,6 @@ class MeasureCore:
 
 
 # --------------------------------------------------------------------- utils
-
-
-def _candidates(kind: SnapKind, verts: list, hit: Gf.Vec3d):
-    """Yield (element_index, world position) for one snap class."""
-    n = len(verts)
-    if kind == SnapKind.VERTEX:
-        for i, v in enumerate(verts):
-            yield i, v
-    elif kind == SnapKind.MIDPOINT:
-        for i in range(n):
-            yield i, (verts[i] + verts[(i + 1) % n]) * 0.5
-    elif kind == SnapKind.EDGE:
-        for i in range(n):
-            a, b = verts[i], verts[(i + 1) % n]
-            ab = b - a
-            denom = ab.GetLength() ** 2
-            if denom <= 1e-12:
-                continue
-            t = max(0.0, min(1.0, Gf.Dot(hit - a, ab) / denom))
-            yield i, a + ab * t
 
 
 def _stage_key(stage) -> str:
@@ -1033,6 +920,17 @@ def _as_np(vec) -> np.ndarray:
     return np.asarray([vec[0], vec[1], vec[2]], dtype=float)
 
 
+def _closest_on_segments(starts: np.ndarray, ends: np.ndarray, point) -> np.ndarray:
+    """Closest point on each segment to `point`, clamped to the segment."""
+    target = _as_np(point)
+    spans = ends - starts
+    lengths = np.einsum("ij,ij->i", spans, spans)
+    safe = np.where(lengths > 1e-24, lengths, 1.0)
+    t = np.einsum("ij,ij->i", target - starts, spans) / safe
+    t = np.clip(np.where(lengths > 1e-24, t, 0.0), 0.0, 1.0)
+    return starts + spans * t[:, None]
+
+
 def _matrix_np(matrix) -> np.ndarray:
     return np.array([[matrix[r][c] for c in range(4)] for r in range(4)], dtype=float)
 
@@ -1070,6 +968,7 @@ class _Geom:
         self.world = np.hstack([local, np.ones((len(local), 1))]) @ matrix
         self.world = self.world[:, :3] / self.world[:, 3:4]
         self._centroids = None
+        self._boundary = None
 
     @property
     def centroids(self):
@@ -1086,6 +985,60 @@ class _Geom:
         start = self.offsets[face]
         end = start + self.counts[face]
         return [Gf.Vec3d(*self.world[i]) for i in self.indices[start:end]]
+
+    @property
+    def boundary(self):
+        """(corner vertex indices, boundary edges) of the mesh outline.
+
+        Only the outline is snappable. An edge shared by two faces is interior,
+        and a boundary vertex whose two edges run straight through it lies
+        partway along the outline rather than at a corner of it.
+        """
+        if self._boundary is None:
+            self._boundary = self._find_boundary()
+        return self._boundary
+
+    def _find_boundary(self):
+        empty = (np.empty(0, dtype=np.int64), np.empty((0, 2), dtype=np.int64))
+        if self.counts is None:
+            return empty
+
+        index = np.asarray(self.indices, dtype=np.int64)
+        starts = np.asarray(self.offsets[:-1], dtype=np.int64)
+        ends = np.asarray(self.offsets[1:], dtype=np.int64) - 1
+
+        # Pair each vertex with the next one in its face, wrapping at the end
+        # of that face instead of running on into the next one.
+        nxt = np.empty_like(index)
+        nxt[:-1] = index[1:]
+        nxt[ends] = index[starts]
+
+        pairs = np.sort(np.stack([index, nxt], axis=1), axis=1)
+        unique, uses = np.unique(pairs, axis=0, return_counts=True)
+        edges = unique[uses == 1]  # an edge only one face uses is an outline
+        if len(edges) == 0:
+            return empty
+
+        neighbours = {}
+        for a, b in edges:
+            neighbours.setdefault(int(a), []).append(int(b))
+            neighbours.setdefault(int(b), []).append(int(a))
+
+        corners = []
+        for vertex, around in neighbours.items():
+            if len(around) != 2:
+                corners.append(vertex)  # junction or dangling end
+                continue
+            here = self.world[vertex]
+            first = self.world[around[0]] - here
+            second = self.world[around[1]] - here
+            n1, n2 = np.linalg.norm(first), np.linalg.norm(second)
+            if n1 < 1e-12 or n2 < 1e-12:
+                continue
+            # Running straight through means the directions oppose, cos near -1.
+            if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
+                corners.append(vertex)
+        return np.asarray(sorted(corners), dtype=np.int64), edges
 
 
 def _build_entry(prim, time=None):
@@ -1232,22 +1185,6 @@ def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
     return None, f"'{path}' carries no points, and nothing near it does | {detail}"
 
 
-def _triangle_total(counts) -> int:
-    return sum(max(1, c - 2) for c in counts)
-
-
-def _triangle_to_face(counts, tri_index: int):
-    """Fan triangulation: a face of n verts becomes n-2 triangles."""
-    if tri_index < 0:
-        return None
-    seen = 0
-    for face, count in enumerate(counts):
-        seen += max(1, count - 2)
-        if tri_index < seen:
-            return face
-    return None
-
-
 def _face_score(verts, hit: Gf.Vec3d) -> float:
     """How well the hit sits on this face. Lower is better.
 
@@ -1265,21 +1202,6 @@ def _face_score(verts, hit: Gf.Vec3d) -> float:
     margin = diag * 0.01
     outside = any(hit[i] < lo[i] - margin or hit[i] > hi[i] + margin for i in range(3))
     return plane + (diag if outside else 0.0)
-
-
-def _face_index_of(result) -> int:
-    """primitive_id naming differs between Kit builds; degrade to surface-only."""
-    for name in ("primitive_id", "primitiveId", "face_id"):
-        value = getattr(result, name, None)
-        if isinstance(value, int):
-            return value
-    getter = getattr(result, "get_primitive_id", None)
-    if callable(getter):
-        try:
-            return int(getter())
-        except Exception:
-            pass
-    return -1
 
 
 def _camera_matrices(viewport_api):
@@ -1309,15 +1231,6 @@ def _resolution(viewport_api):
 def _ndc_to_px(ndc, viewport_api):
     w, h = _resolution(viewport_api)
     return ((ndc[0] * 0.5 + 0.5) * w, (1.0 - (ndc[1] * 0.5 + 0.5)) * h)
-
-
-def _pixel_distance(world: Gf.Vec3d, cursor_px, view, proj, viewport_api):
-    """None when the point is off screen or behind the camera."""
-    clip = (view * proj).Transform(world)
-    if abs(clip[2]) > 1.0:
-        return None
-    px = _ndc_to_px((clip[0], clip[1]), viewport_api)
-    return ((px[0] - cursor_px[0]) ** 2 + (px[1] - cursor_px[1]) ** 2) ** 0.5
 
 
 def _format_length(meters: float) -> str:

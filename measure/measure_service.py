@@ -198,7 +198,12 @@ class MeasureService:
 
     @classmethod
     def set_snap_mode(cls, mode: SnapMode) -> None:
-        """전역입니다. SURFACE 는 항상 폴백으로 깔려 있습니다."""
+        """전역입니다. SURFACE 는 항상 폴백으로 깔려 있습니다.
+
+        VERTEX 는 메시 외곽선의 꼭지점, EDGE 는 외곽선 위의 점입니다.
+        내부 정점과 내부 엣지는 후보가 아닙니다 - 분할된 plane 이면
+        격자점이 아니라 네 모서리만 잡힙니다.
+        """
         MeasureCore.set_snap_mode(mode)
 
     @classmethod

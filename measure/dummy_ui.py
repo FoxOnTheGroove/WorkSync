@@ -15,12 +15,11 @@ import omni.ui as ui
 
 from .measure_service import MeasureService, SnapMode
 
-# Snap priority is absolute (vertex > edge > mid-point > surface), so the
-# useful choices are levels on that ladder rather than free combinations.
+# Snap priority is absolute (vertex > edge > surface), so the useful choices
+# are levels on that ladder rather than free combinations.
 _SNAP_LEVELS = (
-    ("Vertex + Edge + Mid", SnapMode.ALL),
-    ("Vertex + Edge", SnapMode.VERTEX | SnapMode.EDGE),
-    ("Vertex only", SnapMode.VERTEX),
+    ("Corner + Edge", SnapMode.ALL),
+    ("Corner only", SnapMode.VERTEX),
     ("Surface only", SnapMode.NONE),
 )
 
@@ -120,7 +119,7 @@ class MeasureDummyUI:
             combo = ui.ComboBox(index, *[label for label, _ in _SNAP_LEVELS])
             combo.model.add_item_changed_fn(self._on_snap_picked)
         ui.Label(
-            "Strongest match wins. Surface is always the fallback.",
+            "Mesh outline only. Surface is always the fallback.",
             height=18,
             style=_MUTED,
         )

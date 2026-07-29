@@ -13,11 +13,10 @@ from omni.ui import scene as sc
 
 # Marker colour and screen-space size per snap class. Snap kinds are read as
 # plain ints so this module keeps no dependency on measure.py.
-_SURFACE, _MIDPOINT, _EDGE, _VERTEX = 0, 1, 2, 3
+_SURFACE, _EDGE, _VERTEX = 0, 1, 2
 
 _MARKER_STYLE = {
     _SURFACE: ((0.7, 0.7, 0.7, 0.9), 6.0),
-    _MIDPOINT: ((0.4, 0.9, 1.0, 1.0), 8.0),
     _EDGE: ((0.4, 1.0, 0.5, 1.0), 9.0),
     _VERTEX: ((1.0, 0.8, 0.2, 1.0), 11.0),
 }
