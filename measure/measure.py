@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag
 
 import carb
+import numpy as np
 import omni.usd
 from pxr import Gf, Usd, UsdGeom
 
@@ -32,8 +33,8 @@ SNAP_RADIUS_PX = 12.0
 # Cap on the whole-mesh vertex scan used when no face id is available.
 _MAX_SCAN_POINTS = 200_000
 
-# Cap on searching a mesh's faces for the one the hit sits on.
-_MAX_FACE_SCAN = 20_000
+# How many faces nearest the hit get scored when searching for its face.
+_FACE_SHORTLIST = 64
 
 # A hit this close to a face's plane and inside its bounds is on that face.
 _ON_FACE_EPS = 1e-6
@@ -159,7 +160,6 @@ class MeasureCore:
     _snap_mode = SnapMode.ALL  # global, not per viewport
     _changed_callbacks: list = []
     _mesh_cache: dict = {}
-    _world_cache: dict = {}
     _snap_radius = SNAP_RADIUS_PX
     # viewport id -> (viewport_api, frame, tab_id), from register_vph.
     # ViewportWidget has no ViewportWindow to enumerate or to draw into, so the
@@ -196,7 +196,6 @@ class MeasureCore:
         cls._lines.clear()
         cls._changed_callbacks.clear()
         cls._mesh_cache.clear()
-        cls._world_cache.clear()
         cls._next_line_id = 1
         cls._started = False
 
@@ -490,7 +489,6 @@ class MeasureCore:
             return
         # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()
-        cls._world_cache.clear()
         state.armed = True
         state.pending = None
         state.on_done = on_done
@@ -748,51 +746,51 @@ class MeasureCore:
         # not expose a face id on this Kit build. Vertex snapping still works by
         # scanning the whole mesh; edge and mid-point need a face.
         if cls._snap_mode & SnapMode.VERTEX:
-            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state, time)
+            snap = cls._snap_any_vertex(
+                path, cursor_px, view, proj, state, time, hit
+            )
             if snap is not None:
                 return snap
         return surface
 
     @classmethod
-    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state, time=None):
-        """Nearest vertex over the whole mesh, within the snap radius."""
-        points = cls._world_points(prim_path, time)
-        if not points:
-            return None
-        best = None
-        for index, candidate in enumerate(points):
-            dist = _pixel_distance(candidate, cursor_px, view, proj, state.viewport_api)
-            if dist is None or dist > cls._snap_radius:
-                continue
-            if best is None or dist < best[0]:
-                best = (dist, index, candidate)
-        _trace(f"snap:   whole-mesh VERTEX over {len(points)} pts hit={best is not None}")
-        if best is None:
-            return None
-        return SnapPoint(best[2], SnapKind.VERTEX, prim_path, -1, best[1])
+    def _snap_any_vertex(
+        cls, prim_path, cursor_px, view, proj, state, time=None, hit=None
+    ):
+        """Nearest vertex over the whole mesh, within the snap radius.
 
-    @classmethod
-    def _world_points(cls, prim_path: str, time=None) -> list:
-        """Every mesh point in world space. Cached; skips very heavy meshes."""
-        key = (_stage_key(omni.usd.get_context().get_stage()), prim_path, str(time))
-        cached = cls._world_cache.get(key)
-        if cached is not None:
-            return cached
-        entry = cls._mesh_entry(prim_path, None, time)
-        if entry is None:
-            cls._world_cache[key] = []
-            return []
-        points, _counts, _indices, _offsets, xform = entry
-        if len(points) > _MAX_SCAN_POINTS:
+        Vectorised: this runs on every mouse move, and the per-point Python
+        version made a dense mesh unusable.
+        """
+        geom = cls._mesh_entry(prim_path, None, time)
+        if geom is None or len(geom.world) == 0:
+            return None
+        if len(geom.world) > _MAX_SCAN_POINTS:
             carb.log_warn(
-                f"[measure] '{prim_path}' has {len(points)} points, too many to "
-                f"scan without a face id; snapping stays on the surface"
+                f"[measure] '{prim_path}' has {len(geom.world)} points, too many "
+                f"to scan without a face id; snapping stays on the surface"
             )
-            cls._world_cache[key] = []
-            return []
-        world = [xform.Transform(Gf.Vec3d(p)) for p in points]
-        cls._world_cache[key] = world
-        return world
+            return None
+
+        # Projecting every point outright, with no 3D pre-filter: measured, the
+        # filter cost more than the projection it saved, and perspective means
+        # the 3D-nearest vertices are not reliably the nearest on screen.
+        width, height = _resolution(state.viewport_api)
+        pixels, valid = _project_px(geom.world, _matrix_np(view * proj), width, height)
+        distances = np.where(
+            valid, np.linalg.norm(pixels - np.asarray(cursor_px), axis=1), np.inf
+        )
+        index = int(np.argmin(distances))
+        nearest = distances[index]
+        _trace(
+            f"snap:   whole-mesh VERTEX over {len(geom.world)} pts "
+            f"nearest={nearest:.1f} hit={nearest <= cls._snap_radius}"
+        )
+        if nearest > cls._snap_radius:
+            return None
+        return SnapPoint(
+            Gf.Vec3d(*geom.world[index]), SnapKind.VERTEX, prim_path, -1, index
+        )
 
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
@@ -841,15 +839,15 @@ class MeasureCore:
         """
         if primitive_id < 0 and hit is None:
             return -1, [], "no face id and no hit to search by"
-        entry = cls._mesh_entry(prim_path, hit, time)
-        if entry is None:
+        geom = cls._mesh_entry(prim_path, hit, time)
+        if geom is None:
             return -1, [], "no geometry found for this hit"
-        points, counts, indices, offsets, xform = entry
+        counts = geom.counts
         if counts is None:
             return -1, [], "point-based but not a mesh; vertex snapping only"
 
         candidates = []
-        if primitive_id < len(counts):
+        if 0 <= primitive_id < len(counts):
             candidates.append(primitive_id)
         as_triangle = _triangle_to_face(counts, primitive_id)
         if as_triangle is not None and as_triangle not in candidates:
@@ -857,7 +855,7 @@ class MeasureCore:
 
         best = None
         for face in candidates:
-            verts = _face_world_verts(points, counts, indices, offsets, xform, face)
+            verts = geom.face_verts(face)
             score = _face_score(verts, hit) if hit is not None else 0.0
             if best is None or score < best[0]:
                 best = (score, face, verts)
@@ -866,7 +864,7 @@ class MeasureCore:
         # find that face directly, which also covers ids we cannot interpret.
         searched = False
         if hit is not None and (best is None or best[0] > _ON_FACE_EPS):
-            found = _best_face_by_hit(entry, hit)
+            found = _best_face_by_hit(geom, hit)
             if found is not None and (best is None or found[0] < best[0]):
                 best, searched = found, True
 
@@ -890,12 +888,10 @@ class MeasureCore:
     def invalidate_mesh_cache(cls, prim_path=None):
         if prim_path is None:
             cls._mesh_cache.clear()
-            cls._world_cache.clear()
         else:
-            # Caches are keyed by (stage, path), so drop it on every stage.
-            for cache in (cls._mesh_cache, cls._world_cache):
-                for key in [k for k in cache if k[1] == prim_path]:
-                    cache.pop(key, None)
+            # Keyed by (stage, path, time), so drop every matching entry.
+            for key in [k for k in cls._mesh_cache if k[1] == prim_path]:
+                cls._mesh_cache.pop(key, None)
 
     # ---------------------------------------------------------------- draw
 
@@ -985,6 +981,7 @@ def _times_to_try(attr, time):
     if time is not None:
         times.append(time)
     times.append(Usd.TimeCode.Default())
+    times.append(Usd.TimeCode(0.0))
     try:
         samples = attr.GetTimeSamples()
         if samples:
@@ -1025,8 +1022,67 @@ def _descendants(prim):
         return list(Usd.PrimRange(prim))
 
 
+def _as_np(vec) -> np.ndarray:
+    return np.asarray([vec[0], vec[1], vec[2]], dtype=float)
+
+
+def _matrix_np(matrix) -> np.ndarray:
+    return np.array([[matrix[r][c] for c in range(4)] for r in range(4)], dtype=float)
+
+
+def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
+    """(pixels, valid) for many world points at once.
+
+    The per-point Python version made a hover on a dense mesh unusable, since
+    it ran a 4x4 transform per point per mouse move.
+    """
+    count = len(world)
+    homogeneous = np.hstack([world, np.ones((count, 1))])
+    clip = homogeneous @ view_proj  # USD is row-vector: p * M
+    w = clip[:, 3]
+    valid = np.abs(w) > 1e-12
+    ndc = np.zeros((count, 3))
+    np.divide(clip[:, :3], w[:, None], out=ndc, where=valid[:, None])
+    pixels = np.empty((count, 2))
+    pixels[:, 0] = (ndc[:, 0] * 0.5 + 0.5) * width
+    pixels[:, 1] = (1.0 - (ndc[:, 1] * 0.5 + 0.5)) * height
+    return pixels, valid & (np.abs(ndc[:, 2]) <= 1.0)
+
+
+class _Geom:
+    """Geometry of one prim, prepared for repeated screen-space queries."""
+
+    def __init__(self, points, counts, indices, offsets, xform):
+        self.points = points
+        self.counts = counts
+        self.indices = indices
+        self.offsets = offsets
+        self.xform = xform
+        local = np.asarray(points, dtype=float)
+        matrix = _matrix_np(xform)
+        self.world = np.hstack([local, np.ones((len(local), 1))]) @ matrix
+        self.world = self.world[:, :3] / self.world[:, 3:4]
+        self._centroids = None
+
+    @property
+    def centroids(self):
+        """One point per face, for narrowing a face search cheaply."""
+        if self._centroids is None and self.counts is not None:
+            index = np.asarray(self.indices, dtype=np.int64)
+            starts = np.asarray(self.offsets[:-1], dtype=np.int64)
+            sizes = np.asarray(self.counts, dtype=np.int64)
+            sums = np.add.reduceat(self.world[index], starts, axis=0)
+            self._centroids = sums / sizes[:, None]
+        return self._centroids
+
+    def face_verts(self, face: int) -> list:
+        start = self.offsets[face]
+        end = start + self.counts[face]
+        return [Gf.Vec3d(*self.world[i]) for i in self.indices[start:end]]
+
+
 def _build_entry(prim, time=None):
-    """(points, counts, indices, offsets, xform), counts None without topology."""
+    """A _Geom for the prim, or None. counts is None without face topology."""
     points = _points_of(prim, time)
     if points is None:
         return None
@@ -1043,20 +1099,33 @@ def _build_entry(prim, time=None):
     xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
         time if time is not None else Usd.TimeCode.Default()
     )
-    return points, counts, indices, offsets, xform
-
-
-def _best_face_by_hit(entry, hit, cap=_MAX_FACE_SCAN):
-    """(score, face, verts) for the face the hit sits on. Ignores any face id."""
-    points, counts, indices, offsets, xform = entry
-    if counts is None:
+    try:
+        return _Geom(points, counts, indices, offsets, xform)
+    except Exception as exc:
+        carb.log_warn(f"[measure] cannot prepare geometry for {prim.GetPath()}: {exc}")
         return None
+
+
+def _best_face_by_hit(geom, hit, cap=_FACE_SHORTLIST):
+    """(score, face, verts) for the face the hit sits on. Ignores any face id.
+
+    Only the faces whose centroids are nearest the hit get scored: scanning
+    every face of a dense mesh on each mouse move is far too slow.
+    """
+    centroids = geom.centroids
+    if centroids is None:
+        return None
+    target = _as_np(hit)
+    distances = np.linalg.norm(centroids - target, axis=1)
+    order = (
+        np.argsort(distances)[:cap] if len(distances) > cap else range(len(distances))
+    )
     best = None
-    for face in range(min(len(counts), cap)):
-        verts = _face_world_verts(points, counts, indices, offsets, xform, face)
+    for face in order:
+        verts = geom.face_verts(int(face))
         score = _face_score(verts, hit)
         if best is None or score < best[0]:
-            best = (score, face, verts)
+            best = (score, int(face), verts)
             if score <= _ON_FACE_EPS:
                 break  # sitting on it, no better answer exists
     return best
@@ -1064,16 +1133,13 @@ def _best_face_by_hit(entry, hit, cap=_MAX_FACE_SCAN):
 
 def _mesh_hit_score(prim, hit, time=None) -> float:
     """How close the hit is to this prim's surface. Lower is better."""
-    entry = _build_entry(prim, time)
-    if entry is None:
+    geom = _build_entry(prim, time)
+    if geom is None:
         return float("inf")
-    best = _best_face_by_hit(entry, hit)
+    best = _best_face_by_hit(geom, hit)
     if best is not None:
         return best[0]
-    points, _c, _i, _o, xform = entry
-    return min(
-        (xform.Transform(Gf.Vec3d(p)) - hit).GetLength() for p in points[: _MAX_FACE_SCAN]
-    )
+    return float(np.min(np.linalg.norm(geom.world - _as_np(hit), axis=1)))
 
 
 def _describe(prim) -> str:
@@ -1157,12 +1223,6 @@ def _triangle_to_face(counts, tri_index: int):
         if tri_index < seen:
             return face
     return None
-
-
-def _face_world_verts(points, counts, indices, offsets, xform, face: int) -> list:
-    start = offsets[face]
-    end = start + counts[face]
-    return [xform.Transform(Gf.Vec3d(points[i])) for i in indices[start:end]]
 
 
 def _face_score(verts, hit: Gf.Vec3d) -> float:
