@@ -701,15 +701,12 @@ class MeasureCore:
             _trace("snap: mode is NONE, surface only")
             return surface
 
-        stage = _stage_of(state.viewport_api)
-        face_index, verts, note = cls._face_vertices(
-            path, primitive_id, hit, stage
-        )
+        face_index, verts, note = cls._face_vertices(path, primitive_id, hit)
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
             f"snap: path='{path}' id={primitive_id} face={face_index} "
             f"face_verts={len(verts)} cursor_px={cursor_px} "
-            f"radius={cls._snap_radius} stage='{_stage_key(stage)}'"
+            f"radius={cls._snap_radius}"
             f"{' | ' + note if note else ''}"
         )
 
@@ -742,15 +739,15 @@ class MeasureCore:
         # not expose a face id on this Kit build. Vertex snapping still works by
         # scanning the whole mesh; edge and mid-point need a face.
         if cls._snap_mode & SnapMode.VERTEX:
-            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state, stage)
+            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state)
             if snap is not None:
                 return snap
         return surface
 
     @classmethod
-    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state, stage):
+    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state):
         """Nearest vertex over the whole mesh, within the snap radius."""
-        points = cls._world_points(prim_path, stage)
+        points = cls._world_points(prim_path)
         if not points:
             return None
         best = None
@@ -766,13 +763,13 @@ class MeasureCore:
         return SnapPoint(best[2], SnapKind.VERTEX, prim_path, -1, best[1])
 
     @classmethod
-    def _world_points(cls, prim_path: str, stage=None) -> list:
+    def _world_points(cls, prim_path: str) -> list:
         """Every mesh point in world space. Cached; skips very heavy meshes."""
-        key = (_stage_key(stage), prim_path)
+        key = (_stage_key(omni.usd.get_context().get_stage()), prim_path)
         cached = cls._world_cache.get(key)
         if cached is not None:
             return cached
-        entry = cls._mesh_entry(prim_path, stage)
+        entry = cls._mesh_entry(prim_path)
         if entry is None:
             cls._world_cache[key] = []
             return []
@@ -789,19 +786,15 @@ class MeasureCore:
         return world
 
     @classmethod
-    def _mesh_entry(cls, prim_path: str, stage=None):
-        """(points, counts, indices, offsets, xform) for a mesh prim, cached.
-
-        The stage comes from the viewport, not from the default USD context:
-        each tab can own a different context, and querying the wrong stage
-        finds nothing.
-        """
+    def _mesh_entry(cls, prim_path: str):
+        """(points, counts, indices, offsets, xform) for a mesh prim, cached."""
+        stage = omni.usd.get_context().get_stage()
         key = (_stage_key(stage), prim_path)
         entry = cls._mesh_cache.get(key)
         if entry is not None:
             return entry or None
         if stage is None:
-            _trace("snap: no stage for this viewport")
+            _trace("snap: no stage")
             return None
 
         prim, why = _resolve_mesh_prim(stage, prim_path)
@@ -831,7 +824,7 @@ class MeasureCore:
         return entry
 
     @classmethod
-    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None, stage=None):
+    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None):
         """Resolve a raycast primitive id to one face's world-space vertices.
 
         Returns (face_index, verts, reason). The id is not always a USD face
@@ -841,7 +834,7 @@ class MeasureCore:
         """
         if primitive_id < 0:
             return -1, [], "no face id"
-        entry = cls._mesh_entry(prim_path, stage)
+        entry = cls._mesh_entry(prim_path)
         if entry is None:
             return -1, [], "not a mesh, or no points/topology"
         points, counts, indices, offsets, xform = entry
@@ -935,20 +928,6 @@ def _candidates(kind: SnapKind, verts: list, hit: Gf.Vec3d):
             yield i, a + ab * t
 
 
-def _stage_of(viewport_api):
-    """The stage this viewport renders, not whatever the default context holds."""
-    stage = getattr(viewport_api, "stage", None)
-    if stage is not None:
-        return stage
-    try:
-        name = getattr(viewport_api, "usd_context_name", "") or ""
-        context = omni.usd.get_context(name)
-        return context.get_stage() if context else None
-    except Exception as exc:
-        carb.log_warn(f"[measure] cannot reach the viewport's stage: {exc}")
-        return None
-
-
 def _stage_key(stage) -> str:
     if stage is None:
         return ""
@@ -958,35 +937,52 @@ def _stage_key(stage) -> str:
         return str(id(stage))
 
 
-def _resolve_mesh_prim(stage, prim_path: str):
-    """(prim, note). Walks to a real Mesh when the hit path is not one itself.
+def _has_points(prim) -> bool:
+    """Attribute test, not a type test: subclassed or untyped prims count."""
+    try:
+        attr = UsdGeom.Mesh(prim).GetPointsAttr()
+        return bool(attr) and attr.HasAuthoredValue()
+    except Exception:
+        return False
 
-    A raycast can report a GeomSubset, an instance proxy or a parent Xform
-    rather than the mesh that carries the topology.
+
+def _describe(prim) -> str:
+    try:
+        kind = prim.GetTypeName() or "<untyped>"
+        kids = [f"{c.GetName()}:{c.GetTypeName() or '?'}" for c in prim.GetChildren()]
+        return f"type={kind} proxy={prim.IsInstanceProxy()} children={kids[:8]}"
+    except Exception as exc:
+        return f"<undescribable: {exc}>"
+
+
+def _resolve_mesh_prim(stage, prim_path):
+    """(prim, note). Walks to the prim that actually carries the topology.
+
+    A raycast can report a GeomSubset, an instance proxy or a wrapping Xform
+    rather than the mesh itself.
     """
-    prim = stage.GetPrimAtPath(prim_path)
+    path = str(prim_path)
+    prim = stage.GetPrimAtPath(path)
     if not prim or not prim.IsValid():
         return None, (
-            f"'{prim_path}' not found on stage "
-            f"'{_stage_key(stage)}' - wrong USD context?"
+            f"'{path}' ({type(prim_path).__name__}) not found on "
+            f"stage '{_stage_key(stage)}'"
         )
-    if prim.IsA(UsdGeom.Mesh):
+    if _has_points(prim):
         return prim, ""
 
-    kind = prim.GetTypeName() or "<untyped>"
-    # A GeomSubset or similar sits under its mesh.
+    detail = _describe(prim)
     parent = prim.GetParent()
     while parent and parent.IsValid() and not parent.IsPseudoRoot():
-        if parent.IsA(UsdGeom.Mesh):
-            return parent, f"'{prim_path}' is {kind}, used its mesh ancestor"
+        if _has_points(parent):
+            return parent, f"'{path}' had no points, used ancestor {parent.GetPath()}"
         parent = parent.GetParent()
-    # An Xform wrapping exactly one mesh is unambiguous enough to follow.
-    meshes = [d for d in Usd.PrimRange(prim) if d.IsA(UsdGeom.Mesh)]
+    meshes = [d for d in Usd.PrimRange(prim) if _has_points(d)]
     if len(meshes) == 1:
-        return meshes[0], f"'{prim_path}' is {kind}, used its only mesh child"
+        return meshes[0], f"'{path}' had no points, used child {meshes[0].GetPath()}"
     if meshes:
-        return None, f"'{prim_path}' is {kind} with {len(meshes)} meshes under it"
-    return None, f"'{prim_path}' is {kind}, no mesh at or under it"
+        return None, f"'{path}' has {len(meshes)} meshes under it, ambiguous | {detail}"
+    return None, f"'{path}' carries no points, and nothing near it does | {detail}"
 
 
 def _triangle_total(counts) -> int:
