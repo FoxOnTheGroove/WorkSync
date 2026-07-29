@@ -12,12 +12,15 @@ UI/외부는 CadConverterService 를 통해 접근.
 
 import os
 import sys
+import json
+import tempfile
 import threading
+import subprocess
 
 import omni.usd
+import omni.kit.app
 import omni.kit.commands
 import omni.kit.async_engine
-import omni.kit.converter.hoops_core as hoops_mod
 from omni.kit.converter.common import ProgressLogConsumer
 from pxr import UsdGeom
 
@@ -121,22 +124,139 @@ class CadConverter:
 
     # ---------------- convert ----------------
 
+    # Kit 실행파일 / CLI 스크립트 경로 (None 이면 자동 탐색)
+    KIT_EXE = None
+    HOOPS_MAIN = None
+
+    # file_format_args 키 -> CLI config JSON 키 (문서상 다름)
+    _CONFIG_KEY_MAP = {"upAxis": "iUpAxis"}
+
+    @classmethod
+    def _find_kit_exe(cls) -> str:
+        if cls.KIT_EXE:
+            return cls.KIT_EXE
+        exe = "kit.exe" if os.name == "nt" else "kit"
+        try:
+            import carb.tokens
+            kit_dir = carb.tokens.get_tokens_interface().resolve("${kit}")
+            cand = os.path.join(kit_dir, exe)
+            if os.path.isfile(cand):
+                return cand
+        except Exception:
+            pass
+        if os.path.basename(sys.argv[0]).lower().startswith("kit"):
+            return sys.argv[0]
+        raise FileNotFoundError(
+            "kit 실행파일을 찾지 못함 - CadConverter.KIT_EXE 를 직접 지정하세요")
+
+    @classmethod
+    def _find_hoops_main(cls) -> str:
+        if cls.HOOPS_MAIN:
+            return cls.HOOPS_MAIN
+        mgr = omni.kit.app.get_app().get_extension_manager()
+        info = mgr.get_extension_dict("omni.services.convert.cad")
+        if info:
+            cand = os.path.join(
+                info["path"], "omni", "services", "convert", "cad",
+                "services", "process", "hoops_main.py")
+            if os.path.isfile(cand):
+                return cand
+        raise FileNotFoundError(
+            "hoops_main.py 를 찾지 못함 (omni.services.convert.cad 활성화 필요) "
+            "- CadConverter.HOOPS_MAIN 을 직접 지정하세요")
+
+    @classmethod
+    def _to_config(cls, options: dict) -> dict:
+        """file_format_args(전부 문자열) -> CLI config JSON(타입 있는 값)."""
+        def cast(v):
+            s = str(v)
+            low = s.lower()
+            if low in ("true", "false"):
+                return low == "true"
+            try:
+                return float(s) if "." in s else int(s)
+            except ValueError:
+                return s
+        return {cls._CONFIG_KEY_MAP.get(k, k): cast(v) for k, v in options.items()}
+
     @classmethod
     async def convert_async(cls, src_path: str, dest_path: str, options: dict):
-        """STEP -> USD 변환. 진행 로그를 cls.progress 로 흘려보냄. 완료 후 결과 반환."""
-        converter = hoops_mod.get_instance()
+        """STEP -> USD 변환. 완료 후 결과 반환. (호출 형태는 기존과 동일)
 
-        # 진행 로그(fd1)를 progress 에 물려 변환 동안 자동 갱신
+        자식 Kit 프로세스로 변환을 돌리고 그 stdout 을 실시간으로 읽어
+        cls.progress 에 흘려보낸다. in-process 호출은 네이티브가 GIL 을 쥔 채
+        블로킹해서 UI 가 멈추고 진행 로그도 사후에 몰려 나오므로 사용하지 않는다.
+        """
         cls.progress.reset()
-        tap = _StdoutTap(cls.progress.feed)
-        tap.start()
-        try:
-            result = await converter.create_converter_task(src_path, dest_path, options)
-        finally:
-            tap.stop()
 
-        print(f"[cad_converter] convert done: {result}")
-        return result
+        kit_exe = cls._find_kit_exe()
+        hoops_main = cls._find_hoops_main()
+
+        # 변환 옵션을 config JSON 으로 기록 (CLI 는 파일 경로로 받음)
+        fd, cfg_path = tempfile.mkstemp(prefix="cad_cfg_", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(cls._to_config(options), f)
+
+        exec_arg = (
+            f'{hoops_main} '
+            f'--input-path "{src_path}" '
+            f'--output-path "{dest_path}" '
+            f'--config-path "{cfg_path}"'
+        )
+        argv = [
+            kit_exe,
+            "--allow-root",
+            "--enable", "omni.kit.converter.hoops_core",
+            "--exec",
+            "--/app/fastShutdown=1",
+            exec_arg,
+            "--info",
+        ]
+
+        popen_kwargs = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            errors="ignore",
+            **popen_kwargs,
+        )
+
+        # 자식 stdout 을 읽어 progress 로 (자식 프로세스라 우리 GIL 과 무관)
+        def _pump():
+            for line in proc.stdout:
+                cls.progress.feed(line.rstrip())
+
+        reader = threading.Thread(target=_pump, daemon=True)
+        reader.start()
+
+        # 자식이 끝날 때까지 매 프레임 양보 - Kit UI 가 멈추지 않음
+        app = omni.kit.app.get_app()
+        try:
+            while proc.poll() is None:
+                await app.next_update_async()
+        finally:
+            reader.join(timeout=2.0)
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(cfg_path)
+            except OSError:
+                pass
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"[cad_converter] 변환 실패 (exit={proc.returncode}): {src_path}")
+
+        print(f"[cad_converter] convert done: {dest_path}")
+        return dest_path
 
     # ---------------- load / clear ----------------
 
@@ -262,6 +382,8 @@ class CadConverterProgress:
     def feed(self, text: str):
         if "hoops_progress" not in text:
             return
+
+        # --- 파싱 (형식이 어긋난 라인은 조용히 무시) ---
         try:
             # 파서는 프리픽스로 시작하는 라인을 기대함 - 프리픽스 위치부터 자름.
             line = text[text.find(self.PREFIX):]
@@ -283,91 +405,16 @@ class CadConverterProgress:
                     self.value = float(ret[2])
                 if len(ret) > 1 and ret[1]:
                     self.desc = ret[1]               # 현재 과정
+        except Exception as e:
+            print(f"[cad_converter] progress parse skipped: {e}")
+            return
 
-            for cb in self._callbacks:
+        # --- 통지 (콜백 에러는 숨기지 않고 드러냄) ---
+        for cb in self._callbacks:
+            try:
                 cb(self.step_type, self.desc, self.value, self.step_label)
-        except Exception:
-            pass
-
-
-class _StdoutTap:
-    """C 레벨 stdout(fd 1)을 파이프로 복제해 라인 콜백으로 전달.
-
-    HOOPS 네이티브 진행 로그는 fd1 에 직접 쓰므로 이 방법으로만 잡힌다.
-    읽은 내용은 원본 콘솔로 그대로 통과시킨다.
-    """
-
-    def __init__(self, on_line):
-        self._on_line = on_line
-        self._saved_fd = None
-        self._read_fd = None
-        self._thread = None
-        self._shields = []
-
-    def start(self):
-        sys.stdout.flush()
-        self._saved_fd = os.dup(1)
-        r, w = os.pipe()
-        os.dup2(w, 1)
-        os.close(w)
-        self._read_fd = r
-        # tap 중 콘솔 스트림 write 의 OSError(WinError 1) 삼키는 보호막
-        self._shields = [self._shield(sys.stdout), self._shield(sys.stderr)]
-        self._thread = threading.Thread(target=self._pump, daemon=True)
-        self._thread.start()
-
-    def _pump(self):
-        buf = b""
-        while True:
-            try:
-                chunk = os.read(self._read_fd, 4096)
-            except OSError:
-                break
-            if not chunk:
-                break
-            os.write(self._saved_fd, chunk)   # 원본 콘솔로 그대로 통과
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                try:
-                    self._on_line(line.decode("utf-8", "ignore"))
-                except Exception:
-                    pass
-
-    def stop(self):
-        if self._saved_fd is not None:
-            os.dup2(self._saved_fd, 1)    # fd1 원복 -> pump 종료
-            os.close(self._saved_fd)
-            self._saved_fd = None
-        if self._read_fd is not None:
-            try:
-                os.close(self._read_fd)
-            except OSError:
-                pass
-            self._read_fd = None
-        for stream, orig in self._shields:
-            if orig is not None:
-                try:
-                    stream.write = orig
-                except (AttributeError, TypeError):
-                    pass
-        self._shields = []
-
-    @staticmethod
-    def _shield(stream):
-        orig = getattr(stream, "write", None)
-        if orig is None:
-            return (stream, None)
-        def _safe(s, _orig=orig):
-            try:
-                return _orig(s)
-            except OSError:
-                return len(s)
-        try:
-            stream.write = _safe
-        except (AttributeError, TypeError):
-            return (stream, None)
-        return (stream, orig)
+            except Exception as e:
+                print(f"[cad_converter] progress callback error: {e!r}")
 
 
 # CadConverter 아래에 정의된 CadConverterProgress 로 progress 채움
