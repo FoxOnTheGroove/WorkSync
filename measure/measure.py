@@ -43,6 +43,9 @@ _ON_FACE_EPS = 1e-6
 # partway along a straight run of the outline. -cos(15 degrees).
 _CORNER_COS = -0.9659
 
+# Points closer than this fraction of the mesh's extent are the same point.
+_WELD_TOLERANCE = 1e-5
+
 # 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
 TRACE = True
 
@@ -709,11 +712,11 @@ class MeasureCore:
         geom = cls._mesh_entry(path, hit, time)
         if geom is None:
             return surface
-        corners, edges = geom.boundary
+        corners, edge_starts, edge_ends = geom.boundary
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
             f"snap: path='{path}' corners={len(corners)} "
-            f"outline_edges={len(edges)} cursor_px={cursor_px} "
+            f"outline_edges={len(edge_starts)} cursor_px={cursor_px} "
             f"radius={cls._snap_radius} time={time}"
         )
 
@@ -727,14 +730,11 @@ class MeasureCore:
             if kind == SnapKind.VERTEX:
                 if len(corners) == 0:
                     continue
-                points, elements = geom.world[corners], corners
+                points = corners
             else:
-                if len(edges) == 0:
+                if len(edge_starts) == 0:
                     continue
-                points = _closest_on_segments(
-                    geom.world[edges[:, 0]], geom.world[edges[:, 1]], hit
-                )
-                elements = np.arange(len(edges))
+                points = _closest_on_segments(edge_starts, edge_ends, hit)
 
             pixels, valid = _project_px(points, view_proj, width, height)
             distances = np.where(
@@ -748,8 +748,7 @@ class MeasureCore:
             )
             if nearest <= cls._snap_radius:
                 return SnapPoint(
-                    Gf.Vec3d(*points[index]), kind, path, -1,
-                    int(elements[index]), normal,
+                    Gf.Vec3d(*points[index]), kind, path, -1, index, normal
                 )
         return surface
 
@@ -988,7 +987,7 @@ class _Geom:
 
     @property
     def boundary(self):
-        """(corner vertex indices, boundary edges) of the mesh outline.
+        """(corner points, outline edge starts, outline edge ends) in world space.
 
         Only the outline is snappable. An edge shared by two faces is interior,
         and a boundary vertex whose two edges run straight through it lies
@@ -998,12 +997,41 @@ class _Geom:
             self._boundary = self._find_boundary()
         return self._boundary
 
+    def _weld(self):
+        """Merge points that sit at the same position, returning (pos, remap).
+
+        Exported meshes routinely repeat a point per face. Left alone, an
+        interior edge shows up as two different index pairs, each used by one
+        face, so every edge looks like an outline and every vertex like a
+        corner.
+        """
+        world = self.world
+        span = world.max(axis=0) - world.min(axis=0)
+        scale = float(np.linalg.norm(span))
+        tolerance = (scale or 1.0) * _WELD_TOLERANCE
+        keys = np.round(world / tolerance).astype(np.int64)
+        _, first, remap, counts = np.unique(
+            keys, axis=0, return_index=True, return_inverse=True, return_counts=True
+        )
+        remap = remap.ravel()
+        # Average each group so a welded point sits at their common position.
+        position = np.stack(
+            [np.bincount(remap, world[:, axis], len(first)) for axis in range(3)],
+            axis=1,
+        ) / counts[:, None]
+        return position, remap
+
     def _find_boundary(self):
-        empty = (np.empty(0, dtype=np.int64), np.empty((0, 2), dtype=np.int64))
+        empty = (
+            np.empty((0, 3)),
+            np.empty((0, 3)),
+            np.empty((0, 3)),
+        )
         if self.counts is None:
             return empty
 
-        index = np.asarray(self.indices, dtype=np.int64)
+        position, remap = self._weld()
+        index = remap[np.asarray(self.indices, dtype=np.int64)]
         starts = np.asarray(self.offsets[:-1], dtype=np.int64)
         ends = np.asarray(self.offsets[1:], dtype=np.int64) - 1
 
@@ -1014,8 +1042,13 @@ class _Geom:
         nxt[ends] = index[starts]
 
         pairs = np.sort(np.stack([index, nxt], axis=1), axis=1)
+        pairs = pairs[pairs[:, 0] != pairs[:, 1]]  # a face may fold on itself
         unique, uses = np.unique(pairs, axis=0, return_counts=True)
         edges = unique[uses == 1]  # an edge only one face uses is an outline
+        _trace(
+            f"snap:   outline from {len(self.world)} pts welded to "
+            f"{len(position)}: {len(edges)} of {len(unique)} edges"
+        )
         if len(edges) == 0:
             return empty
 
@@ -1029,16 +1062,23 @@ class _Geom:
             if len(around) != 2:
                 corners.append(vertex)  # junction or dangling end
                 continue
-            here = self.world[vertex]
-            first = self.world[around[0]] - here
-            second = self.world[around[1]] - here
+            here = position[vertex]
+            first = position[around[0]] - here
+            second = position[around[1]] - here
             n1, n2 = np.linalg.norm(first), np.linalg.norm(second)
             if n1 < 1e-12 or n2 < 1e-12:
                 continue
             # Running straight through means the directions oppose, cos near -1.
             if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
                 corners.append(vertex)
-        return np.asarray(sorted(corners), dtype=np.int64), edges
+
+        return (
+            position[np.asarray(sorted(corners), dtype=np.int64)]
+            if corners
+            else np.empty((0, 3)),
+            position[edges[:, 0]],
+            position[edges[:, 1]],
+        )
 
 
 def _build_entry(prim, time=None):
