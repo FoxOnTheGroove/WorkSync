@@ -701,12 +701,16 @@ class MeasureCore:
             _trace("snap: mode is NONE, surface only")
             return surface
 
-        face_index, verts, note = cls._face_vertices(path, primitive_id, hit)
+        stage = _stage_of(state.viewport_api)
+        face_index, verts, note = cls._face_vertices(
+            path, primitive_id, hit, stage
+        )
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
             f"snap: path='{path}' id={primitive_id} face={face_index} "
             f"face_verts={len(verts)} cursor_px={cursor_px} "
-            f"radius={cls._snap_radius}{' | ' + note if note else ''}"
+            f"radius={cls._snap_radius} stage='{_stage_key(stage)}'"
+            f"{' | ' + note if note else ''}"
         )
 
         if verts:
@@ -738,15 +742,15 @@ class MeasureCore:
         # not expose a face id on this Kit build. Vertex snapping still works by
         # scanning the whole mesh; edge and mid-point need a face.
         if cls._snap_mode & SnapMode.VERTEX:
-            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state)
+            snap = cls._snap_any_vertex(path, cursor_px, view, proj, state, stage)
             if snap is not None:
                 return snap
         return surface
 
     @classmethod
-    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state):
+    def _snap_any_vertex(cls, prim_path, cursor_px, view, proj, state, stage):
         """Nearest vertex over the whole mesh, within the snap radius."""
-        points = cls._world_points(prim_path)
+        points = cls._world_points(prim_path, stage)
         if not points:
             return None
         best = None
@@ -762,14 +766,15 @@ class MeasureCore:
         return SnapPoint(best[2], SnapKind.VERTEX, prim_path, -1, best[1])
 
     @classmethod
-    def _world_points(cls, prim_path: str) -> list:
+    def _world_points(cls, prim_path: str, stage=None) -> list:
         """Every mesh point in world space. Cached; skips very heavy meshes."""
-        cached = cls._world_cache.get(prim_path)
+        key = (_stage_key(stage), prim_path)
+        cached = cls._world_cache.get(key)
         if cached is not None:
             return cached
-        entry = cls._mesh_entry(prim_path)
+        entry = cls._mesh_entry(prim_path, stage)
         if entry is None:
-            cls._world_cache[prim_path] = []
+            cls._world_cache[key] = []
             return []
         points, _counts, _indices, _offsets, xform = entry
         if len(points) > _MAX_SCAN_POINTS:
@@ -777,33 +782,41 @@ class MeasureCore:
                 f"[measure] '{prim_path}' has {len(points)} points, too many to "
                 f"scan without a face id; snapping stays on the surface"
             )
-            cls._world_cache[prim_path] = []
+            cls._world_cache[key] = []
             return []
         world = [xform.Transform(Gf.Vec3d(p)) for p in points]
-        cls._world_cache[prim_path] = world
+        cls._world_cache[key] = world
         return world
 
     @classmethod
-    def _mesh_entry(cls, prim_path: str):
-        """(points, counts, indices, offsets, xform) for a mesh prim, cached."""
-        entry = cls._mesh_cache.get(prim_path)
+    def _mesh_entry(cls, prim_path: str, stage=None):
+        """(points, counts, indices, offsets, xform) for a mesh prim, cached.
+
+        The stage comes from the viewport, not from the default USD context:
+        each tab can own a different context, and querying the wrong stage
+        finds nothing.
+        """
+        key = (_stage_key(stage), prim_path)
+        entry = cls._mesh_cache.get(key)
         if entry is not None:
             return entry or None
-        stage = omni.usd.get_context().get_stage()
         if stage is None:
+            _trace("snap: no stage for this viewport")
             return None
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim or not prim.IsA(UsdGeom.Mesh):
-            _trace(f"snap: '{prim_path}' is not a UsdGeom.Mesh")
-            cls._mesh_cache[prim_path] = ()
+
+        prim, why = _resolve_mesh_prim(stage, prim_path)
+        if prim is None:
+            _trace(f"snap: {why}")
+            cls._mesh_cache[key] = ()
             return None
+
         mesh = UsdGeom.Mesh(prim)
         points = mesh.GetPointsAttr().Get()
         counts = mesh.GetFaceVertexCountsAttr().Get()
         indices = mesh.GetFaceVertexIndicesAttr().Get()
         if not points or not counts or not indices:
-            _trace(f"snap: '{prim_path}' has no points/topology")
-            cls._mesh_cache[prim_path] = ()
+            _trace(f"snap: '{prim.GetPath()}' has no points/topology")
+            cls._mesh_cache[key] = ()
             return None
         offsets = [0]
         for c in counts:
@@ -811,12 +824,14 @@ class MeasureCore:
         xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()
         )
+        if why:
+            _trace(f"snap: {why}")
         entry = (points, counts, indices, offsets, xform)
-        cls._mesh_cache[prim_path] = entry
+        cls._mesh_cache[key] = entry
         return entry
 
     @classmethod
-    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None):
+    def _face_vertices(cls, prim_path: str, primitive_id: int, hit=None, stage=None):
         """Resolve a raycast primitive id to one face's world-space vertices.
 
         Returns (face_index, verts, reason). The id is not always a USD face
@@ -826,7 +841,7 @@ class MeasureCore:
         """
         if primitive_id < 0:
             return -1, [], "no face id"
-        entry = cls._mesh_entry(prim_path)
+        entry = cls._mesh_entry(prim_path, stage)
         if entry is None:
             return -1, [], "not a mesh, or no points/topology"
         points, counts, indices, offsets, xform = entry
@@ -861,8 +876,10 @@ class MeasureCore:
             cls._mesh_cache.clear()
             cls._world_cache.clear()
         else:
-            cls._mesh_cache.pop(prim_path, None)
-            cls._world_cache.pop(prim_path, None)
+            # Caches are keyed by (stage, path), so drop it on every stage.
+            for cache in (cls._mesh_cache, cls._world_cache):
+                for key in [k for k in cache if k[1] == prim_path]:
+                    cache.pop(key, None)
 
     # ---------------------------------------------------------------- draw
 
@@ -916,6 +933,60 @@ def _candidates(kind: SnapKind, verts: list, hit: Gf.Vec3d):
                 continue
             t = max(0.0, min(1.0, Gf.Dot(hit - a, ab) / denom))
             yield i, a + ab * t
+
+
+def _stage_of(viewport_api):
+    """The stage this viewport renders, not whatever the default context holds."""
+    stage = getattr(viewport_api, "stage", None)
+    if stage is not None:
+        return stage
+    try:
+        name = getattr(viewport_api, "usd_context_name", "") or ""
+        context = omni.usd.get_context(name)
+        return context.get_stage() if context else None
+    except Exception as exc:
+        carb.log_warn(f"[measure] cannot reach the viewport's stage: {exc}")
+        return None
+
+
+def _stage_key(stage) -> str:
+    if stage is None:
+        return ""
+    try:
+        return stage.GetRootLayer().identifier
+    except Exception:
+        return str(id(stage))
+
+
+def _resolve_mesh_prim(stage, prim_path: str):
+    """(prim, note). Walks to a real Mesh when the hit path is not one itself.
+
+    A raycast can report a GeomSubset, an instance proxy or a parent Xform
+    rather than the mesh that carries the topology.
+    """
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        return None, (
+            f"'{prim_path}' not found on stage "
+            f"'{_stage_key(stage)}' - wrong USD context?"
+        )
+    if prim.IsA(UsdGeom.Mesh):
+        return prim, ""
+
+    kind = prim.GetTypeName() or "<untyped>"
+    # A GeomSubset or similar sits under its mesh.
+    parent = prim.GetParent()
+    while parent and parent.IsValid() and not parent.IsPseudoRoot():
+        if parent.IsA(UsdGeom.Mesh):
+            return parent, f"'{prim_path}' is {kind}, used its mesh ancestor"
+        parent = parent.GetParent()
+    # An Xform wrapping exactly one mesh is unambiguous enough to follow.
+    meshes = [d for d in Usd.PrimRange(prim) if d.IsA(UsdGeom.Mesh)]
+    if len(meshes) == 1:
+        return meshes[0], f"'{prim_path}' is {kind}, used its only mesh child"
+    if meshes:
+        return None, f"'{prim_path}' is {kind} with {len(meshes)} meshes under it"
+    return None, f"'{prim_path}' is {kind}, no mesh at or under it"
 
 
 def _triangle_total(counts) -> int:
