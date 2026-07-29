@@ -821,9 +821,12 @@ class MeasureCore:
             cls._mesh_cache[key] = ()
             return None
         if entry.counts is None:
+            mesh = UsdGeom.Mesh(prim)
+            counts_attr = mesh.GetFaceVertexCountsAttr() if mesh else None
             _trace(
                 f"snap: '{prim.GetPath()}' has {len(entry.points)} points but no "
-                f"face topology; vertex snapping only"
+                f"face topology; vertex snapping only. "
+                f"faceVertexCounts: {_attr_report(counts_attr)}"
             )
         cls._mesh_cache[key] = entry
         return entry
@@ -991,6 +994,17 @@ def _times_to_try(attr, time):
     return times
 
 
+def _attr_value(attr, time=None):
+    """Read an attribute, trying the times it might actually be authored at."""
+    if not attr:
+        return None
+    for when in _times_to_try(attr, time):
+        value = attr.Get(when)
+        if value:
+            return value
+    return None
+
+
 def _points_of(prim, time=None):
     """Points of any point-based prim, or None.
 
@@ -998,16 +1012,9 @@ def _points_of(prim, time=None):
     gprims (Cube, Sphere, Cylinder, ...) are procedural and have none.
     """
     try:
-        attr = UsdGeom.PointBased(prim).GetPointsAttr()
+        return _attr_value(UsdGeom.PointBased(prim).GetPointsAttr(), time)
     except Exception:
         return None
-    if not attr:
-        return None
-    for when in _times_to_try(attr, time):
-        points = attr.Get(when)
-        if points:
-            return points
-    return None
 
 
 def _has_points(prim, time=None) -> bool:
@@ -1086,9 +1093,12 @@ def _build_entry(prim, time=None):
     points = _points_of(prim, time)
     if points is None:
         return None
+    # Topology gets the same time treatment as the points: a mesh whose points
+    # are time sampled almost always has its topology authored the same way,
+    # and reading it at the default time code silently loses every face.
     mesh = UsdGeom.Mesh(prim)
-    counts = mesh.GetFaceVertexCountsAttr().Get() if mesh else None
-    indices = mesh.GetFaceVertexIndicesAttr().Get() if mesh else None
+    counts = _attr_value(mesh.GetFaceVertexCountsAttr(), time) if mesh else None
+    indices = _attr_value(mesh.GetFaceVertexIndicesAttr(), time) if mesh else None
     offsets = None
     if counts and indices:
         offsets = [0]
@@ -1140,6 +1150,19 @@ def _mesh_hit_score(prim, hit, time=None) -> float:
     if best is not None:
         return best[0]
     return float(np.min(np.linalg.norm(geom.world - _as_np(hit), axis=1)))
+
+
+def _attr_report(attr) -> str:
+    if not attr:
+        return "absent"
+    try:
+        samples = attr.GetTimeSamples()
+        return (
+            f"authored={attr.HasAuthoredValue()} samples={len(samples)}"
+            f"{samples[:3] if samples else ''}"
+        )
+    except Exception as exc:
+        return f"<unreadable: {exc}>"
 
 
 def _describe(prim) -> str:
