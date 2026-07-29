@@ -820,10 +820,10 @@ class MeasureCore:
             _trace(f"snap: '{prim.GetPath()}' has no points")
             cls._mesh_cache[key] = ()
             return None
-        if entry[1] is None:
+        if entry.counts is None:
             _trace(
-                f"snap: '{prim.GetPath()}' has {len(entry[0])} points but no face "
-                f"topology; vertex snapping only"
+                f"snap: '{prim.GetPath()}' has {len(entry.points)} points but no "
+                f"face topology; vertex snapping only"
             )
         cls._mesh_cache[key] = entry
         return entry
