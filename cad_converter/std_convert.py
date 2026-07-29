@@ -297,12 +297,17 @@ class _StdoutTap:
     읽은 내용은 원본 콘솔로 그대로 통과시킨다.
     """
 
+    DRAIN_TIMEOUT = 5.0   # stop() 에서 pump 가 남은 데이터를 처리할 때까지 대기(초)
+    DEBUG = False         # True 면 파이프로 들어온 라인 통계를 stderr 로 보고
+
     def __init__(self, on_line):
         self._on_line = on_line
         self._saved_fd = None
         self._read_fd = None
         self._thread = None
         self._shields = []
+        self._n_lines = 0        # 파이프로 들어온 전체 라인 수
+        self._n_progress = 0     # 그중 hoops_progress 라인 수
 
     def start(self):
         sys.stdout.flush()
@@ -324,19 +329,44 @@ class _StdoutTap:
             except OSError:
                 break
             if not chunk:
-                break
-            os.write(self._saved_fd, chunk)   # 원본 콘솔로 그대로 통과
+                break                       # 파이프 write 끝이 닫힘 = 정상 종료
+            if self._saved_fd is not None:
+                try:
+                    os.write(self._saved_fd, chunk)   # 원본 출력으로 그대로 통과
+                except OSError:
+                    pass
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
+                text = line.decode("utf-8", "ignore")
+                self._n_lines += 1
+                if "hoops_progress" in text:
+                    self._n_progress += 1
                 try:
-                    self._on_line(line.decode("utf-8", "ignore"))
+                    self._on_line(text)
                 except Exception:
                     pass
 
     def stop(self):
+        # 1) C stdio 버퍼에 갇힌 네이티브 출력을 먼저 파이프로 밀어냄.
+        #    (fd1 이 아직 파이프인 동안 해야 우리 쪽으로 들어온다)
+        self._flush_c_stdio()
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+        # 2) fd1 원복 -> 파이프의 write 끝 참조가 사라져 pump 가 EOF 로 끝남
         if self._saved_fd is not None:
-            os.dup2(self._saved_fd, 1)    # fd1 원복 -> pump 종료
+            os.dup2(self._saved_fd, 1)
+
+        # 3) pump 가 남은 데이터를 다 처리할 때까지 대기 (여기서 콜백이 실행된다)
+        if self._thread is not None:
+            self._thread.join(timeout=self.DRAIN_TIMEOUT)
+            self._thread = None
+
+        # 4) 배수 완료 후에야 fd 정리 (passthrough 중 close 하면 pump 가 죽는다)
+        if self._saved_fd is not None:
             os.close(self._saved_fd)
             self._saved_fd = None
         if self._read_fd is not None:
@@ -345,6 +375,7 @@ class _StdoutTap:
             except OSError:
                 pass
             self._read_fd = None
+
         for stream, orig in self._shields:
             if orig is not None:
                 try:
@@ -352,6 +383,37 @@ class _StdoutTap:
                 except (AttributeError, TypeError):
                     pass
         self._shields = []
+
+        if self.DEBUG:
+            print(f"[cad_converter] tap: lines={self._n_lines} "
+                  f"hoops_progress={self._n_progress}")
+
+    @staticmethod
+    def _flush_c_stdio():
+        """네이티브(C) stdout 버퍼를 강제로 비운다.
+
+        헤드리스/서비스 환경에선 fd1 이 파일·파이프라 C 런타임이 full-buffered 로
+        동작해, 진행 로그가 버퍼에 갇힌 채 변환이 끝난다. fd1 을 원복하기 전에
+        flush 해야 그 내용이 우리 파이프로 들어온다.
+        """
+        import ctypes
+        libs = []
+        if os.name == "nt":
+            for name in ("ucrtbase", "msvcrt"):
+                try:
+                    libs.append(ctypes.CDLL(name))
+                except OSError:
+                    pass
+        else:
+            try:
+                libs.append(ctypes.CDLL(None))
+            except OSError:
+                pass
+        for lib in libs:
+            try:
+                lib.fflush(None)      # fflush(NULL) = 열려 있는 모든 스트림 flush
+            except Exception:
+                pass
 
     @staticmethod
     def _shield(stream):
