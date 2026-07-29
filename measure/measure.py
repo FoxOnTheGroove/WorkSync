@@ -803,17 +803,28 @@ class MeasureCore:
             cls._mesh_cache[key] = ()
             return None
 
-        mesh = UsdGeom.Mesh(prim)
-        points = mesh.GetPointsAttr().Get()
-        counts = mesh.GetFaceVertexCountsAttr().Get()
-        indices = mesh.GetFaceVertexIndicesAttr().Get()
-        if not points or not counts or not indices:
-            _trace(f"snap: '{prim.GetPath()}' has no points/topology")
+        points = _points_of(prim)
+        if points is None:
+            _trace(f"snap: '{prim.GetPath()}' has no points")
             cls._mesh_cache[key] = ()
             return None
-        offsets = [0]
-        for c in counts:
-            offsets.append(offsets[-1] + c)
+
+        # Topology is Mesh-only. Without it, vertex snapping still works and
+        # edge / mid-point do not, so keep the entry rather than discard it.
+        mesh = UsdGeom.Mesh(prim)
+        counts = mesh.GetFaceVertexCountsAttr().Get() if mesh else None
+        indices = mesh.GetFaceVertexIndicesAttr().Get() if mesh else None
+        if not counts or not indices:
+            _trace(
+                f"snap: '{prim.GetPath()}' has {len(points)} points but no face "
+                f"topology; vertex snapping only"
+            )
+            counts = indices = None
+            offsets = None
+        else:
+            offsets = [0]
+            for c in counts:
+                offsets.append(offsets[-1] + c)
         xform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()
         )
@@ -836,8 +847,10 @@ class MeasureCore:
             return -1, [], "no face id"
         entry = cls._mesh_entry(prim_path)
         if entry is None:
-            return -1, [], "not a mesh, or no points/topology"
+            return -1, [], "no geometry found for this hit"
         points, counts, indices, offsets, xform = entry
+        if counts is None:
+            return -1, [], "point-based but not a mesh; vertex snapping only"
 
         candidates = []
         if primitive_id < len(counts):
@@ -937,13 +950,32 @@ def _stage_key(stage) -> str:
         return str(id(stage))
 
 
-def _has_points(prim) -> bool:
-    """Attribute test, not a type test: subclassed or untyped prims count."""
+def _points_of(prim):
+    """Authored points of any point-based prim, or None.
+
+    PointBased rather than Mesh, so Points and BasisCurves work too. Implicit
+    gprims (Cube, Sphere, Cylinder, ...) are procedural and have none.
+    """
     try:
-        attr = UsdGeom.Mesh(prim).GetPointsAttr()
-        return bool(attr) and attr.HasAuthoredValue()
+        attr = UsdGeom.PointBased(prim).GetPointsAttr()
     except Exception:
-        return False
+        return None
+    if not attr:
+        return None
+    points = attr.Get()
+    return points if points else None
+
+
+def _has_points(prim) -> bool:
+    return _points_of(prim) is not None
+
+
+def _descendants(prim):
+    """Children including instance proxies, which a plain range skips."""
+    try:
+        return list(Usd.PrimRange(prim, Usd.TraverseInstanceProxies()))
+    except Exception:
+        return list(Usd.PrimRange(prim))
 
 
 def _describe(prim) -> str:
@@ -977,11 +1009,17 @@ def _resolve_mesh_prim(stage, prim_path):
         if _has_points(parent):
             return parent, f"'{path}' had no points, used ancestor {parent.GetPath()}"
         parent = parent.GetParent()
-    meshes = [d for d in Usd.PrimRange(prim) if _has_points(d)]
+    meshes = [d for d in _descendants(prim) if _has_points(d)]
     if len(meshes) == 1:
         return meshes[0], f"'{path}' had no points, used child {meshes[0].GetPath()}"
     if meshes:
         return None, f"'{path}' has {len(meshes)} meshes under it, ambiguous | {detail}"
+    kind = str(prim.GetTypeName() or "<untyped>")
+    if kind in ("Cube", "Sphere", "Cylinder", "Cone", "Capsule", "Plane"):
+        return None, (
+            f"'{path}' is an implicit {kind}: procedural, so it has no vertices "
+            f"to snap to. Surface only."
+        )
     return None, f"'{path}' carries no points, and nothing near it does | {detail}"
 
 
