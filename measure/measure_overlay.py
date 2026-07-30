@@ -31,6 +31,7 @@ _LABEL_SIZE = 28
 _LABEL_TEXT_COLOR = 0xFF000000
 _LABEL_PLATE_COLOR = 0xFFFFFFFF
 _LABEL_PAD = 10.0  # screen units around the text
+_PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)  # plain white while still dragging
 _LABEL_CHAR_WIDTH = 0.62  # of the font size, enough to size the plate
 
 
@@ -50,6 +51,7 @@ class MeasureOverlay:
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
+        self._drawn = None  # signature of what set_lines last built
 
         self._build()
 
@@ -101,9 +103,22 @@ class MeasureOverlay:
     # ------------------------------------------------------------------ draw
 
     def set_lines(self, lines, format_length):
-        """Redraw all confirmed measurements for this viewport."""
+        """Redraw all confirmed measurements for this viewport.
+
+        Skipped when the set is unchanged. Every label here owns a render
+        target, and a refresh happens on tab switches and visibility changes
+        too, so rebuilding regardless burns through the descriptor pool.
+        """
         if self._lines_root is None:
             return
+        drawn = [
+            (line.id, tuple(line.start.position), tuple(line.end.position))
+            for line in lines
+        ]
+        if drawn == self._drawn:
+            return
+        self._drawn = drawn
+
         self._lines_root.clear()
         with self._lines_root:
             for line in lines:
@@ -114,7 +129,7 @@ class MeasureOverlay:
                     color=_LINE_COLOR,
                     thickness=_LINE_THICKNESS,
                 )
-                _draw_label(a, b, format_length(line.length_m))
+                _draw_plate_label(a, b, format_length(line.length_m))
 
     def set_preview(self, start, end, text):
         """Rubber-band line between the first click and the cursor."""
@@ -131,7 +146,7 @@ class MeasureOverlay:
                 thickness=_LINE_THICKNESS,
             )
             if text:
-                _draw_label(start, end, text)
+                _draw_plain_label(start, end, text)
 
     def set_snap_marker(self, snap):
         """Show where the next click would land, coloured by snap class."""
@@ -174,22 +189,27 @@ class MeasureOverlay:
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
+        self._drawn = None
         self._frame = None
 
 
 # --------------------------------------------------------------------- utils
 
 
-def _draw_label(a, b, text):
-    """Length readout at the midpoint of the line, black on a white billboard.
+def _midpoint(a, b):
+    return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
 
-    Built as an sc.Widget holding ordinary omni.ui widgets, which is what gives
-    the text a real styled background.
+
+def _draw_plate_label(a, b, text):
+    """Finished measurement: black text on a white billboard plate.
+
+    Only for lines that are already placed. sc.Widget allocates a render target
+    per instance, so one built per mouse move exhausts the renderer's descriptor
+    pool; the live preview uses _draw_plain_label instead.
     """
-    mid = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
     plate_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD * 2
     plate_h = _LABEL_SIZE + _LABEL_PAD * 1.5
-    with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*mid)):
+    with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
         # look_at turns the plate to face the camera, scale_to holds its size on
         # screen. scale_to alone leaves it lying in world space, so it goes
         # edge-on and vanishes from most angles.
@@ -198,6 +218,17 @@ def _draw_label(a, b, text):
         ):
             widget = sc.Widget(plate_w, plate_h)
             widget.frame.set_build_fn(lambda value=text: _build_plate(value))
+
+
+def _draw_plain_label(a, b, text):
+    """While still dragging: plain white text, no plate and no render target."""
+    with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
+        sc.Label(
+            text,
+            alignment=ui.Alignment.CENTER,
+            color=_PREVIEW_TEXT_COLOR,
+            size=_LABEL_SIZE,
+        )
 
 
 def _build_plate(text: str):
