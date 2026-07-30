@@ -46,6 +46,11 @@ _CORNER_COS = -0.9659
 # Points closer than this fraction of the mesh's extent are the same point.
 _WELD_TOLERANCE = 1e-5
 
+# Two faces meeting at more than this angle form a crease worth snapping to.
+# Below it they read as one smooth surface. cos(30 degrees); a cylinder wall
+# only reaches this when it has fewer than 12 sides.
+_CREASE_COS = 0.8660
+
 # 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
 TRACE = True
 
@@ -919,6 +924,50 @@ def _as_np(vec) -> np.ndarray:
     return np.asarray([vec[0], vec[1], vec[2]], dtype=float)
 
 
+def _face_normals(position, index, nxt, starts) -> np.ndarray:
+    """One unit normal per face, by Newell's method so n-gons work."""
+    cross = np.cross(position[index], position[nxt])
+    normals = np.add.reduceat(cross, starts, axis=0)
+    lengths = np.linalg.norm(normals, axis=1)
+    return normals / np.where(lengths > 1e-20, lengths, 1.0)[:, None]
+
+
+def _feature_edges(index, nxt, counts, normals):
+    """(edges, total) - edges worth snapping to, as welded index pairs.
+
+    An edge qualifies two ways. It is a boundary, used by a single face. Or it
+    is a crease: the faces either side meet at a sharp angle. Creases matter
+    because a solid has no boundary at all - a capped cylinder's rim is shared
+    by the cap and the wall, yet it is exactly the circle you want to measure
+    to, while the wall's own vertical edges are nearly flat and are not.
+    """
+    pairs = np.sort(np.stack([index, nxt], axis=1), axis=1)
+    face_of = np.repeat(np.arange(len(counts)), counts)
+    keep = pairs[:, 0] != pairs[:, 1]  # a face may fold back on itself
+    pairs, face_of = pairs[keep], face_of[keep]
+    if len(pairs) == 0:
+        return np.empty((0, 2), dtype=np.int64), 0
+
+    order = np.lexsort((pairs[:, 1], pairs[:, 0]))
+    pairs, face_of = pairs[order], face_of[order]
+    fresh = np.ones(len(pairs), dtype=bool)
+    fresh[1:] = np.any(pairs[1:] != pairs[:-1], axis=1)
+    group = np.flatnonzero(fresh)
+    sizes = np.diff(np.append(group, len(pairs)))
+
+    boundary = group[sizes == 1]
+    tangled = group[sizes > 2]  # non-manifold, always interesting
+    shared = group[sizes == 2]
+    creased = shared
+    if len(shared):
+        left, right = normals[face_of[shared]], normals[face_of[shared + 1]]
+        cosine = np.abs(np.einsum("ij,ij->i", left, right))
+        creased = shared[cosine < _CREASE_COS]
+
+    chosen = np.concatenate([boundary, creased, tangled])
+    return pairs[chosen], len(group)
+
+
 def _closest_on_segments(starts: np.ndarray, ends: np.ndarray, point) -> np.ndarray:
     """Closest point on each segment to `point`, clamped to the segment."""
     target = _as_np(point)
@@ -1041,13 +1090,13 @@ class _Geom:
         nxt[:-1] = index[1:]
         nxt[ends] = index[starts]
 
-        pairs = np.sort(np.stack([index, nxt], axis=1), axis=1)
-        pairs = pairs[pairs[:, 0] != pairs[:, 1]]  # a face may fold on itself
-        unique, uses = np.unique(pairs, axis=0, return_counts=True)
-        edges = unique[uses == 1]  # an edge only one face uses is an outline
+        normals = _face_normals(position, index, nxt, starts)
+        edges, counted = _feature_edges(
+            index, nxt, np.asarray(self.counts, dtype=np.int64), normals
+        )
         _trace(
-            f"snap:   outline from {len(self.world)} pts welded to "
-            f"{len(position)}: {len(edges)} of {len(unique)} edges"
+            f"snap:   {len(self.world)} pts welded to {len(position)}: "
+            f"{len(edges)} feature of {counted} edges"
         )
         if len(edges) == 0:
             return empty
