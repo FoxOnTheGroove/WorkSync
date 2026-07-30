@@ -27,16 +27,23 @@ _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
 
+# Selected measurement: line and plate go black, the text goes white.
+_SELECTED_LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
+_SELECTED_PLATE_COLOR = (0.0, 0.0, 0.0, 1.0)
+_SELECTED_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
+
 # Length readout, centred on the line: plain white while still dragging, black
 # on a white billboard plate once placed. One sc.Label size for both, so the
 # text is the same on screen either way.
-_LABEL_SIZE = 16
+_LABEL_SIZE = 20
 _LABEL_TEXT_COLOR = (0.0, 0.0, 0.0, 1.0)
 _LABEL_PLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
 _LABEL_PAD_X = 14.0  # screen units left and right of the text
 _LABEL_PAD_Y = 9.0  # above and below
 _LABEL_CHAR_WIDTH = 0.95  # of the font size; too narrow clips the text
+_LABEL_WIDTH_SCALE = 1.2  # breathing room beyond the text and padding
+_LABEL_HEIGHT_SCALE = 1.5
 _LABEL_RADIUS = 6.0  # corner rounding, in the same screen units
 _LABEL_ROUND_STEPS = 4  # segments per corner
 
@@ -121,12 +128,12 @@ class MeasureOverlay:
 
     # ------------------------------------------------------------------ draw
 
-    def set_lines(self, lines, format_length):
+    def set_lines(self, lines, format_length, selected_id=None):
         """Redraw all confirmed measurements for this viewport.
 
-        Skipped when the set is unchanged. Every label here owns a render
-        target, and a refresh happens on tab switches and visibility changes
-        too, so rebuilding regardless burns through the descriptor pool.
+        Skipped when nothing about the set has changed, selection included: a
+        refresh fires on tab switches and visibility changes too, and there is
+        no point rebuilding the scene for those.
         """
         if self._lines_root is None:
             return
@@ -134,18 +141,19 @@ class MeasureOverlay:
             (line.id, tuple(line.start.position), tuple(line.end.position))
             for line in lines
         ]
-        if drawn == self._drawn:
+        if (drawn, selected_id) == self._drawn:
             return
-        self._drawn = drawn
+        self._drawn = (drawn, selected_id)
 
         self._lines_root.clear()
         with self._lines_root:
             for line in lines:
+                chosen = line.id == selected_id
                 a, b = line.start.position, line.end.position
                 sc.Line(
                     (a[0], a[1], a[2]),
                     (b[0], b[1], b[2]),
-                    color=_LINE_COLOR,
+                    color=_SELECTED_LINE_COLOR if chosen else _LINE_COLOR,
                     thickness=_LINE_THICKNESS,
                 )
                 _draw_plate_label(
@@ -153,6 +161,7 @@ class MeasureOverlay:
                     b,
                     format_length(line.length_m),
                     on_click=self._label_clicked(line.id),
+                    selected=chosen,
                 )
 
     def set_preview(self, start, end, text):
@@ -231,8 +240,11 @@ def plate_size(text: str):
     when another extension owns the mouse, the plate's own gesture never fires
     and the only way to press a plate is to work out where it is.
     """
-    width = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD_X * 2
-    return width, _LABEL_SIZE + _LABEL_PAD_Y * 2
+    text_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD_X * 2
+    return (
+        text_w * _LABEL_WIDTH_SCALE,
+        (_LABEL_SIZE + _LABEL_PAD_Y * 2) * _LABEL_HEIGHT_SCALE,
+    )
 
 
 def _rounded_rect(width: float, height: float, radius: float) -> list:
@@ -251,7 +263,7 @@ def _rounded_rect(width: float, height: float, radius: float) -> list:
     return points
 
 
-def _draw_plate_label(a, b, text, on_click=None):
+def _draw_plate_label(a, b, text, on_click=None, selected=False):
     """Finished measurement: black text on a white billboard plate.
 
     Both the plate and the text are scene shapes. Putting the text in an
@@ -270,15 +282,16 @@ def _draw_plate_label(a, b, text, on_click=None):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
         ):
+            plate = _SELECTED_PLATE_COLOR if selected else _LABEL_PLATE_COLOR
             sc.PolygonMesh(
                 outline,
-                [_LABEL_PLATE_COLOR] * len(outline),
+                [plate] * len(outline),
                 [len(outline)],
                 list(range(len(outline))),
                 wireframe=False,
                 gestures=[sc.ClickGesture(on_click)] if on_click else None,
             )
-            _label(text, _LABEL_TEXT_COLOR)
+            _label(text, _SELECTED_TEXT_COLOR if selected else _LABEL_TEXT_COLOR)
 
 
 def _draw_plain_label(a, b, text):

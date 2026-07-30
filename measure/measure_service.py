@@ -180,7 +180,7 @@ class MeasureService:
         """현재 상태 전부를 dict 하나로. 개별 getter 는 두지 않았습니다.
 
         snap_mode, snap_radius, host_input, active_tab, selected_viewport,
-        picking, tabs {탭 id: (뷰포트 id...)}, maximized
+        selected_line, picking, tabs {탭 id: (뷰포트 id...)}, maximized
         """
         return MeasureCore.status()
 

@@ -189,6 +189,7 @@ class MeasureCore:
     # Armed without naming a viewport: the first click decides which one.
     _pending_any = False
     _pending_done = None
+    _selected_line = None  # highlighted by clicking its readout
 
     # ------------------------------------------------------------------ life
 
@@ -206,6 +207,7 @@ class MeasureCore:
         cls._maximized.clear()
         cls._active_tab = None
         cls._selected = ""
+        cls._selected_line = None
         cls._lines.clear()
         cls._changed_callbacks.clear()
         cls._mesh_cache.clear()
@@ -228,6 +230,7 @@ class MeasureCore:
             "host_input": cls._host_input,
             "active_tab": cls._active_tab,
             "selected_viewport": cls._selected,
+            "selected_line": cls._selected_line,
             "picking": cls._pending_any
             or any(s.armed for s in cls._viewports.values()),
             "tabs": {tab: tuple(members) for tab, members in cls._tabs.items()},
@@ -627,9 +630,28 @@ class MeasureCore:
 
     @classmethod
     def _on_label_click(cls, line_id: int):
-        """Its own readout pressed in the viewport: delete that measurement."""
-        _trace(f"label clicked: removing line {line_id}")
-        cls.remove(line_id)
+        """A readout pressed: first press selects it, a second one deletes it."""
+        if cls._selected_line == line_id:
+            _trace(f"label clicked again: removing line {line_id}")
+            cls._selected_line = None
+            cls.remove(line_id)
+            return
+        _trace(f"label clicked: selecting line {line_id}")
+        cls._selected_line = line_id
+        for viewport_id in list(cls._viewports):
+            cls._refresh(viewport_id)
+        cls._notify()
+
+    @classmethod
+    def _clear_selection(cls):
+        """Any other click drops the highlight."""
+        if cls._selected_line is None:
+            return
+        _trace("selection cleared")
+        cls._selected_line = None
+        for viewport_id in list(cls._viewports):
+            cls._refresh(viewport_id)
+        cls._notify()
 
     @classmethod
     def _try_label_click(cls, state, ndc) -> bool:
@@ -699,8 +721,10 @@ class MeasureCore:
             cls._arm(state, cls._pending_done)
         if not state.armed:
             # Not measuring, so a click here can only be aimed at a readout.
-            cls._try_label_click(state, ndc)
+            if not cls._try_label_click(state, ndc):
+                cls._clear_selection()
             return
+        cls._clear_selection()
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_click(state, snap))
 
     @classmethod
@@ -921,7 +945,7 @@ class MeasureCore:
             for ln in cls._lines.values()
             if ln.viewport_id == viewport_id and ln.visible
         ]
-        state.overlay.set_lines(lines, _format_length)
+        state.overlay.set_lines(lines, _format_length, cls._selected_line)
 
     @classmethod
     def _length_m(cls, a: Gf.Vec3d, b: Gf.Vec3d) -> float:
