@@ -25,6 +25,7 @@ _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
 _END_DOT_SIZE = 8.0  # dots marking where a measurement starts and ends
+_END_DOT_COLOR = (1.0, 1.0, 1.0, 1.0)  # stays white, selected or not
 
 # Selected measurement: its line goes black too, matching its plate.
 _SELECTED_LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
@@ -170,7 +171,7 @@ class MeasureOverlay:
                 )
                 sc.Points(
                     [(a[0], a[1], a[2]), (b[0], b[1], b[2])],
-                    colors=[colour, colour],
+                    colors=[_END_DOT_COLOR, _END_DOT_COLOR],
                     sizes=[_END_DOT_SIZE, _END_DOT_SIZE],
                 )
                 _draw_plate_label(

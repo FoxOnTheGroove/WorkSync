@@ -189,6 +189,7 @@ class MeasureCore:
     # Armed without naming a viewport: the first click decides which one.
     _pending_any = False
     _pending_done = None
+    _pending_viewports: tuple = ()  # which ones may claim it
     _selected_line = None  # highlighted by clicking its readout
 
     # ------------------------------------------------------------------ life
@@ -493,33 +494,54 @@ class MeasureCore:
 
     @classmethod
     def pick_one(cls, viewport_id=None, on_done=None):
-        """Arm for one line. Without an id the first click picks the viewport."""
+        """Arm for one line.
+
+        Every viewport in the active tab can start it. The first point claims
+        its viewport, and the second point has to land in that same one, so a
+        measurement never spans two views.
+
+        Naming a viewport arms only that one.
+        """
         cls._require_started()
         # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()
 
-        state = cls._viewports.get(viewport_id or cls._selected)
-        if state is not None:
+        if viewport_id:
+            state = cls._viewports.get(viewport_id)
+            if state is None:
+                carb.log_warn(f"[measure] pick_one: no viewport '{viewport_id}'")
+                return
             cls._arm(state, on_done)
             return
-        if not cls._viewports:
+
+        candidates = cls._pick_candidates()
+        if not candidates:
             carb.log_warn(
-                "[measure] pick_one: no viewport registered. The host must call "
+                "[measure] pick_one: no viewport to pick in. The host must call "
                 "MeasureService.on_tab_created(tab_id, vphs) first."
             )
             return
-        # Nothing named, so wait and let whichever viewport is clicked claim it.
         cls._pending_any = True
         cls._pending_done = on_done
-        _trace(f"pick_one: armed across {tuple(cls._viewports)}")
+        cls._pending_viewports = candidates
+        _trace(f"pick_one: armed across {candidates}")
         if not cls._host_input:
-            for other in cls._viewports.values():
-                other.overlay.set_click_active(True)
+            for vp in candidates:
+                cls._viewports[vp].overlay.set_click_active(True)
+
+    @classmethod
+    def _pick_candidates(cls) -> tuple:
+        """Registered viewports of the active tab, or all of them if none is."""
+        if cls._active_tab is not None:
+            members = cls._tabs.get(cls._active_tab, ())
+            return tuple(vp for vp in members if vp in cls._viewports)
+        return tuple(cls._viewports)
 
     @classmethod
     def _arm(cls, state, on_done):
         cls._pending_any = False
         cls._pending_done = None
+        cls._pending_viewports = ()
         state.armed = True
         state.pending = None
         state.on_done = on_done
@@ -538,6 +560,7 @@ class MeasureCore:
         """Cancel one viewport's pick, or every pending one."""
         cls._pending_any = False
         cls._pending_done = None
+        cls._pending_viewports = ()
         targets = (
             [cls._viewports[viewport_id]]
             if viewport_id in cls._viewports
@@ -736,8 +759,15 @@ class MeasureCore:
         state = cls._viewports.get(viewport_id)
         if state is None:
             return
-        if not state.armed and cls._pending_any:
-            _trace(f"pick_one: claimed by '{viewport_id}' on its first click")
+        if (
+            not state.armed
+            and cls._pending_any
+            and viewport_id in cls._pending_viewports
+        ):
+            _trace(
+                f"pick_one: claimed by '{viewport_id}'; the second point must "
+                f"land there too"
+            )
             cls._selected = viewport_id
             cls._arm(state, cls._pending_done)
         if not state.armed:
