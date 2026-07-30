@@ -24,6 +24,7 @@ _MARKER_STYLE = {
 _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
+_END_DOT_SIZE = 8.0  # dots marking where a measurement starts and ends
 
 # Selected measurement: its line goes black too, matching its plate.
 _SELECTED_LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
@@ -159,12 +160,18 @@ class MeasureOverlay:
         with self._lines_root:
             for line in lines:
                 chosen = line.id == selected_id
+                colour = _SELECTED_LINE_COLOR if chosen else _LINE_COLOR
                 a, b = line.start.position, line.end.position
                 sc.Line(
                     (a[0], a[1], a[2]),
                     (b[0], b[1], b[2]),
-                    color=_SELECTED_LINE_COLOR if chosen else _LINE_COLOR,
+                    color=colour,
                     thickness=_LINE_THICKNESS,
+                )
+                sc.Points(
+                    [(a[0], a[1], a[2]), (b[0], b[1], b[2])],
+                    colors=[colour, colour],
+                    sizes=[_END_DOT_SIZE, _END_DOT_SIZE],
                 )
                 _draw_plate_label(
                     a,
@@ -333,10 +340,11 @@ def _build_plate(text: str, selected: bool, on_click):
                 "margin": _PLATE_BORDER,
             }
         )
-        # Inset by the ring as well, or a thick outline runs under the text.
-        # Spacers rather than a bare alignment: a Label sizes itself to its
-        # text, so centring it needs something pushing from both sides.
-        with ui.VStack(style={"margin": _PLATE_BORDER}):
+        # No margin here: the plate already grew by the ring thickness, so the
+        # padding alone keeps the text clear of it. Spacers rather than a bare
+        # alignment, because a Label sizes itself to its text and centring it
+        # needs something pushing from both sides.
+        with ui.VStack():
             ui.Spacer()
             ui.Label(
                 text,
