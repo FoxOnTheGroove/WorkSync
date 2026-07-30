@@ -28,7 +28,7 @@ _LINE_THICKNESS = 2.0
 # Length readout, centred on the line: plain white while still dragging, black
 # on a white billboard plate once placed. One sc.Label size for both, so the
 # text is the same on screen either way.
-_LABEL_SIZE = 28
+_LABEL_SIZE = 16
 _LABEL_TEXT_COLOR = (0.0, 0.0, 0.0, 1.0)
 _LABEL_PLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
@@ -38,13 +38,20 @@ _LABEL_CHAR_WIDTH = 0.62  # of the font size, enough to size the plate
 
 class MeasureOverlay:
     def __init__(
-        self, viewport_id: str, viewport_api, frame, on_hover=None, on_click=None
+        self,
+        viewport_id: str,
+        viewport_api,
+        frame,
+        on_hover=None,
+        on_click=None,
+        on_label_click=None,
     ):
         self._viewport_id = viewport_id
         self._viewport_api = viewport_api
         self._frame = frame  # supplied by the caller, never looked up here
         self._on_hover = on_hover
         self._on_click = on_click
+        self._on_label_click = on_label_click
 
         self._scene_view = None
         self._hover_screen = None
@@ -101,6 +108,12 @@ class MeasureOverlay:
             if ndc is not None:
                 self._on_hover(ndc)
 
+    def _label_clicked(self, line_id: int):
+        """Gesture callback for one plate, carrying which line it belongs to."""
+        if self._on_label_click is None:
+            return None
+        return lambda _sender, i=line_id: self._on_label_click(i)
+
     # ------------------------------------------------------------------ draw
 
     def set_lines(self, lines, format_length):
@@ -130,7 +143,12 @@ class MeasureOverlay:
                     color=_LINE_COLOR,
                     thickness=_LINE_THICKNESS,
                 )
-                _draw_plate_label(a, b, format_length(line.length_m))
+                _draw_plate_label(
+                    a,
+                    b,
+                    format_length(line.length_m),
+                    on_click=self._label_clicked(line.id),
+                )
 
     def set_preview(self, start, end, text):
         """Rubber-band line between the first click and the cursor."""
@@ -201,12 +219,15 @@ def _midpoint(a, b):
     return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
 
 
-def _draw_plate_label(a, b, text):
+def _draw_plate_label(a, b, text, on_click=None):
     """Finished measurement: black text on a white billboard plate.
 
     Both the plate and the text are scene shapes. Putting the text in an
     sc.Widget instead rendered it through omni.ui, which sized it differently
     from the preview's sc.Label and allocated a render target per label.
+
+    The plate carries a click gesture, so a measurement can be switched off by
+    pressing its own readout in the viewport rather than through the API.
     """
     plate_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD * 2
     plate_h = _LABEL_SIZE + _LABEL_PAD * 1.5
@@ -218,7 +239,11 @@ def _draw_plate_label(a, b, text):
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
         ):
             sc.Rectangle(
-                plate_w, plate_h, color=_LABEL_PLATE_COLOR, wireframe=False
+                plate_w,
+                plate_h,
+                color=_LABEL_PLATE_COLOR,
+                wireframe=False,
+                gestures=[sc.ClickGesture(on_click)] if on_click else None,
             )
             _label(text, _LABEL_TEXT_COLOR)
 

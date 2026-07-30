@@ -334,6 +334,7 @@ class MeasureCore:
             frame,
             on_hover=lambda ndc, v=viewport_id: cls._on_hover(v, ndc),
             on_click=lambda ndc, v=viewport_id: cls._on_click(v, ndc),
+            on_label_click=cls._on_label_click,
         )
         cls._viewports[viewport_id] = _ViewportState(
             viewport_id, tab_id, viewport_api, overlay
@@ -623,6 +624,12 @@ class MeasureCore:
                 carb.log_error(f"[measure] changed callback failed: {exc}")
 
     # ---------------------------------------------------------------- input
+
+    @classmethod
+    def _on_label_click(cls, line_id: int):
+        """Its own readout pressed in the viewport: switch that line off."""
+        _trace(f"label clicked: hiding line {line_id}")
+        cls.set_visible(False, line_id=line_id)
 
     @classmethod
     def _on_hover(cls, viewport_id: str, ndc):
