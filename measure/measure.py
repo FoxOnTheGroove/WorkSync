@@ -717,11 +717,15 @@ class MeasureCore:
         geom = cls._mesh_entry(path, hit, time)
         if geom is None:
             return surface
-        corners, edge_starts, edge_ends = geom.boundary
+        geom.calibrate(hit, normal)
+        outline = geom.boundary
+        camera = _camera_position(view)
+        edges_seen, corners_seen = outline.visibility(camera, geom.orientation)
         cursor_px = _ndc_to_px(ndc, state.viewport_api)
         _trace(
-            f"snap: path='{path}' corners={len(corners)} "
-            f"outline_edges={len(edge_starts)} cursor_px={cursor_px} "
+            f"snap: path='{path}' corners={int(corners_seen.sum())}/"
+            f"{len(outline.corners)} edges={int(edges_seen.sum())}/"
+            f"{len(outline.edge_a)} visible cursor_px={cursor_px} "
             f"radius={cls._snap_radius} time={time}"
         )
 
@@ -733,22 +737,23 @@ class MeasureCore:
             if not (cls._snap_mode & flag):
                 continue
             if kind == SnapKind.VERTEX:
-                if len(corners) == 0:
-                    continue
-                points = corners
+                points, seen = outline.corners, corners_seen
             else:
-                if len(edge_starts) == 0:
-                    continue
-                points = _closest_on_segments(edge_starts, edge_ends, hit)
+                points = _closest_on_segments(outline.edge_a, outline.edge_b, hit)
+                seen = edges_seen
+            if not len(points) or not seen.any():
+                continue
 
             pixels, valid = _project_px(points, view_proj, width, height)
             distances = np.where(
-                valid, np.linalg.norm(pixels - np.asarray(cursor_px), axis=1), np.inf
+                valid & seen,
+                np.linalg.norm(pixels - np.asarray(cursor_px), axis=1),
+                np.inf,
             )
             index = int(np.argmin(distances))
             nearest = float(distances[index])
             _trace(
-                f"snap:   {kind.name} over {len(points)} nearest={nearest:.1f} "
+                f"snap:   {kind.name} over {int(seen.sum())} nearest={nearest:.1f} "
                 f"hit={nearest <= cls._snap_radius}"
             )
             if nearest <= cls._snap_radius:
@@ -925,7 +930,11 @@ def _as_np(vec) -> np.ndarray:
 
 
 def _face_normals(position, index, nxt, starts) -> np.ndarray:
-    """One unit normal per face, by Newell's method so n-gons work."""
+    """One unit normal per face, by Newell's method so n-gons work.
+
+    Follows the authored winding. Whether that points outward is settled
+    separately, in _Geom.calibrate.
+    """
     cross = np.cross(position[index], position[nxt])
     normals = np.add.reduceat(cross, starts, axis=0)
     lengths = np.linalg.norm(normals, axis=1)
@@ -933,7 +942,7 @@ def _face_normals(position, index, nxt, starts) -> np.ndarray:
 
 
 def _feature_edges(index, nxt, counts, normals):
-    """(edges, total) - edges worth snapping to, as welded index pairs.
+    """(edges, side normals, total) - edges worth snapping to.
 
     An edge qualifies two ways. It is a boundary, used by a single face. Or it
     is a crease: the faces either side meet at a sharp angle. Creases matter
@@ -946,7 +955,7 @@ def _feature_edges(index, nxt, counts, normals):
     keep = pairs[:, 0] != pairs[:, 1]  # a face may fold back on itself
     pairs, face_of = pairs[keep], face_of[keep]
     if len(pairs) == 0:
-        return np.empty((0, 2), dtype=np.int64), 0
+        return np.empty((0, 2), dtype=np.int64), np.empty((0, 2, 3)), 0
 
     order = np.lexsort((pairs[:, 1], pairs[:, 0]))
     pairs, face_of = pairs[order], face_of[order]
@@ -965,7 +974,12 @@ def _feature_edges(index, nxt, counts, normals):
         creased = shared[cosine < _CREASE_COS]
 
     chosen = np.concatenate([boundary, creased, tangled])
-    return pairs[chosen], len(group)
+    # Both faces either side of each chosen edge, so visibility can be judged
+    # later. A boundary edge has only one, so it stands in for both.
+    single = np.isin(chosen, boundary)
+    other = np.where(single, chosen, chosen + 1)
+    sides = np.stack([normals[face_of[chosen]], normals[face_of[other]]], axis=1)
+    return pairs[chosen], sides, len(group)
 
 
 def _closest_on_segments(starts: np.ndarray, ends: np.ndarray, point) -> np.ndarray:
@@ -977,6 +991,11 @@ def _closest_on_segments(starts: np.ndarray, ends: np.ndarray, point) -> np.ndar
     t = np.einsum("ij,ij->i", target - starts, spans) / safe
     t = np.clip(np.where(lengths > 1e-24, t, 0.0), 0.0, 1.0)
     return starts + spans * t[:, None]
+
+
+def _camera_position(view) -> np.ndarray:
+    """World-space eye point, from the inverse of the world-to-view matrix."""
+    return _as_np(view.GetInverse().ExtractTranslation())
 
 
 def _matrix_np(matrix) -> np.ndarray:
@@ -1002,6 +1021,54 @@ def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
     return pixels, valid & (np.abs(ndc[:, 2]) <= 1.0)
 
 
+class _Outline:
+    """A mesh's snappable corners and feature edges, with visibility."""
+
+    def __init__(self, corners, edge_a, edge_b, edge_normals, corner_of, extent):
+        self.corners = corners
+        self.edge_a = edge_a
+        self.edge_b = edge_b
+        self.edge_normals = edge_normals  # (E, 2, 3), both sides of each edge
+        self.corner_of = corner_of  # (E, 2), corner slot per end or -1
+        self.extent = extent
+
+    @classmethod
+    def empty(cls):
+        return cls(
+            np.empty((0, 3)),
+            np.empty((0, 3)),
+            np.empty((0, 3)),
+            np.empty((0, 2, 3)),
+            np.empty((0, 2), dtype=np.int64),
+            1.0,
+        )
+
+    def visibility(self, camera, orientation=1.0):
+        """(edges visible, corners visible), by which way the faces turn.
+
+        An edge shows only if a face beside it faces the camera, which is what
+        hides the far side of a solid. A corner shows only if one of its edges
+        does.
+
+        Occlusion by a different object needs no test here: the raycast reports
+        whatever is in front, so a covered mesh is never the one being snapped
+        to in the first place.
+        """
+        towards = camera - (self.edge_a + self.edge_b) * 0.5
+        facing = (
+            np.einsum("ijk,ik->ij", self.edge_normals, towards) * (orientation or 1.0)
+            > 0.0
+        )
+        edges = facing.any(axis=1)
+
+        corners = np.zeros(len(self.corners), dtype=bool)
+        for end in (0, 1):
+            slots = self.corner_of[:, end]
+            known = slots >= 0
+            np.logical_or.at(corners, slots[known], edges[known])
+        return edges, corners
+
+
 class _Geom:
     """Geometry of one prim, prepared for repeated screen-space queries."""
 
@@ -1015,8 +1082,54 @@ class _Geom:
         matrix = _matrix_np(xform)
         self.world = np.hstack([local, np.ones((len(local), 1))]) @ matrix
         self.world = self.world[:, :3] / self.world[:, 3:4]
+        span = self.world.max(axis=0) - self.world.min(axis=0)
+        self.extent = float(np.linalg.norm(span)) or 1.0
         self._centroids = None
         self._boundary = None
+        self._face_normals = None
+        # Winding orientation, calibrated against a raycast normal on first use.
+        # +1 means our computed normals already point outward.
+        self.orientation = 0.0
+
+    def calibrate(self, hit, hit_normal):
+        """Settle which way our face normals point, once, from a real hit.
+
+        A signed-volume guess only works on closed meshes and would invert an
+        open surface. The renderer's own normal at the hit is ground truth, so
+        compare against the face that hit landed on.
+        """
+        if self.orientation or self.counts is None:
+            return
+        found = _best_face_by_hit(self, hit)
+        if found is None:
+            return
+        ours = self.face_normal(found[1])
+        reference = _as_np(hit_normal)
+        if not np.linalg.norm(reference):
+            return
+        self.orientation = -1.0 if float(np.dot(ours, reference)) < 0.0 else 1.0
+        _trace(f"snap:   winding orientation {self.orientation:+.0f}")
+
+    def face_normal(self, face: int) -> np.ndarray:
+        if self._face_normals is None:
+            position, index, nxt, starts = self._topology()
+            self._face_normals = _face_normals(position, index, nxt, starts)
+        return self._face_normals[face]
+
+    def _topology(self):
+        """Welded (position, index, next-in-face, face starts).
+
+        Each vertex is paired with the next one in its own face, wrapping at
+        that face's end rather than running on into the next face.
+        """
+        position, remap = self._weld()
+        index = remap[np.asarray(self.indices, dtype=np.int64)]
+        starts = np.asarray(self.offsets[:-1], dtype=np.int64)
+        ends = np.asarray(self.offsets[1:], dtype=np.int64) - 1
+        nxt = np.empty_like(index)
+        nxt[:-1] = index[1:]
+        nxt[ends] = index[starts]
+        return position, index, nxt, starts
 
     @property
     def centroids(self):
@@ -1055,9 +1168,7 @@ class _Geom:
         corner.
         """
         world = self.world
-        span = world.max(axis=0) - world.min(axis=0)
-        scale = float(np.linalg.norm(span))
-        tolerance = (scale or 1.0) * _WELD_TOLERANCE
+        tolerance = self.extent * _WELD_TOLERANCE
         keys = np.round(world / tolerance).astype(np.int64)
         _, first, remap, counts = np.unique(
             keys, axis=0, return_index=True, return_inverse=True, return_counts=True
@@ -1071,27 +1182,12 @@ class _Geom:
         return position, remap
 
     def _find_boundary(self):
-        empty = (
-            np.empty((0, 3)),
-            np.empty((0, 3)),
-            np.empty((0, 3)),
-        )
         if self.counts is None:
-            return empty
+            return _Outline.empty()
 
-        position, remap = self._weld()
-        index = remap[np.asarray(self.indices, dtype=np.int64)]
-        starts = np.asarray(self.offsets[:-1], dtype=np.int64)
-        ends = np.asarray(self.offsets[1:], dtype=np.int64) - 1
-
-        # Pair each vertex with the next one in its face, wrapping at the end
-        # of that face instead of running on into the next one.
-        nxt = np.empty_like(index)
-        nxt[:-1] = index[1:]
-        nxt[ends] = index[starts]
-
+        position, index, nxt, starts = self._topology()
         normals = _face_normals(position, index, nxt, starts)
-        edges, counted = _feature_edges(
+        edges, sides, counted = _feature_edges(
             index, nxt, np.asarray(self.counts, dtype=np.int64), normals
         )
         _trace(
@@ -1099,7 +1195,7 @@ class _Geom:
             f"{len(edges)} feature of {counted} edges"
         )
         if len(edges) == 0:
-            return empty
+            return _Outline.empty()
 
         neighbours = {}
         for a, b in edges:
@@ -1121,12 +1217,24 @@ class _Geom:
             if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
                 corners.append(vertex)
 
-        return (
-            position[np.asarray(sorted(corners), dtype=np.int64)]
+        # A corner is only visible when one of the feature edges meeting there
+        # is, so record which corner each edge end belongs to.
+        corners = sorted(corners)
+        slot_of = {vertex: slot for slot, vertex in enumerate(corners)}
+        corner_of = np.array(
+            [[slot_of.get(int(a), -1), slot_of.get(int(b), -1)] for a, b in edges],
+            dtype=np.int64,
+        ).reshape(len(edges), 2)
+
+        return _Outline(
+            corners=position[np.asarray(corners, dtype=np.int64)]
             if corners
             else np.empty((0, 3)),
-            position[edges[:, 0]],
-            position[edges[:, 1]],
+            edge_a=position[edges[:, 0]],
+            edge_b=position[edges[:, 1]],
+            edge_normals=sides,
+            corner_of=corner_of,
+            extent=self.extent,
         )
 
 
