@@ -43,7 +43,11 @@ _PLATE_CHAR_WIDTH = 0.62  # of the font size, to size the widget box
 # ends up uneven and the text reads as sitting high in the plate.
 _PLATE_LINE_HEIGHT = 1.3
 _PLATE_RADIUS = 10
-_PLATE_BORDER = 10  # ring thickness, added outside the padding
+_PLATE_BORDER = 5  # ring thickness, added outside the padding
+
+# Plate footprint for click testing, over its drawn size. Measured, not derived:
+# see plate_hit_size.
+_HIT_SCALE = 0.5
 
 # omni.ui colours (0xAABBGGRR).
 _PLATE_COLOR = 0xFFFFFFFF
@@ -200,20 +204,17 @@ class MeasureOverlay:
             sc.Points([(p[0], p[1], p[2])], colors=[color], sizes=[size])
 
     def screen_size(self):
-        """(width, height) of the drawing area, in the units plates are sized in.
+        """(width, height) of the drawing area, in pixels.
 
-        The frame's computed size is in logical pixels, while
-        scale_to=Space.SCREEN works in physical ones, so the DPI scale has to
-        come back in. Getting this wrong scales every plate's hit area by
-        exactly that factor. The render resolution is only a fallback: it is set
-        independently of the widget size and is a different number again.
+        The frame's computed size, falling back to the render resolution: that
+        one is set independently of the widget size, so it is a different number
+        whenever the two are configured apart.
         """
-        scale = _dpi_scale()
         for source in (self._frame, self._scene_view):
             width = getattr(source, "computed_width", 0) or 0
             height = getattr(source, "computed_height", 0) or 0
             if width > 1 and height > 1:
-                return float(width) * scale, float(height) * scale
+                return float(width), float(height)
         try:
             res = self._viewport_api.resolution
             return float(res[0]), float(res[1])
@@ -260,12 +261,17 @@ def _midpoint(a, b):
     return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
 
 
-def _dpi_scale() -> float:
-    try:
-        scale = float(ui.Workspace.get_dpi_scale())
-    except Exception:
-        return 1.0
-    return scale if scale > 0.0 else 1.0
+def plate_hit_size(text: str):
+    """The plate's footprint as measure.py should test clicks against it.
+
+    A plate sized w by h through scale_to=Space.SCREEN does not end up w by h
+    in the pixel space screen_size reports, and measuring the two showed a
+    factor of about two. This calibrates one against the other. Raise it if
+    plates stop responding near their edges, lower it if clicks land on them
+    from too far away; the traced hit rectangle and miss distance say which.
+    """
+    width, height = plate_size(text)
+    return width * _HIT_SCALE, height * _HIT_SCALE
 
 
 def plate_size(text: str):

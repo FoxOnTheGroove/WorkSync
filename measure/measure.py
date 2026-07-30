@@ -27,7 +27,7 @@ import numpy as np
 import omni.usd
 from pxr import Gf, Usd, UsdGeom
 
-from .measure_overlay import MeasureOverlay, plate_size
+from .measure_overlay import MeasureOverlay, plate_hit_size
 
 # Screen-space snap capture radius. Fixed on purpose: a pixel radius keeps the
 # feel identical at every zoom level.
@@ -691,7 +691,7 @@ class MeasureCore:
         for index, line in enumerate(lines):
             if not valid[index]:
                 continue
-            plate_w, plate_h = plate_size(_format_length(line.length_m))
+            plate_w, plate_h = plate_hit_size(_format_length(line.length_m))
             offset = np.abs(pixels[index] - cursor)
             if offset[0] <= plate_w * 0.5 and offset[1] <= plate_h * 0.5:
                 depth = float(np.linalg.norm(middles[index] - camera))
