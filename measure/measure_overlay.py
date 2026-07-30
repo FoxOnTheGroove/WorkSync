@@ -25,9 +25,9 @@ _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
 
-# Length readout: black on a white plate, centred on the line. These are
-# omni.ui colours (0xAABBGGRR), not the scene's float tuples.
-_LABEL_SIZE = 18
+# Length readout: black on a white billboard plate, centred on the line. The
+# colours are omni.ui values (0xAABBGGRR), not the scene's float tuples.
+_LABEL_SIZE = 28
 _LABEL_TEXT_COLOR = 0xFF000000
 _LABEL_PLATE_COLOR = 0xFFFFFFFF
 _LABEL_PAD = 10.0  # screen units around the text
@@ -181,17 +181,21 @@ class MeasureOverlay:
 
 
 def _draw_label(a, b, text):
-    """Length readout at the midpoint of the line, black on a white plate.
+    """Length readout at the midpoint of the line, black on a white billboard.
 
     Built as an sc.Widget holding ordinary omni.ui widgets, which is what gives
-    the text a real styled background. Wrapped in scale_to=SCREEN so the plate
-    keeps one size on screen instead of shrinking with distance.
+    the text a real styled background.
     """
     mid = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
     plate_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD * 2
-    plate_h = _LABEL_SIZE + _LABEL_PAD
+    plate_h = _LABEL_SIZE + _LABEL_PAD * 1.5
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*mid)):
-        with sc.Transform(scale_to=sc.Space.SCREEN):
+        # look_at turns the plate to face the camera, scale_to holds its size on
+        # screen. scale_to alone leaves it lying in world space, so it goes
+        # edge-on and vanishes from most angles.
+        with sc.Transform(
+            look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
+        ):
             widget = sc.Widget(plate_w, plate_h)
             widget.frame.set_build_fn(lambda value=text: _build_plate(value))
 
