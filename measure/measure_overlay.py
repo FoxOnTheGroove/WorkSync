@@ -298,19 +298,22 @@ def _draw_plate_label(a, b, text, on_click=None, selected=False):
 
 
 def _build_plate(text: str, selected: bool, on_click):
+    fill = _PLATE_COLOR_SELECTED if selected else _PLATE_COLOR
+    edge = _PLATE_BORDER_SELECTED if selected else _PLATE_BORDER_COLOR
     with ui.ZStack():
+        # Two filled rounded rectangles, the smaller inset over the larger, so
+        # the outline is the gap between them. A border_width stroke on a
+        # rounded rectangle rasterises heavier where it turns the corners.
+        ui.Rectangle(
+            style={"background_color": edge, "border_radius": _PLATE_RADIUS},
+            mouse_pressed_fn=(lambda *_: on_click(None)) if on_click else None,
+        )
         ui.Rectangle(
             style={
-                "background_color": _PLATE_COLOR_SELECTED
-                if selected
-                else _PLATE_COLOR,
-                "border_radius": _PLATE_RADIUS,
-                "border_width": _PLATE_BORDER,
-                "border_color": _PLATE_BORDER_SELECTED
-                if selected
-                else _PLATE_BORDER_COLOR,
-            },
-            mouse_pressed_fn=(lambda *_: on_click(None)) if on_click else None,
+                "background_color": fill,
+                "border_radius": max(_PLATE_RADIUS - _PLATE_BORDER, 0),
+                "margin": _PLATE_BORDER,
+            }
         )
         # Spacers rather than a bare alignment: a Label sizes itself to its
         # text, so centring it needs something pushing from both sides.
