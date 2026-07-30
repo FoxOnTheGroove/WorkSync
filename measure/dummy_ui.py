@@ -146,7 +146,8 @@ class MeasureDummyUI:
                 return
             for line in lines:
                 with ui.HStack(height=22, spacing=4):
-                    ui.Label(f"#{line.id}", width=32)
+                    # Number is what to show, id is what to act on.
+                    ui.Label(f"#{line.number}", width=32)
                     ui.Label(f"{line.length_m:.3f} m", width=90)
                     ui.Button(
                         "hide" if line.visible else "show",

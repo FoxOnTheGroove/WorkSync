@@ -119,13 +119,17 @@ class SnapPoint:
 
 @dataclass
 class Line:
-    id: int
+    id: int  # permanent key: unique, never reused, safe to hold on to
     viewport_id: str
     tab_id: str
     start: SnapPoint
     end: SnapPoint
     length_m: float
     visible: bool = True  # user intent; the active tab gates drawing on top
+    # Position within its own viewport, counting from 1. Recomputed whenever
+    # lines come or go, so deleting the second of three renumbers the third to
+    # second. For showing to people; use id to refer to a line.
+    number: int = 0
 
 
 class Subscription:
@@ -397,6 +401,7 @@ class MeasureCore:
         cls._lines = {
             i: ln for i, ln in cls._lines.items() if ln.viewport_id != viewport_id
         }
+        cls._renumber()
 
     # ------------------------------------------------------------------ tabs
 
@@ -582,6 +587,14 @@ class MeasureCore:
     # ---------------------------------------------------------------- lines
 
     @classmethod
+    def _renumber(cls):
+        """Give each viewport's lines 1, 2, 3... in the order they were made."""
+        counts: dict = {}
+        for line in sorted(cls._lines.values(), key=lambda ln: ln.id):
+            counts[line.viewport_id] = counts.get(line.viewport_id, 0) + 1
+            line.number = counts[line.viewport_id]
+
+    @classmethod
     def get_lines(cls, viewport_id=None, tab_id=None) -> tuple:
         lines = list(cls._lines.values())
         if viewport_id is not None:
@@ -595,6 +608,7 @@ class MeasureCore:
         line = cls._lines.pop(line_id, None)
         if line is None:
             return False
+        cls._renumber()
         cls._refresh(line.viewport_id)
         cls._notify()
         return True
@@ -609,6 +623,7 @@ class MeasureCore:
         ]
         for line in doomed:
             cls._lines.pop(line.id, None)
+        cls._renumber()
         for vp in {ln.viewport_id for ln in doomed}:
             cls._refresh(vp)
         cls._notify()
@@ -817,6 +832,7 @@ class MeasureCore:
         )
         cls._next_line_id += 1
         cls._lines[line.id] = line
+        cls._renumber()
 
         on_done = state.on_done
         state.armed = False

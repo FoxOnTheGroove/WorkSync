@@ -145,7 +145,14 @@ class MeasureService:
 
     @classmethod
     def get_lines(cls, viewport_id=None, tab_id=None) -> tuple:
-        """전체, 또는 뷰포트/탭으로 좁힌 목록."""
+        """전체, 또는 뷰포트/탭으로 좁힌 목록.
+
+        Line 은 번호를 두 개 가집니다.
+          id     - 영구 키. 유일하고 재사용되지 않습니다. remove /
+                   set_visible 등 지목할 때 쓰세요.
+          number - 뷰포트 안에서의 순번(1부터). 지우면 뒤가 당겨집니다.
+                   사람에게 보여줄 때만 쓰세요.
+        """
         return MeasureCore.get_lines(viewport_id, tab_id)
 
     @classmethod
