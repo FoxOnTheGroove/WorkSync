@@ -189,6 +189,9 @@ class MeasureCore:
     # so it cannot fight the extension that already owns the mouse.
     _host_input = False
     _hover_seen = False  # has any hover event reached us at all
+    # Armed without naming a viewport: the first click decides which one.
+    _pending_any = False
+    _pending_done = None
 
     # ------------------------------------------------------------------ life
 
@@ -224,12 +227,27 @@ class MeasureCore:
         """Global. Off means no new picks; everything else keeps working."""
         cls._enabled = bool(enabled)
         if not cls._enabled:
-            for viewport_id in list(cls._viewports):
-                cls.cancel_pick(viewport_id)
+            cls.cancel_pick()
 
     @classmethod
     def is_enabled(cls) -> bool:
         return cls._enabled
+
+    @classmethod
+    def status(cls) -> dict:
+        """Everything a caller might want to read, in one call."""
+        return {
+            "enabled": cls._enabled,
+            "snap_mode": cls._snap_mode,
+            "snap_radius": cls._snap_radius,
+            "host_input": cls._host_input,
+            "active_tab": cls._active_tab,
+            "selected_viewport": cls._selected,
+            "picking": cls._pending_any
+            or any(s.armed for s in cls._viewports.values()),
+            "tabs": {tab: tuple(members) for tab, members in cls._tabs.items()},
+            "maximized": dict(cls._maximized),
+        }
 
     # ----------------------------------------------------------- host input
 
@@ -486,27 +504,42 @@ class MeasureCore:
 
     @classmethod
     def pick_one(cls, viewport_id=None, on_done=None):
+        """Arm for one line. Without an id the first click picks the viewport."""
         cls._require_started()
         if not cls._enabled:
             carb.log_warn("[measure] pick_one ignored: the tool is disabled")
             return
-        viewport_id = viewport_id or cls._selected
-        state = cls._viewports.get(viewport_id)
-        if state is None:
-            carb.log_warn(
-                f"[measure] pick_one: no viewport '{viewport_id}'. "
-                f"registered: {tuple(cls._viewports) or '(none)'}. "
-                f"The host must call MeasureService.on_tab_created(tab_id, vphs) "
-                f"and on_viewport_selected(viewport_id)."
-            )
-            return
         # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()
+
+        state = cls._viewports.get(viewport_id or cls._selected)
+        if state is not None:
+            cls._arm(state, on_done)
+            return
+        if not cls._viewports:
+            carb.log_warn(
+                "[measure] pick_one: no viewport registered. The host must call "
+                "MeasureService.on_tab_created(tab_id, vphs) first."
+            )
+            return
+        # Nothing named, so wait and let whichever viewport is clicked claim it.
+        cls._pending_any = True
+        cls._pending_done = on_done
+        _trace(f"pick_one: armed across {tuple(cls._viewports)}")
+        if not cls._host_input:
+            for other in cls._viewports.values():
+                other.overlay.set_click_active(True)
+
+    @classmethod
+    def _arm(cls, state, on_done):
+        cls._pending_any = False
+        cls._pending_done = None
         state.armed = True
         state.pending = None
         state.on_done = on_done
-        if not cls._host_input:
-            state.overlay.set_click_active(True)
+        for other in cls._viewports.values():
+            if not cls._host_input:
+                other.overlay.set_click_active(other is state)
         if not cls._hover_seen:
             _trace(
                 "pick_one: no hover has ever arrived. The snap marker and the "
@@ -516,15 +549,20 @@ class MeasureCore:
 
     @classmethod
     def cancel_pick(cls, viewport_id=None):
-        viewport_id = viewport_id or cls._selected
-        state = cls._viewports.get(viewport_id)
-        if state is None:
-            return
-        state.armed = False
-        state.pending = None
-        state.on_done = None
-        state.overlay.set_preview(None, None, "")
-        state.overlay.set_click_active(False)
+        """Cancel one viewport's pick, or every pending one."""
+        cls._pending_any = False
+        cls._pending_done = None
+        targets = (
+            [cls._viewports[viewport_id]]
+            if viewport_id in cls._viewports
+            else list(cls._viewports.values())
+        )
+        for state in targets:
+            state.armed = False
+            state.pending = None
+            state.on_done = None
+            state.overlay.set_preview(None, None, "")
+            state.overlay.set_click_active(False)
 
     # ---------------------------------------------------------------- lines
 
@@ -625,7 +663,13 @@ class MeasureCore:
     @classmethod
     def _on_click(cls, viewport_id: str, ndc):
         state = cls._viewports.get(viewport_id)
-        if state is None or not state.armed:
+        if state is None:
+            return
+        if not state.armed and cls._pending_any:
+            _trace(f"pick_one: claimed by '{viewport_id}' on its first click")
+            cls._selected = viewport_id
+            cls._arm(state, cls._pending_done)
+        if not state.armed:
             return
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_click(state, snap))
 
