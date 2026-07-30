@@ -7,8 +7,6 @@ and is forwarded straight out through on_hover / on_click as NDC coordinates.
 
 from __future__ import annotations
 
-import math
-
 import carb
 import omni.ui as ui
 from omni.ui import scene as sc
@@ -27,25 +25,27 @@ _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
 
-# Selected measurement: line and plate go black, the text goes white.
+# Selected measurement: its line goes black too, matching its plate.
 _SELECTED_LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
-_SELECTED_PLATE_COLOR = (0.0, 0.0, 0.0, 1.0)
-_SELECTED_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
 
-# Length readout, centred on the line: plain white while still dragging, black
-# on a white billboard plate once placed. One sc.Label size for both, so the
-# text is the same on screen either way.
+# The live preview is a scene label: cheap, and rebuilt on every mouse move.
 _LABEL_SIZE = 20
-_LABEL_TEXT_COLOR = (0.0, 0.0, 0.0, 1.0)
-_LABEL_PLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
-_LABEL_PAD_X = 14.0  # screen units left and right of the text
-_LABEL_PAD_Y = 9.0  # above and below
-_LABEL_CHAR_WIDTH = 0.95  # of the font size; too narrow clips the text
-_LABEL_WIDTH_SCALE = 1.2  # breathing room beyond the text and padding
-_LABEL_HEIGHT_SCALE = 1.5
-_LABEL_RADIUS = 6.0  # corner rounding, in the same screen units
-_LABEL_ROUND_STEPS = 4  # segments per corner
+
+# The placed readout is omni.ui inside an sc.Widget, which rounds its corners
+# properly and sets type better. It renders through a different path, so it
+# needs a larger number than _LABEL_SIZE to look the same size on screen.
+_PLATE_FONT_SIZE = 30
+_PLATE_PAD_X = 20.0  # screen units left and right of the text
+_PLATE_PAD_Y = 14.0  # above and below
+_PLATE_CHAR_WIDTH = 0.62  # of the font size, to size the widget box
+_PLATE_RADIUS = 8
+
+# omni.ui colours (0xAABBGGRR).
+_PLATE_COLOR = 0xFFFFFFFF
+_PLATE_TEXT_COLOR = 0xFF000000
+_PLATE_COLOR_SELECTED = 0xFF000000
+_PLATE_TEXT_SELECTED = 0xFFFFFFFF
 
 
 class MeasureOverlay:
@@ -240,41 +240,21 @@ def plate_size(text: str):
     when another extension owns the mouse, the plate's own gesture never fires
     and the only way to press a plate is to work out where it is.
     """
-    text_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD_X * 2
-    return (
-        text_w * _LABEL_WIDTH_SCALE,
-        (_LABEL_SIZE + _LABEL_PAD_Y * 2) * _LABEL_HEIGHT_SCALE,
+    width = (
+        max(len(text), 1) * _PLATE_FONT_SIZE * _PLATE_CHAR_WIDTH + _PLATE_PAD_X * 2
     )
-
-
-def _rounded_rect(width: float, height: float, radius: float) -> list:
-    """Outline of a rounded rectangle centred on the origin, counter-clockwise."""
-    radius = max(0.0, min(radius, width * 0.5, height * 0.5))
-    x, y = width * 0.5 - radius, height * 0.5 - radius
-    corners = ((x, y), (-x, y), (-x, -y), (x, -y))  # centres of the arcs
-    points = []
-    for index, (cx, cy) in enumerate(corners):
-        start = index * 0.5 * math.pi
-        for step in range(_LABEL_ROUND_STEPS + 1):
-            angle = start + step * (0.5 * math.pi / _LABEL_ROUND_STEPS)
-            points.append(
-                (cx + radius * math.cos(angle), cy + radius * math.sin(angle), 0.0)
-            )
-    return points
+    return width, _PLATE_FONT_SIZE + _PLATE_PAD_Y * 2
 
 
 def _draw_plate_label(a, b, text, on_click=None, selected=False):
-    """Finished measurement: black text on a white billboard plate.
+    """Finished measurement: a rounded plate carrying the length.
 
-    Both the plate and the text are scene shapes. Putting the text in an
-    sc.Widget instead rendered it through omni.ui, which sized it differently
-    from the preview's sc.Label and allocated a render target per label.
-
-    The plate is a polygon rather than an sc.Rectangle because a rectangle
-    cannot round its corners.
+    omni.ui inside an sc.Widget, so the corners round from a style and the text
+    lays itself out. Only placed lines get one: the widget owns a render
+    target, and one built per mouse move exhausts the descriptor pool, which is
+    why the live preview stays a plain scene label.
     """
     width, height = plate_size(text)
-    outline = _rounded_rect(width, height, _LABEL_RADIUS)
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
         # look_at turns the plate to face the camera, scale_to holds its size on
         # screen. scale_to alone leaves it lying in world space, so it goes
@@ -282,16 +262,35 @@ def _draw_plate_label(a, b, text, on_click=None, selected=False):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
         ):
-            plate = _SELECTED_PLATE_COLOR if selected else _LABEL_PLATE_COLOR
-            sc.PolygonMesh(
-                outline,
-                [plate] * len(outline),
-                [len(outline)],
-                list(range(len(outline))),
-                wireframe=False,
-                gestures=[sc.ClickGesture(on_click)] if on_click else None,
+            widget = sc.Widget(
+                width,
+                height,
+                update_policy=sc.Widget.UpdatePolicy.ON_MOUSE_HOVERED,
             )
-            _label(text, _SELECTED_TEXT_COLOR if selected else _LABEL_TEXT_COLOR)
+            widget.frame.set_build_fn(
+                lambda t=text, s=selected, f=on_click: _build_plate(t, s, f)
+            )
+
+
+def _build_plate(text: str, selected: bool, on_click):
+    with ui.ZStack():
+        ui.Rectangle(
+            style={
+                "background_color": _PLATE_COLOR_SELECTED
+                if selected
+                else _PLATE_COLOR,
+                "border_radius": _PLATE_RADIUS,
+            },
+            mouse_pressed_fn=(lambda *_: on_click(None)) if on_click else None,
+        )
+        ui.Label(
+            text,
+            alignment=ui.Alignment.CENTER,
+            style={
+                "color": _PLATE_TEXT_SELECTED if selected else _PLATE_TEXT_COLOR,
+                "font_size": _PLATE_FONT_SIZE,
+            },
+        )
 
 
 def _draw_plain_label(a, b, text):
