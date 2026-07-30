@@ -25,13 +25,14 @@ _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
 
-# Length readout: black on a white billboard plate, centred on the line. The
-# colours are omni.ui values (0xAABBGGRR), not the scene's float tuples.
+# Length readout, centred on the line: plain white while still dragging, black
+# on a white billboard plate once placed. One sc.Label size for both, so the
+# text is the same on screen either way.
 _LABEL_SIZE = 28
-_LABEL_TEXT_COLOR = 0xFF000000
-_LABEL_PLATE_COLOR = 0xFFFFFFFF
+_LABEL_TEXT_COLOR = (0.0, 0.0, 0.0, 1.0)
+_LABEL_PLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
+_PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
 _LABEL_PAD = 10.0  # screen units around the text
-_PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)  # plain white while still dragging
 _LABEL_CHAR_WIDTH = 0.62  # of the font size, enough to size the plate
 
 
@@ -203,9 +204,9 @@ def _midpoint(a, b):
 def _draw_plate_label(a, b, text):
     """Finished measurement: black text on a white billboard plate.
 
-    Only for lines that are already placed. sc.Widget allocates a render target
-    per instance, so one built per mouse move exhausts the renderer's descriptor
-    pool; the live preview uses _draw_plain_label instead.
+    Both the plate and the text are scene shapes. Putting the text in an
+    sc.Widget instead rendered it through omni.ui, which sized it differently
+    from the preview's sc.Label and allocated a render target per label.
     """
     plate_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD * 2
     plate_h = _LABEL_SIZE + _LABEL_PAD * 1.5
@@ -216,34 +217,23 @@ def _draw_plate_label(a, b, text):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
         ):
-            widget = sc.Widget(plate_w, plate_h)
-            widget.frame.set_build_fn(lambda value=text: _build_plate(value))
+            sc.Rectangle(
+                plate_w, plate_h, color=_LABEL_PLATE_COLOR, wireframe=False
+            )
+            _label(text, _LABEL_TEXT_COLOR)
 
 
 def _draw_plain_label(a, b, text):
-    """While still dragging: plain white text, no plate and no render target."""
+    """While still dragging: plain white text, no plate."""
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
-        sc.Label(
-            text,
-            alignment=ui.Alignment.CENTER,
-            color=_PREVIEW_TEXT_COLOR,
-            size=_LABEL_SIZE,
-        )
+        with sc.Transform(
+            look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
+        ):
+            _label(text, _PREVIEW_TEXT_COLOR)
 
 
-def _build_plate(text: str):
-    with ui.ZStack():
-        ui.Rectangle(
-            style={
-                "background_color": _LABEL_PLATE_COLOR,
-                "border_radius": 3,
-            }
-        )
-        ui.Label(
-            text,
-            alignment=ui.Alignment.CENTER,
-            style={"color": _LABEL_TEXT_COLOR, "font_size": _LABEL_SIZE},
-        )
+def _label(text: str, color):
+    sc.Label(text, alignment=ui.Alignment.CENTER, color=color, size=_LABEL_SIZE)
 
 
 def _ndc_from(sender):
