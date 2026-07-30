@@ -27,7 +27,7 @@ import numpy as np
 import omni.usd
 from pxr import Gf, Usd, UsdGeom
 
-from .measure_overlay import MeasureOverlay
+from .measure_overlay import MeasureOverlay, plate_size
 
 # Screen-space snap capture radius. Fixed on purpose: a pixel radius keeps the
 # feel identical at every zoom level.
@@ -627,9 +627,48 @@ class MeasureCore:
 
     @classmethod
     def _on_label_click(cls, line_id: int):
-        """Its own readout pressed in the viewport: switch that line off."""
-        _trace(f"label clicked: hiding line {line_id}")
-        cls.set_visible(False, line_id=line_id)
+        """Its own readout pressed in the viewport: delete that measurement."""
+        _trace(f"label clicked: removing line {line_id}")
+        cls.remove(line_id)
+
+    @classmethod
+    def _try_label_click(cls, state, ndc) -> bool:
+        """Did this click land on a readout plate? If so, remove that line.
+
+        The plate's own gesture only fires when the overlay owns the mouse.
+        Once the host forwards clicks instead, nothing reaches the plate, so
+        work out where the plates are and test the cursor against them.
+        """
+        view, proj = _camera_matrices(state.viewport_api)
+        if view is None:
+            return False
+        lines = [
+            line
+            for line in cls._lines.values()
+            if line.viewport_id == state.viewport_id and line.visible
+        ]
+        if not lines:
+            return False
+
+        cursor = np.asarray(_ndc_to_px(ndc, state.viewport_api))
+        view_proj = _matrix_np(view * proj)
+        width, height = _resolution(state.viewport_api)
+        middles = np.asarray(
+            [
+                (_as_np(line.start.position) + _as_np(line.end.position)) * 0.5
+                for line in lines
+            ]
+        )
+        pixels, valid = _project_px(middles, view_proj, width, height)
+        for index, line in enumerate(lines):
+            if not valid[index]:
+                continue
+            half_w, half_h = plate_size(_format_length(line.length_m))
+            offset = np.abs(pixels[index] - cursor)
+            if offset[0] <= half_w * 0.5 and offset[1] <= half_h * 0.5:
+                cls._on_label_click(line.id)
+                return True
+        return False
 
     @classmethod
     def _on_hover(cls, viewport_id: str, ndc):
@@ -659,6 +698,8 @@ class MeasureCore:
             cls._selected = viewport_id
             cls._arm(state, cls._pending_done)
         if not state.armed:
+            # Not measuring, so a click here can only be aimed at a readout.
+            cls._try_label_click(state, ndc)
             return
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_click(state, snap))
 

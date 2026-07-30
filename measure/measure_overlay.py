@@ -7,6 +7,8 @@ and is forwarded straight out through on_hover / on_click as NDC coordinates.
 
 from __future__ import annotations
 
+import math
+
 import carb
 import omni.ui as ui
 from omni.ui import scene as sc
@@ -32,8 +34,11 @@ _LABEL_SIZE = 16
 _LABEL_TEXT_COLOR = (0.0, 0.0, 0.0, 1.0)
 _LABEL_PLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
-_LABEL_PAD = 10.0  # screen units around the text
-_LABEL_CHAR_WIDTH = 0.62  # of the font size, enough to size the plate
+_LABEL_PAD_X = 14.0  # screen units left and right of the text
+_LABEL_PAD_Y = 9.0  # above and below
+_LABEL_CHAR_WIDTH = 0.95  # of the font size; too narrow clips the text
+_LABEL_RADIUS = 6.0  # corner rounding, in the same screen units
+_LABEL_ROUND_STEPS = 4  # segments per corner
 
 
 class MeasureOverlay:
@@ -219,6 +224,33 @@ def _midpoint(a, b):
     return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
 
 
+def plate_size(text: str):
+    """(width, height) of a readout plate in screen units.
+
+    Shared with measure.py, which hit-tests clicks against these rectangles:
+    when another extension owns the mouse, the plate's own gesture never fires
+    and the only way to press a plate is to work out where it is.
+    """
+    width = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD_X * 2
+    return width, _LABEL_SIZE + _LABEL_PAD_Y * 2
+
+
+def _rounded_rect(width: float, height: float, radius: float) -> list:
+    """Outline of a rounded rectangle centred on the origin, counter-clockwise."""
+    radius = max(0.0, min(radius, width * 0.5, height * 0.5))
+    x, y = width * 0.5 - radius, height * 0.5 - radius
+    corners = ((x, y), (-x, y), (-x, -y), (x, -y))  # centres of the arcs
+    points = []
+    for index, (cx, cy) in enumerate(corners):
+        start = index * 0.5 * math.pi
+        for step in range(_LABEL_ROUND_STEPS + 1):
+            angle = start + step * (0.5 * math.pi / _LABEL_ROUND_STEPS)
+            points.append(
+                (cx + radius * math.cos(angle), cy + radius * math.sin(angle), 0.0)
+            )
+    return points
+
+
 def _draw_plate_label(a, b, text, on_click=None):
     """Finished measurement: black text on a white billboard plate.
 
@@ -226,11 +258,11 @@ def _draw_plate_label(a, b, text, on_click=None):
     sc.Widget instead rendered it through omni.ui, which sized it differently
     from the preview's sc.Label and allocated a render target per label.
 
-    The plate carries a click gesture, so a measurement can be switched off by
-    pressing its own readout in the viewport rather than through the API.
+    The plate is a polygon rather than an sc.Rectangle because a rectangle
+    cannot round its corners.
     """
-    plate_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD * 2
-    plate_h = _LABEL_SIZE + _LABEL_PAD * 1.5
+    width, height = plate_size(text)
+    outline = _rounded_rect(width, height, _LABEL_RADIUS)
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
         # look_at turns the plate to face the camera, scale_to holds its size on
         # screen. scale_to alone leaves it lying in world space, so it goes
@@ -238,10 +270,11 @@ def _draw_plate_label(a, b, text, on_click=None):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
         ):
-            sc.Rectangle(
-                plate_w,
-                plate_h,
-                color=_LABEL_PLATE_COLOR,
+            sc.PolygonMesh(
+                outline,
+                [_LABEL_PLATE_COLOR] * len(outline),
+                [len(outline)],
+                list(range(len(outline))),
                 wireframe=False,
                 gestures=[sc.ClickGesture(on_click)] if on_click else None,
             )
