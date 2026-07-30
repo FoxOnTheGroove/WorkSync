@@ -548,6 +548,12 @@ class MeasureCore:
         for other in cls._viewports.values():
             if not cls._host_input:
                 other.overlay.set_click_active(other is state)
+            elif other is not state:
+                # set_click_active would have cleared these, but it is skipped
+                # while the host owns input, and the losing viewports have
+                # markers up from hovering as candidates.
+                other.overlay.set_snap_marker(None)
+                other.current_snap = None
         if not cls._hover_seen:
             _trace(
                 "pick_one: no hover has ever arrived. The snap marker and the "
@@ -739,10 +745,22 @@ class MeasureCore:
     @classmethod
     def _on_hover(cls, viewport_id: str, ndc):
         state = cls._viewports.get(viewport_id)
-        if state is None or not state.armed:
+        if state is None or not cls._listening(viewport_id, state):
             return  # no raycast per mouse move unless a pick is in progress
         cls._hover_seen = True
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_hover(state, snap))
+
+    @classmethod
+    def _listening(cls, viewport_id: str, state) -> bool:
+        """Should this viewport resolve snaps right now?
+
+        Every armed candidate does, not just the one that has claimed the pick:
+        before the first point there is no claim yet, and snapping has to show
+        in all of them or there is nothing to aim with.
+        """
+        if state.armed:
+            return True
+        return cls._pending_any and viewport_id in cls._pending_viewports
 
     @classmethod
     def _apply_hover(cls, state, snap):
@@ -759,11 +777,7 @@ class MeasureCore:
         state = cls._viewports.get(viewport_id)
         if state is None:
             return
-        if (
-            not state.armed
-            and cls._pending_any
-            and viewport_id in cls._pending_viewports
-        ):
+        if not state.armed and cls._listening(viewport_id, state):
             _trace(
                 f"pick_one: claimed by '{viewport_id}'; the second point must "
                 f"land there too"
