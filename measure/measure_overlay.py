@@ -1,6 +1,6 @@
 """Viewport overlay for the measure tool.
 
-One MeasureOverlay per enabled viewport. Draws only; every decision is made in
+One MeasureOverlay per registered viewport. Draws only; every decision is made in
 measure.py. Input arrives here first because the SceneView owns the gestures,
 and is forwarded straight out through on_hover / on_click as NDC coordinates.
 """
@@ -24,6 +24,14 @@ _MARKER_STYLE = {
 _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
+
+# Length readout: black on a white plate, centred on the line. These are
+# omni.ui colours (0xAABBGGRR), not the scene's float tuples.
+_LABEL_SIZE = 18
+_LABEL_TEXT_COLOR = 0xFF000000
+_LABEL_PLATE_COLOR = 0xFFFFFFFF
+_LABEL_PAD = 10.0  # screen units around the text
+_LABEL_CHAR_WIDTH = 0.62  # of the font size, enough to size the plate
 
 
 class MeasureOverlay:
@@ -106,7 +114,7 @@ class MeasureOverlay:
                     color=_LINE_COLOR,
                     thickness=_LINE_THICKNESS,
                 )
-                _draw_label(a, b, format_length(line.length_m), _LINE_COLOR)
+                _draw_label(a, b, format_length(line.length_m))
 
     def set_preview(self, start, end, text):
         """Rubber-band line between the first click and the cursor."""
@@ -123,7 +131,7 @@ class MeasureOverlay:
                 thickness=_LINE_THICKNESS,
             )
             if text:
-                _draw_label(start, end, text, _PREVIEW_COLOR)
+                _draw_label(start, end, text)
 
     def set_snap_marker(self, snap):
         """Show where the next click would land, coloured by snap class."""
@@ -172,11 +180,35 @@ class MeasureOverlay:
 # --------------------------------------------------------------------- utils
 
 
-def _draw_label(a, b, text, color):
-    """Length label at the midpoint of the segment."""
+def _draw_label(a, b, text):
+    """Length readout at the midpoint of the line, black on a white plate.
+
+    Built as an sc.Widget holding ordinary omni.ui widgets, which is what gives
+    the text a real styled background. Wrapped in scale_to=SCREEN so the plate
+    keeps one size on screen instead of shrinking with distance.
+    """
     mid = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
+    plate_w = max(len(text), 1) * _LABEL_SIZE * _LABEL_CHAR_WIDTH + _LABEL_PAD * 2
+    plate_h = _LABEL_SIZE + _LABEL_PAD
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*mid)):
-        sc.Label(text, alignment=ui.Alignment.CENTER, color=color, size=18)
+        with sc.Transform(scale_to=sc.Space.SCREEN):
+            widget = sc.Widget(plate_w, plate_h)
+            widget.frame.set_build_fn(lambda value=text: _build_plate(value))
+
+
+def _build_plate(text: str):
+    with ui.ZStack():
+        ui.Rectangle(
+            style={
+                "background_color": _LABEL_PLATE_COLOR,
+                "border_radius": 3,
+            }
+        )
+        ui.Label(
+            text,
+            alignment=ui.Alignment.CENTER,
+            style={"color": _LABEL_TEXT_COLOR, "font_size": _LABEL_SIZE},
+        )
 
 
 def _ndc_from(sender):

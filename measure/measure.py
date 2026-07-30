@@ -149,7 +149,7 @@ class Subscription:
 
 
 class _ViewportState:
-    """Per-viewport tool state. One of these per enabled viewport."""
+    """Per-viewport tool state. One of these per registered viewport."""
 
     def __init__(self, viewport_id: str, tab_id: str, viewport_api, overlay: MeasureOverlay):
         self.viewport_id = viewport_id
@@ -182,9 +182,6 @@ class MeasureCore:
     _active_tab = None  # None means "no tab filter", every tab draws
     _maximized: dict = {}  # tab id -> the one viewport id eclipsing its siblings
     _selected = ""  # viewport pick_one defaults to
-    # Global. Gates making new measurements only: show/hide/remove/clear keep
-    # working while off, and existing lines stay on screen.
-    _enabled = True
     # True once the host feeds clicks in. The overlay then never grabs input,
     # so it cannot fight the extension that already owns the mouse.
     _host_input = False
@@ -220,24 +217,12 @@ class MeasureCore:
         if not cls._started:
             raise RuntimeError("measure extension is not started")
 
-    # --------------------------------------------------------------- enable
-
-    @classmethod
-    def set_enabled(cls, enabled: bool):
-        """Global. Off means no new picks; everything else keeps working."""
-        cls._enabled = bool(enabled)
-        if not cls._enabled:
-            cls.cancel_pick()
-
-    @classmethod
-    def is_enabled(cls) -> bool:
-        return cls._enabled
+    # --------------------------------------------------------------- status
 
     @classmethod
     def status(cls) -> dict:
         """Everything a caller might want to read, in one call."""
         return {
-            "enabled": cls._enabled,
             "snap_mode": cls._snap_mode,
             "snap_radius": cls._snap_radius,
             "host_input": cls._host_input,
@@ -506,9 +491,6 @@ class MeasureCore:
     def pick_one(cls, viewport_id=None, on_done=None):
         """Arm for one line. Without an id the first click picks the viewport."""
         cls._require_started()
-        if not cls._enabled:
-            carb.log_warn("[measure] pick_one ignored: the tool is disabled")
-            return
         # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()
 

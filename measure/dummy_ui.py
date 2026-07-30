@@ -38,8 +38,6 @@ class MeasureDummyUI:
             with ui.VStack(spacing=6, height=0):
                 self._status_frame = ui.Frame(build_fn=self._build_status, height=0)
                 ui.Separator()
-                self._build_enabled_row()
-                ui.Separator()
                 self._build_snap_row()
                 ui.Separator()
                 self._build_actions()
@@ -93,20 +91,6 @@ class MeasureDummyUI:
             ui.Label(value)
 
     # ------------------------------------------------------------------ rows
-
-    def _build_enabled_row(self):
-        with ui.HStack(height=24, spacing=6):
-            ui.Label("Enabled", width=80)
-            check = ui.CheckBox()
-            check.model.set_value(MeasureService.status()["enabled"])
-            check.model.add_value_changed_fn(
-                lambda m: MeasureService.set_enabled(m.get_value_as_bool())
-            )
-        ui.Label(
-            "Off stops new picks only. Hide and clear keep working.",
-            height=18,
-            style={"color": 0xFF999999},
-        )
 
     def _build_snap_row(self):
         mode = MeasureService.status()["snap_mode"]

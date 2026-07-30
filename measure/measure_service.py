@@ -107,15 +107,6 @@ class MeasureService:
     # ---------------------------------------------------------------- 제어
 
     @classmethod
-    def set_enabled(cls, enabled: bool) -> None:
-        """전역 on/off. 뷰포트별 스위치는 없습니다.
-
-        끄면 새 측정만 막힙니다. 기존 직선은 화면에 남고 set_visible /
-        remove / clear 는 그대로 동작합니다.
-        """
-        MeasureCore.set_enabled(enabled)
-
-    @classmethod
     def set_snap_mode(cls, mode: SnapMode) -> None:
         """전역입니다. SURFACE 는 항상 폴백으로 깔려 있습니다.
 
@@ -188,8 +179,8 @@ class MeasureService:
     def status(cls) -> dict:
         """현재 상태 전부를 dict 하나로. 개별 getter 는 두지 않았습니다.
 
-        enabled, snap_mode, snap_radius, host_input, active_tab,
-        selected_viewport, picking, tabs {탭 id: (뷰포트 id...)}, maximized
+        snap_mode, snap_radius, host_input, active_tab, selected_viewport,
+        picking, tabs {탭 id: (뷰포트 id...)}, maximized
         """
         return MeasureCore.status()
 
