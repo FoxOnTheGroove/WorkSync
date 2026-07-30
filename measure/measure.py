@@ -660,6 +660,9 @@ class MeasureCore:
         The plate's own gesture only fires when the overlay owns the mouse.
         Once the host forwards clicks instead, nothing reaches the plate, so
         work out where the plates are and test the cursor against them.
+
+        Where plates overlap, the one nearest the camera wins, which is the one
+        drawn on top.
         """
         view, proj = _camera_matrices(state.viewport_api)
         if view is None:
@@ -682,15 +685,23 @@ class MeasureCore:
             ]
         )
         pixels, valid = _project_px(middles, view_proj, width, height)
+        camera = _camera_position(view)
+        under_cursor = []
         for index, line in enumerate(lines):
             if not valid[index]:
                 continue
-            half_w, half_h = plate_size(_format_length(line.length_m))
+            plate_w, plate_h = plate_size(_format_length(line.length_m))
             offset = np.abs(pixels[index] - cursor)
-            if offset[0] <= half_w * 0.5 and offset[1] <= half_h * 0.5:
-                cls._on_label_click(line.id)
-                return True
-        return False
+            if offset[0] <= plate_w * 0.5 and offset[1] <= plate_h * 0.5:
+                depth = float(np.linalg.norm(middles[index] - camera))
+                under_cursor.append((depth, line.id))
+        if not under_cursor:
+            return False
+        under_cursor.sort()
+        if len(under_cursor) > 1:
+            _trace(f"label click: {len(under_cursor)} plates overlap, taking nearest")
+        cls._on_label_click(under_cursor[0][1])
+        return True
 
     @classmethod
     def _on_hover(cls, viewport_id: str, ndc):
@@ -1121,6 +1132,11 @@ def _pixel_scale(view, proj, point, extent, viewport_api) -> float:
         return 1.0
     moved = float(np.linalg.norm(pixels[1] - pixels[0]))
     return moved / step if moved > 1e-9 else 1.0
+
+
+def _camera_position(view) -> np.ndarray:
+    """World-space eye point, from the inverse of the world-to-view matrix."""
+    return _as_np(view.GetInverse().ExtractTranslation())
 
 
 def _matrix_np(matrix) -> np.ndarray:

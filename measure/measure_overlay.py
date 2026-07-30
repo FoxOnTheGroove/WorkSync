@@ -29,23 +29,29 @@ _LINE_THICKNESS = 2.0
 _SELECTED_LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
 
 # The live preview is a scene label: cheap, and rebuilt on every mouse move.
-_LABEL_SIZE = 20
+_LABEL_SIZE = 18
 _PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
 
 # The placed readout is omni.ui inside an sc.Widget, which rounds its corners
 # properly and sets type better. It renders through a different path, so it
 # needs a larger number than _LABEL_SIZE to look the same size on screen.
-_PLATE_FONT_SIZE = 30
-_PLATE_PAD_X = 20.0  # screen units left and right of the text
-_PLATE_PAD_Y = 14.0  # above and below
+_PLATE_FONT_SIZE = 36
+_PLATE_PAD_X = 10.0  # screen units left and right of the text
+_PLATE_PAD_Y = 5.0  # above and below
 _PLATE_CHAR_WIDTH = 0.62  # of the font size, to size the widget box
-_PLATE_RADIUS = 8
+# Glyphs need more room than their point size, or the padding above and below
+# ends up uneven and the text reads as sitting high in the plate.
+_PLATE_LINE_HEIGHT = 1.3
+_PLATE_RADIUS = 10
+_PLATE_BORDER = 2
 
 # omni.ui colours (0xAABBGGRR).
 _PLATE_COLOR = 0xFFFFFFFF
 _PLATE_TEXT_COLOR = 0xFF000000
+_PLATE_BORDER_COLOR = 0xFF000000
 _PLATE_COLOR_SELECTED = 0xFF000000
 _PLATE_TEXT_SELECTED = 0xFFFFFFFF
+_PLATE_BORDER_SELECTED = 0xFFFFFFFF
 
 
 class MeasureOverlay:
@@ -243,7 +249,8 @@ def plate_size(text: str):
     width = (
         max(len(text), 1) * _PLATE_FONT_SIZE * _PLATE_CHAR_WIDTH + _PLATE_PAD_X * 2
     )
-    return width, _PLATE_FONT_SIZE + _PLATE_PAD_Y * 2
+    height = _PLATE_FONT_SIZE * _PLATE_LINE_HEIGHT + _PLATE_PAD_Y * 2
+    return width, height
 
 
 def _draw_plate_label(a, b, text, on_click=None, selected=False):
@@ -280,17 +287,27 @@ def _build_plate(text: str, selected: bool, on_click):
                 if selected
                 else _PLATE_COLOR,
                 "border_radius": _PLATE_RADIUS,
+                "border_width": _PLATE_BORDER,
+                "border_color": _PLATE_BORDER_SELECTED
+                if selected
+                else _PLATE_BORDER_COLOR,
             },
             mouse_pressed_fn=(lambda *_: on_click(None)) if on_click else None,
         )
-        ui.Label(
-            text,
-            alignment=ui.Alignment.CENTER,
-            style={
-                "color": _PLATE_TEXT_SELECTED if selected else _PLATE_TEXT_COLOR,
-                "font_size": _PLATE_FONT_SIZE,
-            },
-        )
+        # Spacers rather than a bare alignment: a Label sizes itself to its
+        # text, so centring it needs something pushing from both sides.
+        with ui.VStack():
+            ui.Spacer()
+            ui.Label(
+                text,
+                height=0,
+                alignment=ui.Alignment.CENTER,
+                style={
+                    "color": _PLATE_TEXT_SELECTED if selected else _PLATE_TEXT_COLOR,
+                    "font_size": _PLATE_FONT_SIZE,
+                },
+            )
+            ui.Spacer()
 
 
 def _draw_plain_label(a, b, text):
