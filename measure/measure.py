@@ -46,6 +46,10 @@ _CORNER_COS = -0.9659
 # Points closer than this fraction of the mesh's extent are the same point.
 _WELD_TOLERANCE = 1e-5
 
+# How far from the struck point a candidate may sit, as a multiple of the snap
+# radius converted to world units there. Keeps the far side of a solid out.
+_HIT_REACH = 3.0
+
 # Two faces meeting at more than this angle form a crease worth snapping to.
 # Below it they read as one smooth surface. cos(30 degrees); a cylinder wall
 # only reaches this when it has fewer than 12 sides.
@@ -717,44 +721,53 @@ class MeasureCore:
         geom = cls._mesh_entry(path, hit, time)
         if geom is None:
             return surface
-        geom.calibrate(hit, normal)
         outline = geom.boundary
-        camera = _camera_position(view)
-        edges_seen, corners_seen = outline.visibility(camera, geom.orientation)
-        cursor_px = _ndc_to_px(ndc, state.viewport_api)
+        cursor_px = np.asarray(_ndc_to_px(ndc, state.viewport_api))
+        view_proj = _matrix_np(view * proj)
+        width, height = _resolution(state.viewport_api)
+
+        # The screen radius alone cannot tell front from back: the far side of a
+        # cylinder projects right under the near side. A candidate must also lie
+        # near the point the ray actually struck, so convert the pixel radius
+        # into a world one at that depth.
+        reach = cls._snap_radius * _HIT_REACH / _pixel_scale(
+            view, proj, hit, geom.extent, state.viewport_api
+        )
         _trace(
-            f"snap: path='{path}' corners={int(corners_seen.sum())}/"
-            f"{len(outline.corners)} edges={int(edges_seen.sum())}/"
-            f"{len(outline.edge_a)} visible cursor_px={cursor_px} "
-            f"radius={cls._snap_radius} time={time}"
+            f"snap: path='{path}' corners={len(outline.corners)} "
+            f"edges={len(outline.edge_a)} cursor_px={cursor_px.round(1)} "
+            f"radius={cls._snap_radius} reach={reach:.4g} time={time}"
         )
 
         # Priority is absolute: the first class with a candidate in range wins,
         # distance only breaks ties inside that class.
-        view_proj = _matrix_np(view * proj)
-        width, height = _resolution(state.viewport_api)
         for flag, kind in _FLAG_TO_KIND:
             if not (cls._snap_mode & flag):
                 continue
             if kind == SnapKind.VERTEX:
-                points, seen = outline.corners, corners_seen
+                points = outline.corners
+                if not len(points):
+                    continue
+                pixels, valid = _project_px(points, view_proj, width, height)
+                screen = np.linalg.norm(pixels - cursor_px, axis=1)
             else:
-                points = _closest_on_segments(outline.edge_a, outline.edge_b, hit)
-                seen = edges_seen
-            if not len(points) or not seen.any():
-                continue
+                if not len(outline.edge_a):
+                    continue
+                points, screen, valid = _nearest_on_edges(
+                    outline.edge_a, outline.edge_b, cursor_px, view_proj, width, height
+                )
 
-            pixels, valid = _project_px(points, view_proj, width, height)
-            distances = np.where(
-                valid & seen,
-                np.linalg.norm(pixels - np.asarray(cursor_px), axis=1),
-                np.inf,
-            )
+            near_hit = np.linalg.norm(points - _as_np(hit), axis=1) <= reach
+            usable = valid & near_hit
+            if not usable.any():
+                _trace(f"snap:   {kind.name} none within reach of the hit")
+                continue
+            distances = np.where(usable, screen, np.inf)
             index = int(np.argmin(distances))
             nearest = float(distances[index])
             _trace(
-                f"snap:   {kind.name} over {int(seen.sum())} nearest={nearest:.1f} "
-                f"hit={nearest <= cls._snap_radius}"
+                f"snap:   {kind.name} {int(usable.sum())}/{len(points)} in reach "
+                f"nearest={nearest:.1f} hit={nearest <= cls._snap_radius}"
             )
             if nearest <= cls._snap_radius:
                 return SnapPoint(
@@ -932,8 +945,8 @@ def _as_np(vec) -> np.ndarray:
 def _face_normals(position, index, nxt, starts) -> np.ndarray:
     """One unit normal per face, by Newell's method so n-gons work.
 
-    Follows the authored winding. Whether that points outward is settled
-    separately, in _Geom.calibrate.
+    Only the angle between two faces matters here, so which way the winding
+    sends them is irrelevant.
     """
     cross = np.cross(position[index], position[nxt])
     normals = np.add.reduceat(cross, starts, axis=0)
@@ -942,7 +955,7 @@ def _face_normals(position, index, nxt, starts) -> np.ndarray:
 
 
 def _feature_edges(index, nxt, counts, normals):
-    """(edges, side normals, total) - edges worth snapping to.
+    """(edges, total) - edges worth snapping to, as welded index pairs.
 
     An edge qualifies two ways. It is a boundary, used by a single face. Or it
     is a crease: the faces either side meet at a sharp angle. Creases matter
@@ -955,7 +968,7 @@ def _feature_edges(index, nxt, counts, normals):
     keep = pairs[:, 0] != pairs[:, 1]  # a face may fold back on itself
     pairs, face_of = pairs[keep], face_of[keep]
     if len(pairs) == 0:
-        return np.empty((0, 2), dtype=np.int64), np.empty((0, 2, 3)), 0
+        return np.empty((0, 2), dtype=np.int64), 0
 
     order = np.lexsort((pairs[:, 1], pairs[:, 0]))
     pairs, face_of = pairs[order], face_of[order]
@@ -974,28 +987,42 @@ def _feature_edges(index, nxt, counts, normals):
         creased = shared[cosine < _CREASE_COS]
 
     chosen = np.concatenate([boundary, creased, tangled])
-    # Both faces either side of each chosen edge, so visibility can be judged
-    # later. A boundary edge has only one, so it stands in for both.
-    single = np.isin(chosen, boundary)
-    other = np.where(single, chosen, chosen + 1)
-    sides = np.stack([normals[face_of[chosen]], normals[face_of[other]]], axis=1)
-    return pairs[chosen], sides, len(group)
+    return pairs[chosen], len(group)
 
 
-def _closest_on_segments(starts: np.ndarray, ends: np.ndarray, point) -> np.ndarray:
-    """Closest point on each segment to `point`, clamped to the segment."""
-    target = _as_np(point)
-    spans = ends - starts
+def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
+    """(points, screen distances, usable) for edges against a cursor.
+
+    Solved on screen, not in space: what matters is the point of the edge that
+    appears under the cursor. Picking the point nearest the hit in 3D instead
+    put the answer somewhere else along the edge and measured its distance from
+    there, which is why edges felt unreliable to grab.
+    """
+    px_a, ok_a = _project_px(starts, view_proj, width, height)
+    px_b, ok_b = _project_px(ends, view_proj, width, height)
+
+    spans = px_b - px_a
     lengths = np.einsum("ij,ij->i", spans, spans)
-    safe = np.where(lengths > 1e-24, lengths, 1.0)
-    t = np.einsum("ij,ij->i", target - starts, spans) / safe
-    t = np.clip(np.where(lengths > 1e-24, t, 0.0), 0.0, 1.0)
-    return starts + spans * t[:, None]
+    safe = np.where(lengths > 1e-12, lengths, 1.0)
+    t = np.einsum("ij,ij->i", cursor_px - px_a, spans) / safe
+    t = np.clip(np.where(lengths > 1e-12, t, 0.0), 0.0, 1.0)
+
+    screen = np.linalg.norm(px_a + spans * t[:, None] - cursor_px, axis=1)
+    points = starts + (ends - starts) * t[:, None]  # same fraction along in 3D
+    return points, screen, ok_a & ok_b
 
 
-def _camera_position(view) -> np.ndarray:
-    """World-space eye point, from the inverse of the world-to-view matrix."""
-    return _as_np(view.GetInverse().ExtractTranslation())
+def _pixel_scale(view, proj, point, extent, viewport_api) -> float:
+    """Pixels per world unit at `point`, so a screen radius becomes a real one."""
+    step = max(extent, 1e-9) * 1e-3
+    across = _as_np(view.GetInverse().TransformDir(Gf.Vec3d(1.0, 0.0, 0.0)))
+    pair = np.stack([_as_np(point), _as_np(point) + across * step])
+    width, height = _resolution(viewport_api)
+    pixels, valid = _project_px(pair, _matrix_np(view * proj), width, height)
+    if not valid.all():
+        return 1.0
+    moved = float(np.linalg.norm(pixels[1] - pixels[0]))
+    return moved / step if moved > 1e-9 else 1.0
 
 
 def _matrix_np(matrix) -> np.ndarray:
@@ -1022,51 +1049,16 @@ def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
 
 
 class _Outline:
-    """A mesh's snappable corners and feature edges, with visibility."""
+    """A mesh's snappable corners and feature edges, in world space."""
 
-    def __init__(self, corners, edge_a, edge_b, edge_normals, corner_of, extent):
+    def __init__(self, corners, edge_a, edge_b):
         self.corners = corners
         self.edge_a = edge_a
         self.edge_b = edge_b
-        self.edge_normals = edge_normals  # (E, 2, 3), both sides of each edge
-        self.corner_of = corner_of  # (E, 2), corner slot per end or -1
-        self.extent = extent
 
     @classmethod
     def empty(cls):
-        return cls(
-            np.empty((0, 3)),
-            np.empty((0, 3)),
-            np.empty((0, 3)),
-            np.empty((0, 2, 3)),
-            np.empty((0, 2), dtype=np.int64),
-            1.0,
-        )
-
-    def visibility(self, camera, orientation=1.0):
-        """(edges visible, corners visible), by which way the faces turn.
-
-        An edge shows only if a face beside it faces the camera, which is what
-        hides the far side of a solid. A corner shows only if one of its edges
-        does.
-
-        Occlusion by a different object needs no test here: the raycast reports
-        whatever is in front, so a covered mesh is never the one being snapped
-        to in the first place.
-        """
-        towards = camera - (self.edge_a + self.edge_b) * 0.5
-        facing = (
-            np.einsum("ijk,ik->ij", self.edge_normals, towards) * (orientation or 1.0)
-            > 0.0
-        )
-        edges = facing.any(axis=1)
-
-        corners = np.zeros(len(self.corners), dtype=bool)
-        for end in (0, 1):
-            slots = self.corner_of[:, end]
-            known = slots >= 0
-            np.logical_or.at(corners, slots[known], edges[known])
-        return edges, corners
+        return cls(np.empty((0, 3)), np.empty((0, 3)), np.empty((0, 3)))
 
 
 class _Geom:
@@ -1086,35 +1078,6 @@ class _Geom:
         self.extent = float(np.linalg.norm(span)) or 1.0
         self._centroids = None
         self._boundary = None
-        self._face_normals = None
-        # Winding orientation, calibrated against a raycast normal on first use.
-        # +1 means our computed normals already point outward.
-        self.orientation = 0.0
-
-    def calibrate(self, hit, hit_normal):
-        """Settle which way our face normals point, once, from a real hit.
-
-        A signed-volume guess only works on closed meshes and would invert an
-        open surface. The renderer's own normal at the hit is ground truth, so
-        compare against the face that hit landed on.
-        """
-        if self.orientation or self.counts is None:
-            return
-        found = _best_face_by_hit(self, hit)
-        if found is None:
-            return
-        ours = self.face_normal(found[1])
-        reference = _as_np(hit_normal)
-        if not np.linalg.norm(reference):
-            return
-        self.orientation = -1.0 if float(np.dot(ours, reference)) < 0.0 else 1.0
-        _trace(f"snap:   winding orientation {self.orientation:+.0f}")
-
-    def face_normal(self, face: int) -> np.ndarray:
-        if self._face_normals is None:
-            position, index, nxt, starts = self._topology()
-            self._face_normals = _face_normals(position, index, nxt, starts)
-        return self._face_normals[face]
 
     def _topology(self):
         """Welded (position, index, next-in-face, face starts).
@@ -1187,7 +1150,7 @@ class _Geom:
 
         position, index, nxt, starts = self._topology()
         normals = _face_normals(position, index, nxt, starts)
-        edges, sides, counted = _feature_edges(
+        edges, counted = _feature_edges(
             index, nxt, np.asarray(self.counts, dtype=np.int64), normals
         )
         _trace(
@@ -1217,24 +1180,12 @@ class _Geom:
             if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
                 corners.append(vertex)
 
-        # A corner is only visible when one of the feature edges meeting there
-        # is, so record which corner each edge end belongs to.
-        corners = sorted(corners)
-        slot_of = {vertex: slot for slot, vertex in enumerate(corners)}
-        corner_of = np.array(
-            [[slot_of.get(int(a), -1), slot_of.get(int(b), -1)] for a, b in edges],
-            dtype=np.int64,
-        ).reshape(len(edges), 2)
-
         return _Outline(
-            corners=position[np.asarray(corners, dtype=np.int64)]
+            corners=position[np.asarray(sorted(corners), dtype=np.int64)]
             if corners
             else np.empty((0, 3)),
             edge_a=position[edges[:, 0]],
             edge_b=position[edges[:, 1]],
-            edge_normals=sides,
-            corner_of=corner_of,
-            extent=self.extent,
         )
 
 
