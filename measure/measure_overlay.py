@@ -43,7 +43,7 @@ _PLATE_CHAR_WIDTH = 0.62  # of the font size, to size the widget box
 # ends up uneven and the text reads as sitting high in the plate.
 _PLATE_LINE_HEIGHT = 1.3
 _PLATE_RADIUS = 10
-_PLATE_BORDER = 2
+_PLATE_BORDER = 10  # ring thickness, added outside the padding
 
 # omni.ui colours (0xAABBGGRR).
 _PLATE_COLOR = 0xFFFFFFFF
@@ -200,17 +200,20 @@ class MeasureOverlay:
             sc.Points([(p[0], p[1], p[2])], colors=[color], sizes=[size])
 
     def screen_size(self):
-        """(width, height) of the area this overlay draws into, in its own px.
+        """(width, height) of the drawing area, in the units plates are sized in.
 
-        The frame's computed size, not the render resolution: those two differ
-        whenever the viewport renders at a resolution other than its widget
-        size, and it is this one that scale_to=Space.SCREEN works in.
+        The frame's computed size is in logical pixels, while
+        scale_to=Space.SCREEN works in physical ones, so the DPI scale has to
+        come back in. Getting this wrong scales every plate's hit area by
+        exactly that factor. The render resolution is only a fallback: it is set
+        independently of the widget size and is a different number again.
         """
+        scale = _dpi_scale()
         for source in (self._frame, self._scene_view):
             width = getattr(source, "computed_width", 0) or 0
             height = getattr(source, "computed_height", 0) or 0
             if width > 1 and height > 1:
-                return float(width), float(height)
+                return float(width) * scale, float(height) * scale
         try:
             res = self._viewport_api.resolution
             return float(res[0]), float(res[1])
@@ -257,6 +260,14 @@ def _midpoint(a, b):
     return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
 
 
+def _dpi_scale() -> float:
+    try:
+        scale = float(ui.Workspace.get_dpi_scale())
+    except Exception:
+        return 1.0
+    return scale if scale > 0.0 else 1.0
+
+
 def plate_size(text: str):
     """(width, height) of a readout plate in screen units.
 
@@ -264,10 +275,11 @@ def plate_size(text: str):
     when another extension owns the mouse, the plate's own gesture never fires
     and the only way to press a plate is to work out where it is.
     """
-    width = (
-        max(len(text), 1) * _PLATE_FONT_SIZE * _PLATE_CHAR_WIDTH + _PLATE_PAD_X * 2
-    )
-    height = _PLATE_FONT_SIZE * _PLATE_LINE_HEIGHT + _PLATE_PAD_Y * 2
+    # The ring grows the plate outwards, so the text keeps the same padding
+    # however thick the outline gets.
+    edges = (_PLATE_PAD_X + _PLATE_BORDER) * 2, (_PLATE_PAD_Y + _PLATE_BORDER) * 2
+    width = max(len(text), 1) * _PLATE_FONT_SIZE * _PLATE_CHAR_WIDTH + edges[0]
+    height = _PLATE_FONT_SIZE * _PLATE_LINE_HEIGHT + edges[1]
     return width, height
 
 
@@ -315,9 +327,10 @@ def _build_plate(text: str, selected: bool, on_click):
                 "margin": _PLATE_BORDER,
             }
         )
+        # Inset by the ring as well, or a thick outline runs under the text.
         # Spacers rather than a bare alignment: a Label sizes itself to its
         # text, so centring it needs something pushing from both sides.
-        with ui.VStack():
+        with ui.VStack(style={"margin": _PLATE_BORDER}):
             ui.Spacer()
             ui.Label(
                 text,

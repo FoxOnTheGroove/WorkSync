@@ -702,7 +702,10 @@ class MeasureCore:
                     f"off by {offset.round(1)}"
                 )
         if not under_cursor:
-            _trace(f"label click: nothing at {cursor.round(1)} in a {size} view")
+            _trace(
+                f"label click: nothing at {cursor.round(1)} in a "
+                f"{size[0]:.0f}x{size[1]:.0f} view"
+            )
             return False
         under_cursor.sort()
         if len(under_cursor) > 1:
