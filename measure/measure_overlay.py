@@ -199,6 +199,24 @@ class MeasureOverlay:
         with self._marker_root:
             sc.Points([(p[0], p[1], p[2])], colors=[color], sizes=[size])
 
+    def screen_size(self):
+        """(width, height) of the area this overlay draws into, in its own px.
+
+        The frame's computed size, not the render resolution: those two differ
+        whenever the viewport renders at a resolution other than its widget
+        size, and it is this one that scale_to=Space.SCREEN works in.
+        """
+        for source in (self._frame, self._scene_view):
+            width = getattr(source, "computed_width", 0) or 0
+            height = getattr(source, "computed_height", 0) or 0
+            if width > 1 and height > 1:
+                return float(width), float(height)
+        try:
+            res = self._viewport_api.resolution
+            return float(res[0]), float(res[1])
+        except Exception:
+            return 1920.0, 1080.0
+
     def set_scene_visible(self, visible: bool):
         if self._scene_view is not None:
             self._scene_view.visible = visible

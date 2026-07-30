@@ -292,7 +292,7 @@ class MeasureCore:
         state = cls._viewports.get(viewport_id)
         if state is None:
             return None
-        width, height = _resolution(state.viewport_api)
+        width, height = _screen_size(state)
         if width <= 0 or height <= 0:
             return None
         # Pixels are measured from the viewport's top-left.
@@ -675,9 +675,10 @@ class MeasureCore:
         if not lines:
             return False
 
-        cursor = np.asarray(_ndc_to_px(ndc, state.viewport_api))
+        size = _screen_size(state)
+        cursor = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
-        width, height = _resolution(state.viewport_api)
+        width, height = size
         middles = np.asarray(
             [
                 (_as_np(line.start.position) + _as_np(line.end.position)) * 0.5
@@ -695,7 +696,13 @@ class MeasureCore:
             if offset[0] <= plate_w * 0.5 and offset[1] <= plate_h * 0.5:
                 depth = float(np.linalg.norm(middles[index] - camera))
                 under_cursor.append((depth, line.id))
+                _trace(
+                    f"label hit: line {line.id} plate {plate_w:.0f}x{plate_h:.0f} "
+                    f"at {pixels[index].round(1)}, cursor {cursor.round(1)}, "
+                    f"off by {offset.round(1)}"
+                )
         if not under_cursor:
+            _trace(f"label click: nothing at {cursor.round(1)} in a {size} view")
             return False
         under_cursor.sort()
         if len(under_cursor) > 1:
@@ -831,16 +838,17 @@ class MeasureCore:
         if geom is None:
             return surface
         outline = geom.boundary
-        cursor_px = np.asarray(_ndc_to_px(ndc, state.viewport_api))
+        size = _screen_size(state)
+        cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
-        width, height = _resolution(state.viewport_api)
+        width, height = size
 
         # The screen radius alone cannot tell front from back: the far side of a
         # cylinder projects right under the near side. A candidate must also lie
         # near the point the ray actually struck, so convert the pixel radius
         # into a world one at that depth.
         reach = cls._snap_radius * _HIT_REACH / _pixel_scale(
-            view, proj, hit, geom.extent, state.viewport_api
+            view, proj, hit, geom.extent, size
         )
         _trace(
             f"snap: path='{path}' corners={len(outline.corners)} "
@@ -1121,12 +1129,12 @@ def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
     return points, screen, ok_a & ok_b
 
 
-def _pixel_scale(view, proj, point, extent, viewport_api) -> float:
+def _pixel_scale(view, proj, point, extent, size) -> float:
     """Pixels per world unit at `point`, so a screen radius becomes a real one."""
     step = max(extent, 1e-9) * 1e-3
     across = _as_np(view.GetInverse().TransformDir(Gf.Vec3d(1.0, 0.0, 0.0)))
     pair = np.stack([_as_np(point), _as_np(point) + across * step])
-    width, height = _resolution(viewport_api)
+    width, height = size
     pixels, valid = _project_px(pair, _matrix_np(view * proj), width, height)
     if not valid.all():
         return 1.0
@@ -1482,16 +1490,18 @@ def _ndc_to_ray(ndc, view: Gf.Matrix4d, proj: Gf.Matrix4d):
     return near, (far - near).GetNormalized()
 
 
-def _resolution(viewport_api):
-    try:
-        res = viewport_api.resolution
-        return float(res[0]), float(res[1])
-    except Exception:
-        return 1920.0, 1080.0
+def _screen_size(state):
+    """Pixel space the overlay draws in. Everything screen-space uses this.
+
+    Not viewport_api.resolution: that is the render resolution, which differs
+    from the widget size whenever the two are set independently, and mixing the
+    two made the plate hit areas the wrong size.
+    """
+    return state.overlay.screen_size()
 
 
-def _ndc_to_px(ndc, viewport_api):
-    w, h = _resolution(viewport_api)
+def _ndc_to_px(ndc, size):
+    w, h = size
     return ((ndc[0] * 0.5 + 0.5) * w, (1.0 - (ndc[1] * 0.5 + 0.5)) * h)
 
 
