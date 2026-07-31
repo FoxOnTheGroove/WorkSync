@@ -701,7 +701,11 @@ class MeasureCore:
         geom = cls._mesh_entry(path, hit, time)
         if geom is None:
             return surface
+        geom.calibrate(hit, normal)
         outline = geom.boundary
+        seen_edges, seen_corners = outline.visibility(
+            _camera_position(view), geom.orientation
+        )
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
@@ -715,7 +719,7 @@ class MeasureCore:
             if not (cls._snap_mode & flag):
                 continue
             if kind == SnapKind.VERTEX:
-                points = outline.corners
+                points, seen = outline.corners, seen_corners
                 if not len(points):
                     continue
                 pixels, valid = _project_px(points, view_proj, width, height)
@@ -726,9 +730,10 @@ class MeasureCore:
                 points, screen, valid = _nearest_on_edges(
                     outline.edge_a, outline.edge_b, cursor_px, view_proj, width, height
                 )
+                seen = seen_edges
 
             near_hit = np.linalg.norm(points - _as_np(hit), axis=1) <= reach
-            usable = valid & near_hit
+            usable = valid & near_hit & seen
             if not usable.any():
                 continue
             distances = np.where(usable, screen, np.inf)
@@ -878,7 +883,7 @@ def _feature_edges(index, nxt, counts, normals):
     keep = pairs[:, 0] != pairs[:, 1]
     pairs, face_of = pairs[keep], face_of[keep]
     if len(pairs) == 0:
-        return np.empty((0, 2), dtype=np.int64), 0
+        return np.empty((0, 2), dtype=np.int64), np.empty((0, 2, 3)), 0
 
     order = np.lexsort((pairs[:, 1], pairs[:, 0]))
     pairs, face_of = pairs[order], face_of[order]
@@ -897,7 +902,10 @@ def _feature_edges(index, nxt, counts, normals):
         creased = shared[cosine < _CREASE_COS]
 
     chosen = np.concatenate([boundary, creased, tangled])
-    return pairs[chosen], len(group)
+    single = np.isin(chosen, boundary)
+    other = np.where(single, chosen, chosen + 1)
+    sides = np.stack([normals[face_of[chosen]], normals[face_of[other]]], axis=1)
+    return pairs[chosen], sides, len(group)
 
 
 def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
@@ -950,14 +958,40 @@ def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
 
 
 class _Outline:
-    def __init__(self, corners, edge_a, edge_b):
+    def __init__(self, corners, edge_a, edge_b, edge_normals, corner_of):
         self.corners = corners
         self.edge_a = edge_a
         self.edge_b = edge_b
+        self.edge_normals = edge_normals
+        self.corner_of = corner_of
 
     @classmethod
     def empty(cls):
-        return cls(np.empty((0, 3)), np.empty((0, 3)), np.empty((0, 3)))
+        return cls(
+            np.empty((0, 3)),
+            np.empty((0, 3)),
+            np.empty((0, 3)),
+            np.empty((0, 2, 3)),
+            np.empty((0, 2), dtype=np.int64),
+        )
+
+    def visibility(self, camera, orientation=1.0):
+        """가려진 후보를 걸러낸다. (엣지 마스크, 꼭지점 마스크)
+
+        엣지는 양옆 면 중 하나라도 카메라를 향해야 하고, 꼭지점은 자신에게
+        모이는 엣지 중 하나라도 보여야 한다. 솔리드의 반대쪽 면이 이걸로
+        걸러진다. 반경으로는 못 막는다 - 가려짐과 가까움은 다른 조건이다.
+        """
+        towards = camera - (self.edge_a + self.edge_b) * 0.5
+        facing = np.einsum("ijk,ik->ij", self.edge_normals, towards)
+        edges = (facing * (orientation or 1.0) > 0.0).any(axis=1)
+
+        corners = np.zeros(len(self.corners), dtype=bool)
+        for end in (0, 1):
+            slots = self.corner_of[:, end]
+            known = slots >= 0
+            np.logical_or.at(corners, slots[known], edges[known])
+        return edges, corners
 
 
 class _Geom:
@@ -975,6 +1009,29 @@ class _Geom:
         self.extent = float(np.linalg.norm(span)) or 1.0
         self._centroids = None
         self._boundary = None
+        self._face_normals = None
+        self.orientation = 0.0
+
+    def calibrate(self, hit, hit_normal):
+        """법선이 바깥을 향하는지 한 번만 확정한다.
+
+        와인딩이 뒤집힌 메시가 있어서 가정할 수 없다. 부호 있는 체적은
+        열린 면에서 무의미하므로, 렌더러가 준 히트 법선을 기준으로 삼는다.
+        """
+        if self.orientation or self.counts is None:
+            return
+        found = _best_face_by_hit(self, hit)
+        reference = _as_np(hit_normal)
+        if found is None or not np.linalg.norm(reference):
+            return
+        ours = self.face_normal(found[1])
+        self.orientation = -1.0 if float(np.dot(ours, reference)) < 0.0 else 1.0
+
+    def face_normal(self, face: int) -> np.ndarray:
+        if self._face_normals is None:
+            position, index, nxt, starts = self._topology()
+            self._face_normals = _face_normals(position, index, nxt, starts)
+        return self._face_normals[face]
 
     def _topology(self):
         position, remap = self._weld()
@@ -1027,7 +1084,7 @@ class _Geom:
 
         position, index, nxt, starts = self._topology()
         normals = _face_normals(position, index, nxt, starts)
-        edges, counted = _feature_edges(
+        edges, sides, counted = _feature_edges(
             index, nxt, np.asarray(self.counts, dtype=np.int64), normals
         )
         if len(edges) == 0:
@@ -1052,12 +1109,21 @@ class _Geom:
             if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
                 corners.append(vertex)
 
+        corners = sorted(corners)
+        slot_of = {vertex: slot for slot, vertex in enumerate(corners)}
+        corner_of = np.array(
+            [[slot_of.get(int(a), -1), slot_of.get(int(b), -1)] for a, b in edges],
+            dtype=np.int64,
+        ).reshape(len(edges), 2)
+
         return _Outline(
-            corners=position[np.asarray(sorted(corners), dtype=np.int64)]
+            corners=position[np.asarray(corners, dtype=np.int64)]
             if corners
             else np.empty((0, 3)),
             edge_a=position[edges[:, 0]],
             edge_b=position[edges[:, 1]],
+            edge_normals=sides,
+            corner_of=corner_of,
         )
 
 
