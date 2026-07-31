@@ -1,10 +1,13 @@
-"""measure 테스트 UI. measure_service 만 사용한다.
+"""measure 테스트 UI. 측정 기능은 measure_service 만 사용한다.
 
 여기서 못 하는 게 있으면 서비스 API 가 부족한 것이므로 measure.py 를
 직접 건드리지 말고 API 를 고칠 것.
 
 탭과 뷰포트는 다루지 않는다. 호스트 이벤트로 들어오고, pick_one 은 활성
 탭 전체를 대상으로 한다.
+
+와이어프레임 버튼만 예외로 Kit 액션을 직접 부른다. 측정과 무관한
+뷰포트 표시 설정이라 서비스 API 에 넣을 것이 아니다.
 """
 
 from __future__ import annotations
@@ -21,6 +24,18 @@ _SNAP_LEVELS = (
 )
 
 _MUTED = {"color": 0xFF999999}
+
+
+def _toggle_wireframe():
+    """씬 표시를 와이어프레임과 기본 사이에서 전환한다. 확인용."""
+    try:
+        import omni.kit.actions.core
+
+        omni.kit.actions.core.execute_action(
+            "omni.kit.viewport.actions", "toggle_wireframe"
+        )
+    except Exception as exc:
+        print(f"[measure] toggle_wireframe failed: {exc}")
 
 
 class MeasureDummyUI:
@@ -104,6 +119,13 @@ class MeasureDummyUI:
             ui.Button("Show all", clicked_fn=lambda: MeasureService.set_visible(True))
             ui.Button("Hide all", clicked_fn=lambda: MeasureService.set_visible(False))
             ui.Button("Clear all", clicked_fn=lambda: MeasureService.clear())
+        with ui.HStack(height=26, spacing=6):
+            ui.Button("Wireframe / Default", clicked_fn=_toggle_wireframe)
+        ui.Label(
+            "Wireframe shows the edges snapping aims at.",
+            height=18,
+            style=_MUTED,
+        )
 
     def _on_snap_picked(self, model, _item):
         index = model.get_item_value_model().get_value_as_int()
