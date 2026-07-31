@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import omni.ui as ui
 
-from .measure_service import MeasureService, SnapMode
+from .distance_line_service import DistanceLineService, SnapMode
 
 _SNAP_LEVELS = (
     ("Corner + Edge", SnapMode.ALL),
@@ -15,7 +15,6 @@ _MUTED = {"color": 0xFF999999}
 
 
 def _toggle_wireframe():
-    """씬 표시를 와이어프레임과 기본 사이에서 전환한다. 확인용."""
     try:
         import omni.kit.actions.core
 
@@ -23,10 +22,10 @@ def _toggle_wireframe():
             "omni.kit.viewport.actions", "toggle_wireframe"
         )
     except Exception as exc:
-        print(f"[measure] toggle_wireframe failed: {exc}")
+        print(f"[distance_line] toggle_wireframe failed: {exc}")
 
 
-class MeasureDummyUI:
+class DistanceLineDummyUI:
     def __init__(self):
         self._window = None
         self._sub = None
@@ -34,7 +33,7 @@ class MeasureDummyUI:
         self._list_frame = None
 
     def build_ui(self):
-        self._window = ui.Window("Measure (dummy)", width=320, height=470)
+        self._window = ui.Window("Distance Line (dummy)", width=320, height=470)
         with self._window.frame:
             with ui.VStack(spacing=6, height=0):
                 self._status_frame = ui.Frame(build_fn=self._build_status, height=0)
@@ -47,11 +46,10 @@ class MeasureDummyUI:
                 with ui.ScrollingFrame(height=200):
                     self._list_frame = ui.Frame(build_fn=self._build_list)
 
-        self._sub = MeasureService.subscribe_changed(self._on_changed)
+        self._sub = DistanceLineService.subscribe_changed(self._on_changed)
 
     def _build_status(self):
-        """읽기 전용. 전부 호스트 이벤트로 들어온 값이다."""
-        state = MeasureService.status()
+        state = DistanceLineService.status()
         tabs = state["tabs"]
         active = state["active_tab"]
         selected = state["selected_viewport"]
@@ -84,7 +82,7 @@ class MeasureDummyUI:
             ui.Label(value)
 
     def _build_snap_row(self):
-        mode = MeasureService.status()["snap_mode"]
+        mode = DistanceLineService.status()["snap_mode"]
         index = next(
             (i for i, (_, m) in enumerate(_SNAP_LEVELS) if m == mode),
             0,
@@ -102,11 +100,11 @@ class MeasureDummyUI:
     def _build_actions(self):
         with ui.HStack(height=26, spacing=6):
             ui.Button("Pick one", clicked_fn=self._pick_one)
-            ui.Button("Cancel", clicked_fn=lambda: MeasureService.cancel_pick())
+            ui.Button("Cancel", clicked_fn=lambda: DistanceLineService.cancel_pick())
         with ui.HStack(height=26, spacing=6):
-            ui.Button("Show all", clicked_fn=lambda: MeasureService.set_visible(True))
-            ui.Button("Hide all", clicked_fn=lambda: MeasureService.set_visible(False))
-            ui.Button("Clear all", clicked_fn=lambda: MeasureService.clear())
+            ui.Button("Show all", clicked_fn=lambda: DistanceLineService.set_visible(True))
+            ui.Button("Hide all", clicked_fn=lambda: DistanceLineService.set_visible(False))
+            ui.Button("Clear all", clicked_fn=lambda: DistanceLineService.clear())
         with ui.HStack(height=26, spacing=6):
             ui.Button("Wireframe / Default", clicked_fn=_toggle_wireframe)
         ui.Label(
@@ -118,10 +116,10 @@ class MeasureDummyUI:
     def _on_snap_picked(self, model, _item):
         index = model.get_item_value_model().get_value_as_int()
         if 0 <= index < len(_SNAP_LEVELS):
-            MeasureService.set_snap_mode(_SNAP_LEVELS[index][1])
+            DistanceLineService.set_snap_mode(_SNAP_LEVELS[index][1])
 
     def _pick_one(self):
-        MeasureService.pick_one()
+        DistanceLineService.pick_one()
 
     def _on_changed(self):
         if self._status_frame is not None:
@@ -130,8 +128,7 @@ class MeasureDummyUI:
             self._list_frame.rebuild()
 
     def _build_list(self):
-        """표시는 number, 동작은 id 로 한다."""
-        lines = MeasureService.get_lines()
+        lines = DistanceLineService.get_lines()
         with ui.VStack(spacing=2, height=0):
             if not lines:
                 ui.Label("(none)", height=20, style={"color": 0xFF999999})
@@ -144,13 +141,13 @@ class MeasureDummyUI:
                         "hide" if line.visible else "show",
                         width=44,
                         clicked_fn=lambda i=line.id, v=line.visible: (
-                            MeasureService.set_visible(not v, line_id=i)
+                            DistanceLineService.set_visible(not v, line_id=i)
                         ),
                     )
                     ui.Button(
                         "x",
                         width=24,
-                        clicked_fn=lambda i=line.id: MeasureService.remove(i),
+                        clicked_fn=lambda i=line.id: DistanceLineService.remove(i),
                     )
 
     def destroy(self):

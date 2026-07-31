@@ -41,7 +41,7 @@ _PLATE_TEXT_SELECTED = 0xFFFFFFFF
 _PLATE_BORDER_SELECTED = 0xFFFFFFFF
 
 
-class MeasureOverlay:
+class DistanceLineOverlay:
     def __init__(
         self,
         viewport_id: str,
@@ -72,7 +72,7 @@ class MeasureOverlay:
 
     def _build(self):
         if self._frame is None:
-            carb.log_warn(f"[measure] no frame to draw '{self._viewport_id}' into")
+            carb.log_warn(f"[distance_line] no frame to draw '{self._viewport_id}' into")
             return
 
         with self._frame:
@@ -92,7 +92,7 @@ class MeasureOverlay:
         try:
             self._viewport_api.add_scene_view(self._scene_view)
         except Exception as exc:
-            carb.log_warn(f"[measure] add_scene_view failed: {exc}")
+            carb.log_warn(f"[distance_line] add_scene_view failed: {exc}")
 
     def _forward_click(self, sender):
         if self._on_click:
@@ -112,11 +112,6 @@ class MeasureOverlay:
         return lambda _sender, i=line_id: self._on_label_click(i)
 
     def set_lines(self, lines, format_length, selected_id=None):
-        """확정된 측정을 다시 그린다.
-
-        선택만 바뀐 경우에는 색만 갈아끼운다. 판을 다시 만들면 한 번 사라
-        졌다 나타나서 깜박인다.
-        """
         if self._lines_root is None:
             return
         shape = [
@@ -165,7 +160,6 @@ class MeasureOverlay:
                 self._items[line.id] = (curve, plate)
 
     def _recolour(self, selected_id) -> bool:
-        """제자리에서 선택 색만 바꾼다. 못 하면 False 를 주고 다시 그리게 한다."""
         if len(self._items) != len(self._shape or ()):
             return False
         try:
@@ -176,11 +170,10 @@ class MeasureOverlay:
                 painted = plate.set_selected(chosen) and painted
             return painted
         except Exception as exc:
-            carb.log_warn(f"[measure] in-place recolour failed: {exc}")
+            carb.log_warn(f"[distance_line] in-place recolour failed: {exc}")
             return False
 
     def set_preview(self, start, end, text):
-        """첫 점과 커서 사이의 고무줄 선."""
         if self._preview_root is None:
             return
         self._preview_root.clear()
@@ -197,7 +190,6 @@ class MeasureOverlay:
                 _draw_plain_label(start, end, text)
 
     def set_snap_marker(self, snap):
-        """다음 클릭이 놓일 자리를 스냅 등급 색으로 표시."""
         if self._marker_root is None:
             return
         self._marker_root.clear()
@@ -209,7 +201,6 @@ class MeasureOverlay:
             sc.Points([(p[0], p[1], p[2])], colors=[color], sizes=[size])
 
     def screen_size(self):
-        """오버레이가 그리는 영역의 픽셀 크기."""
         for source in (self._frame, self._scene_view):
             width = getattr(source, "computed_width", 0) or 0
             height = getattr(source, "computed_height", 0) or 0
@@ -226,7 +217,6 @@ class MeasureOverlay:
             self._scene_view.visible = visible
 
     def set_click_active(self, active: bool):
-        """픽 진행 중에만 뷰포트 클릭을 가로챈다."""
         if self._click_screen is not None:
             self._click_screen.visible = active
         if not active:
@@ -259,17 +249,11 @@ def _midpoint(a, b):
 
 
 def plate_hit_size(text: str):
-    """클릭 판정용 판 크기.
-
-    scale_to=Space.SCREEN 으로 그린 판은 screen_size 가 보고하는 픽셀
-    공간과 크기가 다르다(실측 약 2배). _HIT_SCALE 이 그 보정값이다.
-    """
     width, height = plate_size(text)
     return width * _HIT_SCALE, height * _HIT_SCALE
 
 
 def plate_size(text: str):
-    """그려지는 판 크기(화면 단위)."""
     edges = (_PLATE_PAD_X + _PLATE_BORDER) * 2, (_PLATE_PAD_Y + _PLATE_BORDER) * 2
     width = max(len(text), 1) * _PLATE_FONT_SIZE * _PLATE_CHAR_WIDTH + edges[0]
     height = _PLATE_FONT_SIZE * _PLATE_LINE_HEIGHT + edges[1]
@@ -277,7 +261,6 @@ def plate_size(text: str):
 
 
 def _draw_plate_label(a, b, text, on_click=None, selected=False):
-    """확정된 측정의 값 표기. 카메라를 향하는 둥근 판 위에 올린다."""
     width, height = plate_size(text)
     plate = _Plate(text, selected, on_click)
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
@@ -295,7 +278,6 @@ def _draw_plate_label(a, b, text, on_click=None, selected=False):
 
 
 class _Plate:
-    """판 하나. 선택 상태가 바뀌면 다시 만들지 않고 스타일만 바꾼다."""
 
     def __init__(self, text: str, selected: bool, on_click):
         self._text = text
@@ -310,10 +292,6 @@ class _Plate:
         self._widget = widget
 
     def build(self):
-        """둥근 사각형 두 장을 겹쳐 그 사이 간격을 테두리로 쓴다.
-
-        border_width 스트로크는 모서리에서 두껍게 래스터화된다.
-        """
         click = self._on_click
         with ui.ZStack():
             self._outer = ui.Rectangle(
@@ -332,7 +310,6 @@ class _Plate:
                 ui.Spacer()
 
     def set_selected(self, selected: bool) -> bool:
-        """바뀐 색이 실제로 화면에 반영되면 True."""
         if selected == self._selected:
             return True
         self._selected = selected
@@ -344,7 +321,6 @@ class _Plate:
         return self._repaint()
 
     def _repaint(self) -> bool:
-        """판은 텍스처로 그려지므로 호버 중이 아니면 스타일만 바꿔서는 안 바뀐다."""
         for name in ("invalidate", "invalidate_raster", "update"):
             call = getattr(self._widget, name, None)
             if call is None:
@@ -376,7 +352,6 @@ class _Plate:
 
 
 def _draw_plain_label(a, b, text):
-    """끌고 있는 중의 값 표기. 판 없이 흰 글자만."""
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
@@ -389,7 +364,6 @@ def _label(text: str, color):
 
 
 def _ndc_from(sender):
-    """제스처 payload 에서 NDC 좌표를 꺼낸다. 버전마다 필드명이 다르다."""
     payload = getattr(sender, "gesture_payload", None)
     if payload is None:
         return None

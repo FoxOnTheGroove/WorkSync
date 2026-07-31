@@ -8,7 +8,7 @@ import numpy as np
 import omni.usd
 from pxr import Gf, Usd, UsdGeom
 
-from .measure_overlay import MeasureOverlay, plate_hit_size
+from .distance_line_overlay import DistanceLineOverlay, plate_hit_size
 
 SNAP_RADIUS_PX = 12.0          # 스냅 반경(픽셀)
 _FACE_SHORTLIST = 64           # 히트 지점 근처에서 점수를 매길 면 개수
@@ -25,7 +25,7 @@ _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 
 
 
 def _log(msg: str):
-    print(f"[measure] {msg}")
+    print(f"[distance_line] {msg}")
 
 
 class SnapKind(IntEnum):
@@ -88,7 +88,7 @@ class Subscription:
 
 
 class _ViewportState:
-    def __init__(self, viewport_id: str, tab_id: str, viewport_api, overlay: MeasureOverlay):
+    def __init__(self, viewport_id: str, tab_id: str, viewport_api, overlay: DistanceLineOverlay):
         self.viewport_id = viewport_id
         self.tab_id = tab_id
         self.viewport_api = viewport_api
@@ -103,7 +103,7 @@ class _ViewportState:
         self.snap_queued = None
 
 
-class MeasureCore:
+class DistanceLineCore:
     _started = False
     _viewports: dict = {}
     _lines: dict = {}
@@ -148,11 +148,10 @@ class MeasureCore:
     @classmethod
     def _require_started(cls):
         if not cls._started:
-            raise RuntimeError("measure extension is not started")
+            raise RuntimeError("distance line extension is not started")
 
     @classmethod
     def status(cls) -> dict:
-        """현재 상태 전부를 dict 하나로."""
         return {
             "snap_mode": cls._snap_mode,
             "snap_radius": cls._snap_radius,
@@ -197,7 +196,7 @@ class MeasureCore:
             try:
                 x, y = x[0], x[1]
             except (TypeError, IndexError, KeyError):
-                carb.log_warn(f"[measure] cannot read mouse coords: {x!r}")
+                carb.log_warn(f"[distance_line] cannot read mouse coords: {x!r}")
                 return None
         x, y = float(x), float(y)
         if space == "ndc":
@@ -212,7 +211,6 @@ class MeasureCore:
 
     @classmethod
     def register_vph(cls, vph) -> str:
-        """vph 하나를 등록하고 오버레이를 만든다. 뷰포트 id 반환."""
         cls._require_started()
         viewport_api = vph.viewport_api
         viewport_id = str(getattr(viewport_api, "id", "") or "")
@@ -232,7 +230,7 @@ class MeasureCore:
         if viewport_id not in members:
             members.append(viewport_id)
 
-        overlay = MeasureOverlay(
+        overlay = DistanceLineOverlay(
             viewport_id,
             viewport_api,
             frame,
@@ -249,13 +247,12 @@ class MeasureCore:
 
     @classmethod
     def register_tab(cls, tab_id: str, vphs) -> tuple:
-        """탭과 그 vph 들을 등록하고 활성 탭으로 만든다."""
         vphs = list(vphs)
         ids = []
         for vph in vphs:
             if str(vph.tab_id) != str(tab_id):
                 carb.log_warn(
-                    f"[measure] vph reports tab '{vph.tab_id}', expected '{tab_id}'"
+                    f"[distance_line] vph reports tab '{vph.tab_id}', expected '{tab_id}'"
                 )
             ids.append(cls.register_vph(vph))
         cls._tabs.setdefault(str(tab_id), [])
@@ -264,7 +261,6 @@ class MeasureCore:
 
     @classmethod
     def unregister_tab(cls, tab_id: str):
-        """탭의 뷰포트와 거기 그려진 직선을 모두 제거."""
         tab_id = str(tab_id)
         for viewport_id in list(cls._tabs.get(tab_id, [])):
             cls.unregister_viewport(viewport_id)
@@ -291,7 +287,6 @@ class MeasureCore:
 
     @classmethod
     def set_active_tab(cls, tab_id):
-        """활성 탭만 그리고 클릭을 받는다."""
         cls._active_tab = None if tab_id is None else str(tab_id)
         for viewport_id in list(cls._viewports):
             cls._refresh(viewport_id)
@@ -307,7 +302,6 @@ class MeasureCore:
 
     @classmethod
     def set_maximized(cls, viewport_id: str):
-        """한 뷰포트가 자기 탭 안에서 형제들을 덮는다."""
         tab_id = cls.get_tab_of(viewport_id)
         cls._maximized[tab_id] = viewport_id
         for vp in list(cls._tabs.get(tab_id, [])):
@@ -367,17 +361,13 @@ class MeasureCore:
 
     @classmethod
     def pick_one(cls, viewport_id=None, on_done=None) -> int:
-        """활성 탭 전체를 무장. 첫 점이 찍힌 뷰포트만 두 번째 점을 받는다.
-
-        놓일 직선의 키를 미리 반환한다. 무장에 실패하면 0.
-        """
         cls._require_started()
         _drop_caches()
 
         if viewport_id:
             state = cls._viewports.get(viewport_id)
             if state is None:
-                carb.log_warn(f"[measure] pick_one: no viewport '{viewport_id}'")
+                carb.log_warn(f"[distance_line] pick_one: no viewport '{viewport_id}'")
                 return 0
             line_id = cls._reserve_line_id()
             cls._arm(state, on_done, line_id)
@@ -386,8 +376,8 @@ class MeasureCore:
         candidates = cls._pick_candidates()
         if not candidates:
             carb.log_warn(
-                "[measure] pick_one: no viewport to pick in. The host must call "
-                "MeasureService.on_tab_created(tab_id, vphs) first."
+                "[distance_line] pick_one: no viewport to pick in. The host must call "
+                "DistanceLineService.on_tab_created(tab_id, vphs) first."
             )
             return 0
         cls._pending_any = True
@@ -401,7 +391,6 @@ class MeasureCore:
 
     @classmethod
     def _reserve_line_id(cls) -> int:
-        """직선이 놓이기 전에 키를 미리 떼어 준다. 취소되면 그 번호는 비게 둔다."""
         line_id = cls._next_line_id
         cls._next_line_id += 1
         return line_id
@@ -433,7 +422,6 @@ class MeasureCore:
                 other.current_snap = None
     @classmethod
     def cancel_pick(cls, viewport_id=None):
-        """진행 중인 픽을 취소. id 를 안 주면 전부."""
         cls._pending_any = False
         cls._pending_done = None
         cls._pending_viewports = ()
@@ -455,7 +443,6 @@ class MeasureCore:
 
     @classmethod
     def _renumber(cls):
-        """뷰포트별로 1, 2, 3... 표시 번호를 다시 매긴다."""
         counts: dict = {}
         for line in sorted(cls._lines.values(), key=lambda ln: ln.id):
             counts[line.viewport_id] = counts.get(line.viewport_id, 0) + 1
@@ -498,7 +485,6 @@ class MeasureCore:
 
     @classmethod
     def set_visible(cls, visible: bool, line_id=None, viewport_id=None, tab_id=None):
-        """사용자 의도만 정한다. 활성 탭 여부가 별도로 그리기를 막는다."""
         if line_id is not None:
             line = cls._lines.get(line_id)
             if line is None:
@@ -529,11 +515,10 @@ class MeasureCore:
             try:
                 fn()
             except Exception as exc:
-                carb.log_error(f"[measure] changed callback failed: {exc}")
+                carb.log_error(f"[distance_line] changed callback failed: {exc}")
 
     @classmethod
     def _on_label_click(cls, line_id: int):
-        """판을 누르면 처음엔 선택, 같은 것을 다시 누르면 삭제."""
         if cls._selected_line == line_id:
             cls._selected_line = None
             cls.remove(line_id)
@@ -554,7 +539,6 @@ class MeasureCore:
 
     @classmethod
     def _try_label_click(cls, state, ndc) -> bool:
-        """클릭이 판 위인지 판정. 겹치면 카메라에 가까운 것을 집는다."""
         view, proj = _camera_matrices(state.viewport_api)
         if view is None:
             return False
@@ -603,7 +587,6 @@ class MeasureCore:
 
     @classmethod
     def _listening(cls, viewport_id: str, state) -> bool:
-        """지금 이 뷰포트가 스냅을 해소해야 하는가."""
         if state.armed:
             return True
         return cls._pending_any and viewport_id in cls._pending_viewports
@@ -668,15 +651,10 @@ class MeasureCore:
             try:
                 on_done(line)
             except Exception as exc:
-                carb.log_error(f"[measure] on_done callback failed: {exc}")
+                carb.log_error(f"[distance_line] on_done callback failed: {exc}")
 
     @classmethod
     def _resolve_snap(cls, state, ndc, on_result):
-        """hover 용. 한 번에 한 건만 돈다.
-
-        도는 중에 들어온 hover 는 좌표만 덮어쓰고 끝난 뒤 한 번 더 돈다.
-        마우스 속도만큼 레이가 쌓이면 그게 그대로 프레임 비용이 된다.
-        """
         if state.snap_busy:
             state.snap_queued = (ndc, on_result)
             return
@@ -687,7 +665,6 @@ class MeasureCore:
 
     @classmethod
     def _resolve_snap_now(cls, state, ndc, on_result):
-        """클릭 용. 합치지 않는다. 클릭은 밀리거나 덮이면 안 된다."""
         cls._begin_snap(state, ndc, on_result)
 
     @classmethod
@@ -703,11 +680,10 @@ class MeasureCore:
 
     @classmethod
     def _begin_snap(cls, state, ndc, deliver):
-        """커서 아래를 한 번 쏘고, 채택 직전에 후보가 실제로 보이는지 다시 쏜다."""
         try:
             import omni.kit.raycast.query as rq
         except ImportError:
-            carb.log_error("[measure] omni.kit.raycast.query is not available")
+            carb.log_error("[distance_line] omni.kit.raycast.query is not available")
             deliver(None)
             return
 
@@ -732,12 +708,6 @@ class MeasureCore:
 
     @classmethod
     def _probe(cls, rq, camera, ranked, slot, surface, deliver):
-        """순위대로 한 발씩. 첫 후보가 닿으면 거기서 끝난다.
-
-        앞뒷면 판정은 메시가 자기를 가리는 경우만 잡는다. 다른 메시 안에
-        파묻힌 꼭지점은 양쪽 다 앞면이라 그걸로는 안 걸러지고, 실제로 닿는지
-        쏴 보는 수밖에 없다. 가리는 게 없는 평상시에는 한 발로 끝난다.
-        """
         if slot >= len(ranked):
             deliver(surface)
             return
@@ -765,7 +735,6 @@ class MeasureCore:
 
     @classmethod
     def _candidates_from_hit(cls, state, result, ndc, view, proj):
-        """레이캐스트 결과를 (표면 폴백, 순위 매긴 외곽선 후보들) 로 환산한다."""
         if not getattr(result, "valid", False):
             return None, []
 
@@ -830,7 +799,6 @@ class MeasureCore:
 
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
-        """히트한 지오메트리. 히트 경로가 아니라 해소된 프림으로 캐시한다."""
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             return None
@@ -846,7 +814,6 @@ class MeasureCore:
 
     @classmethod
     def _refresh(cls, viewport_id: str):
-        """그리기 갱신. 활성 탭 / 최대화 / 사용자 가시성 세 조건을 모두 만족해야 보인다."""
         state = cls._viewports.get(viewport_id)
         if state is None:
             return
@@ -928,10 +895,6 @@ def _has_points(prim, time=None) -> bool:
 
 
 def _geom_for(prim, time=None):
-    """프림의 월드 지오메트리. 스테이지/경로/타임코드로 캐시한다.
-
-    _build_entry 는 포인트와 토폴로지를 통째로 읽으므로 hover 마다 부르면 안 된다.
-    """
     key = (_stage_key(prim.GetStage()), str(prim.GetPath()), str(time))
     entry = _GEOM_CACHE.get(key)
     if entry is None:
@@ -1066,12 +1029,6 @@ class _Outline:
         )
 
     def visibility(self, camera, orientation=1.0):
-        """가려진 후보를 걸러낸다. (엣지 마스크, 꼭지점 마스크)
-
-        엣지는 양옆 면 중 하나라도 카메라를 향해야 하고, 꼭지점은 자신에게
-        모이는 엣지 중 하나라도 보여야 한다. 솔리드의 반대쪽 면이 이걸로
-        걸러진다. 반경으로는 못 막는다 - 가려짐과 가까움은 다른 조건이다.
-        """
         towards = camera - (self.edge_a + self.edge_b) * 0.5
         facing = np.einsum("ijk,ik->ij", self.edge_normals, towards)
         edges = (facing * (orientation or 1.0) > 0.0).any(axis=1)
@@ -1103,11 +1060,6 @@ class _Geom:
         self.orientation = 0.0
 
     def calibrate(self, hit, hit_normal):
-        """법선이 바깥을 향하는지 한 번만 확정한다.
-
-        와인딩이 뒤집힌 메시가 있어서 가정할 수 없다. 부호 있는 체적은
-        열린 면에서 무의미하므로, 렌더러가 준 히트 법선을 기준으로 삼는다.
-        """
         if self.orientation or self.counts is None:
             return
         found = _best_face_by_hit(self, hit)
@@ -1237,17 +1189,11 @@ def _build_entry(prim, time=None):
     try:
         return _Geom(points, counts, indices, offsets, xform)
     except Exception as exc:
-        carb.log_warn(f"[measure] cannot prepare geometry for {prim.GetPath()}: {exc}")
+        carb.log_warn(f"[distance_line] cannot prepare geometry for {prim.GetPath()}: {exc}")
         return None
 
 
 def _reached(result, camera, span) -> bool:
-    """카메라에서 후보까지 가는 길이 비어 있으면 True.
-
-    후보 자신이 메시 위의 점이므로 정상이면 딱 그 거리에서 맞는다. 그보다
-    확실히 앞에서 맞으면 무언가가 가리고 있는 것이다. 스치듯 지나가 아무것도
-    못 맞히는 경우는 막힌 게 아니므로 통과시킨다.
-    """
     if not getattr(result, "valid", False):
         return True
     distance = float(getattr(result, "hit_t", 0.0) or 0.0)
@@ -1321,11 +1267,6 @@ def _describe(prim) -> str:
 
 
 def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
-    """히트 경로에서 실제 메시 프림을 찾는다.
-
-    경로 해소는 캐시하고, 히트로 고르는 부분만 매번 다시 한다. _has_points 가
-    포인트 배열을 통째로 읽고 _descendants 가 서브트리를 걷기 때문이다.
-    """
     key = (_stage_key(stage), str(prim_path), str(time))
     found = _PRIM_CACHE.get(key)
     if found is None:
@@ -1350,7 +1291,6 @@ def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
 
 
 def _find_mesh_prim(stage, prim_path, time=None):
-    """(후보 메시들, 사유). 히트와 무관한 부분만 하므로 캐시해도 된다."""
     path = str(prim_path)
     prim = stage.GetPrimAtPath(path)
     if not prim or not prim.IsValid():
@@ -1399,7 +1339,7 @@ def _camera_matrices(viewport_api):
     try:
         return Gf.Matrix4d(viewport_api.view), Gf.Matrix4d(viewport_api.projection)
     except Exception as exc:
-        carb.log_warn(f"[measure] cannot read camera matrices: {exc}")
+        carb.log_warn(f"[distance_line] cannot read camera matrices: {exc}")
         return None, None
 
 
