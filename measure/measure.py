@@ -32,6 +32,8 @@ _CORNER_COS = -0.9659          # 외곽선이 15도 이상 꺾이면 꼭지점
 _WELD_TOLERANCE = 1e-5         # 메시 크기 대비 이 비율 안이면 같은 점
 _HIT_REACH = 3.0               # 히트 지점에서 반경의 몇 배까지 후보로 볼지
 _CREASE_COS = 0.8660           # 두 면이 30도 이상 벌어지면 크리스
+_VERIFY_LIMIT = 4              # 도달 검사를 해볼 후보 개수
+_VERIFY_SLACK = 1e-3           # 이 비율 안에 들어오면 막힌 게 아니라 그 점에 닿은 것
 
 def _log(msg: str):
     print(f"[measure] {msg}")
@@ -107,6 +109,7 @@ class _ViewportState:
         self.on_done = None
         self.current_snap: SnapPoint | None = None
         self.visible = True
+        self.snap_seq = 0
 
 
 class MeasureCore:
@@ -657,6 +660,7 @@ class MeasureCore:
 
     @classmethod
     def _resolve_snap(cls, state, ndc, on_result):
+        """커서 아래를 한 번 쏘고, 나온 후보들이 실제로 보이는지 다시 쏜다."""
         try:
             import omni.kit.raycast.query as rq
         except ImportError:
@@ -670,8 +674,14 @@ class MeasureCore:
             return
         origin, direction = _ndc_to_ray(ndc, view, proj)
 
+        state.snap_seq += 1
+        token = state.snap_seq
+
         def _on_hit(_ray, result):
-            on_result(cls._snap_from_hit(state, result, ndc, view, proj))
+            if token != state.snap_seq:
+                return
+            surface, ranked = cls._candidates_from_hit(state, result, ndc, view, proj)
+            cls._verify_reach(rq, state, token, view, ranked, surface, on_result)
 
         iface = rq.acquire_raycast_query_interface()
         iface.submit_raycast_query(
@@ -683,11 +693,58 @@ class MeasureCore:
         )
 
     @classmethod
-    def _snap_from_hit(cls, state, result, ndc, view, proj):
-        """레이캐스트 결과를 외곽선 스냅점으로 환산한다."""
-        if not getattr(result, "valid", False):
-            return None
+    def _verify_reach(cls, rq, state, token, view, ranked, surface, on_result):
+        """카메라에서 후보까지 한 발씩 쏴 본다.
 
+        앞뒷면 판정은 메시가 자기를 가리는 경우만 잡는다. 다른 메시 안에
+        파묻힌 꼭지점은 양쪽 다 앞면이라 그걸로는 안 걸러지고, 실제로 닿는지
+        쏴 보는 수밖에 없다. 순위대로 보고 처음 닿는 것을 쓴다.
+        """
+        if not ranked:
+            on_result(surface)
+            return
+
+        camera = _camera_position(view)
+        iface = rq.acquire_raycast_query_interface()
+        verdicts = [None] * len(ranked)
+        outstanding = [1]
+
+        def _settle():
+            outstanding[0] -= 1
+            if outstanding[0] or token != state.snap_seq:
+                return
+            for point, reached in zip(ranked, verdicts):
+                if reached:
+                    on_result(point)
+                    return
+            on_result(surface)
+
+        for slot, point in enumerate(ranked):
+            delta = _as_np(point.position) - camera
+            span = float(np.linalg.norm(delta))
+            if span <= 0.0:
+                verdicts[slot] = True
+                continue
+            outstanding[0] += 1
+
+            def _on_probe(_ray, result, slot=slot, span=span):
+                verdicts[slot] = _reached(result, camera, span)
+                _settle()
+
+            iface.submit_raycast_query(
+                rq.Ray(
+                    (camera[0], camera[1], camera[2]),
+                    tuple(delta / span),
+                ),
+                _on_probe,
+            )
+        _settle()
+
+    @classmethod
+    def _candidates_from_hit(cls, state, result, ndc, view, proj):
+        """레이캐스트 결과를 (표면 폴백, 순위 매긴 외곽선 후보들) 로 환산한다."""
+        if not getattr(result, "valid", False):
+            return None, []
 
         hit = Gf.Vec3d(*result.hit_position)
         normal = Gf.Vec3d(*getattr(result, "normal", (0.0, 1.0, 0.0)))
@@ -695,12 +752,12 @@ class MeasureCore:
 
         surface = SnapPoint(hit, SnapKind.SURFACE, path, -1, -1, normal)
         if cls._snap_mode == SnapMode.NONE:
-            return surface
+            return surface, []
 
         time = _time_of(state.viewport_api)
         geom = cls._mesh_entry(path, hit, time)
         if geom is None:
-            return surface
+            return surface, []
         geom.calibrate(hit, normal)
         outline = geom.boundary
         seen_edges, seen_corners = outline.visibility(
@@ -715,8 +772,9 @@ class MeasureCore:
             view, proj, hit, geom.extent, size
         )
 
+        ranked = []
         for flag, kind in _FLAG_TO_KIND:
-            if not (cls._snap_mode & flag):
+            if not (cls._snap_mode & flag) or len(ranked) >= _VERIFY_LIMIT:
                 continue
             if kind == SnapKind.VERTEX:
                 points, seen = outline.corners, seen_corners
@@ -737,13 +795,15 @@ class MeasureCore:
             if not usable.any():
                 continue
             distances = np.where(usable, screen, np.inf)
-            index = int(np.argmin(distances))
-            nearest = float(distances[index])
-            if nearest <= cls._snap_radius:
-                return SnapPoint(
-                    Gf.Vec3d(*points[index]), kind, path, -1, index, normal
+            for index in np.argsort(distances)[: _VERIFY_LIMIT - len(ranked)]:
+                if float(distances[index]) > cls._snap_radius:
+                    break
+                ranked.append(
+                    SnapPoint(
+                        Gf.Vec3d(*points[index]), kind, path, -1, int(index), normal
+                    )
                 )
-        return surface
+        return surface, ranked
 
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
@@ -1149,6 +1209,24 @@ def _build_entry(prim, time=None):
     except Exception as exc:
         carb.log_warn(f"[measure] cannot prepare geometry for {prim.GetPath()}: {exc}")
         return None
+
+
+def _reached(result, camera, span) -> bool:
+    """카메라에서 후보까지 가는 길이 비어 있으면 True.
+
+    후보 자신이 메시 위의 점이므로 정상이면 딱 그 거리에서 맞는다. 그보다
+    확실히 앞에서 맞으면 무언가가 가리고 있는 것이다. 스치듯 지나가 아무것도
+    못 맞히는 경우는 막힌 게 아니므로 통과시킨다.
+    """
+    if not getattr(result, "valid", False):
+        return True
+    distance = float(getattr(result, "hit_t", 0.0) or 0.0)
+    if distance <= 0.0:
+        position = getattr(result, "hit_position", None)
+        if position is None:
+            return True
+        distance = float(np.linalg.norm(np.asarray(position, dtype=float) - camera))
+    return distance >= span * (1.0 - _VERIFY_SLACK)
 
 
 def _best_face_by_hit(geom, hit, cap=_FACE_SHORTLIST):
