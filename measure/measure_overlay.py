@@ -70,7 +70,9 @@ class MeasureOverlay:
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
-        self._drawn = None
+        self._shape = None
+        self._selected = None
+        self._items = {}
 
         self._build()
 
@@ -116,16 +118,31 @@ class MeasureOverlay:
         return lambda _sender, i=line_id: self._on_label_click(i)
 
     def set_lines(self, lines, format_length, selected_id=None):
-        """확정된 측정을 다시 그린다. 바뀐 게 없으면 건너뛴다."""
+        """확정된 측정을 다시 그린다.
+
+        선택만 바뀐 경우에는 색만 갈아끼운다. 판을 다시 만들면 한 번 사라
+        졌다 나타나서 깜박인다.
+        """
         if self._lines_root is None:
             return
-        drawn = [
-            (line.id, tuple(line.start.position), tuple(line.end.position))
+        shape = [
+            (
+                line.id,
+                tuple(line.start.position),
+                tuple(line.end.position),
+                format_length(line.length_m),
+            )
             for line in lines
         ]
-        if (drawn, selected_id) == self._drawn:
-            return
-        self._drawn = (drawn, selected_id)
+        if shape == self._shape:
+            if selected_id == self._selected:
+                return
+            if self._recolour(selected_id):
+                self._selected = selected_id
+                return
+        self._shape = shape
+        self._selected = selected_id
+        self._items = {}
 
         self._lines_root.clear()
         with self._lines_root:
@@ -133,7 +150,7 @@ class MeasureOverlay:
                 chosen = line.id == selected_id
                 colour = _SELECTED_LINE_COLOR if chosen else _LINE_COLOR
                 a, b = line.start.position, line.end.position
-                sc.Line(
+                curve = sc.Line(
                     (a[0], a[1], a[2]),
                     (b[0], b[1], b[2]),
                     color=colour,
@@ -144,13 +161,29 @@ class MeasureOverlay:
                     colors=[_END_DOT_COLOR, _END_DOT_COLOR],
                     sizes=[_END_DOT_SIZE, _END_DOT_SIZE],
                 )
-                _draw_plate_label(
+                plate = _draw_plate_label(
                     a,
                     b,
                     format_length(line.length_m),
                     on_click=self._label_clicked(line.id),
                     selected=chosen,
                 )
+                self._items[line.id] = (curve, plate)
+
+    def _recolour(self, selected_id) -> bool:
+        """제자리에서 선택 색만 바꾼다. 못 하면 False 를 주고 다시 그리게 한다."""
+        if len(self._items) != len(self._shape or ()):
+            return False
+        try:
+            painted = True
+            for line_id, (curve, plate) in self._items.items():
+                chosen = line_id == selected_id
+                curve.color = _SELECTED_LINE_COLOR if chosen else _LINE_COLOR
+                painted = plate.set_selected(chosen) and painted
+            return painted
+        except Exception as exc:
+            carb.log_warn(f"[measure] in-place recolour failed: {exc}")
+            return False
 
     def set_preview(self, start, end, text):
         """첫 점과 커서 사이의 고무줄 선."""
@@ -221,7 +254,9 @@ class MeasureOverlay:
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
-        self._drawn = None
+        self._shape = None
+        self._selected = None
+        self._items = {}
         self._frame = None
 
 
@@ -250,6 +285,7 @@ def plate_size(text: str):
 def _draw_plate_label(a, b, text, on_click=None, selected=False):
     """확정된 측정의 값 표기. 카메라를 향하는 둥근 판 위에 올린다."""
     width, height = plate_size(text)
+    plate = _Plate(text, selected, on_click)
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
@@ -259,42 +295,90 @@ def _draw_plate_label(a, b, text, on_click=None, selected=False):
                 height,
                 update_policy=sc.Widget.UpdatePolicy.ON_MOUSE_HOVERED,
             )
-            widget.frame.set_build_fn(
-                lambda t=text, s=selected, f=on_click: _build_plate(t, s, f)
+            widget.frame.set_build_fn(plate.build)
+            plate.attach(widget)
+    return plate
+
+
+class _Plate:
+    """판 하나. 선택 상태가 바뀌면 다시 만들지 않고 스타일만 바꾼다."""
+
+    def __init__(self, text: str, selected: bool, on_click):
+        self._text = text
+        self._selected = selected
+        self._on_click = on_click
+        self._widget = None
+        self._outer = None
+        self._inner = None
+        self._label = None
+
+    def attach(self, widget):
+        self._widget = widget
+
+    def build(self):
+        """둥근 사각형 두 장을 겹쳐 그 사이 간격을 테두리로 쓴다.
+
+        border_width 스트로크는 모서리에서 두껍게 래스터화된다.
+        """
+        click = self._on_click
+        with ui.ZStack():
+            self._outer = ui.Rectangle(
+                style=self._outer_style(),
+                mouse_pressed_fn=(lambda *_: click(None)) if click else None,
             )
+            self._inner = ui.Rectangle(style=self._inner_style())
+            with ui.VStack():
+                ui.Spacer()
+                self._label = ui.Label(
+                    self._text,
+                    height=0,
+                    alignment=ui.Alignment.CENTER,
+                    style=self._label_style(),
+                )
+                ui.Spacer()
 
+    def set_selected(self, selected: bool) -> bool:
+        """바뀐 색이 실제로 화면에 반영되면 True."""
+        if selected == self._selected:
+            return True
+        self._selected = selected
+        if self._outer is None:
+            return True
+        self._outer.set_style(self._outer_style())
+        self._inner.set_style(self._inner_style())
+        self._label.set_style(self._label_style())
+        return self._repaint()
 
-def _build_plate(text: str, selected: bool, on_click):
-    """둥근 사각형 두 장을 겹쳐 그 사이 간격을 테두리로 쓴다.
+    def _repaint(self) -> bool:
+        """판은 텍스처로 그려지므로 호버 중이 아니면 스타일만 바꿔서는 안 바뀐다."""
+        for name in ("invalidate", "invalidate_raster", "update"):
+            call = getattr(self._widget, name, None)
+            if call is None:
+                continue
+            try:
+                call()
+                return True
+            except Exception:
+                continue
+        return False
 
-    border_width 스트로크는 모서리에서 두껍게 래스터화된다.
-    """
-    fill = _PLATE_COLOR_SELECTED if selected else _PLATE_COLOR
-    edge = _PLATE_BORDER_SELECTED if selected else _PLATE_BORDER_COLOR
-    with ui.ZStack():
-        ui.Rectangle(
-            style={"background_color": edge, "border_radius": _PLATE_RADIUS},
-            mouse_pressed_fn=(lambda *_: on_click(None)) if on_click else None,
-        )
-        ui.Rectangle(
-            style={
-                "background_color": fill,
-                "border_radius": max(_PLATE_RADIUS - _PLATE_BORDER, 0),
-                "margin": _PLATE_BORDER,
-            }
-        )
-        with ui.VStack():
-            ui.Spacer()
-            ui.Label(
-                text,
-                height=0,
-                alignment=ui.Alignment.CENTER,
-                style={
-                    "color": _PLATE_TEXT_SELECTED if selected else _PLATE_TEXT_COLOR,
-                    "font_size": _PLATE_FONT_SIZE,
-                },
-            )
-            ui.Spacer()
+    def _outer_style(self):
+        edge = _PLATE_BORDER_SELECTED if self._selected else _PLATE_BORDER_COLOR
+        return {"background_color": edge, "border_radius": _PLATE_RADIUS}
+
+    def _inner_style(self):
+        fill = _PLATE_COLOR_SELECTED if self._selected else _PLATE_COLOR
+        return {
+            "background_color": fill,
+            "border_radius": max(_PLATE_RADIUS - _PLATE_BORDER, 0),
+            "margin": _PLATE_BORDER,
+        }
+
+    def _label_style(self):
+        return {
+            "color": _PLATE_TEXT_SELECTED if self._selected else _PLATE_TEXT_COLOR,
+            "font_size": _PLATE_FONT_SIZE,
+        }
 
 
 def _draw_plain_label(a, b, text):
