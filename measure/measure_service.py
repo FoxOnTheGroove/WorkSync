@@ -1,26 +1,3 @@
-"""measure 툴의 공개 API.
-
-패키지 밖에서는 MeasureService 만 쓰면 됩니다. 상태는 전부 measure.py 가
-들고 있고 여기는 위임만 합니다.
-
-뷰포트는 ViewportAPI.id 로 구분하고, 그 뷰포트를 소유한 탭으로 묶입니다.
-탭 하나에 vph(뷰포트 위젯 호스트)가 1, 2, 4개 들어갑니다.
-
-연동은 호스트 이벤트를 물리는 것뿐입니다:
-
-    MeasureService.on_tab_created(tab_id, vphs)
-    MeasureService.on_tab_activated(tab_id)
-    MeasureService.on_tab_closed(tab_id)
-    MeasureService.on_viewport_selected(viewport_id)
-    MeasureService.on_viewport_maximized(viewport_id, True/False)
-    MeasureService.on_viewport_click(viewport_id, sender.gesture_payload.mouse)
-
-측정은 두 줄입니다:
-
-    MeasureService.set_snap_mode(SnapMode.VERTEX | SnapMode.EDGE)
-    MeasureService.pick_one()          # 다음 두 번의 클릭으로 직선 하나
-"""
-
 from __future__ import annotations
 
 from .measure import (
@@ -44,49 +21,6 @@ __all__ = [
 
 class MeasureService:
     @classmethod
-    def on_tab_created(cls, tab_id: str, vphs) -> tuple:
-        """탭 생성. vph 들을 등록하고 오버레이를 만들며 활성 탭이 됩니다."""
-        return MeasureCore.register_tab(tab_id, vphs)
-
-    @classmethod
-    def on_tab_activated(cls, tab_id) -> None:
-        """활성 탭만 그리고 클릭을 받습니다."""
-        MeasureCore.set_active_tab(tab_id)
-
-    @classmethod
-    def on_tab_closed(cls, tab_id: str) -> None:
-        """탭의 뷰포트와 거기 그려진 직선을 모두 제거합니다."""
-        MeasureCore.unregister_tab(tab_id)
-
-    @classmethod
-    def on_viewport_selected(cls, viewport_id: str) -> None:
-        """내부 참고용. pick_one 은 이제 활성 탭 전체를 대상으로 합니다."""
-        MeasureCore.set_selected_viewport(viewport_id)
-
-    @classmethod
-    def on_viewport_maximized(cls, viewport_id: str, maximized: bool = True) -> None:
-        """한 뷰포트가 형제들을 덮고 커졌는지. 그 탭 안에서만 적용됩니다."""
-        if maximized:
-            MeasureCore.set_maximized(viewport_id)
-        else:
-            MeasureCore.clear_maximized(MeasureCore.get_tab_of(viewport_id))
-
-    @classmethod
-    def on_viewport_click(cls, viewport_id: str, x, y=None, space="ndc") -> None:
-        """호스트가 잡은 클릭을 넘깁니다.
-
-        좌표는 sender.gesture_payload.mouse 를 그대로 주면 됩니다(NDC).
-        픽셀이면 space="pixel". 무장되지 않은 클릭은 무시하니 매번
-        넘겨도 됩니다.
-        """
-        MeasureCore.on_external_click(viewport_id, x, y, space)
-
-    @classmethod
-    def on_viewport_hover(cls, viewport_id: str, x, y=None, space="ndc") -> None:
-        """커서 이동. 스냅 마커와 미리보기용이며 보통은 필요 없습니다."""
-        MeasureCore.on_external_hover(viewport_id, x, y, space)
-
-    @classmethod
     def set_snap_mode(cls, mode: SnapMode) -> None:
         """전역. VERTEX 는 메시 외곽선의 꼭지점, EDGE 는 외곽선 위의 점입니다.
 
@@ -100,14 +34,17 @@ class MeasureService:
         MeasureCore.set_snap_radius(pixels)
 
     @classmethod
-    def pick_one(cls, viewport_id=None, on_done=None) -> None:
-        """다음 두 번의 클릭으로 직선 하나를 놓습니다.
+    def pick_one(cls, viewport_id=None, on_done=None) -> int:
+        """다음 두 번의 클릭으로 직선 하나를 놓고, 그 직선의 키를 반환합니다.
+
+        키는 미리 떼어 주므로 클릭을 기다리지 않고 바로 받습니다. 취소되면
+        그 번호는 비게 됩니다. 무장에 실패하면 0 입니다.
 
         활성 탭의 모든 뷰포트에서 시작할 수 있고, 첫 점이 찍힌 뷰포트만
         두 번째 점을 받습니다. id 를 주면 그 뷰포트만 무장합니다.
         on_done(line) 은 완료 시점 훅이며 취소되면 불리지 않습니다.
         """
-        MeasureCore.pick_one(viewport_id, on_done)
+        return MeasureCore.pick_one(viewport_id, on_done)
 
     @classmethod
     def cancel_pick(cls, viewport_id=None) -> None:
@@ -161,3 +98,51 @@ class MeasureService:
         반환된 핸들을 살려 두어야 하고, 놓으면 구독이 해지됩니다.
         """
         return MeasureCore.subscribe_changed(fn)
+
+    # ------------------------------------------------------------------
+    # 아래는 호스트 연동용. 설계자가 이벤트에 물어 두는 것이고,
+    # 측정을 쓰는 쪽에서 부를 일은 없습니다.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def on_tab_created(cls, tab_id: str, vphs) -> tuple:
+        """탭 생성. vph 들을 등록하고 오버레이를 만들며 활성 탭이 됩니다."""
+        return MeasureCore.register_tab(tab_id, vphs)
+
+    @classmethod
+    def on_tab_activated(cls, tab_id) -> None:
+        """활성 탭만 그리고 클릭을 받습니다."""
+        MeasureCore.set_active_tab(tab_id)
+
+    @classmethod
+    def on_tab_closed(cls, tab_id: str) -> None:
+        """탭의 뷰포트와 거기 그려진 직선을 모두 제거합니다."""
+        MeasureCore.unregister_tab(tab_id)
+
+    @classmethod
+    def on_viewport_selected(cls, viewport_id: str) -> None:
+        """내부 참고용. pick_one 은 활성 탭 전체를 대상으로 합니다."""
+        MeasureCore.set_selected_viewport(viewport_id)
+
+    @classmethod
+    def on_viewport_maximized(cls, viewport_id: str, maximized: bool = True) -> None:
+        """한 뷰포트가 형제들을 덮고 커졌는지. 그 탭 안에서만 적용됩니다."""
+        if maximized:
+            MeasureCore.set_maximized(viewport_id)
+        else:
+            MeasureCore.clear_maximized(MeasureCore.get_tab_of(viewport_id))
+
+    @classmethod
+    def on_viewport_click(cls, viewport_id: str, x, y=None, space="ndc") -> None:
+        """호스트가 잡은 클릭을 넘깁니다.
+
+        좌표는 sender.gesture_payload.mouse 를 그대로 주면 됩니다(NDC).
+        픽셀이면 space="pixel". 무장되지 않은 클릭은 무시하니 매번
+        넘겨도 됩니다.
+        """
+        MeasureCore.on_external_click(viewport_id, x, y, space)
+
+    @classmethod
+    def on_viewport_hover(cls, viewport_id: str, x, y=None, space="ndc") -> None:
+        """커서 이동. 스냅 마커와 미리보기용이며 보통은 필요 없습니다."""
+        MeasureCore.on_external_hover(viewport_id, x, y, space)

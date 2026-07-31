@@ -1,9 +1,3 @@
-"""뷰포트 오버레이. 그리기만 하고 판단은 전부 measure.py 가 한다.
-
-등록된 뷰포트마다 하나씩 있으며, SceneView 가 제스처를 소유하므로 입력이
-여기로 먼저 들어와 NDC 좌표로 넘어간다.
-"""
-
 from __future__ import annotations
 
 import carb

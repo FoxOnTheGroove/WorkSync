@@ -1,15 +1,3 @@
-"""measure 테스트 UI. 측정 기능은 measure_service 만 사용한다.
-
-여기서 못 하는 게 있으면 서비스 API 가 부족한 것이므로 measure.py 를
-직접 건드리지 말고 API 를 고칠 것.
-
-탭과 뷰포트는 다루지 않는다. 호스트 이벤트로 들어오고, pick_one 은 활성
-탭 전체를 대상으로 한다.
-
-와이어프레임 버튼만 예외로 Kit 액션을 직접 부른다. 측정과 무관한
-뷰포트 표시 설정이라 서비스 API 에 넣을 것이 아니다.
-"""
-
 from __future__ import annotations
 
 import omni.ui as ui

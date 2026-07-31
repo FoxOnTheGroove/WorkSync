@@ -1,18 +1,3 @@
-"""측정 코어. 상태를 전부 여기서 들고 있으며, 외부는 measure_service 만 씁니다.
-
-클릭/호버 한 번의 스냅 해소:
-
-    커서 픽셀 -> Ray -> 레이캐스트
-      -> 맞은 메시의 외곽선(면 하나만 쓰는 엣지 + 크리스)에서 후보 생성
-           VERTEX : 외곽선이 꺾이는 꼭지점
-           EDGE   : 외곽선 위의 점
-      -> 화면에 투영해 스냅 반경 안의 후보만 남김
-      -> VERTEX > EDGE 우선순위로 채택, 없으면 SURFACE
-
-내부 정점과 내부 엣지는 일부러 제외합니다. 분할된 plane 이면 격자점이
-아니라 네 모서리만 잡힙니다.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -37,6 +22,7 @@ _VERIFY_SLACK = 1e-3           # 이 비율 안에 들어오면 막힌 게 아�
 
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
+
 
 def _log(msg: str):
     print(f"[measure] {msg}")
@@ -110,6 +96,7 @@ class _ViewportState:
         self.armed = False
         self.pending: SnapPoint | None = None
         self.on_done = None
+        self.line_id = 0
         self.current_snap: SnapPoint | None = None
         self.visible = True
         self.snap_busy = False
@@ -134,6 +121,7 @@ class MeasureCore:
     _pending_any = False
     _pending_done = None
     _pending_viewports: tuple = ()
+    _pending_line_id = 0
     _selected_line = None
 
     @classmethod
@@ -378,8 +366,11 @@ class MeasureCore:
         return state.current_snap if state else None
 
     @classmethod
-    def pick_one(cls, viewport_id=None, on_done=None):
-        """활성 탭 전체를 무장. 첫 점이 찍힌 뷰포트만 두 번째 점을 받는다."""
+    def pick_one(cls, viewport_id=None, on_done=None) -> int:
+        """활성 탭 전체를 무장. 첫 점이 찍힌 뷰포트만 두 번째 점을 받는다.
+
+        놓일 직선의 키를 미리 반환한다. 무장에 실패하면 0.
+        """
         cls._require_started()
         _drop_caches()
 
@@ -387,9 +378,10 @@ class MeasureCore:
             state = cls._viewports.get(viewport_id)
             if state is None:
                 carb.log_warn(f"[measure] pick_one: no viewport '{viewport_id}'")
-                return
-            cls._arm(state, on_done)
-            return
+                return 0
+            line_id = cls._reserve_line_id()
+            cls._arm(state, on_done, line_id)
+            return line_id
 
         candidates = cls._pick_candidates()
         if not candidates:
@@ -397,13 +389,22 @@ class MeasureCore:
                 "[measure] pick_one: no viewport to pick in. The host must call "
                 "MeasureService.on_tab_created(tab_id, vphs) first."
             )
-            return
+            return 0
         cls._pending_any = True
         cls._pending_done = on_done
         cls._pending_viewports = candidates
+        cls._pending_line_id = cls._reserve_line_id()
         if not cls._host_input:
             for vp in candidates:
                 cls._viewports[vp].overlay.set_click_active(True)
+        return cls._pending_line_id
+
+    @classmethod
+    def _reserve_line_id(cls) -> int:
+        """직선이 놓이기 전에 키를 미리 떼어 준다. 취소되면 그 번호는 비게 둔다."""
+        line_id = cls._next_line_id
+        cls._next_line_id += 1
+        return line_id
 
     @classmethod
     def _pick_candidates(cls) -> tuple:
@@ -413,13 +414,15 @@ class MeasureCore:
         return tuple(cls._viewports)
 
     @classmethod
-    def _arm(cls, state, on_done):
+    def _arm(cls, state, on_done, line_id):
         cls._pending_any = False
         cls._pending_done = None
         cls._pending_viewports = ()
+        cls._pending_line_id = 0
         state.armed = True
         state.pending = None
         state.on_done = on_done
+        state.line_id = line_id
         state.snap_busy = False
         state.snap_queued = None
         for other in cls._viewports.values():
@@ -434,6 +437,7 @@ class MeasureCore:
         cls._pending_any = False
         cls._pending_done = None
         cls._pending_viewports = ()
+        cls._pending_line_id = 0
         targets = (
             [cls._viewports[viewport_id]]
             if viewport_id in cls._viewports
@@ -443,6 +447,7 @@ class MeasureCore:
             state.armed = False
             state.pending = None
             state.on_done = None
+            state.line_id = 0
             state.snap_busy = False
             state.snap_queued = None
             state.overlay.set_preview(None, None, "")
@@ -620,7 +625,7 @@ class MeasureCore:
             return
         if not state.armed and cls._listening(viewport_id, state):
             cls._selected = viewport_id
-            cls._arm(state, cls._pending_done)
+            cls._arm(state, cls._pending_done, cls._pending_line_id)
         if not state.armed:
             if not cls._try_label_click(state, ndc):
                 cls._clear_selection()
@@ -638,14 +643,13 @@ class MeasureCore:
             return
 
         line = Line(
-            id=cls._next_line_id,
+            id=state.line_id or cls._reserve_line_id(),
             viewport_id=state.viewport_id,
             tab_id=state.tab_id,
             start=state.pending,
             end=snap,
             length_m=cls._length_m(state.pending.position, snap.position),
         )
-        cls._next_line_id += 1
         cls._lines[line.id] = line
         cls._renumber()
         _log(f"line {line.id} (#{line.number}) on '{line.viewport_id}': {line.length_m:.3f} m")
@@ -654,6 +658,7 @@ class MeasureCore:
         state.armed = False
         state.pending = None
         state.on_done = None
+        state.line_id = 0
         state.overlay.set_preview(None, None, "")
         state.overlay.set_click_active(False)
         cls._refresh(state.viewport_id)
