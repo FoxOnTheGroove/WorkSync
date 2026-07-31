@@ -1,8 +1,7 @@
-"""Viewport overlay for the measure tool.
+"""뷰포트 오버레이. 그리기만 하고 판단은 전부 measure.py 가 한다.
 
-One MeasureOverlay per registered viewport. Draws only; every decision is made in
-measure.py. Input arrives here first because the SceneView owns the gestures,
-and is forwarded straight out through on_hover / on_click as NDC coordinates.
+등록된 뷰포트마다 하나씩 있으며, SceneView 가 제스처를 소유하므로 입력이
+여기로 먼저 들어와 NDC 좌표로 넘어간다.
 """
 
 from __future__ import annotations
@@ -11,8 +10,6 @@ import carb
 import omni.ui as ui
 from omni.ui import scene as sc
 
-# Marker colour and screen-space size per snap class. Snap kinds are read as
-# plain ints so this module keeps no dependency on measure.py.
 _SURFACE, _EDGE, _VERTEX = 0, 1, 2
 
 _MARKER_STYLE = {
@@ -24,34 +21,24 @@ _MARKER_STYLE = {
 _LINE_COLOR = (1.0, 1.0, 1.0, 1.0)
 _PREVIEW_COLOR = (1.0, 1.0, 1.0, 0.5)
 _LINE_THICKNESS = 2.0
-_END_DOT_SIZE = 8.0  # dots marking where a measurement starts and ends
-_END_DOT_COLOR = (1.0, 1.0, 1.0, 1.0)  # stays white, selected or not
+_END_DOT_SIZE = 8.0
+_END_DOT_COLOR = (1.0, 1.0, 1.0, 1.0)
 
-# Selected measurement: its line goes black too, matching its plate.
 _SELECTED_LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
 
-# The live preview is a scene label: cheap, and rebuilt on every mouse move.
 _LABEL_SIZE = 18
 _PREVIEW_TEXT_COLOR = (1.0, 1.0, 1.0, 1.0)
 
-# The placed readout is omni.ui inside an sc.Widget, which rounds its corners
-# properly and sets type better. It renders through a different path, so it
-# needs a larger number than _LABEL_SIZE to look the same size on screen.
 _PLATE_FONT_SIZE = 36
-_PLATE_PAD_X = 10.0  # screen units left and right of the text
-_PLATE_PAD_Y = 5.0  # above and below
-_PLATE_CHAR_WIDTH = 0.62  # of the font size, to size the widget box
-# Glyphs need more room than their point size, or the padding above and below
-# ends up uneven and the text reads as sitting high in the plate.
+_PLATE_PAD_X = 10.0
+_PLATE_PAD_Y = 5.0
+_PLATE_CHAR_WIDTH = 0.62
 _PLATE_LINE_HEIGHT = 1.3
 _PLATE_RADIUS = 10
-_PLATE_BORDER = 5  # ring thickness, added outside the padding
+_PLATE_BORDER = 5
 
-# Plate footprint for click testing, over its drawn size. Measured, not derived:
-# see plate_hit_size.
 _HIT_SCALE = 0.5
 
-# omni.ui colours (0xAABBGGRR).
 _PLATE_COLOR = 0xFFFFFFFF
 _PLATE_TEXT_COLOR = 0xFF000000
 _PLATE_BORDER_COLOR = 0xFF000000
@@ -72,7 +59,7 @@ class MeasureOverlay:
     ):
         self._viewport_id = viewport_id
         self._viewport_api = viewport_api
-        self._frame = frame  # supplied by the caller, never looked up here
+        self._frame = frame
         self._on_hover = on_hover
         self._on_click = on_click
         self._on_label_click = on_label_click
@@ -83,11 +70,9 @@ class MeasureOverlay:
         self._lines_root = None
         self._marker_root = None
         self._preview_root = None
-        self._drawn = None  # signature of what set_lines last built
+        self._drawn = None
 
         self._build()
-
-    # ----------------------------------------------------------------- build
 
     def _build(self):
         if self._frame is None:
@@ -97,10 +82,6 @@ class MeasureOverlay:
         with self._frame:
             self._scene_view = sc.SceneView()
             with self._scene_view.scene:
-                # Hover and click are separate Screens on purpose. Hover can
-                # stay live harmlessly, but a click Screen swallows the button
-                # press, so it only appears while a pick is armed and never
-                # when the host owns input.
                 self._hover_screen = sc.Screen(
                     gestures=[sc.HoverGesture(on_changed_fn=self._forward_hover)]
                 )
@@ -112,13 +93,10 @@ class MeasureOverlay:
                 self._preview_root = sc.Transform()
                 self._marker_root = sc.Transform()
 
-        # Keeps the scene camera in sync with the viewport camera.
         try:
             self._viewport_api.add_scene_view(self._scene_view)
         except Exception as exc:
             carb.log_warn(f"[measure] add_scene_view failed: {exc}")
-
-    # ----------------------------------------------------------------- input
 
     def _forward_click(self, sender):
         if self._on_click:
@@ -133,20 +111,12 @@ class MeasureOverlay:
                 self._on_hover(ndc)
 
     def _label_clicked(self, line_id: int):
-        """Gesture callback for one plate, carrying which line it belongs to."""
         if self._on_label_click is None:
             return None
         return lambda _sender, i=line_id: self._on_label_click(i)
 
-    # ------------------------------------------------------------------ draw
-
     def set_lines(self, lines, format_length, selected_id=None):
-        """Redraw all confirmed measurements for this viewport.
-
-        Skipped when nothing about the set has changed, selection included: a
-        refresh fires on tab switches and visibility changes too, and there is
-        no point rebuilding the scene for those.
-        """
+        """확정된 측정을 다시 그린다. 바뀐 게 없으면 건너뛴다."""
         if self._lines_root is None:
             return
         drawn = [
@@ -183,7 +153,7 @@ class MeasureOverlay:
                 )
 
     def set_preview(self, start, end, text):
-        """Rubber-band line between the first click and the cursor."""
+        """첫 점과 커서 사이의 고무줄 선."""
         if self._preview_root is None:
             return
         self._preview_root.clear()
@@ -200,7 +170,7 @@ class MeasureOverlay:
                 _draw_plain_label(start, end, text)
 
     def set_snap_marker(self, snap):
-        """Show where the next click would land, coloured by snap class."""
+        """다음 클릭이 놓일 자리를 스냅 등급 색으로 표시."""
         if self._marker_root is None:
             return
         self._marker_root.clear()
@@ -212,12 +182,7 @@ class MeasureOverlay:
             sc.Points([(p[0], p[1], p[2])], colors=[color], sizes=[size])
 
     def screen_size(self):
-        """(width, height) of the drawing area, in pixels.
-
-        The frame's computed size, falling back to the render resolution: that
-        one is set independently of the widget size, so it is a different number
-        whenever the two are configured apart.
-        """
+        """오버레이가 그리는 영역의 픽셀 크기."""
         for source in (self._frame, self._scene_view):
             width = getattr(source, "computed_width", 0) or 0
             height = getattr(source, "computed_height", 0) or 0
@@ -234,13 +199,11 @@ class MeasureOverlay:
             self._scene_view.visible = visible
 
     def set_click_active(self, active: bool):
-        """Only swallow viewport clicks while a pick is in progress."""
+        """픽 진행 중에만 뷰포트 클릭을 가로챈다."""
         if self._click_screen is not None:
             self._click_screen.visible = active
         if not active:
             self.set_snap_marker(None)
-
-    # --------------------------------------------------------------- teardown
 
     def destroy(self):
         if self._scene_view is not None:
@@ -262,35 +225,22 @@ class MeasureOverlay:
         self._frame = None
 
 
-# --------------------------------------------------------------------- utils
-
-
 def _midpoint(a, b):
     return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
 
 
 def plate_hit_size(text: str):
-    """The plate's footprint as measure.py should test clicks against it.
+    """클릭 판정용 판 크기.
 
-    A plate sized w by h through scale_to=Space.SCREEN does not end up w by h
-    in the pixel space screen_size reports, and measuring the two showed a
-    factor of about two. This calibrates one against the other. Raise it if
-    plates stop responding near their edges, lower it if clicks land on them
-    from too far away; the traced hit rectangle and miss distance say which.
+    scale_to=Space.SCREEN 으로 그린 판은 screen_size 가 보고하는 픽셀
+    공간과 크기가 다르다(실측 약 2배). _HIT_SCALE 이 그 보정값이다.
     """
     width, height = plate_size(text)
     return width * _HIT_SCALE, height * _HIT_SCALE
 
 
 def plate_size(text: str):
-    """(width, height) of a readout plate in screen units.
-
-    Shared with measure.py, which hit-tests clicks against these rectangles:
-    when another extension owns the mouse, the plate's own gesture never fires
-    and the only way to press a plate is to work out where it is.
-    """
-    # The ring grows the plate outwards, so the text keeps the same padding
-    # however thick the outline gets.
+    """그려지는 판 크기(화면 단위)."""
     edges = (_PLATE_PAD_X + _PLATE_BORDER) * 2, (_PLATE_PAD_Y + _PLATE_BORDER) * 2
     width = max(len(text), 1) * _PLATE_FONT_SIZE * _PLATE_CHAR_WIDTH + edges[0]
     height = _PLATE_FONT_SIZE * _PLATE_LINE_HEIGHT + edges[1]
@@ -298,18 +248,9 @@ def plate_size(text: str):
 
 
 def _draw_plate_label(a, b, text, on_click=None, selected=False):
-    """Finished measurement: a rounded plate carrying the length.
-
-    omni.ui inside an sc.Widget, so the corners round from a style and the text
-    lays itself out. Only placed lines get one: the widget owns a render
-    target, and one built per mouse move exhausts the descriptor pool, which is
-    why the live preview stays a plain scene label.
-    """
+    """확정된 측정의 값 표기. 카메라를 향하는 둥근 판 위에 올린다."""
     width, height = plate_size(text)
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
-        # look_at turns the plate to face the camera, scale_to holds its size on
-        # screen. scale_to alone leaves it lying in world space, so it goes
-        # edge-on and vanishes from most angles.
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
         ):
@@ -324,12 +265,13 @@ def _draw_plate_label(a, b, text, on_click=None, selected=False):
 
 
 def _build_plate(text: str, selected: bool, on_click):
+    """둥근 사각형 두 장을 겹쳐 그 사이 간격을 테두리로 쓴다.
+
+    border_width 스트로크는 모서리에서 두껍게 래스터화된다.
+    """
     fill = _PLATE_COLOR_SELECTED if selected else _PLATE_COLOR
     edge = _PLATE_BORDER_SELECTED if selected else _PLATE_BORDER_COLOR
     with ui.ZStack():
-        # Two filled rounded rectangles, the smaller inset over the larger, so
-        # the outline is the gap between them. A border_width stroke on a
-        # rounded rectangle rasterises heavier where it turns the corners.
         ui.Rectangle(
             style={"background_color": edge, "border_radius": _PLATE_RADIUS},
             mouse_pressed_fn=(lambda *_: on_click(None)) if on_click else None,
@@ -341,10 +283,6 @@ def _build_plate(text: str, selected: bool, on_click):
                 "margin": _PLATE_BORDER,
             }
         )
-        # No margin here: the plate already grew by the ring thickness, so the
-        # padding alone keeps the text clear of it. Spacers rather than a bare
-        # alignment, because a Label sizes itself to its text and centring it
-        # needs something pushing from both sides.
         with ui.VStack():
             ui.Spacer()
             ui.Label(
@@ -360,7 +298,7 @@ def _build_plate(text: str, selected: bool, on_click):
 
 
 def _draw_plain_label(a, b, text):
-    """While still dragging: plain white text, no plate."""
+    """끌고 있는 중의 값 표기. 판 없이 흰 글자만."""
     with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
         with sc.Transform(
             look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
@@ -373,11 +311,7 @@ def _label(text: str, color):
 
 
 def _ndc_from(sender):
-    """Pull normalised device coords out of a gesture payload.
-
-    Payload field names have shifted between omni.ui.scene versions, so try the
-    known spellings rather than pinning one.
-    """
+    """제스처 payload 에서 NDC 좌표를 꺼낸다. 버전마다 필드명이 다르다."""
     payload = getattr(sender, "gesture_payload", None)
     if payload is None:
         return None

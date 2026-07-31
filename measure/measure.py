@@ -1,20 +1,16 @@
-"""Point-to-point measurement core.
+"""측정 코어. 상태를 전부 여기서 들고 있으며, 외부는 measure_service 만 씁니다.
 
-Owns all state. Everything public goes through measure_service.MeasureService.
+클릭/호버 한 번의 스냅 해소:
 
-Snap resolution per click/hover:
+    커서 픽셀 -> Ray -> 레이캐스트
+      -> 맞은 메시의 외곽선(면 하나만 쓰는 엣지 + 크리스)에서 후보 생성
+           VERTEX : 외곽선이 꺾이는 꼭지점
+           EDGE   : 외곽선 위의 점
+      -> 화면에 투영해 스냅 반경 안의 후보만 남김
+      -> VERTEX > EDGE 우선순위로 채택, 없으면 SURFACE
 
-    cursor pixel -> Ray -> submit_raycast_query
-        -> hit_position / normal / usd_path
-        -> the hit mesh's outline: edges used by a single face, and the
-           boundary vertices where that outline turns a corner
-             vertex : each outline corner
-             edge   : closest point on each outline edge
-        -> project candidates to screen, keep those within the snap radius
-        -> pick by priority VERTEX > EDGE, else fall back to SURFACE
-
-Interior vertices and interior edges are deliberately not snappable: a
-subdivided plane should offer its four corners, not its whole grid.
+내부 정점과 내부 엣지는 일부러 제외합니다. 분할된 plane 이면 격자점이
+아니라 네 모서리만 잡힙니다.
 """
 
 from __future__ import annotations
@@ -29,78 +25,31 @@ from pxr import Gf, Usd, UsdGeom
 
 from .measure_overlay import MeasureOverlay, plate_hit_size
 
-# Screen-space snap capture radius. Fixed on purpose: a pixel radius keeps the
-# feel identical at every zoom level.
-SNAP_RADIUS_PX = 12.0
+SNAP_RADIUS_PX = 12.0          # 스냅 반경(픽셀)
+_FACE_SHORTLIST = 64           # 히트 지점 근처에서 점수를 매길 면 개수
+_ON_FACE_EPS = 1e-6            # 이보다 가까우면 그 면 위에 있다고 본다
+_CORNER_COS = -0.9659          # 외곽선이 15도 이상 꺾이면 꼭지점
+_WELD_TOLERANCE = 1e-5         # 메시 크기 대비 이 비율 안이면 같은 점
+_HIT_REACH = 3.0               # 히트 지점에서 반경의 몇 배까지 후보로 볼지
+_CREASE_COS = 0.8660           # 두 면이 30도 이상 벌어지면 크리스
 
-# How many faces nearest the hit get scored when searching for its face.
-_FACE_SHORTLIST = 64
-
-# A hit this close to a face's plane and inside its bounds is on that face.
-_ON_FACE_EPS = 1e-6
-
-# Cosine above which a boundary vertex counts as a corner rather than a point
-# partway along a straight run of the outline. -cos(15 degrees).
-_CORNER_COS = -0.9659
-
-# Points closer than this fraction of the mesh's extent are the same point.
-_WELD_TOLERANCE = 1e-5
-
-# How far from the struck point a candidate may sit, as a multiple of the snap
-# radius converted to world units there. Keeps the far side of a solid out.
-_HIT_REACH = 3.0
-
-# Two faces meeting at more than this angle form a crease worth snapping to.
-# Below it they read as one smooth surface. cos(30 degrees); a cylinder wall
-# only reaches this when it has fewer than 12 sides.
-_CREASE_COS = 0.8660
-
-# 임시 진단 로그. 연동이 안정되면 False 로 끄면 됩니다.
-TRACE = True
-
-_dumped_result_attrs = False
-
-
-def _trace(msg: str):
-    if TRACE:
-        print(f"[measure] {msg}")
-
-
-def _dump_result_attrs(result):
-    """Print the raycast result's fields once, to identify the face id name."""
-    global _dumped_result_attrs
-    if _dumped_result_attrs or not TRACE:
-        return
-    _dumped_result_attrs = True
-    names = [n for n in dir(result) if not n.startswith("_")]
-    print(f"[measure] raycast result fields: {names}")
-    for name in names:
-        try:
-            value = getattr(result, name)
-        except Exception:
-            continue
-        if not callable(value):
-            print(f"[measure]   {name} = {value!r}")
+def _log(msg: str):
+    print(f"[measure] {msg}")
 
 
 class SnapKind(IntEnum):
-    """Snap class. Higher value wins when several candidates are in range."""
-
-    SURFACE = 0  # fallback, always available, cannot be masked off
+    SURFACE = 0
     EDGE = 1
     VERTEX = 2
 
 
 class SnapMode(IntFlag):
-    """Which snap classes are active. SURFACE is absent: it is the floor."""
-
     NONE = 0
     EDGE = 1 << 0
     VERTEX = 1 << 1
     ALL = EDGE | VERTEX
 
 
-# Highest priority first, so resolution can stop at the first class that hits.
 _FLAG_TO_KIND = (
     (SnapMode.VERTEX, SnapKind.VERTEX),
     (SnapMode.EDGE, SnapKind.EDGE),
@@ -113,28 +62,23 @@ class SnapPoint:
     kind: SnapKind
     prim_path: str = ""
     face_index: int = -1
-    element_index: int = -1  # vertex or edge index within the face, -1 for SURFACE
+    element_index: int = -1
     normal: Gf.Vec3d = field(default_factory=lambda: Gf.Vec3d(0, 1, 0))
 
 
 @dataclass
 class Line:
-    id: int  # permanent key: unique, never reused, safe to hold on to
+    id: int
     viewport_id: str
     tab_id: str
     start: SnapPoint
     end: SnapPoint
     length_m: float
-    visible: bool = True  # user intent; the active tab gates drawing on top
-    # Position within its own viewport, counting from 1. Recomputed whenever
-    # lines come or go, so deleting the second of three renumbers the third to
-    # second. For showing to people; use id to refer to a line.
+    visible: bool = True
     number: int = 0
 
 
 class Subscription:
-    """Handle returned by subscribe_changed. Dropping it unsubscribes."""
-
     def __init__(self, store: list, fn):
         self._store = store
         self._fn = fn
@@ -153,50 +97,38 @@ class Subscription:
 
 
 class _ViewportState:
-    """Per-viewport tool state. One of these per registered viewport."""
-
     def __init__(self, viewport_id: str, tab_id: str, viewport_api, overlay: MeasureOverlay):
         self.viewport_id = viewport_id
         self.tab_id = tab_id
         self.viewport_api = viewport_api
         self.overlay = overlay
-        self.armed = False  # pick_one issued, waiting for clicks
-        self.pending: SnapPoint | None = None  # first click landed
+        self.armed = False
+        self.pending: SnapPoint | None = None
         self.on_done = None
         self.current_snap: SnapPoint | None = None
         self.visible = True
 
 
 class MeasureCore:
-    """Singleton. All state lives here as class attributes."""
-
     _started = False
     _viewports: dict = {}
     _lines: dict = {}
     _next_line_id = 1
-    _snap_mode = SnapMode.ALL  # global, not per viewport
+    _snap_mode = SnapMode.ALL
     _changed_callbacks: list = []
     _mesh_cache: dict = {}
     _snap_radius = SNAP_RADIUS_PX
-    # viewport id -> (viewport_api, frame, tab_id), from register_vph.
-    # ViewportWidget has no ViewportWindow to enumerate or to draw into, so the
-    # host supplies both.
     _registered: dict = {}
-    _tabs: dict = {}  # tab id -> [viewport id]
-    _active_tab = None  # None means "no tab filter", every tab draws
-    _maximized: dict = {}  # tab id -> the one viewport id eclipsing its siblings
-    _selected = ""  # viewport pick_one defaults to
-    # True once the host feeds clicks in. The overlay then never grabs input,
-    # so it cannot fight the extension that already owns the mouse.
+    _tabs: dict = {}
+    _active_tab = None
+    _maximized: dict = {}
+    _selected = ""
     _host_input = False
-    _hover_seen = False  # has any hover event reached us at all
-    # Armed without naming a viewport: the first click decides which one.
+    _hover_seen = False
     _pending_any = False
     _pending_done = None
-    _pending_viewports: tuple = ()  # which ones may claim it
-    _selected_line = None  # highlighted by clicking its readout
-
-    # ------------------------------------------------------------------ life
+    _pending_viewports: tuple = ()
+    _selected_line = None
 
     @classmethod
     def startup(cls):
@@ -224,11 +156,9 @@ class MeasureCore:
         if not cls._started:
             raise RuntimeError("measure extension is not started")
 
-    # --------------------------------------------------------------- status
-
     @classmethod
     def status(cls) -> dict:
-        """Everything a caller might want to read, in one call."""
+        """현재 상태 전부를 dict 하나로."""
         return {
             "snap_mode": cls._snap_mode,
             "snap_radius": cls._snap_radius,
@@ -242,17 +172,9 @@ class MeasureCore:
             "maximized": dict(cls._maximized),
         }
 
-    # ----------------------------------------------------------- host input
-
     @classmethod
     def set_host_input(cls, host_input: bool):
-        """Hand mouse input over to the host, or take it back.
-
-        While on, the overlay never activates its own click capture; clicks
-        arrive only through on_external_click().
-        """
         cls._host_input = bool(host_input)
-        _trace(f"set_host_input({cls._host_input}) - hover stays on the overlay")
         if cls._host_input:
             for state in cls._viewports.values():
                 state.overlay.set_click_active(False)
@@ -263,28 +185,20 @@ class MeasureCore:
 
     @classmethod
     def on_external_click(cls, viewport_id: str, x, y=None, space: str = "ndc"):
-        """A click the host captured. Ignored unless that viewport is armed."""
         if not cls._host_input:
-            cls.set_host_input(True)  # first external click settles ownership
-        state = cls._viewports.get(viewport_id)
+            cls.set_host_input(True)
         ndc = cls._to_ndc(viewport_id, x, y, space)
-        _trace(
-            f"on_viewport_click vp='{viewport_id}' raw={x!r},{y!r} space={space} "
-            f"-> ndc={ndc} armed={getattr(state, 'armed', None)}"
-        )
         if ndc is not None:
             cls._on_click(viewport_id, ndc)
 
     @classmethod
     def on_external_hover(cls, viewport_id: str, x, y=None, space: str = "ndc"):
-        """Cursor moved. Drives the snap marker and the rubber-band preview."""
         ndc = cls._to_ndc(viewport_id, x, y, space)
         if ndc is not None:
             cls._on_hover(viewport_id, ndc)
 
     @classmethod
     def _to_ndc(cls, viewport_id: str, x, y, space: str):
-        """(x, y) 또는 (x, y) 시퀀스를 받습니다. space 는 'ndc' 또는 'pixel'."""
         if y is None:
             try:
                 x, y = x[0], x[1]
@@ -300,19 +214,11 @@ class MeasureCore:
         width, height = _screen_size(state)
         if width <= 0 or height <= 0:
             return None
-        # Pixels are measured from the viewport's top-left.
         return ((x / width) * 2.0 - 1.0, 1.0 - (y / height) * 2.0)
-
-    # --------------------------------------------------------- registration
 
     @classmethod
     def register_vph(cls, vph) -> str:
-        """Register one viewport widget host. Returns its viewport id.
-
-        Reads vph.viewport_api.id, vph.tab_id and vph.ui_frame, and builds the
-        overlay straight away. Registration is the only way a viewport becomes
-        known: there is nothing to discover for a ViewportWidget.
-        """
+        """vph 하나를 등록하고 오버레이를 만든다. 뷰포트 id 반환."""
         cls._require_started()
         viewport_api = vph.viewport_api
         viewport_id = str(getattr(viewport_api, "id", "") or "")
@@ -320,15 +226,11 @@ class MeasureCore:
             raise ValueError("vph.viewport_api has no usable id")
         tab_id = str(vph.tab_id)
         frame = vph.ui_frame
-        _trace(
-            f"register_vph id='{viewport_id}' tab='{tab_id}' "
-            f"frame={type(frame).__name__ if frame is not None else None}"
-        )
         if frame is None:
             raise ValueError(f"vph '{viewport_id}' has no ui_frame to draw into")
 
         old = cls._viewports.pop(viewport_id, None)
-        if old is not None:  # re-registered, e.g. the tab was rebuilt
+        if old is not None:
             old.overlay.destroy()
 
         cls._registered[viewport_id] = (viewport_api, frame, tab_id)
@@ -353,13 +255,8 @@ class MeasureCore:
 
     @classmethod
     def register_tab(cls, tab_id: str, vphs) -> tuple:
-        """Register a whole tab at creation time. Returns its viewport ids.
-
-        tab_id is taken from each vph, so it only has to agree with what the
-        hosts report; a mismatch is a caller bug and is logged.
-        """
+        """탭과 그 vph 들을 등록하고 활성 탭으로 만든다."""
         vphs = list(vphs)
-        _trace(f"on_tab_created tab='{tab_id}' vph count={len(vphs)}")
         ids = []
         for vph in vphs:
             if str(vph.tab_id) != str(tab_id):
@@ -368,17 +265,12 @@ class MeasureCore:
                 )
             ids.append(cls.register_vph(vph))
         cls._tabs.setdefault(str(tab_id), [])
-        # A freshly created tab is the one on screen, so make it active.
         cls.set_active_tab(tab_id)
-        _trace(
-            f"on_tab_created done tab='{tab_id}' ids={tuple(ids)} "
-            f"all tabs={tuple(cls._tabs)} active={cls._active_tab!r}"
-        )
         return tuple(ids)
 
     @classmethod
     def unregister_tab(cls, tab_id: str):
-        """Tab closed: drop its viewports and every line drawn in them."""
+        """탭의 뷰포트와 거기 그려진 직선을 모두 제거."""
         tab_id = str(tab_id)
         for viewport_id in list(cls._tabs.get(tab_id, [])):
             cls.unregister_viewport(viewport_id)
@@ -403,16 +295,10 @@ class MeasureCore:
         }
         cls._renumber()
 
-    # ------------------------------------------------------------------ tabs
-
     @classmethod
     def set_active_tab(cls, tab_id):
-        """Only the active tab draws. None lifts the filter entirely."""
+        """활성 탭만 그리고 클릭을 받는다."""
         cls._active_tab = None if tab_id is None else str(tab_id)
-        _trace(
-            f"on_tab_activated active='{cls._active_tab}' "
-            f"members={tuple(cls._tabs.get(cls._active_tab or '', ()))}"
-        )
         for viewport_id in list(cls._viewports):
             cls._refresh(viewport_id)
         cls._notify()
@@ -427,7 +313,7 @@ class MeasureCore:
 
     @classmethod
     def set_maximized(cls, viewport_id: str):
-        """One viewport eclipses its siblings inside its own tab."""
+        """한 뷰포트가 자기 탭 안에서 형제들을 덮는다."""
         tab_id = cls.get_tab_of(viewport_id)
         cls._maximized[tab_id] = viewport_id
         for vp in list(cls._tabs.get(tab_id, [])):
@@ -435,7 +321,6 @@ class MeasureCore:
 
     @classmethod
     def clear_maximized(cls, tab_id: str):
-        """Back to the normal grid: every viewport in the tab draws again."""
         tab_id = str(tab_id)
         cls._maximized.pop(tab_id, None)
         for vp in list(cls._tabs.get(tab_id, [])):
@@ -447,12 +332,7 @@ class MeasureCore:
 
     @classmethod
     def set_selected_viewport(cls, viewport_id: str):
-        """The viewport pick_one() targets when called without an id."""
         cls._selected = str(viewport_id or "")
-        _trace(
-            f"on_viewport_selected '{cls._selected}' "
-            f"registered={cls._selected in cls._viewports}"
-        )
         cls._notify()
 
     @classmethod
@@ -461,7 +341,6 @@ class MeasureCore:
 
     @classmethod
     def list_viewport_ids(cls, tab_id=None) -> tuple:
-        """Every registered viewport id, or only one tab's."""
         if tab_id is not None:
             return tuple(cls._tabs.get(str(tab_id), []))
         return tuple(cls._registered)
@@ -470,8 +349,6 @@ class MeasureCore:
     def get_tab_of(cls, viewport_id: str) -> str:
         entry = cls._registered.get(viewport_id)
         return entry[2] if entry is not None else ""
-
-    # ----------------------------------------------------------------- snap
 
     @classmethod
     def set_snap_mode(cls, mode: SnapMode):
@@ -483,7 +360,6 @@ class MeasureCore:
 
     @classmethod
     def set_snap_radius(cls, pixels: float):
-        """Capture radius in render pixels. Raise it if snapping feels dead."""
         cls._snap_radius = max(1.0, float(pixels))
 
     @classmethod
@@ -495,20 +371,10 @@ class MeasureCore:
         state = cls._viewports.get(viewport_id)
         return state.current_snap if state else None
 
-    # ----------------------------------------------------------------- pick
-
     @classmethod
     def pick_one(cls, viewport_id=None, on_done=None):
-        """Arm for one line.
-
-        Every viewport in the active tab can start it. The first point claims
-        its viewport, and the second point has to land in that same one, so a
-        measurement never spans two views.
-
-        Naming a viewport arms only that one.
-        """
+        """활성 탭 전체를 무장. 첫 점이 찍힌 뷰포트만 두 번째 점을 받는다."""
         cls._require_started()
-        # Points and transforms may have changed since the last pick.
         cls._mesh_cache.clear()
 
         if viewport_id:
@@ -529,14 +395,12 @@ class MeasureCore:
         cls._pending_any = True
         cls._pending_done = on_done
         cls._pending_viewports = candidates
-        _trace(f"pick_one: armed across {candidates}")
         if not cls._host_input:
             for vp in candidates:
                 cls._viewports[vp].overlay.set_click_active(True)
 
     @classmethod
     def _pick_candidates(cls) -> tuple:
-        """Registered viewports of the active tab, or all of them if none is."""
         if cls._active_tab is not None:
             members = cls._tabs.get(cls._active_tab, ())
             return tuple(vp for vp in members if vp in cls._viewports)
@@ -554,21 +418,11 @@ class MeasureCore:
             if not cls._host_input:
                 other.overlay.set_click_active(other is state)
             elif other is not state:
-                # set_click_active would have cleared these, but it is skipped
-                # while the host owns input, and the losing viewports have
-                # markers up from hovering as candidates.
                 other.overlay.set_snap_marker(None)
                 other.current_snap = None
-        if not cls._hover_seen:
-            _trace(
-                "pick_one: no hover has ever arrived. The snap marker and the "
-                "preview line need on_viewport_hover(vp_id, coords) forwarded "
-                "when the host owns viewport input. Clicks snap regardless."
-            )
-
     @classmethod
     def cancel_pick(cls, viewport_id=None):
-        """Cancel one viewport's pick, or every pending one."""
+        """진행 중인 픽을 취소. id 를 안 주면 전부."""
         cls._pending_any = False
         cls._pending_done = None
         cls._pending_viewports = ()
@@ -584,11 +438,9 @@ class MeasureCore:
             state.overlay.set_preview(None, None, "")
             state.overlay.set_click_active(False)
 
-    # ---------------------------------------------------------------- lines
-
     @classmethod
     def _renumber(cls):
-        """Give each viewport's lines 1, 2, 3... in the order they were made."""
+        """뷰포트별로 1, 2, 3... 표시 번호를 다시 매긴다."""
         counts: dict = {}
         for line in sorted(cls._lines.values(), key=lambda ln: ln.id):
             counts[line.viewport_id] = counts.get(line.viewport_id, 0) + 1
@@ -609,6 +461,7 @@ class MeasureCore:
         if line is None:
             return False
         cls._renumber()
+        _log(f"removed line {line.id} from '{line.viewport_id}'")
         cls._refresh(line.viewport_id)
         cls._notify()
         return True
@@ -630,11 +483,7 @@ class MeasureCore:
 
     @classmethod
     def set_visible(cls, visible: bool, line_id=None, viewport_id=None, tab_id=None):
-        """Four tiers, most specific first: line, viewport, tab, everything.
-
-        This is user intent only. The active tab gates drawing independently,
-        so making something visible here does not show it in an inactive tab.
-        """
+        """사용자 의도만 정한다. 활성 탭 여부가 별도로 그리기를 막는다."""
         if line_id is not None:
             line = cls._lines.get(line_id)
             if line is None:
@@ -655,32 +504,25 @@ class MeasureCore:
                 cls._refresh(vp)
         cls._notify()
 
-    # --------------------------------------------------------------- events
-
     @classmethod
     def subscribe_changed(cls, fn) -> Subscription:
         return Subscription(cls._changed_callbacks, fn)
 
     @classmethod
     def _notify(cls):
-        _trace(f"notify -> {len(cls._changed_callbacks)} listener(s)")
         for fn in list(cls._changed_callbacks):
             try:
                 fn()
-            except Exception as exc:  # a bad listener must not break the tool
+            except Exception as exc:
                 carb.log_error(f"[measure] changed callback failed: {exc}")
-
-    # ---------------------------------------------------------------- input
 
     @classmethod
     def _on_label_click(cls, line_id: int):
-        """A readout pressed: first press selects it, a second one deletes it."""
+        """판을 누르면 처음엔 선택, 같은 것을 다시 누르면 삭제."""
         if cls._selected_line == line_id:
-            _trace(f"label clicked again: removing line {line_id}")
             cls._selected_line = None
             cls.remove(line_id)
             return
-        _trace(f"label clicked: selecting line {line_id}")
         cls._selected_line = line_id
         for viewport_id in list(cls._viewports):
             cls._refresh(viewport_id)
@@ -688,10 +530,8 @@ class MeasureCore:
 
     @classmethod
     def _clear_selection(cls):
-        """Any other click drops the highlight."""
         if cls._selected_line is None:
             return
-        _trace("selection cleared")
         cls._selected_line = None
         for viewport_id in list(cls._viewports):
             cls._refresh(viewport_id)
@@ -699,15 +539,7 @@ class MeasureCore:
 
     @classmethod
     def _try_label_click(cls, state, ndc) -> bool:
-        """Did this click land on a readout plate? If so, remove that line.
-
-        The plate's own gesture only fires when the overlay owns the mouse.
-        Once the host forwards clicks instead, nothing reaches the plate, so
-        work out where the plates are and test the cursor against them.
-
-        Where plates overlap, the one nearest the camera wins, which is the one
-        drawn on top.
-        """
+        """클릭이 판 위인지 판정. 겹치면 카메라에 가까운 것을 집는다."""
         view, proj = _camera_matrices(state.viewport_api)
         if view is None:
             return False
@@ -740,20 +572,9 @@ class MeasureCore:
             if offset[0] <= plate_w * 0.5 and offset[1] <= plate_h * 0.5:
                 depth = float(np.linalg.norm(middles[index] - camera))
                 under_cursor.append((depth, line.id))
-                _trace(
-                    f"label hit: line {line.id} plate {plate_w:.0f}x{plate_h:.0f} "
-                    f"at {pixels[index].round(1)}, cursor {cursor.round(1)}, "
-                    f"off by {offset.round(1)}"
-                )
         if not under_cursor:
-            _trace(
-                f"label click: nothing at {cursor.round(1)} in a "
-                f"{size[0]:.0f}x{size[1]:.0f} view"
-            )
             return False
         under_cursor.sort()
-        if len(under_cursor) > 1:
-            _trace(f"label click: {len(under_cursor)} plates overlap, taking nearest")
         cls._on_label_click(under_cursor[0][1])
         return True
 
@@ -761,18 +582,13 @@ class MeasureCore:
     def _on_hover(cls, viewport_id: str, ndc):
         state = cls._viewports.get(viewport_id)
         if state is None or not cls._listening(viewport_id, state):
-            return  # no raycast per mouse move unless a pick is in progress
+            return
         cls._hover_seen = True
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_hover(state, snap))
 
     @classmethod
     def _listening(cls, viewport_id: str, state) -> bool:
-        """Should this viewport resolve snaps right now?
-
-        Every armed candidate does, not just the one that has claimed the pick:
-        before the first point there is no claim yet, and snapping has to show
-        in all of them or there is nothing to aim with.
-        """
+        """지금 이 뷰포트가 스냅을 해소해야 하는가."""
         if state.armed:
             return True
         return cls._pending_any and viewport_id in cls._pending_viewports
@@ -793,14 +609,9 @@ class MeasureCore:
         if state is None:
             return
         if not state.armed and cls._listening(viewport_id, state):
-            _trace(
-                f"pick_one: claimed by '{viewport_id}'; the second point must "
-                f"land there too"
-            )
             cls._selected = viewport_id
             cls._arm(state, cls._pending_done)
         if not state.armed:
-            # Not measuring, so a click here can only be aimed at a readout.
             if not cls._try_label_click(state, ndc):
                 cls._clear_selection()
             return
@@ -809,14 +620,8 @@ class MeasureCore:
 
     @classmethod
     def _apply_click(cls, state, snap):
-        if snap is None:  # clicked empty space, nothing to anchor to
-            _trace("click resolved: nothing hit")
+        if snap is None:
             return
-        _trace(
-            f"click resolved: kind={snap.kind.name} elem={snap.element_index} "
-            f"pos={tuple(round(v, 4) for v in snap.position)}"
-        )
-        # Show where it landed even when hover never reaches us.
         state.overlay.set_snap_marker(snap)
         if state.pending is None:
             state.pending = snap
@@ -833,6 +638,7 @@ class MeasureCore:
         cls._next_line_id += 1
         cls._lines[line.id] = line
         cls._renumber()
+        _log(f"line {line.id} (#{line.number}) on '{line.viewport_id}': {line.length_m:.3f} m")
 
         on_done = state.on_done
         state.armed = False
@@ -849,11 +655,8 @@ class MeasureCore:
             except Exception as exc:
                 carb.log_error(f"[measure] on_done callback failed: {exc}")
 
-    # ----------------------------------------------------------------- snap
-
     @classmethod
     def _resolve_snap(cls, state, ndc, on_result):
-        """Fire a raycast, then reduce the hit to a snapped point."""
         try:
             import omni.kit.raycast.query as rq
         except ImportError:
@@ -881,11 +684,10 @@ class MeasureCore:
 
     @classmethod
     def _snap_from_hit(cls, state, result, ndc, view, proj):
+        """레이캐스트 결과를 외곽선 스냅점으로 환산한다."""
         if not getattr(result, "valid", False):
-            _trace("snap: raycast miss")
             return None
 
-        _dump_result_attrs(result)
 
         hit = Gf.Vec3d(*result.hit_position)
         normal = Gf.Vec3d(*getattr(result, "normal", (0.0, 1.0, 0.0)))
@@ -893,7 +695,6 @@ class MeasureCore:
 
         surface = SnapPoint(hit, SnapKind.SURFACE, path, -1, -1, normal)
         if cls._snap_mode == SnapMode.NONE:
-            _trace("snap: mode is NONE, surface only")
             return surface
 
         time = _time_of(state.viewport_api)
@@ -906,21 +707,10 @@ class MeasureCore:
         view_proj = _matrix_np(view * proj)
         width, height = size
 
-        # The screen radius alone cannot tell front from back: the far side of a
-        # cylinder projects right under the near side. A candidate must also lie
-        # near the point the ray actually struck, so convert the pixel radius
-        # into a world one at that depth.
         reach = cls._snap_radius * _HIT_REACH / _pixel_scale(
             view, proj, hit, geom.extent, size
         )
-        _trace(
-            f"snap: path='{path}' corners={len(outline.corners)} "
-            f"edges={len(outline.edge_a)} cursor_px={cursor_px.round(1)} "
-            f"radius={cls._snap_radius} reach={reach:.4g} time={time}"
-        )
 
-        # Priority is absolute: the first class with a candidate in range wins,
-        # distance only breaks ties inside that class.
         for flag, kind in _FLAG_TO_KIND:
             if not (cls._snap_mode & flag):
                 continue
@@ -940,37 +730,24 @@ class MeasureCore:
             near_hit = np.linalg.norm(points - _as_np(hit), axis=1) <= reach
             usable = valid & near_hit
             if not usable.any():
-                _trace(f"snap:   {kind.name} none within reach of the hit")
                 continue
             distances = np.where(usable, screen, np.inf)
             index = int(np.argmin(distances))
             nearest = float(distances[index])
-            _trace(
-                f"snap:   {kind.name} {int(usable.sum())}/{len(points)} in reach "
-                f"nearest={nearest:.1f} hit={nearest <= cls._snap_radius}"
-            )
             if nearest <= cls._snap_radius:
                 return SnapPoint(
                     Gf.Vec3d(*points[index]), kind, path, -1, index, normal
                 )
         return surface
 
-
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
-        """(points, counts, indices, offsets, xform) for the hit geometry.
-
-        Cached by the prim it resolves to, never by the path that was hit:
-        one path can cover several meshes and the hit decides which.
-        """
+        """히트한 지오메트리. 히트 경로가 아니라 해소된 프림으로 캐시한다."""
         stage = omni.usd.get_context().get_stage()
         if stage is None:
-            _trace("snap: no stage")
             return None
 
         prim, why = _resolve_mesh_prim(stage, prim_path, hit, time)
-        if why:
-            _trace(f"snap: {why}")
         if prim is None:
             return None
 
@@ -981,46 +758,28 @@ class MeasureCore:
 
         entry = _build_entry(prim, time)
         if entry is None:
-            _trace(f"snap: '{prim.GetPath()}' has no points")
             cls._mesh_cache[key] = ()
             return None
-        if entry.counts is None:
-            mesh = UsdGeom.Mesh(prim)
-            counts_attr = mesh.GetFaceVertexCountsAttr() if mesh else None
-            _trace(
-                f"snap: '{prim.GetPath()}' has {len(entry.points)} points but no "
-                f"face topology; vertex snapping only. "
-                f"faceVertexCounts: {_attr_report(counts_attr)}"
-            )
         cls._mesh_cache[key] = entry
         return entry
-
 
     @classmethod
     def invalidate_mesh_cache(cls, prim_path=None):
         if prim_path is None:
             cls._mesh_cache.clear()
         else:
-            # Keyed by (stage, path, time), so drop every matching entry.
             for key in [k for k in cls._mesh_cache if k[1] == prim_path]:
                 cls._mesh_cache.pop(key, None)
 
-    # ---------------------------------------------------------------- draw
-
     @classmethod
     def _refresh(cls, viewport_id: str):
+        """그리기 갱신. 활성 탭 / 최대화 / 사용자 가시성 세 조건을 모두 만족해야 보인다."""
         state = cls._viewports.get(viewport_id)
         if state is None:
             return
-        # Two independent gates: the active tab, and user intent. Hiding the
-        # scene also stops gestures, so an inactive tab cannot be clicked into.
         tab_active = cls._active_tab is None or state.tab_id == cls._active_tab
         eclipsed = cls._maximized.get(state.tab_id) not in (None, viewport_id)
         shown = state.visible and tab_active and not eclipsed
-        _trace(
-            f"refresh vp='{viewport_id}' tab='{state.tab_id}' shown={shown} "
-            f"(tab_active={tab_active} eclipsed={eclipsed} user={state.visible})"
-        )
         state.overlay.set_scene_visible(shown)
         lines = [
             ln
@@ -1036,9 +795,6 @@ class MeasureCore:
         return float((b - a).GetLength()) * (mpu or 1.0)
 
 
-# --------------------------------------------------------------------- utils
-
-
 def _stage_key(stage) -> str:
     if stage is None:
         return ""
@@ -1049,7 +805,6 @@ def _stage_key(stage) -> str:
 
 
 def _time_of(viewport_api):
-    """The time the viewport is showing, as a Usd.TimeCode."""
     time = getattr(viewport_api, "time", None)
     if time is not None:
         return time
@@ -1064,11 +819,6 @@ def _time_of(viewport_api):
 
 
 def _times_to_try(attr, time):
-    """Current time first, then default, then the first authored sample.
-
-    Points are often authored only at time samples, so reading at the default
-    time code comes back empty even though the mesh clearly has geometry.
-    """
     times = []
     if time is not None:
         times.append(time)
@@ -1084,7 +834,6 @@ def _times_to_try(attr, time):
 
 
 def _attr_value(attr, time=None):
-    """Read an attribute, trying the times it might actually be authored at."""
     if not attr:
         return None
     for when in _times_to_try(attr, time):
@@ -1095,11 +844,6 @@ def _attr_value(attr, time=None):
 
 
 def _points_of(prim, time=None):
-    """Points of any point-based prim, or None.
-
-    PointBased rather than Mesh, so Points and BasisCurves work too. Implicit
-    gprims (Cube, Sphere, Cylinder, ...) are procedural and have none.
-    """
     try:
         return _attr_value(UsdGeom.PointBased(prim).GetPointsAttr(), time)
     except Exception:
@@ -1111,7 +855,6 @@ def _has_points(prim, time=None) -> bool:
 
 
 def _descendants(prim):
-    """Children including instance proxies, which a plain range skips."""
     try:
         return list(Usd.PrimRange(prim, Usd.TraverseInstanceProxies()))
     except Exception:
@@ -1123,11 +866,6 @@ def _as_np(vec) -> np.ndarray:
 
 
 def _face_normals(position, index, nxt, starts) -> np.ndarray:
-    """One unit normal per face, by Newell's method so n-gons work.
-
-    Only the angle between two faces matters here, so which way the winding
-    sends them is irrelevant.
-    """
     cross = np.cross(position[index], position[nxt])
     normals = np.add.reduceat(cross, starts, axis=0)
     lengths = np.linalg.norm(normals, axis=1)
@@ -1135,17 +873,9 @@ def _face_normals(position, index, nxt, starts) -> np.ndarray:
 
 
 def _feature_edges(index, nxt, counts, normals):
-    """(edges, total) - edges worth snapping to, as welded index pairs.
-
-    An edge qualifies two ways. It is a boundary, used by a single face. Or it
-    is a crease: the faces either side meet at a sharp angle. Creases matter
-    because a solid has no boundary at all - a capped cylinder's rim is shared
-    by the cap and the wall, yet it is exactly the circle you want to measure
-    to, while the wall's own vertical edges are nearly flat and are not.
-    """
     pairs = np.sort(np.stack([index, nxt], axis=1), axis=1)
     face_of = np.repeat(np.arange(len(counts)), counts)
-    keep = pairs[:, 0] != pairs[:, 1]  # a face may fold back on itself
+    keep = pairs[:, 0] != pairs[:, 1]
     pairs, face_of = pairs[keep], face_of[keep]
     if len(pairs) == 0:
         return np.empty((0, 2), dtype=np.int64), 0
@@ -1158,7 +888,7 @@ def _feature_edges(index, nxt, counts, normals):
     sizes = np.diff(np.append(group, len(pairs)))
 
     boundary = group[sizes == 1]
-    tangled = group[sizes > 2]  # non-manifold, always interesting
+    tangled = group[sizes > 2]
     shared = group[sizes == 2]
     creased = shared
     if len(shared):
@@ -1171,13 +901,6 @@ def _feature_edges(index, nxt, counts, normals):
 
 
 def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
-    """(points, screen distances, usable) for edges against a cursor.
-
-    Solved on screen, not in space: what matters is the point of the edge that
-    appears under the cursor. Picking the point nearest the hit in 3D instead
-    put the answer somewhere else along the edge and measured its distance from
-    there, which is why edges felt unreliable to grab.
-    """
     px_a, ok_a = _project_px(starts, view_proj, width, height)
     px_b, ok_b = _project_px(ends, view_proj, width, height)
 
@@ -1188,12 +911,11 @@ def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
     t = np.clip(np.where(lengths > 1e-12, t, 0.0), 0.0, 1.0)
 
     screen = np.linalg.norm(px_a + spans * t[:, None] - cursor_px, axis=1)
-    points = starts + (ends - starts) * t[:, None]  # same fraction along in 3D
+    points = starts + (ends - starts) * t[:, None]
     return points, screen, ok_a & ok_b
 
 
 def _pixel_scale(view, proj, point, extent, size) -> float:
-    """Pixels per world unit at `point`, so a screen radius becomes a real one."""
     step = max(extent, 1e-9) * 1e-3
     across = _as_np(view.GetInverse().TransformDir(Gf.Vec3d(1.0, 0.0, 0.0)))
     pair = np.stack([_as_np(point), _as_np(point) + across * step])
@@ -1206,7 +928,6 @@ def _pixel_scale(view, proj, point, extent, size) -> float:
 
 
 def _camera_position(view) -> np.ndarray:
-    """World-space eye point, from the inverse of the world-to-view matrix."""
     return _as_np(view.GetInverse().ExtractTranslation())
 
 
@@ -1215,14 +936,9 @@ def _matrix_np(matrix) -> np.ndarray:
 
 
 def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
-    """(pixels, valid) for many world points at once.
-
-    The per-point Python version made a hover on a dense mesh unusable, since
-    it ran a 4x4 transform per point per mouse move.
-    """
     count = len(world)
     homogeneous = np.hstack([world, np.ones((count, 1))])
-    clip = homogeneous @ view_proj  # USD is row-vector: p * M
+    clip = homogeneous @ view_proj
     w = clip[:, 3]
     valid = np.abs(w) > 1e-12
     ndc = np.zeros((count, 3))
@@ -1234,8 +950,6 @@ def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
 
 
 class _Outline:
-    """A mesh's snappable corners and feature edges, in world space."""
-
     def __init__(self, corners, edge_a, edge_b):
         self.corners = corners
         self.edge_a = edge_a
@@ -1247,8 +961,6 @@ class _Outline:
 
 
 class _Geom:
-    """Geometry of one prim, prepared for repeated screen-space queries."""
-
     def __init__(self, points, counts, indices, offsets, xform):
         self.points = points
         self.counts = counts
@@ -1265,11 +977,6 @@ class _Geom:
         self._boundary = None
 
     def _topology(self):
-        """Welded (position, index, next-in-face, face starts).
-
-        Each vertex is paired with the next one in its own face, wrapping at
-        that face's end rather than running on into the next face.
-        """
         position, remap = self._weld()
         index = remap[np.asarray(self.indices, dtype=np.int64)]
         starts = np.asarray(self.offsets[:-1], dtype=np.int64)
@@ -1281,7 +988,6 @@ class _Geom:
 
     @property
     def centroids(self):
-        """One point per face, for narrowing a face search cheaply."""
         if self._centroids is None and self.counts is not None:
             index = np.asarray(self.indices, dtype=np.int64)
             starts = np.asarray(self.offsets[:-1], dtype=np.int64)
@@ -1297,24 +1003,11 @@ class _Geom:
 
     @property
     def boundary(self):
-        """(corner points, outline edge starts, outline edge ends) in world space.
-
-        Only the outline is snappable. An edge shared by two faces is interior,
-        and a boundary vertex whose two edges run straight through it lies
-        partway along the outline rather than at a corner of it.
-        """
         if self._boundary is None:
             self._boundary = self._find_boundary()
         return self._boundary
 
     def _weld(self):
-        """Merge points that sit at the same position, returning (pos, remap).
-
-        Exported meshes routinely repeat a point per face. Left alone, an
-        interior edge shows up as two different index pairs, each used by one
-        face, so every edge looks like an outline and every vertex like a
-        corner.
-        """
         world = self.world
         tolerance = self.extent * _WELD_TOLERANCE
         keys = np.round(world / tolerance).astype(np.int64)
@@ -1322,7 +1015,6 @@ class _Geom:
             keys, axis=0, return_index=True, return_inverse=True, return_counts=True
         )
         remap = remap.ravel()
-        # Average each group so a welded point sits at their common position.
         position = np.stack(
             [np.bincount(remap, world[:, axis], len(first)) for axis in range(3)],
             axis=1,
@@ -1338,10 +1030,6 @@ class _Geom:
         edges, counted = _feature_edges(
             index, nxt, np.asarray(self.counts, dtype=np.int64), normals
         )
-        _trace(
-            f"snap:   {len(self.world)} pts welded to {len(position)}: "
-            f"{len(edges)} feature of {counted} edges"
-        )
         if len(edges) == 0:
             return _Outline.empty()
 
@@ -1353,7 +1041,7 @@ class _Geom:
         corners = []
         for vertex, around in neighbours.items():
             if len(around) != 2:
-                corners.append(vertex)  # junction or dangling end
+                corners.append(vertex)
                 continue
             here = position[vertex]
             first = position[around[0]] - here
@@ -1361,7 +1049,6 @@ class _Geom:
             n1, n2 = np.linalg.norm(first), np.linalg.norm(second)
             if n1 < 1e-12 or n2 < 1e-12:
                 continue
-            # Running straight through means the directions oppose, cos near -1.
             if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
                 corners.append(vertex)
 
@@ -1375,13 +1062,9 @@ class _Geom:
 
 
 def _build_entry(prim, time=None):
-    """A _Geom for the prim, or None. counts is None without face topology."""
     points = _points_of(prim, time)
     if points is None:
         return None
-    # Topology gets the same time treatment as the points: a mesh whose points
-    # are time sampled almost always has its topology authored the same way,
-    # and reading it at the default time code silently loses every face.
     mesh = UsdGeom.Mesh(prim)
     counts = _attr_value(mesh.GetFaceVertexCountsAttr(), time) if mesh else None
     indices = _attr_value(mesh.GetFaceVertexIndicesAttr(), time) if mesh else None
@@ -1403,11 +1086,6 @@ def _build_entry(prim, time=None):
 
 
 def _best_face_by_hit(geom, hit, cap=_FACE_SHORTLIST):
-    """(score, face, verts) for the face the hit sits on. Ignores any face id.
-
-    Only the faces whose centroids are nearest the hit get scored: scanning
-    every face of a dense mesh on each mouse move is far too slow.
-    """
     centroids = geom.centroids
     if centroids is None:
         return None
@@ -1423,12 +1101,11 @@ def _best_face_by_hit(geom, hit, cap=_FACE_SHORTLIST):
         if best is None or score < best[0]:
             best = (score, int(face), verts)
             if score <= _ON_FACE_EPS:
-                break  # sitting on it, no better answer exists
+                break
     return best
 
 
 def _mesh_hit_score(prim, hit, time=None) -> float:
-    """How close the hit is to this prim's surface. Lower is better."""
     geom = _build_entry(prim, time)
     if geom is None:
         return float("inf")
@@ -1470,12 +1147,6 @@ def _describe(prim) -> str:
 
 
 def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
-    """(prim, note). Walks to the prim that actually carries the topology.
-
-    A raycast can report a GeomSubset, an instance proxy or a wrapping Xform
-    rather than the mesh itself. When several meshes sit under the reported
-    path, the one the hit point lies on wins.
-    """
     path = str(prim_path)
     prim = stage.GetPrimAtPath(path)
     if not prim or not prim.IsValid():
@@ -1498,8 +1169,6 @@ def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
     if meshes:
         if hit is None:
             return None, f"'{path}' has {len(meshes)} meshes under it, no hit to pick by"
-        # Intersecting planes overlap in space, so pick by distance to the
-        # actual surface rather than by bounds.
         scored = sorted((_mesh_hit_score(m, hit, time), i) for i, m in enumerate(meshes))
         score, index = scored[0]
         chosen = meshes[index]
@@ -1519,11 +1188,6 @@ def _resolve_mesh_prim(stage, prim_path, hit=None, time=None):
 
 
 def _face_score(verts, hit: Gf.Vec3d) -> float:
-    """How well the hit sits on this face. Lower is better.
-
-    Distance to the face's plane, plus a penalty when the hit falls outside
-    its bounding box. That separates the two readings of a primitive id.
-    """
     if len(verts) < 3:
         return float("inf")
     normal = Gf.Cross(verts[1] - verts[0], verts[2] - verts[0])
@@ -1546,7 +1210,6 @@ def _camera_matrices(viewport_api):
 
 
 def _ndc_to_ray(ndc, view: Gf.Matrix4d, proj: Gf.Matrix4d):
-    """USD is row-vector: clip = world * view * proj."""
     inv = (view * proj).GetInverse()
     near = inv.Transform(Gf.Vec3d(ndc[0], ndc[1], -1.0))
     far = inv.Transform(Gf.Vec3d(ndc[0], ndc[1], 1.0))
@@ -1554,12 +1217,6 @@ def _ndc_to_ray(ndc, view: Gf.Matrix4d, proj: Gf.Matrix4d):
 
 
 def _screen_size(state):
-    """Pixel space the overlay draws in. Everything screen-space uses this.
-
-    Not viewport_api.resolution: that is the render resolution, which differs
-    from the widget size whenever the two are set independently, and mixing the
-    two made the plate hit areas the wrong size.
-    """
     return state.overlay.screen_size()
 
 

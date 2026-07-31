@@ -1,12 +1,10 @@
-"""Test UI for the measure tool.
+"""measure 테스트 UI. measure_service 만 사용한다.
 
-Deliberately built on measure_service only. If something needed here cannot be
-done through MeasureService, the service API is incomplete: fix the API rather
-than reaching into measure.py.
+여기서 못 하는 게 있으면 서비스 API 가 부족한 것이므로 measure.py 를
+직접 건드리지 말고 API 를 고칠 것.
 
-It knows nothing about tabs or viewports. Those arrive through the host events
-the extension wires up, and pick_one() follows whichever viewport was last
-selected.
+탭과 뷰포트는 다루지 않는다. 호스트 이벤트로 들어오고, pick_one 은 활성
+탭 전체를 대상으로 한다.
 """
 
 from __future__ import annotations
@@ -44,18 +42,12 @@ class MeasureDummyUI:
                 ui.Separator()
                 ui.Label("Lines", height=20)
                 with ui.ScrollingFrame(height=200):
-                    # build_fn + rebuild() so the list is rebuilt on the next
-                    # frame. Rebuilding it inline would mean replacing the
-                    # container from inside its own button callback, which
-                    # omni.ui warns about as "addChild during draw callback".
                     self._list_frame = ui.Frame(build_fn=self._build_list)
 
         self._sub = MeasureService.subscribe_changed(self._on_changed)
 
-    # ---------------------------------------------------------------- status
-
     def _build_status(self):
-        """Read-only. Everything here arrives through the host events."""
+        """읽기 전용. 전부 호스트 이벤트로 들어온 값이다."""
         state = MeasureService.status()
         tabs = state["tabs"]
         active = state["active_tab"]
@@ -72,8 +64,6 @@ class MeasureDummyUI:
                     style=_MUTED,
                 )
                 return
-            # Every registered tab, not just the active one: a tab can be
-            # registered before anything activates it.
             for tab_id, viewports in tabs.items():
                 mark = " (active)" if tab_id == active else ""
                 self._status_line("tab", f"{tab_id}{mark}")
@@ -89,8 +79,6 @@ class MeasureDummyUI:
         with ui.HStack(height=18, spacing=6):
             ui.Label(label, width=72, style=_MUTED)
             ui.Label(value)
-
-    # ------------------------------------------------------------------ rows
 
     def _build_snap_row(self):
         mode = MeasureService.status()["snap_mode"]
@@ -117,20 +105,13 @@ class MeasureDummyUI:
             ui.Button("Hide all", clicked_fn=lambda: MeasureService.set_visible(False))
             ui.Button("Clear all", clicked_fn=lambda: MeasureService.clear())
 
-    # --------------------------------------------------------------- actions
-
     def _on_snap_picked(self, model, _item):
         index = model.get_item_value_model().get_value_as_int()
         if 0 <= index < len(_SNAP_LEVELS):
             MeasureService.set_snap_mode(_SNAP_LEVELS[index][1])
 
     def _pick_one(self):
-        MeasureService.pick_one(on_done=self._on_line_done)
-
-    def _on_line_done(self, line):
-        print(f"[measure] line {line.id} on '{line.viewport_id}': {line.length_m:.3f} m")
-
-    # ------------------------------------------------------------------ list
+        MeasureService.pick_one()
 
     def _on_changed(self):
         if self._status_frame is not None:
@@ -139,6 +120,7 @@ class MeasureDummyUI:
             self._list_frame.rebuild()
 
     def _build_list(self):
+        """표시는 number, 동작은 id 로 한다."""
         lines = MeasureService.get_lines()
         with ui.VStack(spacing=2, height=0):
             if not lines:
@@ -146,7 +128,6 @@ class MeasureDummyUI:
                 return
             for line in lines:
                 with ui.HStack(height=22, spacing=4):
-                    # Number is what to show, id is what to act on.
                     ui.Label(f"#{line.number}", width=32)
                     ui.Label(f"{line.length_m:.3f} m", width=90)
                     ui.Button(
@@ -161,8 +142,6 @@ class MeasureDummyUI:
                         width=24,
                         clicked_fn=lambda i=line.id: MeasureService.remove(i),
                     )
-
-    # -------------------------------------------------------------- teardown
 
     def destroy(self):
         self._sub = None
