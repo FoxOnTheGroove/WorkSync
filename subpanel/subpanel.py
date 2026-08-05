@@ -356,9 +356,25 @@ class SubPanel:
                     panel_frame = ui.Frame(width=PANEL_W)
                     panel_frame.opaque_for_mouse_events = True
                     with panel_frame:
-                        self._build_panel()
+                        with ui.ZStack():
+                            self._build_blocker()   # 뒤(뷰포트)로 클릭 새는 것 차단
+                            self._build_panel()
                     ui.Spacer(width=_MARGIN)                 # 우측 여백
                 ui.Spacer(height=_MARGIN)                    # 하단 여백
+
+    def _build_blocker(self):
+        # 패널 영역 전체를 덮는 투명 Rectangle. 콜백이 붙어 있어야 omni.ui가
+        # 이벤트를 '처리됨'으로 보고 뒤(뷰포트)로 안 넘긴다. ZStack 맨 아래에
+        # 두므로 패널의 버튼/슬라이더가 먼저 이벤트를 가져가고, 빈 틈으로
+        # 떨어지는 것만 여기서 먹는다.
+        blocker = ui.Rectangle(style={"background_color": 0x00000000})
+        for setter in ("set_mouse_pressed_fn", "set_mouse_released_fn",
+                       "set_mouse_moved_fn", "set_mouse_double_clicked_fn",
+                       "set_mouse_wheel_fn"):
+            fn = getattr(blocker, setter, None)
+            if fn:
+                fn(lambda *args: None)
+        return blocker
 
     def _build_panel(self):
         with ui.VStack(spacing=0, style=_STYLE, width=PANEL_W):
