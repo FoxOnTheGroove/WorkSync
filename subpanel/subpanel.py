@@ -344,6 +344,11 @@ class SubPanel:
     def _build_in_frame(self):
         # 뷰포트 프레임 우하단 앵커. 스페이서로 밀어내므로 위치 계산/리사이즈
         # 콜백이 필요 없다. 패널 높이는 _panel_row 가 쥐고, 최소화 때 그것만 바꾼다.
+        #
+        # 이 프레임이 클릭 담당 프레임보다 '위'에 있어도 전체를 가로채지 않는다.
+        # 여기서 통과(False)로 두고 패널 영역만 opaque 로 잡기 때문에, 패널 밖
+        # 클릭은 그대로 아래 프레임으로 내려간다.
+        self._frame.opaque_for_mouse_events = False
         with self._frame:
             with ui.VStack():
                 ui.Spacer()                                  # 위쪽 흡수
