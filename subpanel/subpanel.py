@@ -350,7 +350,13 @@ class SubPanel:
                 self._panel_row = ui.HStack(height=PANEL_H)
                 with self._panel_row:
                     ui.Spacer()                              # 왼쪽 흡수
-                    self._build_panel()
+                    # 오버레이 프레임은 기본적으로 마우스를 뷰포트로 흘려보내
+                    # 버튼이 클릭을 못 받는다. 패널 영역'만' 이벤트를 잡도록
+                    # 감싼다(프레임 전체를 opaque로 하면 뷰포트 조작이 막힘).
+                    panel_frame = ui.Frame(width=PANEL_W)
+                    panel_frame.opaque_for_mouse_events = True
+                    with panel_frame:
+                        self._build_panel()
                     ui.Spacer(width=_MARGIN)                 # 우측 여백
                 ui.Spacer(height=_MARGIN)                    # 하단 여백
 
