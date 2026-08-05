@@ -168,8 +168,12 @@ class PartsManager:
         if not meshes:
             return True
         if key is None:
+            # UnbindAllBindings는 edit target의 rel만 제거하므로, 원본 reference에서
+            # 온 material:binding이 다시 떠오른다. 빈 explicit list op를 author해
+            # 약한 opinion을 차단한다.
             for prim in meshes:
                 UsdShade.MaterialBindingAPI(prim).UnbindAllBindings()
+                UsdShade.MaterialBindingAPI(prim).CreateDirectBindingRel().SetTargets([])
             return True
         mtl_path = f"{node.path}/Looks/{Tf.MakeValidIdentifier(key)}"
         mtl_prim = stage.GetPrimAtPath(mtl_path)
