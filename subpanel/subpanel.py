@@ -4,8 +4,6 @@
 #   행2 (y20,h32): 8 | Iteration(폰트12) | x72 좌'1' | x93 슬라이더58 | 우'20'(-8)
 #   행3 (y52,h32): 8 | Thickness       | x72 좌'0.5'| x93 슬라이더58 | 우'1.0'
 #
-# 최소화: 가로 유지(180), 타이틀 줄(20)만 남아 창 맨 아래에 붙는다 → 180x20.
-#
 # 아이콘: 이 파일과 같은 subpanel/ 아래 data/icons/ 에 둔다 (파일은 별도 준비).
 #   arrow.png / arrow_r.png  (최소화 화살표, 펼침/접힘)
 #   ov_n.png  / ov_h.png     (슬라이더 핸들 기본/hover)
@@ -29,8 +27,8 @@ _TIP_LABEL_OFFSET_Y = -2   # 라벨 세로 미세조정(px). 음수=위로, 양�
 # ── 패널 치수 (전체 180x84 = 타이틀 20 + 행 32x2) ───────────────────────
 PANEL_W = 180
 PANEL_H = 84
-PANEL_W_MIN = 180    # 최소화해도 가로는 그대로
-PANEL_H_MIN = 20     # 최소화: 타이틀 줄만 (= _ROW1_H), 창 맨 아래에 붙는다
+PANEL_W_MIN = 16
+PANEL_H_MIN = 16
 
 _ROW1_H  = 20        # 타이틀
 _ROW_H   = 32        # 행2 / 행3 각각 (합 64)
@@ -319,7 +317,6 @@ class SubPanel:
         self._window = None
         self._body = None
         self._title_content = None
-        self._top_spacer = None      # 최소화 시 타이틀 줄을 아래로 미는 여백
         self._minimized = False
         self._btn_min = None
         self.iter_slider = None
@@ -334,11 +331,6 @@ class SubPanel:
 
         with self._window.frame:
             with ui.VStack(spacing=0, style=_STYLE):
-
-                # 최소화 시 타이틀 줄을 창 맨 아래로 내리는 여백 (평소 0).
-                # 창을 런타임에 리사이즈하는 건 안 먹으므로, 창은 180x84로 두고
-                # 남는 위쪽을 이 여백으로 밀어 시각적으로 180x20 하단 스트립을 만든다.
-                self._top_spacer = ui.Spacer(height=0)
 
                 # ── 행1: 타이틀 ──────────────────────────────────
                 with ui.ZStack(height=_ROW1_H):
@@ -393,18 +385,19 @@ class SubPanel:
         return slider
 
     def _on_toggle_minimize(self):
-        # 가로(180)는 그대로, 타이틀 줄만 남겨 창 맨 아래에 붙인다.
-        # 위 여백을 (PANEL_H - PANEL_H_MIN)만큼 주면 타이틀 줄이 아래로 내려가고,
-        # 본문(_body)은 VStack에서 남은 공간을 먹는 가변 요소라 0으로 눌려 사라진다.
-        # 타이틀 텍스트는 폭이 그대로라 계속 보인다(가리지 않음).
         self._minimized = not self._minimized
+        self._title_content.visible = not self._minimized
         self._body.visible = not self._minimized
-        self._top_spacer.height = ui.Pixel(
-            PANEL_H - PANEL_H_MIN if self._minimized else 0)
         self._btn_min.style = {
             "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
             "fill_policy": ui.FillPolicy.STRETCH,
         }
+        if self._minimized:
+            self._window.width = PANEL_W_MIN
+            self._window.height = PANEL_H_MIN
+        else:
+            self._window.width = PANEL_W
+            self._window.height = PANEL_H
 
     def destroy(self):
         for s in (self.iter_slider, self.thick_slider):
@@ -415,7 +408,6 @@ class SubPanel:
             self._window = None
         self._body = None
         self._title_content = None
-        self._top_spacer = None
         self._btn_min = None
         self.iter_slider = None
         self.thick_slider = None
