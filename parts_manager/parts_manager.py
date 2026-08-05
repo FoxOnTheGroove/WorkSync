@@ -314,6 +314,9 @@ class PartsManager:
     @classmethod
     def _is_excluded(cls, prim: Usd.Prim) -> bool:
         type_name = prim.GetTypeName()
+        # 마테리얼 적용으로 생긴 Looks는 트리에서 제외 (자식 수/leaf 판정 오염 방지)
+        if prim.GetName() == "Looks":
+            return True
         if type_name.endswith("Light") or type_name in cls._EXCLUDED_TYPES:
             return True
         if type_name == "Xform" and not prim.GetChildren():
