@@ -173,6 +173,10 @@ class PartsManager:
             mtl_prim = stage.DefinePrim(mtl_path, "Material")
             mtl_prim.GetReferences().AddReference(key)
             mtl_prim.SetCustomDataByKey("url", key)
+        elif not mtl_prim.IsActive():
+            # 이전에 SetActive(False)로 억제된 prim 재사용 시 활성화 복구
+            # (비활성 상태면 셰이더 네트워크가 컴포즈되지 않아 흰색으로 렌더됨)
+            mtl_prim.SetActive(True)
         material = UsdShade.Material(mtl_prim)
         for prim in meshes:
             UsdShade.MaterialBindingAPI(prim).Bind(material)
