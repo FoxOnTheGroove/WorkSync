@@ -27,8 +27,9 @@ _TIP_LABEL_OFFSET_Y = -2   # 라벨 세로 미세조정(px). 음수=위로, 양�
 # ── 패널 치수 (전체 180x84 = 타이틀 20 + 행 32x2) ───────────────────────
 PANEL_W = 180
 PANEL_H = 84
-PANEL_W_MIN = 16
-PANEL_H_MIN = 16
+PANEL_W_MIN = 180    # 최소화해도 가로는 그대로
+PANEL_H_MIN = 20     # 최소화: 타이틀 줄만 (= _ROW1_H)
+_MARGIN     = 8      # 프레임 오버레이 앵커 여백(우/하단)
 
 _ROW1_H  = 20        # 타이틀
 _ROW_H   = 32        # 행2 / 행3 각각 (합 64)
@@ -312,9 +313,14 @@ class ImageSlider:
 
 class SubPanel:
 
-    def __init__(self, title: str = "Path line"):
+    def __init__(self, title: str = "Path line", frame=None):
+        # frame: 뷰포트 프레임(예: vph.frame)을 주면 창 대신 그 위에 얹는다.
+        # 창이 아니라서 32px 최소크기 클램프도, 지워지지 않는 창 테두리도,
+        # 런타임 리사이즈 불가 문제도 없다(최소화 = 그냥 행 높이 변경).
         self._title = title
+        self._frame = frame
         self._window = None
+        self._panel_row = None       # 프레임 경로에서 패널 높이를 쥔 행
         self._body = None
         self._title_content = None
         self._minimized = False
@@ -323,46 +329,65 @@ class SubPanel:
         self.thick_slider = None
 
     def build_ui(self):
+        if self._frame is not None:
+            self._build_in_frame()
+            return
+
         self._window = ui.Window(f"__subpanel_{self._title}__",
                                  width=PANEL_W, height=PANEL_H,
                                  flags=_WINDOW_FLAGS)
         self._window.padding_x = 0
         self._window.padding_y = 0
-
         with self._window.frame:
-            with ui.VStack(spacing=0, style=_STYLE):
+            self._build_panel()
 
-                # ── 행1: 타이틀 ──────────────────────────────────
-                with ui.ZStack(height=_ROW1_H):
-                    ui.Rectangle(name="title_bg")
-                    with ui.HStack():
-                        ui.Spacer(width=3)
-                        self._btn_min = _vcenter(10, lambda: ui.Button(
-                            "", width=10, height=10, name="min_btn",
-                            alignment=ui.Alignment.CENTER,
-                            clicked_fn=self._on_toggle_minimize,
-                            style={"image_url": _ICON_ARROW,
-                                   "fill_policy": ui.FillPolicy.STRETCH}))
-                        ui.Spacer(width=2)
-                        self._title_content = ui.HStack()
-                        with self._title_content:
-                            with ui.VStack():                 # 윗점 정렬
-                                ui.Label(self._title, height=15,
-                                         style={"font_size": _TITLE_FONT})
-                                ui.Spacer()
+    def _build_in_frame(self):
+        # 뷰포트 프레임 우하단 앵커. 스페이서로 밀어내므로 위치 계산/리사이즈
+        # 콜백이 필요 없다. 패널 높이는 _panel_row 가 쥐고, 최소화 때 그것만 바꾼다.
+        with self._frame:
+            with ui.VStack():
+                ui.Spacer()                                  # 위쪽 흡수
+                self._panel_row = ui.HStack(height=PANEL_H)
+                with self._panel_row:
+                    ui.Spacer()                              # 왼쪽 흡수
+                    self._build_panel()
+                    ui.Spacer(width=_MARGIN)                 # 우측 여백
+                ui.Spacer(height=_MARGIN)                    # 하단 여백
 
-                # ── 본문 (행2 + 행3) ─────────────────────────────
-                self._body = ui.ZStack()
-                with self._body:
-                    ui.Rectangle(name="body_bg")
-                    with ui.VStack(spacing=0):
-                        # 위(Iteration)는 정수 슬라이더(1~20, 좌끝 기본).
-                        # 아래(Thickness)는 float 0.5~1.0, 기본값 우측 끝(1.0).
-                        self.iter_slider = self._slider_row(
-                            "Iteration", "1", "20", int_range=(1, 20))
-                        self.thick_slider = self._slider_row(
-                            "Thickness", "0.5", "1.0",
-                            float_range=(0.5, 1.0), init_t=1.0)
+    def _build_panel(self):
+        with ui.VStack(spacing=0, style=_STYLE, width=PANEL_W):
+
+            # ── 행1: 타이틀 ──────────────────────────────────
+            with ui.ZStack(height=_ROW1_H):
+                ui.Rectangle(name="title_bg")
+                with ui.HStack():
+                    ui.Spacer(width=3)
+                    self._btn_min = _vcenter(10, lambda: ui.Button(
+                        "", width=10, height=10, name="min_btn",
+                        alignment=ui.Alignment.CENTER,
+                        clicked_fn=self._on_toggle_minimize,
+                        style={"image_url": _ICON_ARROW,
+                               "fill_policy": ui.FillPolicy.STRETCH}))
+                    ui.Spacer(width=2)
+                    self._title_content = ui.HStack()
+                    with self._title_content:
+                        with ui.VStack():                 # 윗점 정렬
+                            ui.Label(self._title, height=15,
+                                     style={"font_size": _TITLE_FONT})
+                            ui.Spacer()
+
+            # ── 본문 (행2 + 행3) ─────────────────────────────
+            self._body = ui.ZStack()
+            with self._body:
+                ui.Rectangle(name="body_bg")
+                with ui.VStack(spacing=0):
+                    # 위(Iteration)는 정수 슬라이더(1~20, 좌끝 기본).
+                    # 아래(Thickness)는 float 0.5~1.0, 기본값 우측 끝(1.0).
+                    self.iter_slider = self._slider_row(
+                        "Iteration", "1", "20", int_range=(1, 20))
+                    self.thick_slider = self._slider_row(
+                        "Thickness", "0.5", "1.0",
+                        float_range=(0.5, 1.0), init_t=1.0)
 
     def _slider_row(self, label, left_idx, right_idx,
                     int_range=None, float_range=None, init_t=0.0, tooltip=True):
@@ -385,19 +410,20 @@ class SubPanel:
         return slider
 
     def _on_toggle_minimize(self):
+        # 가로(180)는 그대로, 타이틀 줄만 남긴다. 본문(_body)은 VStack에서 남은
+        # 공간을 먹는 가변 요소라, 패널 높이를 20으로 줄이면 0으로 눌려 사라진다.
+        # 타이틀 텍스트는 폭이 그대로라 계속 보인다.
         self._minimized = not self._minimized
-        self._title_content.visible = not self._minimized
         self._body.visible = not self._minimized
+        h = PANEL_H_MIN if self._minimized else PANEL_H
+        if self._panel_row is not None:
+            self._panel_row.height = ui.Pixel(h)    # 프레임 경로: 이걸로 끝
+        elif self._window:
+            self._window.height = h                 # 창 경로: 런타임엔 안 먹음(레거시)
         self._btn_min.style = {
             "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
             "fill_policy": ui.FillPolicy.STRETCH,
         }
-        if self._minimized:
-            self._window.width = PANEL_W_MIN
-            self._window.height = PANEL_H_MIN
-        else:
-            self._window.width = PANEL_W
-            self._window.height = PANEL_H
 
     def destroy(self):
         for s in (self.iter_slider, self.thick_slider):
@@ -406,6 +432,9 @@ class SubPanel:
         if self._window:
             self._window.destroy()
             self._window = None
+        elif self._frame is not None:
+            self._frame.clear()        # 프레임 경로: 얹은 위젯만 걷어낸다
+        self._panel_row = None
         self._body = None
         self._title_content = None
         self._btn_min = None
