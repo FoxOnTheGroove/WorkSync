@@ -152,12 +152,16 @@ class PartsManager:
         stage = cls._get_stage()
         if stage is None:
             return False
-        # 이전 마테리얼 prim 제거 (reference 소스면 RemovePrim 실패 → SetActive(False) fallback)
+        # 이전 마테리얼 prim 제거. root layer spec이 있을 때만 지워지고(=이번 세션에
+        # 만든 것), reference 소스는 실패해도 그냥 둔다.
+        # 비활성화(SetActive(False))로 억제하면 안 된다: Hydra가 머티리얼 Sprim을
+        # 제거한 뒤 같은 배치의 리바인딩을 반영하지 못해 Mesh가 흰색으로 렌더된다.
+        # 아래에서 Mesh를 새 마테리얼로 명시적 리바인딩하므로 남아 있어도 무해하고,
+        # 원본 파일은 save_material_eqp가 RemovePrim으로 정리한다.
         looks = stage.GetPrimAtPath(f"{node.path}/Looks")
         if looks.IsValid():
             for child in looks.GetChildren():
-                if not stage.RemovePrim(child.GetPath()):
-                    child.SetActive(False)
+                stage.RemovePrim(child.GetPath())
         node.material_key = key
         cls._dirty_keys.add(index_key)
         meshes = [p for p in Usd.PrimRange(node.prim) if p.GetTypeName() == "Mesh"]
@@ -338,13 +342,18 @@ class PartsManager:
         ]
         if len(children) == 1 and children[0].is_leaf:
             children = []
-        # 저장된 마테리얼 복원: Looks 자식의 customData["url"]에서 URL 복원
-        looks = prim.GetChild("Looks")
-        if looks.IsValid() and looks.GetChildren():
-            url_val = looks.GetChildren()[0].GetCustomDataByKey("url")
-            material_key = url_val if isinstance(url_val, str) else None
-        else:
-            material_key = None
+        # 저장된 마테리얼 복원: Looks 자식을 순서로 추측하지 않고, 하위 첫 Mesh가
+        # 실제로 바인딩한 Material의 customData["url"]을 읽는다.
+        # (교체된 이전 마테리얼 prim이 Looks 아래 남아 있을 수 있어 index 0은 부정확)
+        material_key = None
+        for p in Usd.PrimRange(prim):
+            if p.GetTypeName() == "Mesh":
+                bound = UsdShade.MaterialBindingAPI(p).GetDirectBinding().GetMaterial()
+                if bound:
+                    url_val = bound.GetPrim().GetCustomDataByKey("url")
+                    if isinstance(url_val, str):
+                        material_key = url_val
+                break
         return PrimNode(
             prim=prim,
             path=path,
