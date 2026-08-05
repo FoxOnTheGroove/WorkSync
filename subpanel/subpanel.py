@@ -399,7 +399,9 @@ class SubPanel:
                             ui.Spacer()
 
             # ── 본문 (행2 + 행3) ─────────────────────────────
-            self._body = ui.ZStack()
+            # 높이를 명시해 둔다. 최소화 때 0으로 접으면 상위(Frame/행)가 콘텐츠를
+            # 따라 20으로 줄어든다 — visible=False 만으론 공간이 안 비워진다.
+            self._body = ui.ZStack(height=PANEL_H - _ROW1_H)
             with self._body:
                 ui.Rectangle(name="body_bg")
                 with ui.VStack(spacing=0):
@@ -432,14 +434,16 @@ class SubPanel:
         return slider
 
     def _on_toggle_minimize(self):
-        # 가로(180)는 그대로, 타이틀 줄만 남긴다. 본문(_body)은 VStack에서 남은
-        # 공간을 먹는 가변 요소라, 패널 높이를 20으로 줄이면 0으로 눌려 사라진다.
+        # 가로(180)는 그대로, 타이틀 줄만 남긴다. 본문 높이를 0으로 접는 게 핵심 —
+        # visible=False 만으론 공간이 안 비워지고, 상위 Frame은 콘텐츠 크기를 따라
+        # 가므로 본문이 0이 되어야 패널이 실제로 20으로 줄어든다.
         # 타이틀 텍스트는 폭이 그대로라 계속 보인다.
         self._minimized = not self._minimized
-        self._body.visible = not self._minimized
         h = PANEL_H_MIN if self._minimized else PANEL_H
+        self._body.height = ui.Pixel(0 if self._minimized else PANEL_H - _ROW1_H)
+        self._body.visible = not self._minimized
         if self._panel_row is not None:
-            self._panel_row.height = ui.Pixel(h)    # 프레임 경로: 이걸로 끝
+            self._panel_row.height = ui.Pixel(h)    # 행도 같이 조여 준다
         elif self._window:
             self._window.height = h                 # 창 경로: 런타임엔 안 먹음(레거시)
         self._btn_min.style = {
