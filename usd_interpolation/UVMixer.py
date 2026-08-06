@@ -60,9 +60,14 @@ class UVMixer:
     def load(self, st_paths: 'list[str]') -> 'list[str]':
         """소스 USD 파일들을 읽어 보간 데이터를 주입한다.
         재호출 시 이전 bake를 청소하고 다시 굽는다. 구독자는 유지된다.
-        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다."""
+        유효하지 않은 메쉬는 경고 후 스킵되며, 경고 메시지 목록을 반환한다.
+        소스가 2개 미만이면 보간할 게 없어 그냥 건너뛴다(경고만, 기존 상태 유지)."""
         if len(st_paths) < 2:
-            raise ValueError(f"[UVMixer] need at least 2 source paths, got {len(st_paths)}")
+            # 호출부가 이미 이 경우 mixer 를 안 만든다. 동작상 문제가 아니므로
+            # 예외로 올리지 않고 경고만 남긴다.
+            w = f"need at least 2 source paths, got {len(st_paths)} — skip load"
+            print(f"[UVMixer] {w}")
+            return [w]
         self._n_frames = len(st_paths)
         maps_per_file = [self.make_st_map(p) for p in st_paths]
         if maps_per_file and maps_per_file[0]:
