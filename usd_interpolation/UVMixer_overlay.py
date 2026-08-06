@@ -48,15 +48,15 @@ _TIP_FLAGS = (
     | ui.WINDOW_FLAGS_NO_FOCUS_ON_APPEARING
 )
 
-# ── 패널 치수 명세 (전체 180x80) ────────────────────────────────────────
+# ── 패널 치수 명세 (전체 180x84) ────────────────────────────────────────
 OVERLAY_W = 180
-OVERLAY_H = 80
+OVERLAY_H = 84
 OVERLAY_W_MIN = 16          # 최소화 시 너비 (버튼만)
 OVERLAY_H_MIN = 16          # 최소화 시 높이 (버튼만)
 _MARGIN = 8                 # 뷰포트 가장자리 여백
 
-# 행 높이 (세로 누적: 16 + 30 + 1 + 33 = 80)
-_ROW1_H = 16                # 타이틀
+# 행 높이 (세로 누적: 20 + 30 + 1 + 33 = 84)
+_ROW1_H = 20                # 타이틀
 _ROW2_H = 30                # 재생/슬라이더/배속
 _DIV_H  = 1                 # 구분선
 _ROW4_H = 33                # Reverse/Loop
@@ -393,7 +393,7 @@ class ViewportOverlayPanel:
         with self._window.frame:
             with ui.VStack(spacing=0, style=_STYLE):     # 스타일시트는 여기 한 번만
 
-                # ── 행1 (y=0, h=16): 검정 타이틀바 ──────────────────────
+                # ── 행1 (y=0, h=20): 검정 타이틀바 ──────────────────────
                 #   3 여백 | 최소화 10x10(중앙) | 2 여백 | Animation(폰트10,h15,윗점)
                 with ui.ZStack(height=_ROW1_H):
                     ui.Rectangle(name="title_bg")
@@ -419,7 +419,7 @@ class ViewportOverlayPanel:
                     ui.Rectangle(name="body_bg")
                     with ui.VStack(spacing=0):
 
-                        # 행2 (y=16, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
+                        # 행2 (y=20, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
                         with ui.HStack(height=_ROW2_H):
                             ui.Spacer(width=12)
                             # 재생/정지 아이콘 미리 로드 + visible 토글(깜박임 없음, 노브와 동일
@@ -471,13 +471,13 @@ class ViewportOverlayPanel:
                             spd_btn = _vcenter(24, _build_spd)
                             ui.Spacer(width=8)
 
-                        # 구분선 (y=46, h=1): 8 | 흰선 164x1 | 8
+                        # 구분선 (y=50, h=1): 8 | 흰선 164x1 | 8
                         with ui.HStack(height=_DIV_H):
                             ui.Spacer(width=8)
                             ui.Rectangle(name="separator", width=164, height=1)
                             ui.Spacer(width=8)
 
-                        # 행4 (y=47, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
+                        # 행4 (y=51, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
                         # 체크박스는 n(기본)/h(hover)/s(체크됨 또는 press) 세 이미지를
                         # 미리 로드해 visible만 토글한다(깜박임 없음, 노브와 동일 패턴).
                         with ui.HStack(height=_ROW4_H):
