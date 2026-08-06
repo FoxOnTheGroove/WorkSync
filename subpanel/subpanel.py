@@ -346,34 +346,17 @@ class SubPanel:
 
     # ── 상위 프레임에 가려질 때: 커서가 패널 위면 그 프레임 입력만 잠깐 끈다 ──
     #
-    # 패널이 아래 프레임에 있고 위 프레임이 이벤트를 먹는 구조에서는, 패널이
-    # hover 를 못 받으니 스스로 "커서가 내 위인지"를 알 수 없다. 그래서 좌표는
-    # 위 프레임 쪽에서 알려줘야 한다:
+    #   panel.set_top_frame(vph.frame_input)     # 패널을 가리는 프레임
     #
-    #   panel.set_top_frame(vph.frame_input)          # 가리는 프레임
-    #   ...위 프레임의 기존 mouse_moved 핸들러 안에서...
-    #   panel.on_mouse_move(x, y)                     # 화면 좌표 그대로
-    #
-    # 기존 핸들러를 덮어쓰지 않으려고 이쪽에서 콜백을 걸지 않는다(픽킹/드래그가
-    # 죽을 수 있음). 커서가 패널 위면 위 프레임을 통과(False)로 바꿔 클릭이
-    # 패널로 내려오고, 벗어나면 즉시 원래대로(True) 돌린다.
+    # blocker Rectangle 은 위 프레임에 가려져도 hover 는 받으므로, 그걸로 진입/이탈을
+    # 판정한다(좌표를 밖에서 받아올 필요 없음). 커서가 패널 위에 있는 동안만 위
+    # 프레임을 통과(False)로 바꿔 클릭이 패널로 내려오고, 벗어나면 바로 복구한다.
 
     def set_top_frame(self, frame):
         self._top_frame = frame
 
-    def on_mouse_move(self, x, y):
-        self._mute_top(self._point_in_panel(x, y))
-
-    def _point_in_panel(self, x, y) -> bool:
-        f = self._panel_frame
-        if f is None:
-            return False
-        try:
-            fx, fy = f.screen_position_x, f.screen_position_y
-            return (fx <= x <= fx + f.computed_width and
-                    fy <= y <= fy + f.computed_height)
-        except Exception:
-            return False
+    def _on_panel_hover(self, hovered):
+        self._mute_top(hovered)
 
     def _mute_top(self, mute: bool):
         if self._top_frame is None or mute == self._top_muted:
@@ -420,6 +403,8 @@ class SubPanel:
             fn = getattr(blocker, setter, None)
             if fn:
                 fn(lambda *args: None)
+        # 가려져 있어도 hover 는 들어오므로, 이걸로 상위 프레임 입력을 껐다 켠다.
+        blocker.set_mouse_hovered_fn(self._on_panel_hover)
         return blocker
 
     def _build_panel(self):
