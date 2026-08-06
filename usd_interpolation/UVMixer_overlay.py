@@ -323,6 +323,7 @@ class ViewportOverlayPanel:
         self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
         self._ico_min = None
         self._min_hover_ov = None    # 최소화 버튼 hover 하이라이트
+        self._root = None            # 프레임 경로에서 우리 서브트리 루트
         self._panel_row = None       # 프레임 경로에서 패널 높이를 쥔 행
         self._min_window = None
         self._window = None
@@ -412,15 +413,22 @@ class ViewportOverlayPanel:
             mixer.own_player.subscribe_stopped(self._on_own_stopped)
 
     def _build_in_frame(self) -> None:
-        # 프레임 우하단 앵커. 스페이서로 밀어내므로 위치 계산도, 리사이즈 콜백도
-        # 필요 없다(_calc_overlay_pos / _on_viewport_resized 는 창 경로 전용).
+        # 우하단 앵커. 스페이서로 밀어내므로 위치 계산도, 리사이즈 콜백도 필요
+        # 없다(_calc_overlay_pos / _on_viewport_resized 는 창 경로 전용).
         # 패널 높이는 _panel_row 가 쥐고, 최소화 때 그 행만 줄인다.
         #
-        # 이 프레임 자체는 통과(False)로 두고 패널 영역만 opaque 로 잡는다 —
-        # 그래야 패널 밖 클릭이 아래 프레임(뷰포트/픽킹)으로 그대로 내려간다.
-        self._frame.opaque_for_mouse_events = False
+        # ⚠ 넘겨줄 컨테이너는 ZStack 을 권장한다. ui.Frame 은 자식을 하나만
+        #   가지므로, 이미 다른 UI 가 쓰고 있는 Frame 을 주면 그 내용이 우리
+        #   위젯으로 '교체'되어 사라진다. ZStack 이면 한 자식으로 얹혀서 서로
+        #   영향 없이 겹쳐 그려진다(우리 영역 밖은 전부 투명 Spacer).
+        #
+        # opaque 는 패널 영역만 잡고 host 는 통과시켜야 패널 밖 클릭이 아래
+        # 프레임(뷰포트/픽킹)으로 내려간다. Stack 엔 이 속성이 없을 수 있어 가드.
+        if hasattr(self._frame, "opaque_for_mouse_events"):
+            self._frame.opaque_for_mouse_events = False
         with self._frame:
-            with ui.VStack():
+            self._root = ui.VStack()      # 우리 서브트리 루트 (정리는 이것만)
+            with self._root:
                 ui.Spacer()                                   # 위쪽 흡수
                 self._panel_row = ui.HStack(height=OVERLAY_H)
                 with self._panel_row:
@@ -969,7 +977,12 @@ class ViewportOverlayPanel:
         self._mute_top(False)                      # 꺼뒀던 상위 프레임 입력 복구
         self._top_frame = None
         if self._frame is not None:
-            self._frame.clear()                    # 프레임 경로: 얹은 위젯만 걷어냄
+            # host 를 clear 하면 같은 컨테이너를 쓰는 다른 UI 까지 날아간다.
+            # 우리가 만든 루트만 비우고 숨긴다.
+            if self._root is not None:
+                self._root.clear()
+                self._root.visible = False
+                self._root = None
             self._frame = None
             self._panel_row = None
         sp = UVMixerService.get_shared_player(self._tab_id)
