@@ -485,19 +485,29 @@ class SubPanel:
             ui.Spacer(width=_MARGIN_R)
         return slider
 
+    def _set_outer_height(self, h):
+        if self._panel_row is not None:
+            self._panel_row.height = ui.Pixel(h)    # 프레임 경로
+        elif self._window:
+            self._window.height = h                 # 창 경로: 런타임엔 안 먹음(레거시)
+
     def _on_toggle_minimize(self):
         # 가로(180)는 그대로, 타이틀 줄만 남긴다. 본문 높이를 0으로 접는 게 핵심 —
         # visible=False 만으론 공간이 안 비워지고, 상위 Frame은 콘텐츠 크기를 따라
         # 가므로 본문이 0이 되어야 패널이 실제로 20으로 줄어든다.
         # 타이틀 텍스트는 폭이 그대로라 계속 보인다.
+        # 깜박임 방지: 줄일 땐 안(body) → 밖(row), 키울 땐 밖 → 안 순서로 바꾼다.
+        # 반대로 하면 한 프레임 동안 콘텐츠가 컨테이너보다 큰 상태가 보인다.
         self._minimized = not self._minimized
         h = PANEL_H_MIN if self._minimized else PANEL_H
-        self._body.height = ui.Pixel(0 if self._minimized else PANEL_H - _ROW1_H)
-        self._body.visible = not self._minimized
-        if self._panel_row is not None:
-            self._panel_row.height = ui.Pixel(h)    # 행도 같이 조여 준다
-        elif self._window:
-            self._window.height = h                 # 창 경로: 런타임엔 안 먹음(레거시)
+        if self._minimized:
+            self._body.visible = False
+            self._body.height = ui.Pixel(0)
+            self._set_outer_height(h)
+        else:
+            self._set_outer_height(h)
+            self._body.height = ui.Pixel(PANEL_H - _ROW1_H)
+            self._body.visible = True
         self._ico_min.visible  = self._minimized
         self._ico_open.visible = not self._minimized
 
