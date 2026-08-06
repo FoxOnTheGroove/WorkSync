@@ -46,6 +46,8 @@ _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF
 
+_HOVER_OVERLAY = 0x22FFFFFF       # hover 시 덧씌우는 반투명 흰색 (mixer와 동일)
+
 _SLIDER_TRACK_BG = 0xFF6A6A6A     # #6a6a6a
 _SLIDER_FILL_BG  = 0xFFF18D95     # #958df1 (0xAABBGGRR)
 
@@ -330,6 +332,7 @@ class SubPanel:
         self._btn_min = None
         self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
         self._ico_min = None
+        self._min_hover_ov = None    # 최소화 버튼 hover 하이라이트
         self.iter_slider = None
         self.thick_slider = None
 
@@ -403,10 +406,16 @@ class SubPanel:
             self._ico_min  = ui.Image(_ICON_ARROW_R, width=10, height=10,
                                       fill_policy=ui.FillPolicy.STRETCH,
                                       visible=False)
+            self._min_hover_ov = ui.Rectangle(              # hover 하이라이트
+                style={"background_color": _HOVER_OVERLAY}, visible=False)
             hit = ui.Rectangle(style={"background_color": 0x00000000})
             hit.set_mouse_pressed_fn(
                 lambda x, y, b, m: self._on_toggle_minimize() if b == 0 else None)
+            hit.set_mouse_hovered_fn(self._on_min_hover)
         return hit
+
+    def _on_min_hover(self, hovered):
+        self._min_hover_ov.visible = hovered
 
     def _build_blocker(self):
         # 패널 영역 전체를 덮는 투명 Rectangle. 콜백이 붙어 있어야 omni.ui가
@@ -510,5 +519,6 @@ class SubPanel:
         self._btn_min = None
         self._ico_open = None
         self._ico_min = None
+        self._min_hover_ov = None
         self.iter_slider = None
         self.thick_slider = None
