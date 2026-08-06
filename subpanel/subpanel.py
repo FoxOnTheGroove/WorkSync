@@ -328,6 +328,8 @@ class SubPanel:
         self._title_content = None
         self._minimized = False
         self._btn_min = None
+        self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
+        self._ico_min = None
         self.iter_slider = None
         self.thick_slider = None
 
@@ -391,6 +393,21 @@ class SubPanel:
                     ui.Spacer(width=_MARGIN)                 # 우측 여백
                 ui.Spacer(height=_MARGIN)                    # 하단 여백
 
+    def _build_min_btn(self):
+        # ui.Button 대신 이미지 2장 + 투명 Rectangle. Rectangle 은 상위 프레임에
+        # 가려져도 마우스를 받는 게 확인됐고, 아이콘도 visible 토글이라 재로드로
+        # 깜박이지 않는다(슬라이더 노브와 같은 패턴).
+        with ui.ZStack(width=10, height=10):
+            self._ico_open = ui.Image(_ICON_ARROW, width=10, height=10,
+                                      fill_policy=ui.FillPolicy.STRETCH)
+            self._ico_min  = ui.Image(_ICON_ARROW_R, width=10, height=10,
+                                      fill_policy=ui.FillPolicy.STRETCH,
+                                      visible=False)
+            hit = ui.Rectangle(style={"background_color": 0x00000000})
+            hit.set_mouse_pressed_fn(
+                lambda x, y, b, m: self._on_toggle_minimize() if b == 0 else None)
+        return hit
+
     def _build_blocker(self):
         # 패널 영역 전체를 덮는 투명 Rectangle. 콜백이 붙어 있어야 omni.ui가
         # 이벤트를 '처리됨'으로 보고 뒤(뷰포트)로 안 넘긴다. ZStack 맨 아래에
@@ -415,12 +432,7 @@ class SubPanel:
                 ui.Rectangle(name="title_bg")
                 with ui.HStack():
                     ui.Spacer(width=3)
-                    self._btn_min = _vcenter(10, lambda: ui.Button(
-                        "", width=10, height=10, name="min_btn",
-                        alignment=ui.Alignment.CENTER,
-                        clicked_fn=self._on_toggle_minimize,
-                        style={"image_url": _ICON_ARROW,
-                               "fill_policy": ui.FillPolicy.STRETCH}))
+                    self._btn_min = _vcenter(10, self._build_min_btn)
                     ui.Spacer(width=2)
                     self._title_content = ui.HStack()
                     with self._title_content:
@@ -477,10 +489,8 @@ class SubPanel:
             self._panel_row.height = ui.Pixel(h)    # 행도 같이 조여 준다
         elif self._window:
             self._window.height = h                 # 창 경로: 런타임엔 안 먹음(레거시)
-        self._btn_min.style = {
-            "image_url": _ICON_ARROW_R if self._minimized else _ICON_ARROW,
-            "fill_policy": ui.FillPolicy.STRETCH,
-        }
+        self._ico_min.visible  = self._minimized
+        self._ico_open.visible = not self._minimized
 
     def destroy(self):
         for s in (self.iter_slider, self.thick_slider):
@@ -498,5 +508,7 @@ class SubPanel:
         self._body = None
         self._title_content = None
         self._btn_min = None
+        self._ico_open = None
+        self._ico_min = None
         self.iter_slider = None
         self.thick_slider = None
