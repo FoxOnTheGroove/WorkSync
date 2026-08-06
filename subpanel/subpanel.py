@@ -322,6 +322,7 @@ class SubPanel:
         self._title = title
         self._frame = frame
         self._window = None
+        self._root = None            # 프레임 경로에서 우리 서브트리 루트
         self._panel_row = None       # 프레임 경로에서 패널 높이를 쥔 행
         self._panel_frame = None     # 패널 영역 프레임 (커서 판정용)
         self._top_frame = None       # 패널을 가리는 상위 프레임 (set_top_frame)
@@ -370,15 +371,21 @@ class SubPanel:
         self._top_muted = mute
 
     def _build_in_frame(self):
-        # 뷰포트 프레임 우하단 앵커. 스페이서로 밀어내므로 위치 계산/리사이즈
-        # 콜백이 필요 없다. 패널 높이는 _panel_row 가 쥐고, 최소화 때 그것만 바꾼다.
+        # 우하단 앵커. 스페이서로 밀어내므로 위치 계산/리사이즈 콜백이 필요 없다.
+        # 패널 높이는 _panel_row 가 쥐고, 최소화 때 그것만 바꾼다.
         #
-        # 이 프레임이 클릭 담당 프레임보다 '위'에 있어도 전체를 가로채지 않는다.
-        # 여기서 통과(False)로 두고 패널 영역만 opaque 로 잡기 때문에, 패널 밖
-        # 클릭은 그대로 아래 프레임으로 내려간다.
-        self._frame.opaque_for_mouse_events = False
+        # ⚠ 넘겨줄 컨테이너는 ZStack 을 권장한다. ui.Frame 은 자식을 하나만
+        #   가지므로, 이미 다른 UI 가 쓰고 있는 Frame 을 주면 그 내용이 우리
+        #   위젯으로 '교체'되어 사라진다. ZStack 이면 한 자식으로 얹혀서 서로
+        #   영향 없이 겹쳐 그려진다(우리 영역 밖은 전부 투명 Spacer).
+        #
+        # host 는 통과(False)로 두고 패널 영역만 opaque 로 잡아야, 패널 밖 클릭이
+        # 그대로 아래로 내려간다. Stack 엔 이 속성이 없을 수 있어 가드.
+        if hasattr(self._frame, "opaque_for_mouse_events"):
+            self._frame.opaque_for_mouse_events = False
         with self._frame:
-            with ui.VStack():
+            self._root = ui.VStack()      # 우리 서브트리 루트 (정리는 이것만)
+            with self._root:
                 ui.Spacer()                                  # 위쪽 흡수
                 self._panel_row = ui.HStack(height=PANEL_H)
                 with self._panel_row:
@@ -518,10 +525,14 @@ class SubPanel:
         if self._window:
             self._window.destroy()
             self._window = None
-        elif self._frame is not None:
-            self._frame.clear()        # 프레임 경로: 얹은 위젯만 걷어낸다
+        elif self._frame is not None and self._root is not None:
+            # host 를 clear 하면 같은 컨테이너를 쓰는 다른 UI 까지 날아간다.
+            # 우리가 만든 루트만 비우고 숨긴다.
+            self._root.clear()
+            self._root.visible = False
         self._mute_top(False)          # 가려주던 프레임 입력을 되살려 놓는다
         self._top_frame = None
+        self._root = None
         self._panel_frame = None
         self._panel_row = None
         self._body = None
