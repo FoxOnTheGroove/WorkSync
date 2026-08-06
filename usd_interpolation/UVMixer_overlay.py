@@ -320,6 +320,9 @@ class ViewportOverlayPanel:
         self._frame = frame
         self._top_frame = top_frame
         self._top_muted = False      # 상위 프레임 입력을 꺼 둔 상태인지
+        self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
+        self._ico_min = None
+        self._min_hover_ov = None    # 최소화 버튼 hover 하이라이트
         self._panel_row = None       # 프레임 경로에서 패널 높이를 쥔 행
         self._min_window = None
         self._window = None
@@ -431,6 +434,27 @@ class ViewportOverlayPanel:
                     ui.Spacer(width=_MARGIN)                  # 우측 여백
                 ui.Spacer(height=_MARGIN)                     # 하단 여백
 
+    def _build_min_btn(self):
+        # ui.Button 대신 이미지 2장 + 투명 Rectangle. Rectangle 은 상위 프레임에
+        # 가려져도 마우스를 받고, 아이콘도 visible 토글이라 재로드로 깜박이지
+        # 않는다(슬라이더 노브·체크박스와 같은 패턴).
+        with ui.ZStack(width=10, height=10):
+            self._ico_open = ui.Image(_ICON_ARROW, width=10, height=10,
+                                      fill_policy=ui.FillPolicy.STRETCH)
+            self._ico_min  = ui.Image(_ICON_ARROW_R, width=10, height=10,
+                                      fill_policy=ui.FillPolicy.STRETCH,
+                                      visible=False)
+            self._min_hover_ov = ui.Rectangle(              # hover 하이라이트
+                style={"background_color": _HOVER_OVERLAY}, visible=False)
+            hit = ui.Rectangle(style={"background_color": 0x00000000})
+            hit.set_mouse_pressed_fn(
+                lambda x, y, b, m: self._on_toggle_minimize() if b == 0 else None)
+            hit.set_mouse_hovered_fn(self._on_min_hover)
+        return hit
+
+    def _on_min_hover(self, hovered: bool) -> None:
+        self._min_hover_ov.visible = hovered
+
     def _build_blocker(self):
         # 패널 영역 전체를 덮는 투명 Rectangle. 콜백이 붙어 있어야 omni.ui 가
         # 이벤트를 '처리됨'으로 보고 뒤(뷰포트)로 안 넘긴다. ZStack 맨 아래라
@@ -473,12 +497,7 @@ class ViewportOverlayPanel:
                 ui.Rectangle(name="title_bg")
                 with ui.HStack():
                     ui.Spacer(width=3)
-                    btn_min = _vcenter(10, lambda: ui.Button(
-                        "", width=10, height=10, name="min_btn",
-                        alignment=ui.Alignment.CENTER,
-                        clicked_fn=self._on_toggle_minimize,
-                        style={"image_url": _ICON_ARROW,
-                               "fill_policy": ui.FillPolicy.STRETCH}))
+                    btn_min = _vcenter(10, self._build_min_btn)
                     ui.Spacer(width=2)
                     title_content = ui.HStack()       # 최소화 시 숨김
                     with title_content:
@@ -870,6 +889,10 @@ class ViewportOverlayPanel:
 
     def _on_toggle_minimize(self) -> None:
         self._minimized = not self._minimized
+        # 프레임 경로엔 mini 창이 없으니 이 버튼이 상태를 표시한다(창 경로는
+        # 최소화 시 본 창째로 숨겨져서 어느 쪽이 보이든 무관).
+        self._ico_min.visible  = self._minimized
+        self._ico_open.visible = not self._minimized
         if self._panel_row is not None:
             # 프레임 경로: 창이 없으니 스왑도 불필요. 본문을 접고 행을 줄인다.
             # 깜박임 방지로 줄일 땐 안→밖, 키울 땐 밖→안 순서.
