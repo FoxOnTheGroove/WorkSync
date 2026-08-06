@@ -321,6 +321,9 @@ class SubPanel:
         self._frame = frame
         self._window = None
         self._panel_row = None       # 프레임 경로에서 패널 높이를 쥔 행
+        self._panel_frame = None     # 패널 영역 프레임 (커서 판정용)
+        self._top_frame = None       # 패널을 가리는 상위 프레임 (set_top_frame)
+        self._top_muted = False      # 상위 프레임 입력을 꺼 둔 상태인지
         self._body = None
         self._title_content = None
         self._minimized = False
@@ -341,6 +344,43 @@ class SubPanel:
         with self._window.frame:
             self._build_panel()
 
+    # ── 상위 프레임에 가려질 때: 커서가 패널 위면 그 프레임 입력만 잠깐 끈다 ──
+    #
+    # 패널이 아래 프레임에 있고 위 프레임이 이벤트를 먹는 구조에서는, 패널이
+    # hover 를 못 받으니 스스로 "커서가 내 위인지"를 알 수 없다. 그래서 좌표는
+    # 위 프레임 쪽에서 알려줘야 한다:
+    #
+    #   panel.set_top_frame(vph.frame_input)          # 가리는 프레임
+    #   ...위 프레임의 기존 mouse_moved 핸들러 안에서...
+    #   panel.on_mouse_move(x, y)                     # 화면 좌표 그대로
+    #
+    # 기존 핸들러를 덮어쓰지 않으려고 이쪽에서 콜백을 걸지 않는다(픽킹/드래그가
+    # 죽을 수 있음). 커서가 패널 위면 위 프레임을 통과(False)로 바꿔 클릭이
+    # 패널로 내려오고, 벗어나면 즉시 원래대로(True) 돌린다.
+
+    def set_top_frame(self, frame):
+        self._top_frame = frame
+
+    def on_mouse_move(self, x, y):
+        self._mute_top(self._point_in_panel(x, y))
+
+    def _point_in_panel(self, x, y) -> bool:
+        f = self._panel_frame
+        if f is None:
+            return False
+        try:
+            fx, fy = f.screen_position_x, f.screen_position_y
+            return (fx <= x <= fx + f.computed_width and
+                    fy <= y <= fy + f.computed_height)
+        except Exception:
+            return False
+
+    def _mute_top(self, mute: bool):
+        if self._top_frame is None or mute == self._top_muted:
+            return
+        self._top_frame.opaque_for_mouse_events = not mute
+        self._top_muted = mute
+
     def _build_in_frame(self):
         # 뷰포트 프레임 우하단 앵커. 스페이서로 밀어내므로 위치 계산/리사이즈
         # 콜백이 필요 없다. 패널 높이는 _panel_row 가 쥐고, 최소화 때 그것만 바꾼다.
@@ -360,6 +400,7 @@ class SubPanel:
                     # 감싼다(프레임 전체를 opaque로 하면 뷰포트 조작이 막힘).
                     panel_frame = ui.Frame(width=PANEL_W)
                     panel_frame.opaque_for_mouse_events = True
+                    self._panel_frame = panel_frame       # 커서 판정용 사각형
                     with panel_frame:
                         with ui.ZStack():
                             self._build_blocker()   # 뒤(뷰포트)로 클릭 새는 것 차단
@@ -465,6 +506,9 @@ class SubPanel:
             self._window = None
         elif self._frame is not None:
             self._frame.clear()        # 프레임 경로: 얹은 위젯만 걷어낸다
+        self._mute_top(False)          # 가려주던 프레임 입력을 되살려 놓는다
+        self._top_frame = None
+        self._panel_frame = None
         self._panel_row = None
         self._body = None
         self._title_content = None
