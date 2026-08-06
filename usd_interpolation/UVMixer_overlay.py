@@ -308,14 +308,18 @@ def _calc_overlay_pos(vph, width: int = OVERLAY_W, height: int = OVERLAY_H,
 class ViewportOverlayPanel:
 
     def __init__(self, key: str, vph, mgr: 'OverlayManager', tab_id: 'str | None',
-                 frame=None):
-        # frame: 뷰포트 오버레이 프레임을 주면 창 대신 그 위에 얹는다. 창이 아니라서
-        # 32px 최소크기 클램프도, 지워지지 않는 창 테두리도, 런타임 리사이즈 불가
-        # 문제도 없다(최소화 = 행 높이 변경, mini 창 스왑 불필요).
+                 frame=None, top_frame=None):
+        # frame: 뷰포트 오버레이 프레임(vph.frame)을 주면 창 대신 그 위에 얹는다.
+        #   창이 아니라서 32px 최소크기 클램프도, 지워지지 않는 창 테두리도,
+        #   런타임 리사이즈 불가 문제도 없다(최소화 = 행 높이 변경).
+        # top_frame: 그보다 뒤에 선언돼 패널을 덮는 프레임(vph.topframe).
+        #   커서가 패널 위일 때만 그 프레임 입력을 꺼서 클릭이 패널로 내려오게 한다.
         self._key = key
         self._mgr = mgr
         self._vph = vph
         self._frame = frame
+        self._top_frame = top_frame
+        self._top_muted = False      # 상위 프레임 입력을 꺼 둔 상태인지
         self._panel_row = None       # 프레임 경로에서 패널 높이를 쥔 행
         self._min_window = None
         self._window = None
@@ -408,16 +412,53 @@ class ViewportOverlayPanel:
         # 프레임 우하단 앵커. 스페이서로 밀어내므로 위치 계산도, 리사이즈 콜백도
         # 필요 없다(_calc_overlay_pos / _on_viewport_resized 는 창 경로 전용).
         # 패널 높이는 _panel_row 가 쥐고, 최소화 때 그 행만 줄인다.
+        #
+        # 이 프레임 자체는 통과(False)로 두고 패널 영역만 opaque 로 잡는다 —
+        # 그래야 패널 밖 클릭이 아래 프레임(뷰포트/픽킹)으로 그대로 내려간다.
+        self._frame.opaque_for_mouse_events = False
         with self._frame:
             with ui.VStack():
                 ui.Spacer()                                   # 위쪽 흡수
                 self._panel_row = ui.HStack(height=OVERLAY_H)
                 with self._panel_row:
                     ui.Spacer()                               # 왼쪽 흡수
-                    with ui.Frame(width=OVERLAY_W):
-                        self._build_panel()
+                    panel_frame = ui.Frame(width=OVERLAY_W)
+                    panel_frame.opaque_for_mouse_events = True
+                    with panel_frame:
+                        with ui.ZStack():
+                            self._build_blocker()   # 뒤로 클릭 새는 것 차단
+                            self._build_panel()
                     ui.Spacer(width=_MARGIN)                  # 우측 여백
                 ui.Spacer(height=_MARGIN)                     # 하단 여백
+
+    def _build_blocker(self):
+        # 패널 영역 전체를 덮는 투명 Rectangle. 콜백이 붙어 있어야 omni.ui 가
+        # 이벤트를 '처리됨'으로 보고 뒤(뷰포트)로 안 넘긴다. ZStack 맨 아래라
+        # 버튼/슬라이더가 먼저 가져가고 빈 틈만 여기서 먹는다.
+        blocker = ui.Rectangle(style={"background_color": 0x00000000})
+        for setter in ("set_mouse_pressed_fn", "set_mouse_released_fn",
+                       "set_mouse_moved_fn", "set_mouse_double_clicked_fn",
+                       "set_mouse_wheel_fn"):
+            fn = getattr(blocker, setter, None)
+            if fn:
+                fn(lambda *args: None)
+        # 상위 프레임에 가려져도 hover 는 들어오므로, 이걸로 그 입력을 껐다 켠다.
+        blocker.set_mouse_hovered_fn(self._on_panel_hover)
+        return blocker
+
+    # ── 상위 프레임(topframe)에 가려질 때: 커서가 패널 위면 그 입력만 잠깐 끈다 ──
+
+    def set_top_frame(self, frame) -> None:
+        self._top_frame = frame
+
+    def _on_panel_hover(self, hovered: bool) -> None:
+        self._mute_top(hovered)
+
+    def _mute_top(self, mute: bool) -> None:
+        if self._top_frame is None or mute == self._top_muted:
+            return
+        self._top_frame.opaque_for_mouse_events = not mute
+        self._top_muted = mute
 
     def _build(self) -> None:
         with self._window.frame:
@@ -902,6 +943,8 @@ class ViewportOverlayPanel:
             if self._frame is None:                # 창 경로에서만 걸어둔 콜백
                 self._vph.frame.set_computed_content_size_changed_fn(None)
             self._vph = None
+        self._mute_top(False)                      # 꺼뒀던 상위 프레임 입력 복구
+        self._top_frame = None
         if self._frame is not None:
             self._frame.clear()                    # 프레임 경로: 얹은 위젯만 걷어냄
             self._frame = None
@@ -937,13 +980,16 @@ class OverlayManager:
             panel.refresh_from_player()
 
     def on_mixer_loaded(self, key: str, target_path: str, tab_id: 'str | None',
-                        *, visible: bool = True, frame=None) -> None:
+                        *, visible: bool = True, frame=None, top_frame=None) -> None:
         # frame 을 주면 창 대신 그 뷰포트 오버레이 프레임 위에 패널을 얹는다.
+        # top_frame(= 뒤에 선언돼 패널을 덮는 프레임)을 같이 주면, 커서가 패널
+        # 위일 때만 그 프레임 입력을 꺼서 클릭이 패널로 내려온다.
         self._remove_panel(key)
         vph = _find_vph(target_path)
         if vph is None:
             return
-        panel = ViewportOverlayPanel(key, vph, mgr=self, tab_id=tab_id, frame=frame)
+        panel = ViewportOverlayPanel(key, vph, mgr=self, tab_id=tab_id,
+                                     frame=frame, top_frame=top_frame)
         panel.refresh_from_player()
         if not visible:
             panel.set_visible(False)
