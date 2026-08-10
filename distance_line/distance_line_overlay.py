@@ -58,6 +58,7 @@ class DistanceLineOverlay:
         self._on_click = on_click
         self._on_label_click = on_label_click
 
+        self._clip = None
         self._scene_view = None
         self._hover_screen = None
         self._click_screen = None
@@ -76,7 +77,9 @@ class DistanceLineOverlay:
             return
 
         with self._frame:
-            self._scene_view = sc.SceneView()
+            self._clip = _clipping_frame()
+            with self._clip:
+                self._scene_view = sc.SceneView()
             with self._scene_view.scene:
                 self._hover_screen = sc.Screen(
                     gestures=[sc.HoverGesture(on_changed_fn=self._forward_hover)]
@@ -232,7 +235,8 @@ class DistanceLineOverlay:
                 self._scene_view.destroy()
             except Exception:
                 pass
-            self._scene_view = None
+            self._clip = None
+        self._scene_view = None
         self._hover_screen = None
         self._click_screen = None
         self._lines_root = None
@@ -242,6 +246,17 @@ class DistanceLineOverlay:
         self._selected = None
         self._items = {}
         self._frame = None
+
+
+def _clipping_frame():
+    """뷰포트 밖으로 나간 부분을 잘라낸다. 안 자르면 옆 뷰포트 위에 그려진다."""
+    try:
+        return ui.Frame(horizontal_clipping=True, vertical_clipping=True)
+    except TypeError:
+        frame = ui.Frame()
+        frame.horizontal_clipping = True
+        frame.vertical_clipping = True
+        return frame
 
 
 def _midpoint(a, b):
