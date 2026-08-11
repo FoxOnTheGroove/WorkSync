@@ -55,11 +55,17 @@ OVERLAY_W_MIN = 16          # 최소화 시 너비 (버튼만)
 OVERLAY_H_MIN = 16          # 최소화 시 높이 (버튼만)
 _MARGIN = 8                 # 뷰포트 가장자리 여백
 
-# 행 높이 (현재 행 합계는 20 + 30 + 1 + 33 = 84 → 남는 30px 은 본문 아래 빈 공간)
+# 행 높이 (세로 누적: 20 + 30 + 1 + 33 + 30 = 114)
 _ROW1_H = 20                # 타이틀
 _ROW2_H = 30                # 재생/슬라이더/배속
 _DIV_H  = 1                 # 구분선
 _ROW4_H = 33                # Reverse/Loop
+_ROW5_H = 30                # 재생 속도 (라벨 + 드롭다운 박스)
+
+# 행5 가로 배치: 12 여백 | 라벨 | x78 박스 90x18 | 12 여백  (합 180)
+_SPD_BOX_X = 78             # 박스 좌측 시작 x (패널 왼쪽 끝 기준)
+_SPD_BOX_W = 90
+_SPD_BOX_H = 18
 
 _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
@@ -275,6 +281,9 @@ _STYLE = {
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
     "Rectangle::body_bg":   {"background_color": _BODY_BG},
     "Rectangle::separator": {"background_color": _WHITE},
+    # 재생 속도 드롭다운 자리 — 배경 없이 1px 흰 테두리만
+    "Rectangle::spd_box":   {"background_color": 0x00000000,
+                             "border_width": 1, "border_color": _WHITE},
 }
 
 
@@ -615,6 +624,23 @@ class ViewportOverlayPanel:
                                  alignment=ui.Alignment.LEFT_CENTER,
                                  style={"font_size": 12})
                         ui.Spacer()
+
+                    # 행5 (y=84, h=30): 12 | "재생 속도"(폰트17) | x78 박스 90x18 | 12
+                    #   가로 12 + 66 + 90 + 12 = 180. 박스는 행 상단 기준이라
+                    #   아래로 30 - 18 = 12px 여백이 남는다.
+                    #   드롭다운은 아직 없음 — 우선 테두리 1px Rectangle 로만 자리.
+                    with ui.HStack(height=_ROW5_H):
+                        ui.Spacer(width=12)
+                        with ui.VStack(width=_SPD_BOX_X - 12):
+                            ui.Label("재생 속도", height=_SPD_BOX_H,
+                                     alignment=ui.Alignment.LEFT_CENTER,
+                                     style={"font_size": 17})
+                            ui.Spacer()                  # 아래 12
+                        with ui.VStack(width=_SPD_BOX_W):
+                            self._spd_box = ui.Rectangle(height=_SPD_BOX_H,
+                                                         name="spd_box")
+                            ui.Spacer()                  # 아래 12
+                        ui.Spacer(width=12)
 
         self._body = body
         self._title_content = title_content
