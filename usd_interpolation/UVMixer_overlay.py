@@ -483,8 +483,7 @@ class ViewportOverlayPanel:
             with self._root:
                 self._drop_catcher = ui.Rectangle(
                     style={"background_color": 0x00000000}, visible=False)
-                self._drop_catcher.set_mouse_pressed_fn(
-                    lambda x, y, b, m: self._set_drop_open(False) if b == 0 else None)
+                self._drop_catcher.set_mouse_pressed_fn(self._on_catcher_press)
 
                 with ui.VStack():
                     ui.Spacer()                               # 위쪽 흡수
@@ -616,6 +615,28 @@ class ViewportOverlayPanel:
         if inside:
             self._apply_speed(value)
             self._set_drop_open(False)
+
+    def _on_catcher_press(self, x, y, button, modifier) -> None:
+        # catcher 는 프레임 전체를 덮으므로 팝업/박스 위 클릭도 같이 받는다.
+        # 그 둘은 각자 핸들러가 처리해야 하니 여기선 무시 — 안 그러면 아이템을
+        # 누르는 순간 목록이 닫혀 release(=선택)가 도달하지 못한다.
+        if button != 0 or not self._drop_open:
+            return
+        if self._point_in_drop_ui(x, y):
+            return
+        self._set_drop_open(False)
+
+    def _point_in_drop_ui(self, x, y) -> bool:
+        try:
+            if self._drop_popup is not None and _point_in_widget(
+                    self._drop_popup, x, y, _SPD_BOX_W, self._drop_list_h()):
+                return True
+            if self._drop_hit is not None and _point_in_widget(
+                    self._drop_hit, x, y, _SPD_BOX_W, _SPD_BOX_H):
+                return True
+        except Exception:
+            return True          # 판정 불가 시엔 닫지 않는 쪽이 안전
+        return False
 
     def _position_drop_popup(self) -> None:
         # 프레임 경로: 팝업이 패널 밖(프레임 루트)에 있으므로 프레임 로컬 좌표로
