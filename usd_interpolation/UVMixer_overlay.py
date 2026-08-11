@@ -62,8 +62,9 @@ _DIV_H  = 1                 # 구분선
 _ROW4_H = 33                # Reverse/Loop
 _ROW5_H = 30                # 재생 속도 (라벨 + 드롭다운 박스)
 
+# 두 번째 열 시작 x (패널 왼쪽 끝 기준) — 행4 Reverse 체크박스와 행5 박스가 맞춰짐
+_COL2_X = 78
 # 행5 가로 배치: 12 여백 | 라벨 | x78 박스 90x18 | 12 여백  (합 180)
-_SPD_BOX_X = 78             # 박스 좌측 시작 x (패널 왼쪽 끝 기준)
 _SPD_BOX_W = 90
 _SPD_BOX_H = 18
 
@@ -587,11 +588,29 @@ class ViewportOverlayPanel:
                         ui.Rectangle(name="separator", width=164, height=1)
                         ui.Spacer(width=8)
 
-                    # 행4 (y=51, h=33): 12 | 체크14 | 8 | Reverse(폰트12) | 20 | 체크14 | 8 | Loop(폰트12)
+                    # 행4 (y=51, h=33): 12 | 체크14 | 8 | Loop(폰트12) | x78 체크14 | 8 | Reverse
+                    #   Reverse 체크박스가 행5 박스와 같은 x(78)에서 시작한다.
                     # 체크박스는 n(기본)/h(hover)/s(체크됨 또는 press) 세 이미지를
                     # 미리 로드해 visible만 토글한다(깜박임 없음, 노브와 동일 패턴).
                     with ui.HStack(height=_ROW4_H):
                         ui.Spacer(width=12)
+                        def _build_loop():
+                            n, h, s, hit = _build_tri_icon(
+                                14, 14, _ICON_CHECKBOX_N,
+                                _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
+                            self._loop_imgs = (n, h, s)
+                            hit.set_mouse_hovered_fn(self._on_loop_hover)
+                            hit.set_mouse_pressed_fn(self._on_loop_press)
+                            hit.set_mouse_released_fn(self._on_loop_release)
+                            self._loop_hit = hit
+                            return hit
+                        loop_cb = _vcenter(14, _build_loop)
+                        ui.Spacer(width=8)
+                        # 라벨 폭으로 다음 체크박스를 x=78 에 맞춘다 (78-12-14-8=44)
+                        ui.Label("Loop", width=_COL2_X - (12 + 14 + 8),
+                                 height=_ROW4_H,
+                                 alignment=ui.Alignment.LEFT_CENTER,
+                                 style={"font_size": 12})
                         def _build_rev():
                             n, h, s, hit = _build_tri_icon(
                                 14, 14, _ICON_CHECKBOX_N,
@@ -607,22 +626,6 @@ class ViewportOverlayPanel:
                         ui.Label("Reverse", height=_ROW4_H,
                                  alignment=ui.Alignment.LEFT_CENTER,
                                  style={"font_size": 12})
-                        ui.Spacer(width=20)
-                        def _build_loop():
-                            n, h, s, hit = _build_tri_icon(
-                                14, 14, _ICON_CHECKBOX_N,
-                                _ICON_CHECKBOX_H, _ICON_CHECKBOX_S)
-                            self._loop_imgs = (n, h, s)
-                            hit.set_mouse_hovered_fn(self._on_loop_hover)
-                            hit.set_mouse_pressed_fn(self._on_loop_press)
-                            hit.set_mouse_released_fn(self._on_loop_release)
-                            self._loop_hit = hit
-                            return hit
-                        loop_cb = _vcenter(14, _build_loop)
-                        ui.Spacer(width=8)
-                        ui.Label("Loop", height=_ROW4_H,
-                                 alignment=ui.Alignment.LEFT_CENTER,
-                                 style={"font_size": 12})
                         ui.Spacer()
 
                     # 행5 (y=84, h=30): 12 | "재생 속도"(폰트17) | x78 박스 90x18 | 12
@@ -631,7 +634,7 @@ class ViewportOverlayPanel:
                     #   드롭다운은 아직 없음 — 우선 테두리 1px Rectangle 로만 자리.
                     with ui.HStack(height=_ROW5_H):
                         ui.Spacer(width=12)
-                        with ui.VStack(width=_SPD_BOX_X - 12):
+                        with ui.VStack(width=_COL2_X - 12):
                             ui.Label("재생 속도", height=_SPD_BOX_H,
                                      alignment=ui.Alignment.LEFT_CENTER,
                                      style={"font_size": 17})
