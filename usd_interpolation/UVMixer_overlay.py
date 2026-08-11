@@ -627,16 +627,20 @@ class ViewportOverlayPanel:
         self._set_drop_open(False)
 
     def _point_in_drop_ui(self, x, y) -> bool:
+        # Placer 의 screen_position 은 기대대로 안 나와서, 박스 화면좌표에서
+        # 직접 계산한다(팝업을 그 기준으로 배치했으므로 정확히 일치).
+        if self._spd_box is None:
+            return True
         try:
-            if self._drop_popup is not None and _point_in_widget(
-                    self._drop_popup, x, y, _SPD_BOX_W, self._drop_list_h()):
-                return True
-            if self._drop_hit is not None and _point_in_widget(
-                    self._drop_hit, x, y, _SPD_BOX_W, _SPD_BOX_H):
-                return True
+            bx = self._spd_box.screen_position_x
+            by = self._spd_box.screen_position_y
         except Exception:
             return True          # 판정 불가 시엔 닫지 않는 쪽이 안전
-        return False
+        if not (bx <= x <= bx + _SPD_BOX_W):
+            return False
+        top = by - _DROP_GAP - self._drop_list_h()
+        return (by <= y <= by + _SPD_BOX_H          # 접힘 박스
+                or top <= y <= by - _DROP_GAP)      # 펼친 목록
 
     def _position_drop_popup(self) -> None:
         # 프레임 경로: 팝업이 패널 밖(프레임 루트)에 있으므로 프레임 로컬 좌표로
