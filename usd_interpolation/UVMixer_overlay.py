@@ -20,6 +20,8 @@ except ImportError:
 #   usd_interpolation/data/icons/checkbox_h.png  (체크박스 hover)
 #   usd_interpolation/data/icons/checkbox_s.png  (체크박스 선택됨)
 #   usd_interpolation/data/icons/tooltip.png     (슬라이더 press 시 값 말풍선)
+#   usd_interpolation/data/icons/drop_arrow.png   (드롭다운 닫힘)
+#   usd_interpolation/data/icons/drop_arrow_r.png (드롭다운 열림)
 _ICON_DIR       = os.path.join(os.path.dirname(__file__), "data", "icons")
 _ICON_ARROW     = os.path.join(_ICON_DIR, "arrow.png")
 _ICON_ARROW_R   = os.path.join(_ICON_DIR, "arrow_r.png")
@@ -31,6 +33,8 @@ _ICON_CHECKBOX_S = os.path.join(_ICON_DIR, "checkbox_s.png")
 _ICON_OV_N       = os.path.join(_ICON_DIR, "ov_n.png")      # 슬라이더 핸들 기본
 _ICON_OV_H       = os.path.join(_ICON_DIR, "ov_h.png")      # 슬라이더 핸들 hover
 _ICON_TOOLTIP    = os.path.join(_ICON_DIR, "tooltip.png")
+_ICON_DROP_ARROW   = os.path.join(_ICON_DIR, "drop_arrow.png")    # 닫힘
+_ICON_DROP_ARROW_R = os.path.join(_ICON_DIR, "drop_arrow_r.png")  # 열림
 
 _TIP_W = 30           # 말풍선 폭 (tooltip.png 크기에 맞게 조정)
 _TIP_H = 20           # 말풍선 높이
@@ -76,6 +80,20 @@ _NUM_H     = 18             # 그 라벨 밴드 높이
 _NUM_FONT  = 17
 _SLIDER_W  = 90             # 좌측 59에서 시작해 149에서 끝남
 
+# ── 재생 속도 드롭다운 ──────────────────────────────────────────────────
+# 색은 0xAABBGGRR. (#8f9094 → 0xFF94908F 처럼 RGB 를 뒤집어 적는다)
+_DROP_FONT       = 12
+_DROP_ARROW_SIZE = 10       # 우측 화살표 이미지 크기
+_DROP_PAD        = 8        # 박스 좌/우 안쪽 여백
+_DROP_GAP        = 4        # 박스와 펼쳐진 목록 사이 간격
+_DROP_N   = 0xFF94908F      # #8f9094  기본 (박스 테두리 + 텍스트)
+_DROP_H   = 0xFFF18D95      # #958df1  hover / 펼쳐진 상태
+_DROP_P   = 0xFFB34747      # #4747b3  press
+# 아이템: 반투명 상태색을 덧칠하므로 불투명 바탕을 먼저 깐다
+_DROP_ITEM_BG  = 0xFF34302F # #2f3034  아이템 바탕
+_DROP_ITEM_HOV = 0x26F1A9AE # #aea9f1 26  hover 덧칠
+_DROP_ITEM_PRS = 0x59F1A9AE # #aea9f1 59  press 덧칠
+
 _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
@@ -84,7 +102,7 @@ _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
 _HOVER_OVERLAY = 0x22FFFFFF        # 반투명 흰색 (hover 오버레이)
 _PRESS_TINT    = 0xFF0000FF        # 빨강 (press 시 흰 아이콘에 씌우는 tint)
 
-SPEED_CYCLE = [1.0, 2.0, 4.0, 0.5]     # 클릭할 때마다 x1 → x2 → x4 → x0.5 → x1 ...
+SPEED_CYCLE = [1.0, 2.0, 4.0, 0.5, 0.25]    # 드롭다운 아이템 목록(순서 그대로)
 
 
 def _speed_label(spd: float) -> str:
@@ -290,9 +308,9 @@ _STYLE = {
     "Rectangle::title_bg":  {"background_color": _TITLE_BG},
     "Rectangle::body_bg":   {"background_color": _BODY_BG},
     "Rectangle::separator": {"background_color": _WHITE},
-    # 재생 속도 드롭다운 자리 — 배경 없이 1px 흰 테두리만
+    # 재생 속도 드롭다운 박스 — 배경 없이 1px 테두리 (색은 상태 따라 갱신)
     "Rectangle::spd_box":   {"background_color": 0x00000000,
-                             "border_width": 1, "border_color": _WHITE},
+                             "border_width": 1, "border_color": _DROP_N},
 }
 
 
@@ -338,7 +356,15 @@ class ViewportOverlayPanel:
         self._frame = frame
         self._top_frame = top_frame
         self._top_muted = False      # 상위 프레임 입력을 꺼 둔 상태인지
-        self._spd_label = None       # 배속 버튼 제거 — 위젯 없음(_apply_speed 가 가드)
+        self._spd_label = None       # 드롭다운 박스의 현재 값 라벨 (_apply_speed 가 갱신)
+        self._spd_box = None         # 드롭다운 접힘 박스 (테두리 = 상태색)
+        self._drop_popup = None      # 펼친 목록 (Placer)
+        self._drop_hit = None
+        self._drop_arrow = None      # 닫힘/열림 화살표 (visible 토글)
+        self._drop_arrow_r = None
+        self._drop_open = False
+        self._drop_hovering = False
+        self._drop_pressing = False
         self._num_left = None        # 슬라이더 좌측 숫자 (추후 값1)
         self._num_right = None       # 슬라이더 우측 숫자 (추후 값2)
         self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
@@ -483,6 +509,130 @@ class ViewportOverlayPanel:
 
     def _on_min_hover(self, hovered: bool) -> None:
         self._min_hover_ov.visible = hovered
+
+    # ── 재생 속도 드롭다운 ──────────────────────────────────────────────
+
+    def _build_spd_box(self):
+        # 접힌 상태 박스 (90x18): 8 여백 | 현재 값 | ... | 화살표 | 8 여백.
+        # 테두리·텍스트 색은 상태(_refresh_drop_colors)에 따라 바뀐다.
+        with ui.ZStack(height=_SPD_BOX_H):
+            self._spd_box = ui.Rectangle(name="spd_box")
+            with ui.HStack():
+                ui.Spacer(width=_DROP_PAD)
+                self._spd_label = ui.Label(
+                    _speed_label(self._speed), height=_SPD_BOX_H,
+                    alignment=ui.Alignment.LEFT_CENTER,
+                    style={"font_size": _DROP_FONT, "color": _DROP_N})
+                ui.Spacer()
+
+                def _arrows():
+                    with ui.ZStack(width=_DROP_ARROW_SIZE, height=_DROP_ARROW_SIZE):
+                        self._drop_arrow = ui.Image(
+                            _ICON_DROP_ARROW,
+                            width=_DROP_ARROW_SIZE, height=_DROP_ARROW_SIZE,
+                            fill_policy=ui.FillPolicy.STRETCH)
+                        self._drop_arrow_r = ui.Image(
+                            _ICON_DROP_ARROW_R,
+                            width=_DROP_ARROW_SIZE, height=_DROP_ARROW_SIZE,
+                            fill_policy=ui.FillPolicy.STRETCH, visible=False)
+                _vcenter(_DROP_ARROW_SIZE, _arrows)
+                ui.Spacer(width=_DROP_PAD)
+
+            hit = ui.Rectangle(style={"background_color": 0x00000000})
+            hit.set_mouse_hovered_fn(self._on_drop_hover)
+            hit.set_mouse_pressed_fn(self._on_drop_press)
+            hit.set_mouse_released_fn(self._on_drop_release)
+            self._drop_hit = hit
+
+    def _build_drop_popup(self):
+        # 위쪽으로 펼친다. body 기준 y: (박스 위 행 합계) - 간격 - 목록 높이.
+        rows_above = _ROW2_H + _DIV_H + _ROW4_H          # 박스 상단 y (body 기준)
+        list_h = len(SPEED_CYCLE) * _SPD_BOX_H
+        self._drop_popup = ui.Placer(
+            offset_x=ui.Pixel(_COL2_X),
+            offset_y=ui.Pixel(rows_above - _DROP_GAP - list_h))
+        self._drop_popup.visible = False
+        with self._drop_popup:
+            with ui.VStack(width=_SPD_BOX_W, spacing=0):
+                for value in SPEED_CYCLE:
+                    self._build_drop_item(value)
+
+    def _build_drop_item(self, value):
+        # 아이템 (90x18): 불투명 바탕 위에 반투명 상태색을 덧칠. 텍스트는 흰색 고정.
+        with ui.ZStack(height=_SPD_BOX_H):
+            ui.Rectangle(style={"background_color": _DROP_ITEM_BG})
+            ov = ui.Rectangle(style={"background_color": 0x00000000})
+            with ui.HStack():
+                ui.Spacer(width=_DROP_PAD)
+                ui.Label(_speed_label(value), height=_SPD_BOX_H,
+                         alignment=ui.Alignment.LEFT_CENTER,
+                         style={"font_size": _DROP_FONT, "color": _WHITE})
+                ui.Spacer(width=_DROP_PAD)
+            hit = ui.Rectangle(style={"background_color": 0x00000000})
+            hit.set_mouse_hovered_fn(
+                lambda h, o=ov: self._set_item_tint(o, _DROP_ITEM_HOV if h else 0x00000000))
+            hit.set_mouse_pressed_fn(
+                lambda x, y, b, m, o=ov: self._on_item_press(o, b))
+            hit.set_mouse_released_fn(
+                lambda x, y, b, m, o=ov, v=value, t=hit: self._on_item_release(o, v, t, x, y, b))
+
+    def _set_item_tint(self, ov, color):
+        ov.style = {"background_color": color}
+
+    def _on_item_press(self, ov, button):
+        if button == 0:
+            self._set_item_tint(ov, _DROP_ITEM_PRS)
+
+    def _on_item_release(self, ov, value, hit, x, y, button):
+        if button != 0:
+            return
+        inside = _point_in_widget(hit, x, y, _SPD_BOX_W, _SPD_BOX_H)
+        self._set_item_tint(ov, _DROP_ITEM_HOV if inside else 0x00000000)
+        if inside:
+            self._apply_speed(value)
+            self._set_drop_open(False)
+
+    def _set_drop_open(self, is_open: bool) -> None:
+        self._drop_open = is_open
+        self._drop_popup.visible = is_open
+        self._drop_arrow.visible = not is_open
+        self._drop_arrow_r.visible = is_open
+        self._refresh_drop_colors()
+
+    def _refresh_drop_colors(self) -> None:
+        # press > (열림 또는 hover) > 기본. 열린 상태는 hover 와 같은 색.
+        if self._drop_pressing:
+            c = _DROP_P
+        elif self._drop_open or self._drop_hovering:
+            c = _DROP_H
+        else:
+            c = _DROP_N
+        if self._spd_box is not None:
+            self._spd_box.style = {"background_color": 0x00000000,
+                                   "border_width": 1, "border_color": c}
+        if self._spd_label is not None:
+            self._spd_label.style = {"font_size": _DROP_FONT, "color": c}
+
+    def _on_drop_hover(self, hovered: bool) -> None:
+        self._drop_hovering = hovered
+        self._refresh_drop_colors()
+
+    def _on_drop_press(self, x, y, button, modifier) -> None:
+        if button == 0:
+            self._drop_pressing = True
+            self._refresh_drop_colors()
+
+    def _on_drop_release(self, x, y, button, modifier) -> None:
+        if button != 0:
+            return
+        was_pressing = self._drop_pressing
+        self._drop_pressing = False
+        inside = _point_in_widget(self._drop_hit, x, y, _SPD_BOX_W, _SPD_BOX_H)
+        self._drop_hovering = inside
+        if was_pressing and inside:
+            self._set_drop_open(not self._drop_open)
+        else:
+            self._refresh_drop_colors()
 
     def _build_num_label(self, alignment):
         # 슬라이더 좌/우 숫자("00"). 17pt 라인박스가 밴드보다 커서 글자가 아래로
@@ -644,7 +794,6 @@ class ViewportOverlayPanel:
                     # 행5 (y=84, h=30): 12 | "재생 속도"(폰트17) | x78 박스 90x18 | 12
                     #   가로 12 + 66 + 90 + 12 = 180. 박스는 행 상단 기준이라
                     #   아래로 30 - 18 = 12px 여백이 남는다.
-                    #   드롭다운은 아직 없음 — 우선 테두리 1px Rectangle 로만 자리.
                     with ui.HStack(height=_ROW5_H):
                         ui.Spacer(width=12)
                         with ui.VStack(width=_COL2_X - 12):
@@ -659,11 +808,15 @@ class ViewportOverlayPanel:
                                              style={"font_size": 17})
                             ui.Spacer()                  # 아래 12
                         with ui.VStack(width=_SPD_BOX_W):
-                            self._spd_box = ui.Rectangle(height=_SPD_BOX_H,
-                                                         name="spd_box")
+                            self._build_spd_box()
                             ui.Spacer()                  # 아래 12
                         ui.Spacer(width=12)
 
+                # 펼친 목록은 body ZStack 의 '마지막' 자식 — 그래야 위 행들 위로
+                # 그려진다. 레이아웃엔 영향 없이 Placer 로 좌표만 잡는다.
+                self._build_drop_popup()
+
+        self._refresh_drop_colors()          # 초기 색 반영
         self._body = body
         self._title_content = title_content
         self._widgets = {
