@@ -67,6 +67,7 @@ _COL2_X = 78
 # 행5 가로 배치: 12 여백 | 라벨 | x78 박스 90x18 | 12 여백  (합 180)
 _SPD_BOX_W = 90
 _SPD_BOX_H = 18
+_SPD_LABEL_OFFSET_Y = -2    # "재생 속도" 세로 미세조정(px). 음수=위로, 양수=아래로
 
 _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
@@ -635,9 +636,15 @@ class ViewportOverlayPanel:
                     with ui.HStack(height=_ROW5_H):
                         ui.Spacer(width=12)
                         with ui.VStack(width=_COL2_X - 12):
-                            ui.Label("재생 속도", height=_SPD_BOX_H,
-                                     alignment=ui.Alignment.LEFT_CENTER,
-                                     style={"font_size": 17})
+                            # 17pt 라인박스(≈20px)가 18px 밴드보다 커서 글자가
+                            # 아래로 밀려 보인다. 툴팁 라벨과 같은 방식으로 Placer
+                            # 픽셀 보정(_SPD_LABEL_OFFSET_Y)해서 박스와 눈높이를 맞춤.
+                            with ui.ZStack(height=_SPD_BOX_H):
+                                with ui.Placer(offset_x=0,
+                                               offset_y=ui.Pixel(_SPD_LABEL_OFFSET_Y)):
+                                    ui.Label("재생 속도", height=_SPD_BOX_H,
+                                             alignment=ui.Alignment.LEFT_CENTER,
+                                             style={"font_size": 17})
                             ui.Spacer()                  # 아래 12
                         with ui.VStack(width=_SPD_BOX_W):
                             self._spd_box = ui.Rectangle(height=_SPD_BOX_H,
