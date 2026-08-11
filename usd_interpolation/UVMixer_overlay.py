@@ -69,6 +69,13 @@ _SPD_BOX_W = 90
 _SPD_BOX_H = 18
 _SPD_LABEL_OFFSET_Y = -2    # "재생 속도" 세로 미세조정(px). 음수=위로, 양수=아래로
 
+# 행2 구성요소 (8 + 24 + 8 + 13 + 6 + 90 + 6 + 13 + 12 = 180)
+_PLAY_SIZE = 24             # 재생/정지 버튼
+_NUM_W     = 13             # 슬라이더 좌/우 숫자 라벨 폭
+_NUM_H     = 18             # 그 라벨 밴드 높이
+_NUM_FONT  = 17
+_SLIDER_W  = 90             # 좌측 59에서 시작해 149에서 끝남
+
 _TITLE_BG = 0xFF000000      # 타이틀바: 진한 검정
 _BODY_BG  = 0xFF3C3C3C      # 본문: 진한 회색
 _WHITE    = 0xFFFFFFFF      # 본문/타이틀 텍스트·버튼 전부 흰색
@@ -331,6 +338,9 @@ class ViewportOverlayPanel:
         self._frame = frame
         self._top_frame = top_frame
         self._top_muted = False      # 상위 프레임 입력을 꺼 둔 상태인지
+        self._spd_label = None       # 배속 버튼 제거 — 위젯 없음(_apply_speed 가 가드)
+        self._num_left = None        # 슬라이더 좌측 숫자 (추후 값1)
+        self._num_right = None       # 슬라이더 우측 숫자 (추후 값2)
         self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
         self._ico_min = None
         self._min_hover_ov = None    # 최소화 버튼 hover 하이라이트
@@ -474,6 +484,17 @@ class ViewportOverlayPanel:
     def _on_min_hover(self, hovered: bool) -> None:
         self._min_hover_ov.visible = hovered
 
+    def _build_num_label(self):
+        # 슬라이더 좌/우 숫자("00"). 17pt 라인박스가 밴드보다 커서 글자가 아래로
+        # 밀리므로, 툴팁 라벨과 같은 Placer 픽셀 보정을 적용한다.
+        with ui.ZStack(height=_NUM_H):
+            with ui.Placer(offset_x=0,
+                           offset_y=ui.Pixel(_TIP_LABEL_OFFSET_Y)):
+                lbl = ui.Label("00", height=_NUM_H,
+                               alignment=ui.Alignment.CENTER,
+                               style={"font_size": _NUM_FONT})
+        return lbl
+
     def _build_blocker(self):
         # 패널 영역 전체를 덮는 투명 Rectangle. 콜백이 붙어 있어야 omni.ui 가
         # 이벤트를 '처리됨'으로 보고 뒤(뷰포트)로 안 넘긴다. ZStack 맨 아래라
@@ -531,19 +552,22 @@ class ViewportOverlayPanel:
                 ui.Rectangle(name="body_bg")
                 with ui.VStack(spacing=0):
 
-                    # 행2 (y=20, h=30): 12 | 재생16 | 5 | 슬라이더112(h10) | 3 | 배속24 | 8
+                    # 행2 (y=20, h=30):
+                    #   8 | 재생24 | 8 | 숫자13 | 6 | 슬라이더90 | 6 | 숫자13 | 12
+                    #   = 8+24+8+13+6+90+6+13+12 = 180. 슬라이더는 좌측 59에서 시작.
+                    #   배속 버튼은 제거(핸들러/사이클 로직은 남겨둠).
                     with ui.HStack(height=_ROW2_H):
-                        ui.Spacer(width=12)
+                        ui.Spacer(width=8)
                         # 재생/정지 아이콘 미리 로드 + visible 토글(깜박임 없음, 노브와 동일
                         # 패턴). hover는 반투명 오버레이, press는 흰 아이콘에 빨강 tint.
                         def _build_play():
-                            with ui.ZStack(width=16, height=16):
+                            with ui.ZStack(width=_PLAY_SIZE, height=_PLAY_SIZE):
                                 self._play_img = ui.Image(
-                                    _ICON_PLAY, width=16, height=16,
+                                    _ICON_PLAY, width=_PLAY_SIZE, height=_PLAY_SIZE,
                                     fill_policy=ui.FillPolicy.STRETCH,
                                     style={"color": _WHITE})
                                 self._stop_img = ui.Image(
-                                    _ICON_STOP, width=16, height=16,
+                                    _ICON_STOP, width=_PLAY_SIZE, height=_PLAY_SIZE,
                                     fill_policy=ui.FillPolicy.STRETCH,
                                     style={"color": _WHITE}, visible=False)
                                 self._play_hover_ov = ui.Rectangle(
@@ -556,32 +580,16 @@ class ViewportOverlayPanel:
                                 hit.set_mouse_released_fn(self._on_play_release)
                                 self._play_hit = hit
                             return hit
-                        btn_play = _vcenter(16, _build_play)
-                        ui.Spacer(width=5)
-                        slider = _vcenter(112, lambda: _ImageSlider(
-                            width=112, track_h=4, knob=10))
-                        slider.model.add_value_changed_fn(self._on_slider)
-                        ui.Spacer(width=3)
-                        # play와 동일 구성: hover=반투명 흰 오버레이, press=빨강.
-                        # 이미지가 아니라 텍스트라 tint 대신 라벨 색을 바꾼다.
-                        def _build_spd():
-                            with ui.ZStack(width=24, height=24):
-                                self._spd_label = ui.Label(
-                                    _speed_label(self._speed),
-                                    alignment=ui.Alignment.CENTER,
-                                    style={"font_size": 12, "color": _WHITE})
-                                self._spd_hover_ov = ui.Rectangle(
-                                    style={"background_color": _HOVER_OVERLAY},
-                                    visible=False)
-                                hit = ui.Rectangle(
-                                    style={"background_color": 0x00000000})
-                                hit.set_mouse_hovered_fn(self._on_spd_hover)
-                                hit.set_mouse_pressed_fn(self._on_spd_press)
-                                hit.set_mouse_released_fn(self._on_spd_release)
-                                self._spd_hit = hit
-                            return hit
-                        spd_btn = _vcenter(24, _build_spd)
+                        btn_play = _vcenter(_PLAY_SIZE, _build_play)
                         ui.Spacer(width=8)
+                        self._num_left = _vcenter(_NUM_W, self._build_num_label)
+                        ui.Spacer(width=6)
+                        slider = _vcenter(_SLIDER_W, lambda: _ImageSlider(
+                            width=_SLIDER_W, track_h=4, knob=10))
+                        slider.model.add_value_changed_fn(self._on_slider)
+                        ui.Spacer(width=6)
+                        self._num_right = _vcenter(_NUM_W, self._build_num_label)
+                        ui.Spacer(width=12)
 
                     # 구분선 (y=50, h=1): 8 | 흰선 164x1 | 8
                     with ui.HStack(height=_DIV_H):
@@ -660,7 +668,8 @@ class ViewportOverlayPanel:
             'rev_cb':   rev_cb,
             'loop_cb':  loop_cb,
             'slider':   slider,
-            'spd_btn':  spd_btn,
+            'num_left':  self._num_left,
+            'num_right': self._num_right,
         }
 
     def _own_player(self):
@@ -878,7 +887,8 @@ class ViewportOverlayPanel:
 
     def _apply_speed(self, spd: float, broadcast: bool = True) -> None:
         self._speed = spd
-        self._spd_label.text = _speed_label(spd)
+        if self._spd_label is not None:      # 배속 버튼 제거됨 — 있을 때만 갱신
+            self._spd_label.text = _speed_label(spd)
         if not broadcast:
             return
         if UVMixerService.is_synced(self._tab_id):
