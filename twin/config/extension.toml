@@ -1,0 +1,48 @@
+[package]
+title = "Twin Viewer"
+version = "0.1.0"  # Semantic Versioning is used: https://semver.org/
+description = "Ansys Twin Builder ROM(.twin) 평가 결과를 USD 포인트 클라우드로 뷰포트에 표시한다."
+category = "Simulation"  # How to categorize this in the Extension Manager
+changelog = "docs/CHANGELOG.md"
+keywords = ["kit", "twin", "pytwin", "ansys", "rom", "pointcloud"]  # Search keywords for the Extension Manager
+readme = "docs/README.md"  # Path (relative to the root) or content of readme markdown file for UI
+repository = "https://github.com/FoxOnTheGroove/WorkSync"  # URL of the extension source repository
+
+
+[dependencies]
+"omni.usd" = {}
+
+
+# pytwin은 Kit 익스텐션이 아니라 pip 패키지다. Kit이 startup 때 받아온다.
+# [graphics] extra(pyvista/vtk)는 선택이 아니라 필수다 — TBROM이 포함된 .twin 은
+# TwinModel 인스턴스화 시점에 graphics를 요구한다. vtk까지 받느라 최초 설치가 무겁다.
+# 오프라인 환경이면 이 블록을 지우고 Kit 파이썬에 직접 설치할 것.
+# ignore_import_check: pipapi는 설치 후 requirement 문자열을 그대로 모듈명으로 import 해
+# 검증한다. extras 표기가 붙으면 'No module named pytwin[graphics]' 로 헛발질하므로 끈다.
+[python.pipapi]
+requirements = ["pytwin[graphics]"]
+use_online_index = true
+ignore_import_check = true
+
+
+[settings]
+
+
+[[python.module]]  # Main python module this extension provides, it will be publicly available as "import twin"
+name = "twin"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/DESIGN.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+dependencies = [
+]
+
+args = [
+]
