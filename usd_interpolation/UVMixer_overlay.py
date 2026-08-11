@@ -82,7 +82,7 @@ _SLIDER_W  = 90             # 좌측 59에서 시작해 149에서 끝남
 
 # ── 재생 속도 드롭다운 ──────────────────────────────────────────────────
 # 색은 0xAABBGGRR. (#8f9094 → 0xFF94908F 처럼 RGB 를 뒤집어 적는다)
-_DROP_FONT       = 12
+_DROP_FONT       = 17       # 박스/아이템 텍스트 (2px 위로 보정해서 씀)
 _DROP_ARROW_SIZE = 10       # 우측 화살표 이미지 크기
 _DROP_PAD        = 8        # 박스 좌/우 안쪽 여백
 _DROP_GAP        = 4        # 박스와 펼쳐진 목록 사이 간격
@@ -362,6 +362,7 @@ class ViewportOverlayPanel:
         self._drop_hit = None
         self._drop_arrow = None      # 닫힘/열림 화살표 (visible 토글)
         self._drop_arrow_r = None
+        self._drop_catcher = None    # 바깥 클릭 감지 (프레임 경로에서만)
         self._drop_open = False
         self._drop_hovering = False
         self._drop_pressing = False
@@ -474,20 +475,33 @@ class ViewportOverlayPanel:
         if hasattr(self._frame, "opaque_for_mouse_events"):
             self._frame.opaque_for_mouse_events = False
         with self._frame:
-            self._root = ui.VStack()      # 우리 서브트리 루트 (정리는 이것만)
+            # 루트를 ZStack 으로 둬서 패널 위/아래에 레이어를 하나씩 깐다.
+            #  - 맨 아래: 드롭다운 바깥 클릭 감지용 catcher (열렸을 때만 보임)
+            #  - 가운데: 패널
+            #  - 맨 위:  드롭다운 펼침 목록 (패널 밖으로 나가도 안 잘림)
+            self._root = ui.ZStack()      # 우리 서브트리 루트 (정리는 이것만)
             with self._root:
-                ui.Spacer()                                   # 위쪽 흡수
-                self._panel_row = ui.HStack(height=OVERLAY_H)
-                with self._panel_row:
-                    ui.Spacer()                               # 왼쪽 흡수
-                    panel_frame = ui.Frame(width=OVERLAY_W)
-                    panel_frame.opaque_for_mouse_events = True
-                    with panel_frame:
-                        with ui.ZStack():
-                            self._build_blocker()   # 뒤로 클릭 새는 것 차단
-                            self._build_panel()
-                    ui.Spacer(width=_MARGIN)                  # 우측 여백
-                ui.Spacer(height=_MARGIN)                     # 하단 여백
+                self._drop_catcher = ui.Rectangle(
+                    style={"background_color": 0x00000000}, visible=False)
+                self._drop_catcher.set_mouse_pressed_fn(
+                    lambda x, y, b, m: self._set_drop_open(False) if b == 0 else None)
+
+                with ui.VStack():
+                    ui.Spacer()                               # 위쪽 흡수
+                    self._panel_row = ui.HStack(height=OVERLAY_H)
+                    with self._panel_row:
+                        ui.Spacer()                           # 왼쪽 흡수
+                        panel_frame = ui.Frame(width=OVERLAY_W)
+                        panel_frame.opaque_for_mouse_events = True
+                        with panel_frame:
+                            with ui.ZStack():
+                                self._build_blocker()   # 뒤로 클릭 새는 것 차단
+                                self._build_panel()
+                        ui.Spacer(width=_MARGIN)              # 우측 여백
+                    ui.Spacer(height=_MARGIN)                 # 하단 여백
+
+                # 패널 '밖'(프레임 레벨)에 두어야 패널 경계에서 안 잘린다.
+                self._build_drop_popup()
 
     def _build_min_btn(self):
         # ui.Button 대신 이미지 2장 + 투명 Rectangle. Rectangle 은 상위 프레임에
@@ -519,10 +533,15 @@ class ViewportOverlayPanel:
             self._spd_box = ui.Rectangle(name="spd_box")
             with ui.HStack():
                 ui.Spacer(width=_DROP_PAD)
-                self._spd_label = ui.Label(
-                    _speed_label(self._speed), height=_SPD_BOX_H,
-                    alignment=ui.Alignment.LEFT_CENTER,
-                    style={"font_size": _DROP_FONT, "color": _DROP_N})
+                # 17pt 라인박스가 18px 밴드보다 커서 글자가 아래로 밀린다 →
+                # 다른 라벨들과 같은 Placer 픽셀 보정.
+                with ui.ZStack():
+                    with ui.Placer(offset_x=0,
+                                   offset_y=ui.Pixel(_TIP_LABEL_OFFSET_Y)):
+                        self._spd_label = ui.Label(
+                            _speed_label(self._speed), height=_SPD_BOX_H,
+                            alignment=ui.Alignment.LEFT_CENTER,
+                            style={"font_size": _DROP_FONT, "color": _DROP_N})
                 ui.Spacer()
 
                 def _arrows():
@@ -544,13 +563,16 @@ class ViewportOverlayPanel:
             hit.set_mouse_released_fn(self._on_drop_release)
             self._drop_hit = hit
 
+    def _drop_list_h(self):
+        return len(SPEED_CYCLE) * _SPD_BOX_H
+
     def _build_drop_popup(self):
-        # 위쪽으로 펼친다. body 기준 y: (박스 위 행 합계) - 간격 - 목록 높이.
+        # 위쪽으로 펼친다. 창 경로(body 안)일 때의 기본 좌표 — 프레임 경로에선
+        # 열 때마다 _position_drop_popup() 이 화면좌표로 다시 잡는다.
         rows_above = _ROW2_H + _DIV_H + _ROW4_H          # 박스 상단 y (body 기준)
-        list_h = len(SPEED_CYCLE) * _SPD_BOX_H
         self._drop_popup = ui.Placer(
             offset_x=ui.Pixel(_COL2_X),
-            offset_y=ui.Pixel(rows_above - _DROP_GAP - list_h))
+            offset_y=ui.Pixel(rows_above - _DROP_GAP - self._drop_list_h()))
         self._drop_popup.visible = False
         with self._drop_popup:
             with ui.VStack(width=_SPD_BOX_W, spacing=0):
@@ -564,9 +586,12 @@ class ViewportOverlayPanel:
             ov = ui.Rectangle(style={"background_color": 0x00000000})
             with ui.HStack():
                 ui.Spacer(width=_DROP_PAD)
-                ui.Label(_speed_label(value), height=_SPD_BOX_H,
-                         alignment=ui.Alignment.LEFT_CENTER,
-                         style={"font_size": _DROP_FONT, "color": _WHITE})
+                with ui.ZStack():                     # 박스 라벨과 같은 2px 보정
+                    with ui.Placer(offset_x=0,
+                                   offset_y=ui.Pixel(_TIP_LABEL_OFFSET_Y)):
+                        ui.Label(_speed_label(value), height=_SPD_BOX_H,
+                                 alignment=ui.Alignment.LEFT_CENTER,
+                                 style={"font_size": _DROP_FONT, "color": _WHITE})
                 ui.Spacer(width=_DROP_PAD)
             hit = ui.Rectangle(style={"background_color": 0x00000000})
             hit.set_mouse_hovered_fn(
@@ -592,9 +617,26 @@ class ViewportOverlayPanel:
             self._apply_speed(value)
             self._set_drop_open(False)
 
+    def _position_drop_popup(self) -> None:
+        # 프레임 경로: 팝업이 패널 밖(프레임 루트)에 있으므로 프레임 로컬 좌표로
+        # 다시 잡는다. 박스/프레임의 화면좌표 차이 = 프레임 안에서의 위치.
+        if self._frame is None or self._spd_box is None:
+            return
+        try:
+            fx, fy = self._frame.screen_position_x, self._frame.screen_position_y
+            bx, by = self._spd_box.screen_position_x, self._spd_box.screen_position_y
+        except Exception:
+            return
+        self._drop_popup.offset_x = ui.Pixel(bx - fx)
+        self._drop_popup.offset_y = ui.Pixel(by - fy - _DROP_GAP - self._drop_list_h())
+
     def _set_drop_open(self, is_open: bool) -> None:
         self._drop_open = is_open
+        if is_open:
+            self._position_drop_popup()
         self._drop_popup.visible = is_open
+        if self._drop_catcher is not None:      # 바깥 클릭으로 닫기
+            self._drop_catcher.visible = is_open
         self._drop_arrow.visible = not is_open
         self._drop_arrow_r.visible = is_open
         self._refresh_drop_colors()
@@ -812,9 +854,10 @@ class ViewportOverlayPanel:
                             ui.Spacer()                  # 아래 12
                         ui.Spacer(width=12)
 
-                # 펼친 목록은 body ZStack 의 '마지막' 자식 — 그래야 위 행들 위로
-                # 그려진다. 레이아웃엔 영향 없이 Placer 로 좌표만 잡는다.
-                self._build_drop_popup()
+                # 창 경로에선 프레임 레벨이 없으니 여기(body 마지막 자식)에 둔다.
+                # 프레임 경로는 _build_in_frame 에서 패널 밖에 만든다(안 잘리게).
+                if self._frame is None:
+                    self._build_drop_popup()
 
         self._refresh_drop_colors()          # 초기 색 반영
         self._body = body
