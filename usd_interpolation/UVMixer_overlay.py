@@ -344,7 +344,8 @@ def _calc_overlay_pos(vph, width: int = OVERLAY_W, height: int = OVERLAY_H,
 class ViewportOverlayPanel:
 
     def __init__(self, key: str, vph, mgr: 'OverlayManager', tab_id: 'str | None',
-                 frame=None, top_frame=None):
+                 length=None, frame=None, top_frame=None):
+        # length: 소스 개수. 슬라이더 좌측 숫자 = 1, 우측 숫자 = length.
         # frame: 뷰포트 오버레이 프레임(vph.frame)을 주면 창 대신 그 위에 얹는다.
         #   창이 아니라서 32px 최소크기 클램프도, 지워지지 않는 창 테두리도,
         #   런타임 리사이즈 불가 문제도 없다(최소화 = 행 높이 변경).
@@ -366,8 +367,9 @@ class ViewportOverlayPanel:
         self._drop_open = False
         self._drop_hovering = False
         self._drop_pressing = False
-        self._num_left = None        # 슬라이더 좌측 숫자 (추후 값1)
-        self._num_right = None       # 슬라이더 우측 숫자 (추후 값2)
+        self._num_left = None        # 슬라이더 좌측 숫자 (= 1)
+        self._num_right = None       # 슬라이더 우측 숫자 (= length)
+        self._length = length
         self._ico_open = None        # 최소화 버튼 아이콘 (펼침/접힘, visible 토글)
         self._ico_min = None
         self._min_hover_ov = None    # 최소화 버튼 hover 하이라이트
@@ -396,6 +398,7 @@ class ViewportOverlayPanel:
         self._widgets: dict = {}
         if frame is not None:
             self._build_in_frame()
+            self._apply_length()
             self._subscribe_players()
             return
 
@@ -411,6 +414,7 @@ class ViewportOverlayPanel:
         self._window.padding_x = 0
         self._window.padding_y = 0
         self._build()
+        self._apply_length()
 
         # 최소화 상태 창(16x16, 복원 버튼만). 본 창과 visible을 순환시킨다 —
         # 런타임 window 리사이즈가 안 먹어서, 리사이즈 대신 두 창을 스왑한다.
@@ -700,6 +704,17 @@ class ViewportOverlayPanel:
             self._set_drop_open(not self._drop_open)
         else:
             self._refresh_drop_colors()
+
+    def set_length(self, length) -> None:
+        """소스 개수 갱신. 좌측 숫자는 1 고정, 우측 숫자가 이 값이 된다."""
+        self._length = length
+        self._apply_length()
+
+    def _apply_length(self) -> None:
+        if self._num_left is not None:
+            self._num_left.text = "1"
+        if self._num_right is not None and self._length is not None:
+            self._num_right.text = str(self._length)
 
     def _build_num_label(self, alignment):
         # 슬라이더 좌/우 숫자("00"). 17pt 라인박스가 밴드보다 커서 글자가 아래로
@@ -1287,7 +1302,9 @@ class OverlayManager:
             panel.refresh_from_player()
 
     def on_mixer_loaded(self, key: str, target_path: str, tab_id: 'str | None',
-                        *, visible: bool = True, frame=None, top_frame=None) -> None:
+                        *, visible: bool = True, len=None,
+                        frame=None, top_frame=None) -> None:
+        # len: 소스 개수. 슬라이더 좌측 숫자는 1, 우측 숫자는 이 값으로 표시한다.
         # frame 을 주면 창 대신 그 뷰포트 오버레이 프레임 위에 패널을 얹는다.
         # top_frame(= 뒤에 선언돼 패널을 덮는 프레임)을 같이 주면, 커서가 패널
         # 위일 때만 그 프레임 입력을 꺼서 클릭이 패널로 내려온다.
@@ -1296,7 +1313,7 @@ class OverlayManager:
         if vph is None:
             return
         panel = ViewportOverlayPanel(key, vph, mgr=self, tab_id=tab_id,
-                                     frame=frame, top_frame=top_frame)
+                                     length=len, frame=frame, top_frame=top_frame)
         panel.refresh_from_player()
         if not visible:
             panel.set_visible(False)
