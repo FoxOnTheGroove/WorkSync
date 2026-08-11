@@ -624,8 +624,6 @@ class DistanceLineCore:
         if state.pending is None:
             state.pending = snap
             return
-        if _same_point(state.pending.position, snap.position):
-            return
 
         line = Line(
             id=state.line_id or cls._reserve_line_id(),
@@ -1193,17 +1191,6 @@ def _build_entry(prim, time=None):
     except Exception as exc:
         carb.log_warn(f"[distance_line] cannot prepare geometry for {prim.GetPath()}: {exc}")
         return None
-
-
-def _same_point(a, b) -> bool:
-    """같은 클릭이 두 번 들어온 것. 길이 0 인 직선은 만들지 않는다.
-
-    호스트가 클릭을 넘겨주기 전까지는 자체 클릭 스크린도 켜져 있어서,
-    세션의 첫 클릭만 두 경로로 두 번 도착한다.
-    """
-    first, second = _as_np(a), _as_np(b)
-    scale = max(1.0, float(np.abs(first).max()), float(np.abs(second).max()))
-    return bool(np.linalg.norm(second - first) <= 1e-9 * scale)
 
 
 def _reached(result, camera, span) -> bool:
