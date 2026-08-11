@@ -77,7 +77,7 @@ class DistanceLineOverlay:
             return
 
         with self._frame:
-            self._clip = _clipping_stack()
+            self._clip = _clipping_frame()
             with self._clip:
                 self._scene_view = sc.SceneView()
             with self._scene_view.scene:
@@ -248,18 +248,15 @@ class DistanceLineOverlay:
         self._frame = None
 
 
-def _clipping_stack():
-    """뷰포트 사각형으로 자른다. 안 자르면 형제 뷰포트 위에 그려진다.
-
-    Frame 의 horizontal/vertical_clipping 은 내용이 프레임보다 클 때만 자르는
-    레이아웃용이라 SceneView 에는 걸리지 않는다. content_clipping 을 써야 한다.
-    """
+def _clipping_frame():
+    """뷰포트 밖으로 나간 부분을 잘라낸다. 안 자르면 옆 뷰포트 위에 그려진다."""
     try:
-        return ui.ZStack(content_clipping=True)
+        return ui.Frame(horizontal_clipping=True, vertical_clipping=True)
     except TypeError:
-        stack = ui.ZStack()
-        stack.content_clipping = True
-        return stack
+        frame = ui.Frame()
+        frame.horizontal_clipping = True
+        frame.vertical_clipping = True
+        return frame
 
 
 def _midpoint(a, b):
