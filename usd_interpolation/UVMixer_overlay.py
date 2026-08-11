@@ -484,14 +484,16 @@ class ViewportOverlayPanel:
     def _on_min_hover(self, hovered: bool) -> None:
         self._min_hover_ov.visible = hovered
 
-    def _build_num_label(self):
+    def _build_num_label(self, alignment):
         # 슬라이더 좌/우 숫자("00"). 17pt 라인박스가 밴드보다 커서 글자가 아래로
         # 밀리므로, 툴팁 라벨과 같은 Placer 픽셀 보정을 적용한다.
+        # 정렬은 '슬라이더에 붙는 쪽' 기준 — 한 자리 숫자가 와도 왼쪽 라벨은
+        # 오른쪽 0 자리에, 오른쪽 라벨은 왼쪽 0 자리에 놓이게 한다.
         with ui.ZStack(height=_NUM_H):
             with ui.Placer(offset_x=0,
                            offset_y=ui.Pixel(_TIP_LABEL_OFFSET_Y)):
-                lbl = ui.Label("00", height=_NUM_H,
-                               alignment=ui.Alignment.CENTER,
+                lbl = ui.Label("00", width=_NUM_W, height=_NUM_H,
+                               alignment=alignment,
                                style={"font_size": _NUM_FONT})
         return lbl
 
@@ -582,13 +584,15 @@ class ViewportOverlayPanel:
                             return hit
                         btn_play = _vcenter(_PLAY_SIZE, _build_play)
                         ui.Spacer(width=8)
-                        self._num_left = _vcenter(_NUM_W, self._build_num_label)
+                        self._num_left = _vcenter(_NUM_W, lambda: self._build_num_label(
+                            ui.Alignment.RIGHT_CENTER))     # 슬라이더 쪽(우)으로 붙임
                         ui.Spacer(width=6)
                         slider = _vcenter(_SLIDER_W, lambda: _ImageSlider(
                             width=_SLIDER_W, track_h=4, knob=10))
                         slider.model.add_value_changed_fn(self._on_slider)
                         ui.Spacer(width=6)
-                        self._num_right = _vcenter(_NUM_W, self._build_num_label)
+                        self._num_right = _vcenter(_NUM_W, lambda: self._build_num_label(
+                            ui.Alignment.LEFT_CENTER))      # 슬라이더 쪽(좌)으로 붙임
                         ui.Spacer(width=12)
 
                     # 구분선 (y=50, h=1): 8 | 흰선 164x1 | 8
