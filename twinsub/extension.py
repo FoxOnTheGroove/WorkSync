@@ -1,7 +1,7 @@
 import omni.ext
 
 from .dummy_ui import DummyUI
-from .twinview_service import cleanup
+from .twinview_service import TwinViewService
 
 
 class TwinSubExtension(omni.ext.IExt):
@@ -17,7 +17,7 @@ class TwinSubExtension(omni.ext.IExt):
         print("[twinsub] shutdown")
 
         # 받아둔 .twin 임시폴더를 남기지 않는다.
-        cleanup()
+        TwinViewService.cleanup()
 
         if self._ui:
             self._ui.destroy()

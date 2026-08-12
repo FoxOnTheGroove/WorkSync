@@ -1,6 +1,6 @@
 import omni.ui as ui
 
-from . import twinview_service as tv
+from .twinview_service import TwinViewService as tv
 
 
 class DummyUI:
