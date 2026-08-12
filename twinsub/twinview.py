@@ -32,7 +32,7 @@ class TwinView:
     _update_sub = None
     _elapsed = 0.0
 
-    # 매 프레임 부른다. 평가 시각처럼 싸게 읽는 값만 여기서 갱신한다.
+    # 매 프레임 부른다. 시뮬레이션 시각처럼 싸게 읽는 값만 여기서 갱신한다.
     _on_time = None
 
     # 주기를 채워 필드를 갱신한 뒤 부른다. 무거운 값은 여기서 다시 읽는다.
@@ -133,7 +133,7 @@ class TwinView:
         runner.step_size = value
 
     @classmethod
-    def get_evaluation_time(cls, runner) -> float:
+    def get_simulation_time(cls, runner) -> float:
         return float(runner.evaluation_time)
 
     @classmethod

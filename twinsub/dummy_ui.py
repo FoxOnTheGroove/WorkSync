@@ -15,7 +15,7 @@ class DummyUI:
         self._prim_path_model = None
         self._deform_model = None
         self._step_model = None
-        self._eval_time_label = None
+        self._sim_time_label = None
         self._status_label = None
 
         # 로드하며 필드에 값을 넣을 때 변경 콜백이 되받아치는 걸 막는다.
@@ -72,7 +72,7 @@ class DummyUI:
                     ui.Button("Play", clicked_fn=self._on_play)
                     ui.Button("Stop", clicked_fn=self._on_stop)
 
-                self._eval_time_label = ui.Label("")
+                self._sim_time_label = ui.Label("")
                 self._status_label = ui.Label("")
 
                 ui.Separator(height=8)
@@ -81,7 +81,7 @@ class DummyUI:
                 self._io_frame = ui.Frame(height=0)
 
         # 시간은 매 프레임, 무거운 값은 주기마다 받는다.
-        tv.set_on_time(self._refresh_eval_time)
+        tv.set_on_time(self._refresh_sim_time)
         tv.set_on_updated(self._refresh_outputs)
 
     def destroy(self):
@@ -94,7 +94,7 @@ class DummyUI:
         self._prim_path_model = None
         self._deform_model = None
         self._step_model = None
-        self._eval_time_label = None
+        self._sim_time_label = None
         self._status_label = None
 
         # 모델을 붙들고 있으면 창이 사라진 뒤에도 콜백이 살아 있다.
@@ -159,7 +159,7 @@ class DummyUI:
             return
 
         self._set_status("playing" if started else "이미 재생 중")
-        self._refresh_eval_time()
+        self._refresh_sim_time()
         self._refresh_outputs()
 
     def _on_stop(self):
@@ -170,7 +170,7 @@ class DummyUI:
             return
 
         self._set_status("stopped" if stopped else "재생 중이 아님")
-        self._refresh_eval_time()
+        self._refresh_sim_time()
         self._refresh_outputs()
 
     def _on_deform_changed(self, model):
@@ -213,16 +213,16 @@ class DummyUI:
         finally:
             self._suppress = False
 
-    def _refresh_eval_time(self):
-        if self._eval_time_label is None:
+    def _refresh_sim_time(self):
+        if self._sim_time_label is None:
             return
 
         try:
-            value = tv.get_evaluation_time()
+            value = tv.get_simulation_time()
         except Exception:  # noqa: BLE001
             return
 
-        self._eval_time_label.text = "evaluation time: {:.3f}".format(value)
+        self._sim_time_label.text = "sim time: {:.3f}".format(value)
 
     # ------------------------------------------------------------ 입출력 목록
 

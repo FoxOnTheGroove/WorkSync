@@ -17,12 +17,12 @@ __all__ = [
     "cleanup",
     "download_twin",
     "get_deform_scale",
-    "get_evaluation_time",
     "get_inputs",
     "get_interval",
     "get_local_path",
     "get_outputs",
     "get_runner",
+    "get_simulation_time",
     "get_step_size",
     "is_loaded",
     "is_playing",
@@ -108,9 +108,9 @@ def set_step_size(value: float) -> None:
     TwinView.set_step_size(_require_target()[1], value)
 
 
-def get_evaluation_time() -> float:
-    """트윈 내부 평가 시각(초)."""
-    return TwinView.get_evaluation_time(_require_target()[1])
+def get_simulation_time() -> float:
+    """트윈 내부 시뮬레이션 시각(초)."""
+    return TwinView.get_simulation_time(_require_target()[1])
 
 
 # ---------------------------------------------------------------------- 표시
@@ -164,7 +164,7 @@ def get_interval() -> float:
 def set_on_time(callback) -> None:
     """재생 중 매 프레임 호출. fn() -> None. None 으로 해제.
 
-    평가 시각처럼 싸게 읽는 값만 여기서 갱신한다.
+    시뮬레이션 시각처럼 싸게 읽는 값만 여기서 갱신한다.
     """
     TwinView._on_time = callback
 
