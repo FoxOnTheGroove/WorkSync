@@ -13,6 +13,8 @@ UI와 다른 익스텐션은 twinview.TwinView 를 직접 건드리지 말고 �
     tv.play()
 """
 
+import asyncio
+
 from .twinview import TwinView
 
 __all__ = ["TwinViewService"]
@@ -31,6 +33,16 @@ class TwinViewService:
             raise ValueError("먼저 .twin 을 로드할 것")
         return path, runner
 
+    @classmethod
+    async def _to_thread(cls, fn, *args):
+        """블로킹 작업을 워커 스레드로 넘긴다.
+
+        USD 를 만지지 않는 것만 여기로 보낸다 — 스테이지 쓰기는 메인 스레드여야
+        한다. 그래서 rom_show 는 동기로 남는다.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, fn, *args)
+
     # ------------------------------------------------------------ 수명주기
 
     @classmethod
@@ -42,6 +54,33 @@ class TwinViewService:
     def load_twin(cls, path: str) -> bool:
         """로컬 .twin 경로로 러너를 세운다. 같은 경로면 기존 러너를 재사용한다."""
         return TwinView.load_twin(path)
+
+    @classmethod
+    async def download_twin_async(cls, s3_uri: str) -> str:
+        """download_twin 을 워커 스레드에서 돌린다. 네트워크가 UI 를 막지 않는다."""
+        key = ("download", s3_uri.strip())
+        if not TwinView.begin_task(key):
+            raise ValueError("이미 받는 중이다: {}".format(s3_uri))
+
+        try:
+            return await cls._to_thread(TwinView.download_twin, s3_uri)
+        finally:
+            TwinView.end_task(key)
+
+    @classmethod
+    async def load_twin_async(cls, path: str) -> bool:
+        """load_twin 을 워커 스레드에서 돌린다.
+
+        TwinRunner 인스턴스화가 수 초씩 걸린다. 동기로 부르면 그동안 Kit 이 멈춘다.
+        """
+        key = ("load", path.strip())
+        if not TwinView.begin_task(key):
+            raise ValueError("이미 로드 중이다: {}".format(path))
+
+        try:
+            return await cls._to_thread(TwinView.load_twin, path)
+        finally:
+            TwinView.end_task(key)
 
     @classmethod
     def cleanup(cls) -> None:

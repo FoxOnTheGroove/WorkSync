@@ -22,6 +22,9 @@ class TwinView:
     # 재생 중인 twin path. 러너마다 따로 봐야 하므로 플래그 하나로 두지 않는다.
     _playing = set()  # type: set
 
+    # 진행 중인 비동기 작업 키. 같은 작업이 겹쳐 도는 것을 막는다.
+    _inflight = set()  # type: set
+
     # twin path → 그 트윈을 띄운 prim path. 업데이트 때 어느 뷰를 만질지 찾는다.
     _prim_paths = {}  # type: dict
 
@@ -94,6 +97,23 @@ class TwinView:
 
         cls._local_path = path
         return True
+
+    @classmethod
+    def begin_task(cls, key) -> bool:
+        """같은 작업이 이미 돌고 있으면 False.
+
+        느린 작업이 비동기로 나가면 버튼을 두 번 눌러 두 번 도는 일이 생긴다.
+        같은 경로를 두 번 받으면 같은 파일에 동시에 쓴다.
+        """
+        if key in cls._inflight:
+            return False
+
+        cls._inflight.add(key)
+        return True
+
+    @classmethod
+    def end_task(cls, key) -> None:
+        cls._inflight.discard(key)
 
     @classmethod
     def get_runner(cls, path: str = "") -> object:

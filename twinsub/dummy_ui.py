@@ -1,3 +1,5 @@
+import asyncio
+
 import omni.ui as ui
 
 from .twinview_service import TwinViewService as tv
@@ -108,15 +110,28 @@ class DummyUI:
 
     # ------------------------------------------------------------ 핸들러
 
-    def _on_s3_load(self):
-        s3_uri = self._uri_model.get_value_as_string()
+    # 다운로드와 로드는 오래 걸린다. 버튼은 코루틴만 띄우고 바로 돌아온다.
 
-        # 잘못된 uri, 자격증명 없음, 없는 키 전부 여기로 떨어진다.
+    def _on_s3_load(self):
+        # 위젯 값은 여기서 읽어 넘긴다. 코루틴이 시작되기 전에 창이 닫히면
+        # 그 안에서는 모델이 이미 None 이다.
+        asyncio.ensure_future(
+            self._s3_load_async(self._uri_model.get_value_as_string()))
+
+    async def _s3_load_async(self, s3_uri):
+        self._set_status("downloading ...")
+
+        # 잘못된 uri, 자격증명 없음, 없는 키, 중복 요청 전부 여기로 떨어진다.
         # 더미 UI라 구분하지 않고 이유만 그대로 띄운다.
         try:
-            local_path = tv.download_twin(s3_uri)
+            local_path = await tv.download_twin_async(s3_uri)
         except Exception as exc:  # noqa: BLE001
             self._set_status("download 실패: {}".format(exc))
+            return
+
+        # await 뒤는 다시 메인 스레드다. 위젯을 만져도 된다.
+        # 창이 이미 닫혔을 수 있으므로 아래 갱신 함수들은 전부 None 을 확인한다.
+        if self._path_model is None:
             return
 
         # 받기만 하고 로드는 하지 않는다. 로드는 아래 Load 버튼이 맡는다.
@@ -124,10 +139,14 @@ class DummyUI:
         self._set_status("downloaded: {}".format(local_path))
 
     def _on_path_load(self):
-        path = self._path_model.get_value_as_string()
+        asyncio.ensure_future(
+            self._path_load_async(self._path_model.get_value_as_string()))
+
+    async def _path_load_async(self, path):
+        self._set_status("loading ...")
 
         try:
-            tv.load_twin(path)
+            await tv.load_twin_async(path)
         except Exception as exc:  # noqa: BLE001
             self._set_status("load 실패: {}".format(exc))
             return
