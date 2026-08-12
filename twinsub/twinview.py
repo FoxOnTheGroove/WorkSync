@@ -183,10 +183,43 @@ class TwinView:
         view = cls._get_rom_view(path, rom_name)
         if view is not None:
             view.ensure_prim(runner.rom_points[rom_name])
+            cls._ensure_xform(cls._rom_prim_path(path, rom_name))
 
         # 재생 중 업데이트가 어느 prim 아래를 갱신할지 여기서 정해진다.
         # 항상 현재 대상에 대해 불리므로 _local_path 로 물린다.
         cls._prim_paths[cls._local_path] = path
+        return True
+
+    @classmethod
+    def _ensure_xform(cls, prim_path: str) -> bool:
+        """포인트 프림에 xformOp 를 달아 옮길 수 있게 한다.
+
+        Points 는 Xformable 을 상속하므로 부모 Xform 을 따로 두지 않아도 된다.
+        ensure_prim 이 만든 프림에는 xformOp 가 없어 트랜스폼이 안 잡힌다.
+
+        이미 있으면 건드리지 않는다 — 뷰포트에서 옮겨둔 것을 Show 가 되돌리면
+        안 된다.
+        """
+        from pxr import Gf, UsdGeom
+
+        stage = cls._get_stage()
+        if stage is None:
+            return False
+
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            return False
+
+        xform = UsdGeom.Xformable(prim)
+        if not xform:
+            return False
+
+        if xform.GetOrderedXformOps():
+            return True
+
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+        xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        xform.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
         return True
 
     @classmethod
@@ -322,9 +355,7 @@ class TwinView:
 
         stage 를 못 찾으면 None. 스테이지가 아직 안 열린 상태에서 눌린 경우다.
         """
-        import omni.usd
-
-        stage = omni.usd.get_context().get_stage()
+        stage = cls._get_stage()
         if stage is None:
             return None
 
@@ -332,12 +363,21 @@ class TwinView:
         view = views.get(name)
 
         if view is None:
-            # path 가 "/World/" 로 들어와도 "//" 가 생기지 않게 한다.
-            new_path = "{}/{}".format(path.rstrip("/"), name)
-            view = RomPointCloud(stage, new_path)
+            view = RomPointCloud(stage, cls._rom_prim_path(path, name))
             views[name] = view
 
         return view
+
+    @staticmethod
+    def _rom_prim_path(path: str, name: str) -> str:
+        """path 가 "/World/" 로 들어와도 "//" 가 생기지 않게 한다."""
+        return "{}/{}".format(path.rstrip("/"), name)
+
+    @staticmethod
+    def _get_stage():
+        import omni.usd
+
+        return omni.usd.get_context().get_stage()
 
     # ------------------------------------------------------------ 임시폴더
 
