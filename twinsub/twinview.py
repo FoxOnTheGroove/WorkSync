@@ -13,6 +13,7 @@ class TwinView:
     # 정리할 대상이 흩어진다.
     _temp_dir = None
     _local_path = ""
+    _runner = None
 
     # ------------------------------------------------------------ 다운로드
 
@@ -42,6 +43,40 @@ class TwinView:
         """마지막으로 받은 로컬 경로. 없으면 빈 문자열."""
         return cls._local_path
 
+    # ------------------------------------------------------------ 로드
+
+    @classmethod
+    def load_twin(cls, path: str) -> bool:
+        """로컬 .twin 경로로 러너를 세운다.
+
+        s3 를 거치지 않고 경로를 바로 넣어도 되게 다운로드와 분리해 둔다.
+        """
+        path = path.strip()
+        if not path:
+            raise ValueError("경로가 비어 있다")
+
+        if not os.path.isfile(path):
+            raise ValueError("파일이 없다: {}".format(path))
+
+        try:
+            cls._runner = TwinRunner(path)
+        except Exception:
+            # 실패한 채로 이전 러너를 남겨두면 다음 동작이 옛 트윈에 걸린다.
+            cls._runner = None
+            raise
+
+        cls._local_path = path
+        return True
+
+    @classmethod
+    def get_runner(cls):
+        """세워진 TwinRunner. 없으면 None."""
+        return cls._runner
+
+    @classmethod
+    def is_loaded(cls) -> bool:
+        return cls._runner is not None
+
     # ------------------------------------------------------------ 임시폴더
 
     @classmethod
@@ -58,6 +93,7 @@ class TwinView:
             shutil.rmtree(cls._temp_dir, ignore_errors=True)
         cls._temp_dir = None
         cls._local_path = ""
+        cls._runner = None
 
     # ------------------------------------------------------------ 내부
 
