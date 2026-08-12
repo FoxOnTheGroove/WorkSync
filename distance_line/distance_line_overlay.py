@@ -68,6 +68,7 @@ class DistanceLineOverlay:
         self._shape = None
         self._selected = None
         self._items = {}
+        self._free_slots = []
 
         self._build()
 
@@ -115,66 +116,86 @@ class DistanceLineOverlay:
         return lambda _sender, i=line_id: self._on_label_click(i)
 
     def set_lines(self, lines, format_length, selected_id=None):
+        """바뀐 직선만 다시 만든다.
+
+        판은 sc.Widget 이라 하나가 GPU 텍스처 하나다. 전부 부수고 다시 만들면
+        누적 할당이 직선 개수의 제곱으로 늘어 descriptor pool 이 고갈된다.
+        """
         if self._lines_root is None:
             return
-        shape = [
-            (
-                line.id,
+        shape = {
+            line.id: (
                 tuple(line.start.position),
                 tuple(line.end.position),
                 format_length(line.length_m),
             )
             for line in lines
-        ]
-        if shape == self._shape:
-            if selected_id == self._selected:
-                return
-            if self._recolour(selected_id):
-                self._selected = selected_id
-                return
+        }
+        known = self._shape or {}
+        for line_id in [i for i in list(self._items) if shape.get(i) != known.get(i)]:
+            self._release(line_id)
         self._shape = shape
-        self._selected = selected_id
-        self._items = {}
 
-        self._lines_root.clear()
+        for line in lines:
+            if line.id not in self._items:
+                self._add(line, shape[line.id][2], line.id == selected_id)
+
+        if selected_id != self._selected:
+            previous, self._selected = self._selected, selected_id
+            for line_id in (previous, selected_id):
+                if line_id in self._items:
+                    self._reselect(line_id, line_id == selected_id, lines)
+
+    def _release(self, line_id):
+        """이 직선의 씬 아이템을 버리고 슬롯은 다음 직선을 위해 남겨 둔다."""
+        slot, _curve, _plate = self._items.pop(line_id)
+        slot.clear()
+        self._free_slots.append(slot)
+
+    def _slot(self):
+        if self._free_slots:
+            return self._free_slots.pop()
         with self._lines_root:
-            for line in lines:
-                chosen = line.id == selected_id
-                colour = _SELECTED_LINE_COLOR if chosen else _LINE_COLOR
-                a, b = line.start.position, line.end.position
-                curve = sc.Line(
-                    (a[0], a[1], a[2]),
-                    (b[0], b[1], b[2]),
-                    color=colour,
-                    thickness=_LINE_THICKNESS,
-                )
-                sc.Points(
-                    [(a[0], a[1], a[2]), (b[0], b[1], b[2])],
-                    colors=[_END_DOT_COLOR, _END_DOT_COLOR],
-                    sizes=[_END_DOT_SIZE, _END_DOT_SIZE],
-                )
-                plate = _draw_plate_label(
-                    a,
-                    b,
-                    format_length(line.length_m),
-                    on_click=self._label_clicked(line.id),
-                    selected=chosen,
-                )
-                self._items[line.id] = (curve, plate)
+            return sc.Transform()
 
-    def _recolour(self, selected_id) -> bool:
-        if len(self._items) != len(self._shape or ()):
-            return False
+    def _add(self, line, text, selected):
+        slot = self._slot()
+        a, b = line.start.position, line.end.position
+        with slot:
+            curve = sc.Line(
+                (a[0], a[1], a[2]),
+                (b[0], b[1], b[2]),
+                color=_SELECTED_LINE_COLOR if selected else _LINE_COLOR,
+                thickness=_LINE_THICKNESS,
+            )
+            sc.Points(
+                [(a[0], a[1], a[2]), (b[0], b[1], b[2])],
+                colors=[_END_DOT_COLOR, _END_DOT_COLOR],
+                sizes=[_END_DOT_SIZE, _END_DOT_SIZE],
+            )
+            plate = _draw_plate_label(
+                a,
+                b,
+                text,
+                on_click=self._label_clicked(line.id),
+                selected=selected,
+            )
+        self._items[line.id] = (slot, curve, plate)
+
+    def _reselect(self, line_id, chosen, lines):
+        """색만 갈아끼운다. 판이 다시 칠해지지 않으면 그 하나만 새로 만든다."""
+        _slot, curve, plate = self._items[line_id]
         try:
-            painted = True
-            for line_id, (curve, plate) in self._items.items():
-                chosen = line_id == selected_id
-                curve.color = _SELECTED_LINE_COLOR if chosen else _LINE_COLOR
-                painted = plate.set_selected(chosen) and painted
-            return painted
+            curve.color = _SELECTED_LINE_COLOR if chosen else _LINE_COLOR
+            if plate.set_selected(chosen):
+                return
         except Exception as exc:
             carb.log_warn(f"[distance_line] in-place recolour failed: {exc}")
-            return False
+        line = next((ln for ln in lines if ln.id == line_id), None)
+        if line is None:
+            return
+        self._release(line_id)
+        self._add(line, self._shape[line_id][2], chosen)
 
     def set_preview(self, start, end, text):
         if self._preview_root is None:
@@ -245,6 +266,7 @@ class DistanceLineOverlay:
         self._shape = None
         self._selected = None
         self._items = {}
+        self._free_slots = []
         self._frame = None
 
 
