@@ -32,6 +32,7 @@ __all__ = [
     "set_deform_scale",
     "set_input",
     "set_interval",
+    "set_on_time",
     "set_on_updated",
     "set_step_size",
     "stop",
@@ -160,9 +161,17 @@ def get_interval() -> float:
 
 # ---------------------------------------------------------------------- 이벤트 훅
 
-def set_on_updated(callback) -> None:
-    """재생 중 틱마다 호출. fn() -> None. None 으로 해제.
+def set_on_time(callback) -> None:
+    """재생 중 매 프레임 호출. fn() -> None. None 으로 해제.
 
-    부른 쪽이 폴링하지 않고 이 신호로 값을 다시 읽는다.
+    평가 시각처럼 싸게 읽는 값만 여기서 갱신한다.
+    """
+    TwinView._on_time = callback
+
+
+def set_on_updated(callback) -> None:
+    """재생 중 필드를 갱신한 뒤 호출. fn() -> None. None 으로 해제.
+
+    set_interval 주기로 온다. 부른 쪽이 폴링하지 않고 이 신호로 다시 읽는다.
     """
     TwinView._on_updated = callback

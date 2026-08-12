@@ -32,7 +32,10 @@ class TwinView:
     _update_sub = None
     _elapsed = 0.0
 
-    # 틱을 한 번 돌 때마다 부른다. UI가 값을 다시 읽는 신호다.
+    # 매 프레임 부른다. 평가 시각처럼 싸게 읽는 값만 여기서 갱신한다.
+    _on_time = None
+
+    # 주기를 채워 필드를 갱신한 뒤 부른다. 무거운 값은 여기서 다시 읽는다.
     _on_updated = None
 
     # prim path → {rom name → RomPointCloud}
@@ -258,29 +261,40 @@ class TwinView:
             dt = 0.0
 
         cls._elapsed += dt
-        if cls._elapsed < cls._interval:
+        if cls._elapsed >= cls._interval:
+            cls._elapsed = 0.0
+
+            # 콜백 안에서 stop 이 불릴 수 있으므로 사본을 돈다.
+            for twin_path in list(cls._playing):
+                runner = cls._runners.get(twin_path)
+                prim_path = cls._prim_paths.get(twin_path)
+                if runner is None or prim_path is None:
+                    continue
+
+                # 한 트윈이 터져도 나머지 재생은 계속 가야 한다.
+                try:
+                    cls.update_model(prim_path, runner)
+                except Exception as exc:  # noqa: BLE001
+                    print("[twinsub] update 실패 ({}): {}".format(twin_path, exc))
+
+            cls._notify(cls._on_updated, "on_updated")
+
+        # 시간은 매 프레임 알린다. 읽기만 하므로 싸고, 주기에 묶어두면
+        # 0.5초씩 튀어서 재생이 멈춘 것처럼 보인다.
+        # 필드 갱신 뒤에 부른다 — 앞에서 부르면 같은 프레임에 진행된 시간을
+        # 한 틱 늦게 보여준다.
+        cls._notify(cls._on_time, "on_time")
+
+    @classmethod
+    def _notify(cls, callback, what):
+        """콜백에서 터진 예외가 구독을 죽이면 재생이 멈춘다. 삼킨다."""
+        if callback is None:
             return
-        cls._elapsed = 0.0
 
-        # 콜백 안에서 stop 이 불릴 수 있으므로 사본을 돈다.
-        for twin_path in list(cls._playing):
-            runner = cls._runners.get(twin_path)
-            prim_path = cls._prim_paths.get(twin_path)
-            if runner is None or prim_path is None:
-                continue
-
-            # 한 트윈이 터져도 나머지 재생은 계속 가야 한다.
-            try:
-                cls.update_model(prim_path, runner)
-            except Exception as exc:  # noqa: BLE001
-                print("[twinsub] update 실패 ({}): {}".format(twin_path, exc))
-
-        # UI 갱신 신호. 콜백에서 터진 예외가 구독을 죽이면 재생이 멈춘다.
-        if cls._on_updated is not None:
-            try:
-                cls._on_updated()
-            except Exception as exc:  # noqa: BLE001
-                print("[twinsub] on_updated 콜백 실패: {}".format(exc))
+        try:
+            callback()
+        except Exception as exc:  # noqa: BLE001
+            print("[twinsub] {} 콜백 실패: {}".format(what, exc))
 
     @classmethod
     def _get_rom_view(cls, path: str, name: str):
