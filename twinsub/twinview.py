@@ -12,8 +12,12 @@ class TwinView:
     # 임시폴더는 세션당 하나만 만들어 재사용한다. 로드할 때마다 새로 파면
     # 정리할 대상이 흩어진다.
     _temp_dir = None
+
+    # 마지막으로 로드한 .twin 경로. _runners 에서 현재 대상을 고르는 키다.
     _local_path = ""
-    _runner = None
+
+    # twin path → TwinRunner
+    _runners = {}  # type: dict
 
     # prim path → {rom name → RomPointCloud}
     # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
@@ -62,24 +66,24 @@ class TwinView:
         if not os.path.isfile(path):
             raise ValueError("파일이 없다: {}".format(path))
 
-        try:
-            cls._runner = TwinRunner(path)
-        except Exception:
-            # 실패한 채로 이전 러너를 남겨두면 다음 동작이 옛 트윈에 걸린다.
-            cls._runner = None
-            raise
+        runner = cls._runners.get(path)
+        if runner is None:
+            # 실패하면 _runners 에 넣지 않는다. 반쯤 세워진 러너가 남으면
+            # 다음 동작이 그쪽에 걸린다.
+            runner = TwinRunner(path)
+            cls._runners[path] = runner
 
         cls._local_path = path
         return True
 
     @classmethod
-    def get_runner(cls):
-        """세워진 TwinRunner. 없으면 None."""
-        return cls._runner
+    def get_runner(cls, path: str = "") -> object:
+        """path 의 TwinRunner. path 를 비우면 현재 대상. 없으면 None."""
+        return cls._runners.get(path or cls._local_path)
 
     @classmethod
     def is_loaded(cls) -> bool:
-        return cls._runner is not None
+        return cls.get_runner() is not None
 
     # ------------------------------------------------------------ 표시
 
@@ -99,6 +103,16 @@ class TwinView:
             view.ensure_prim(runner.rom_points[rom_name])
 
         return True
+
+    # ------------------------------------------------------------ 재생
+
+    @classmethod
+    def play(cls, runner) -> None:
+        runner.start()
+
+    @classmethod
+    def stop(cls, runner) -> None:
+        runner.stop()
 
     @classmethod
     def _get_rom_view(cls, path: str, name: str):
@@ -139,7 +153,7 @@ class TwinView:
             shutil.rmtree(cls._temp_dir, ignore_errors=True)
         cls._temp_dir = None
         cls._local_path = ""
-        cls._runner = None
+        cls._runners = {}
         cls._rom_views = {}
 
     # ------------------------------------------------------------ 내부

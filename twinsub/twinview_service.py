@@ -7,8 +7,18 @@ __all__ = [
     "get_runner",
     "is_loaded",
     "load_twin",
+    "play",
     "rom_show",
+    "stop",
 ]
+
+
+def _require_runner():
+    """현재 대상 러너. 없으면 예외 — UI가 이유를 그대로 띄운다."""
+    runner = TwinView.get_runner()
+    if runner is None:
+        raise ValueError("먼저 .twin 을 로드할 것")
+    return runner
 
 
 def download_twin(s3_uri: str) -> str:
@@ -26,9 +36,9 @@ def load_twin(path: str) -> bool:
     return TwinView.load_twin(path)
 
 
-def get_runner():
-    """세워진 TwinRunner. 없으면 None."""
-    return TwinView.get_runner()
+def get_runner(path: str = ""):
+    """path 의 TwinRunner. path 를 비우면 현재 대상. 없으면 None."""
+    return TwinView.get_runner(path)
 
 
 def is_loaded() -> bool:
@@ -37,11 +47,17 @@ def is_loaded() -> bool:
 
 def rom_show(prim_path: str) -> bool:
     """prim path 아래에 rom 포인트 클라우드를 띄운다."""
-    runner = TwinView.get_runner()
-    if runner is None:
-        raise ValueError("먼저 .twin 을 로드할 것")
+    return TwinView.rom_show(prim_path, _require_runner())
 
-    return TwinView.rom_show(prim_path, runner)
+
+def play() -> None:
+    """현재 대상 러너를 돌린다."""
+    TwinView.play(_require_runner())
+
+
+def stop() -> None:
+    """현재 대상 러너를 멈춘다."""
+    TwinView.stop(_require_runner())
 
 
 def cleanup() -> None:

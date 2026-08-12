@@ -47,6 +47,10 @@ class DummyUI:
 
                 ui.Button("Show", height=28, clicked_fn=self._on_show)
 
+                with ui.HStack(spacing=6, height=28):
+                    ui.Button("Play", clicked_fn=self._on_play)
+                    ui.Button("Stop", clicked_fn=self._on_stop)
+
                 self._status_label = ui.Label("")
 
     def destroy(self):
@@ -101,6 +105,24 @@ class DummyUI:
             return
 
         self._set_status("shown under {}".format(prim_path))
+
+    def _on_play(self):
+        try:
+            tv.play()
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("play 실패: {}".format(exc))
+            return
+
+        self._set_status("playing")
+
+    def _on_stop(self):
+        try:
+            tv.stop()
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("stop 실패: {}".format(exc))
+            return
+
+        self._set_status("stopped")
 
     def _set_status(self, text):
         if self._status_label:
