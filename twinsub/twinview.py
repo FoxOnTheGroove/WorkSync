@@ -15,6 +15,10 @@ class TwinView:
     _local_path = ""
     _runner = None
 
+    # prim path → {rom name → RomPointCloud}
+    # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
+    _rom_views = {}  # type: dict
+
     # ------------------------------------------------------------ 다운로드
 
     @classmethod
@@ -77,6 +81,48 @@ class TwinView:
     def is_loaded(cls) -> bool:
         return cls._runner is not None
 
+    # ------------------------------------------------------------ 표시
+
+    @classmethod
+    def rom_show(cls, path: str, runner) -> bool:
+        """prim path 아래에 rom 포인트 클라우드를 띄운다.
+
+        지금은 트윈에 TBROM이 하나라고 보고 첫 번째만 쓴다.
+        """
+        rom_name = runner.tbrom_name[0]
+
+        if not runner.set_rom_selected(rom_name, True):
+            return False
+
+        view = cls._get_rom_view(path, rom_name)
+        if view is not None:
+            view.ensure_prim(runner.rom_points[rom_name])
+
+        return True
+
+    @classmethod
+    def _get_rom_view(cls, path: str, name: str):
+        """(prim path, rom 이름) 에 물린 RomPointCloud 를 준다. 없으면 만든다.
+
+        stage 를 못 찾으면 None. 스테이지가 아직 안 열린 상태에서 눌린 경우다.
+        """
+        import omni.usd
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return None
+
+        views = cls._rom_views.setdefault(path, {})
+        view = views.get(name)
+
+        if view is None:
+            # path 가 "/World/" 로 들어와도 "//" 가 생기지 않게 한다.
+            new_path = "{}/{}".format(path.rstrip("/"), name)
+            view = RomPointCloud(stage, new_path)
+            views[name] = view
+
+        return view
+
     # ------------------------------------------------------------ 임시폴더
 
     @classmethod
@@ -94,6 +140,7 @@ class TwinView:
         cls._temp_dir = None
         cls._local_path = ""
         cls._runner = None
+        cls._rom_views = {}
 
     # ------------------------------------------------------------ 내부
 

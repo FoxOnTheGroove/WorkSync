@@ -7,6 +7,7 @@ __all__ = [
     "get_runner",
     "is_loaded",
     "load_twin",
+    "rom_show",
 ]
 
 
@@ -32,6 +33,15 @@ def get_runner():
 
 def is_loaded() -> bool:
     return TwinView.is_loaded()
+
+
+def rom_show(prim_path: str) -> bool:
+    """prim path 아래에 rom 포인트 클라우드를 띄운다."""
+    runner = TwinView.get_runner()
+    if runner is None:
+        raise ValueError("먼저 .twin 을 로드할 것")
+
+    return TwinView.rom_show(prim_path, runner)
 
 
 def cleanup() -> None:

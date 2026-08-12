@@ -6,11 +6,13 @@ from . import twinview_service as tv
 class DummyUI:
 
     WINDOW_TITLE = "TwinSub"
+    DEFAULT_PRIM_PATH = "/World"
 
     def __init__(self):
         self._window = None
         self._uri_model = None
         self._path_model = None
+        self._prim_path_model = None
         self._status_label = None
 
     def build_ui(self):
@@ -35,11 +37,22 @@ class DummyUI:
 
                 ui.Button("Load", height=28, clicked_fn=self._on_path_load)
 
+                ui.Separator(height=8)
+
+                # --- 표시: 이 prim 아래에 rom 이름의 포인트 클라우드가 생긴다 ---
+                with ui.HStack(spacing=6, height=24):
+                    ui.Label("Prim Path", width=60)
+                    self._prim_path_model = ui.StringField().model
+                    self._prim_path_model.set_value(self.DEFAULT_PRIM_PATH)
+
+                ui.Button("Show", height=28, clicked_fn=self._on_show)
+
                 self._status_label = ui.Label("")
 
     def destroy(self):
         self._uri_model = None
         self._path_model = None
+        self._prim_path_model = None
         self._status_label = None
 
         if self._window:
@@ -73,6 +86,21 @@ class DummyUI:
             return
 
         self._set_status("loaded: {}".format(path))
+
+    def _on_show(self):
+        prim_path = self._prim_path_model.get_value_as_string()
+
+        try:
+            shown = tv.rom_show(prim_path)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("show 실패: {}".format(exc))
+            return
+
+        if not shown:
+            self._set_status("show 실패: rom 선택이 거부됐다")
+            return
+
+        self._set_status("shown under {}".format(prim_path))
 
     def _set_status(self, text):
         if self._status_label:
