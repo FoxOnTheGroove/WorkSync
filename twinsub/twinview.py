@@ -115,6 +115,22 @@ class TwinView:
     def set_input(cls, runner, name: str, value: float) -> None:
         runner.set_input(name, value)
 
+    @classmethod
+    def get_step_size(cls, runner) -> float:
+        return float(runner.step_size)
+
+    @classmethod
+    def set_step_size(cls, runner, value: float) -> None:
+        value = float(value)
+        if value <= 0.0:
+            raise ValueError("step size 는 양수여야 한다: {}".format(value))
+
+        runner.step_size = value
+
+    @classmethod
+    def get_evaluation_time(cls, runner) -> float:
+        return float(runner.evaluation_time)
+
     # ------------------------------------------------------------ 표시
 
     @classmethod

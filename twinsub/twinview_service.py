@@ -11,12 +11,15 @@ __all__ = [
     "is_playing",
     "load_twin",
     "play",
+    "get_evaluation_time",
     "get_interval",
     "get_scale",
+    "get_step_size",
     "rom_show",
     "set_input",
     "set_interval",
     "set_scale",
+    "set_step_size",
     "stop",
 ]
 
@@ -67,6 +70,21 @@ def get_outputs() -> dict:
 def set_input(name: str, value: float) -> None:
     """입력 하나를 바꾼다."""
     TwinView.set_input(_require_target()[1], name, float(value))
+
+
+def get_step_size() -> float:
+    """트윈에 설정된 step size."""
+    return TwinView.get_step_size(_require_target()[1])
+
+
+def set_step_size(value: float) -> None:
+    """step size 를 바꾼다. 양수가 아니면 예외."""
+    TwinView.set_step_size(_require_target()[1], value)
+
+
+def get_evaluation_time() -> float:
+    """트윈 내부 평가 시각(초)."""
+    return TwinView.get_evaluation_time(_require_target()[1])
 
 
 def rom_show(prim_path: str) -> bool:
