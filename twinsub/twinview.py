@@ -89,7 +89,7 @@ class TwinView:
 
         지금은 트윈에 TBROM이 하나라고 보고 첫 번째만 쓴다.
         """
-        rom_name = runner.tbrom_name[0]
+        rom_name = runner.tbrom_names[0]
 
         if not runner.set_rom_selected(rom_name, True):
             return False
