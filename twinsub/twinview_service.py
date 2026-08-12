@@ -16,23 +16,23 @@ from .twinview import TwinView
 __all__ = [
     "cleanup",
     "download_twin",
+    "get_deform_scale",
     "get_evaluation_time",
     "get_inputs",
     "get_interval",
     "get_local_path",
     "get_outputs",
     "get_runner",
-    "get_scale",
     "get_step_size",
     "is_loaded",
     "is_playing",
     "load_twin",
     "play",
     "rom_show",
+    "set_deform_scale",
     "set_input",
     "set_interval",
     "set_on_updated",
-    "set_scale",
     "set_step_size",
     "stop",
 ]
@@ -122,13 +122,14 @@ def rom_show(prim_path: str) -> bool:
     return TwinView.rom_show(prim_path, _require_target()[1])
 
 
-def set_scale(scale: float) -> None:
-    """필드 스케일. 기본 1.0."""
-    TwinView.set_scale(scale)
+def get_deform_scale() -> float:
+    """현재 rom 의 변형 스케일. 설정이 없으면 1.0."""
+    return TwinView.get_deform_scale(_require_target()[1])
 
 
-def get_scale() -> float:
-    return TwinView.get_scale()
+def set_deform_scale(value: float) -> None:
+    """현재 rom 의 변형 스케일을 바꾼다."""
+    TwinView.set_deform_scale(_require_target()[1], value)
 
 
 # ---------------------------------------------------------------------- 재생

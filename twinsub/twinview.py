@@ -25,9 +25,8 @@ class TwinView:
     # twin path → 그 트윈을 띄운 prim path. 업데이트 때 어느 뷰를 만질지 찾는다.
     _prim_paths = {}  # type: dict
 
-    # 재생 중 필드를 다시 읽는 주기(초)와 필드 스케일.
+    # 재생 중 필드를 다시 읽는 주기(초).
     _interval = 0.5
-    _scale = 1.0
 
     # Kit 업데이트 구독. 재생 중인 트윈이 하나라도 있을 때만 살아 있다.
     _update_sub = None
@@ -134,6 +133,17 @@ class TwinView:
     def get_evaluation_time(cls, runner) -> float:
         return float(runner.evaluation_time)
 
+    @classmethod
+    def get_deform_scale(cls, runner, rom_name: str = "") -> float:
+        """rom 의 변형 스케일. 설정이 없으면 1.0."""
+        rom_name = rom_name or runner.tbrom_names[0]
+        return float(runner.rom_deform_scale.get(rom_name, 1.0))
+
+    @classmethod
+    def set_deform_scale(cls, runner, value: float, rom_name: str = "") -> None:
+        rom_name = rom_name or runner.tbrom_names[0]
+        runner.set_rom_deform_scale(rom_name, float(value))
+
     # ------------------------------------------------------------ 표시
 
     @classmethod
@@ -172,7 +182,9 @@ class TwinView:
         field = runner.get_rom_field(rom_name)
         if field is not None:
             values, dim = field
-            view.update_field(values, dim, cls._scale if scale is None else scale)
+            if scale is None:
+                scale = cls.get_deform_scale(runner, rom_name)
+            view.update_field(values, dim, scale)
 
     # ------------------------------------------------------------ 재생
 
@@ -215,15 +227,6 @@ class TwinView:
     @classmethod
     def get_interval(cls) -> float:
         return cls._interval
-
-    @classmethod
-    def set_scale(cls, scale: float) -> None:
-        """필드 스케일."""
-        cls._scale = float(scale)
-
-    @classmethod
-    def get_scale(cls) -> float:
-        return cls._scale
 
     # ------------------------------------------------------------ 업데이트 틱
 

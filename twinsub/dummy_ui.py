@@ -13,12 +13,13 @@ class DummyUI:
         self._uri_model = None
         self._path_model = None
         self._prim_path_model = None
+        self._deform_model = None
         self._step_model = None
         self._eval_time_label = None
         self._status_label = None
 
-        # 로드하며 step size 를 넣을 때 변경 콜백이 되받아치는 걸 막는다.
-        self._suppress_step = False
+        # 로드하며 필드에 값을 넣을 때 변경 콜백이 되받아치는 걸 막는다.
+        self._suppress = False
 
         # 로드 전엔 무엇이 있는지 모른다. 로드 후에 채운다.
         self._io_frame = None
@@ -58,6 +59,11 @@ class DummyUI:
                 ui.Button("Show", height=28, clicked_fn=self._on_show)
 
                 with ui.HStack(spacing=6, height=24):
+                    ui.Label("Deform", width=60)
+                    self._deform_model = ui.FloatField().model
+                    self._deform_model.add_value_changed_fn(self._on_deform_changed)
+
+                with ui.HStack(spacing=6, height=24):
                     ui.Label("Step Size", width=60)
                     self._step_model = ui.FloatField().model
                     self._step_model.add_value_changed_fn(self._on_step_changed)
@@ -84,6 +90,7 @@ class DummyUI:
         self._uri_model = None
         self._path_model = None
         self._prim_path_model = None
+        self._deform_model = None
         self._step_model = None
         self._eval_time_label = None
         self._status_label = None
@@ -124,7 +131,7 @@ class DummyUI:
             return
 
         self._set_status("loaded: {}".format(path))
-        self._refresh_step_size()
+        self._refresh_scalars()
         self._rebuild_io()
 
     def _on_show(self):
@@ -164,9 +171,18 @@ class DummyUI:
         self._refresh_eval_time()
         self._refresh_outputs()
 
-    def _on_step_changed(self, model):
+    def _on_deform_changed(self, model):
         # 로드하며 넣은 값이 되돌아온 것은 무시한다.
-        if self._suppress_step:
+        if self._suppress:
+            return
+
+        try:
+            tv.set_deform_scale(model.get_value_as_float())
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("deform scale 실패: {}".format(exc))
+
+    def _on_step_changed(self, model):
+        if self._suppress:
             return
 
         try:
@@ -181,22 +197,24 @@ class DummyUI:
         self._refresh_eval_time()
         self._refresh_outputs()
 
-    def _refresh_step_size(self):
-        """로드된 트윈의 기본 step size 를 필드에 넣는다."""
-        if self._step_model is None:
+    def _refresh_scalars(self):
+        """로드된 트윈의 deform scale 과 step size 를 필드에 넣는다."""
+        if self._deform_model is None or self._step_model is None:
             return
 
         try:
-            value = tv.get_step_size()
+            deform = tv.get_deform_scale()
+            step = tv.get_step_size()
         except Exception as exc:  # noqa: BLE001
-            self._set_status("step size 조회 실패: {}".format(exc))
+            self._set_status("조회 실패: {}".format(exc))
             return
 
-        self._suppress_step = True
+        self._suppress = True
         try:
-            self._step_model.set_value(value)
+            self._deform_model.set_value(deform)
+            self._step_model.set_value(step)
         finally:
-            self._suppress_step = False
+            self._suppress = False
 
     def _refresh_eval_time(self):
         if self._eval_time_label is None:
