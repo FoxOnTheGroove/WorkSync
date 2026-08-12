@@ -1,0 +1,27 @@
+[package]
+title = "TwinSub"
+version = "0.1.0"  # Semantic Versioning is used: https://semver.org/
+description = "TwinSub 뷰어 익스텐션. 구현/서비스/UI 계층을 분리한 뼈대."
+category = "Simulation"  # How to categorize this in the Extension Manager
+keywords = ["kit", "twinsub"]  # Search keywords for the Extension Manager
+repository = "https://github.com/FoxOnTheGroove/WorkSync"  # URL of the extension source repository
+
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+
+
+[settings]
+
+
+[[python.module]]  # Main python module this extension provides, it will be publicly available as "import twinsub"
+name = "twinsub"
+
+
+[[test]]
+dependencies = [
+]
+
+args = [
+]
