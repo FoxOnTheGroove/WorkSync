@@ -3,13 +3,16 @@ from .twinview import TwinView
 __all__ = [
     "cleanup",
     "download_twin",
+    "get_inputs",
     "get_local_path",
+    "get_outputs",
     "get_runner",
     "is_loaded",
     "is_playing",
     "load_twin",
     "play",
     "rom_show",
+    "set_input",
     "stop",
 ]
 
@@ -45,6 +48,21 @@ def get_runner(path: str = ""):
 
 def is_loaded() -> bool:
     return TwinView.is_loaded()
+
+
+def get_inputs() -> dict:
+    """입력 이름 → 현재값."""
+    return TwinView.get_inputs(_require_target()[1])
+
+
+def get_outputs() -> dict:
+    """출력 이름 → 마지막 값."""
+    return TwinView.get_outputs(_require_target()[1])
+
+
+def set_input(name: str, value: float) -> None:
+    """입력 하나를 바꾼다."""
+    TwinView.set_input(_require_target()[1], name, float(value))
 
 
 def rom_show(prim_path: str) -> bool:

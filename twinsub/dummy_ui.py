@@ -15,8 +15,13 @@ class DummyUI:
         self._prim_path_model = None
         self._status_label = None
 
+        # 로드 전엔 무엇이 있는지 모른다. 로드 후에 채운다.
+        self._io_frame = None
+        self._input_models = {}
+        self._output_labels = {}
+
     def build_ui(self):
-        self._window = ui.Window(self.WINDOW_TITLE, width=560, height=220)
+        self._window = ui.Window(self.WINDOW_TITLE, width=560, height=520)
 
         with self._window.frame:
             with ui.VStack(spacing=6, height=0):
@@ -53,11 +58,21 @@ class DummyUI:
 
                 self._status_label = ui.Label("")
 
+                ui.Separator(height=8)
+
+                # 로드된 트윈의 입출력 목록. 로드 때마다 다시 그린다.
+                self._io_frame = ui.Frame(height=0)
+
     def destroy(self):
         self._uri_model = None
         self._path_model = None
         self._prim_path_model = None
         self._status_label = None
+
+        # 모델을 붙들고 있으면 창이 사라진 뒤에도 콜백이 살아 있다.
+        self._input_models = {}
+        self._output_labels = {}
+        self._io_frame = None
 
         if self._window:
             self._window.destroy()
@@ -90,6 +105,7 @@ class DummyUI:
             return
 
         self._set_status("loaded: {}".format(path))
+        self._rebuild_io()
 
     def _on_show(self):
         prim_path = self._prim_path_model.get_value_as_string()
@@ -114,6 +130,7 @@ class DummyUI:
             return
 
         self._set_status("playing" if started else "이미 재생 중")
+        self._refresh_outputs()
 
     def _on_stop(self):
         try:
@@ -123,6 +140,82 @@ class DummyUI:
             return
 
         self._set_status("stopped" if stopped else "재생 중이 아님")
+        self._refresh_outputs()
+
+    # ------------------------------------------------------------ 입출력 목록
+
+    def _rebuild_io(self):
+        """로드된 트윈의 입력/출력 목록을 다시 그린다."""
+        self._input_models = {}
+        self._output_labels = {}
+
+        if self._io_frame is None:
+            return
+
+        self._io_frame.clear()
+
+        try:
+            inputs = tv.get_inputs()
+            outputs = tv.get_outputs()
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("입출력 조회 실패: {}".format(exc))
+            return
+
+        with self._io_frame:
+            with ui.VStack(spacing=4, height=0):
+
+                ui.Label("Inputs")
+                for name in sorted(inputs):
+                    with ui.HStack(spacing=6, height=22):
+                        ui.Label(name, width=180)
+
+                        model = ui.FloatField().model
+                        model.set_value(self._as_float(inputs[name]))
+
+                        # 콜백은 초기값을 넣은 뒤에 단다. 먼저 달면 여기서
+                        # set_input 이 한 번 헛돌아 러너 값을 덮어쓴다.
+                        model.add_value_changed_fn(
+                            lambda m, n=name: self._on_input_changed(n, m)
+                        )
+                        self._input_models[name] = model
+
+                ui.Separator(height=6)
+
+                ui.Label("Outputs")
+                for name in sorted(outputs):
+                    with ui.HStack(spacing=6, height=22):
+                        ui.Label(name, width=180)
+                        self._output_labels[name] = ui.Label(str(outputs[name]))
+
+    def _on_input_changed(self, name, model):
+        try:
+            tv.set_input(name, model.get_value_as_float())
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("set_input 실패: {}".format(exc))
+            return
+
+        self._refresh_outputs()
+
+    def _refresh_outputs(self):
+        if not self._output_labels:
+            return
+
+        try:
+            outputs = tv.get_outputs()
+        except Exception:  # noqa: BLE001
+            return
+
+        for name, label in self._output_labels.items():
+            if name in outputs:
+                label.text = str(outputs[name])
+
+    @staticmethod
+    def _as_float(value):
+        # 입력이 숫자가 아닌 트윈도 있을 수 있다. 필드가 못 받으면 0 으로 둔다.
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _set_status(self, text):
         if self._status_label:

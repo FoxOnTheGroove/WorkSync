@@ -88,6 +88,22 @@ class TwinView:
     def is_loaded(cls) -> bool:
         return cls.get_runner() is not None
 
+    # ------------------------------------------------------------ 모델 정보
+
+    @classmethod
+    def get_inputs(cls, runner) -> dict:
+        """입력 이름 → 현재값. 사본이라 여기 손대도 러너는 안 바뀐다."""
+        return dict(runner.inputs)
+
+    @classmethod
+    def get_outputs(cls, runner) -> dict:
+        """출력 이름 → 마지막 값. 사본이다."""
+        return dict(runner.outputs)
+
+    @classmethod
+    def set_input(cls, runner, name: str, value: float) -> None:
+        runner.set_input(name, value)
+
     # ------------------------------------------------------------ 표시
 
     @classmethod
