@@ -33,6 +33,9 @@ class TwinView:
     _update_sub = None
     _elapsed = 0.0
 
+    # 틱을 한 번 돌 때마다 부른다. UI가 값을 다시 읽는 신호다.
+    _on_updated = None
+
     # prim path → {rom name → RomPointCloud}
     # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
     _rom_views = {}  # type: dict
@@ -268,6 +271,13 @@ class TwinView:
                 cls.update_model(prim_path, runner)
             except Exception as exc:  # noqa: BLE001
                 print("[twinsub] update 실패 ({}): {}".format(twin_path, exc))
+
+        # UI 갱신 신호. 콜백에서 터진 예외가 구독을 죽이면 재생이 멈춘다.
+        if cls._on_updated is not None:
+            try:
+                cls._on_updated()
+            except Exception as exc:  # noqa: BLE001
+                print("[twinsub] on_updated 콜백 실패: {}".format(exc))
 
     @classmethod
     def _get_rom_view(cls, path: str, name: str):

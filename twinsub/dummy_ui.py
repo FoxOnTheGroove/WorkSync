@@ -74,7 +74,13 @@ class DummyUI:
                 # 로드된 트윈의 입출력 목록. 로드 때마다 다시 그린다.
                 self._io_frame = ui.Frame(height=0)
 
+        # 재생 중 값이 도는 것은 틱 신호로 받는다.
+        tv.set_on_updated(self._on_tick)
+
     def destroy(self):
+        # 훅부터 끊는다. 창이 사라진 뒤 틱이 들어오면 죽은 위젯을 만진다.
+        tv.set_on_updated(None)
+
         self._uri_model = None
         self._path_model = None
         self._prim_path_model = None
@@ -169,6 +175,11 @@ class DummyUI:
             self._set_status("step size 실패: {}".format(exc))
 
     # ------------------------------------------------------------ 갱신
+
+    def _on_tick(self):
+        """재생 중 매 틱. 도는 값들만 다시 읽는다."""
+        self._refresh_eval_time()
+        self._refresh_outputs()
 
     def _refresh_step_size(self):
         """로드된 트윈의 기본 step size 를 필드에 넣는다."""

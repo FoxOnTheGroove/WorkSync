@@ -18,6 +18,7 @@ __all__ = [
     "rom_show",
     "set_input",
     "set_interval",
+    "set_on_updated",
     "set_scale",
     "set_step_size",
     "stop",
@@ -123,6 +124,14 @@ def get_scale() -> float:
 def is_playing(path: str = "") -> bool:
     """path 가 재생 중인지. path 를 비우면 현재 대상."""
     return TwinView.is_playing(path)
+
+
+def set_on_updated(callback) -> None:
+    """재생 중 틱마다 호출. fn() -> None. None 으로 해제.
+
+    UI가 폴링하지 않고 이 신호로 값을 다시 읽는다.
+    """
+    TwinView._on_updated = callback
 
 
 def cleanup() -> None:
