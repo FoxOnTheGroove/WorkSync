@@ -108,21 +108,21 @@ class DummyUI:
 
     def _on_play(self):
         try:
-            tv.play()
+            started = tv.play()
         except Exception as exc:  # noqa: BLE001
             self._set_status("play 실패: {}".format(exc))
             return
 
-        self._set_status("playing")
+        self._set_status("playing" if started else "이미 재생 중")
 
     def _on_stop(self):
         try:
-            tv.stop()
+            stopped = tv.stop()
         except Exception as exc:  # noqa: BLE001
             self._set_status("stop 실패: {}".format(exc))
             return
 
-        self._set_status("stopped")
+        self._set_status("stopped" if stopped else "재생 중이 아님")
 
     def _set_status(self, text):
         if self._status_label:

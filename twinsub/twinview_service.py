@@ -6,6 +6,7 @@ __all__ = [
     "get_local_path",
     "get_runner",
     "is_loaded",
+    "is_playing",
     "load_twin",
     "play",
     "rom_show",
@@ -13,12 +14,13 @@ __all__ = [
 ]
 
 
-def _require_runner():
-    """현재 대상 러너. 없으면 예외 — UI가 이유를 그대로 띄운다."""
-    runner = TwinView.get_runner()
+def _require_target():
+    """현재 대상 (twin path, runner). 없으면 예외 — UI가 이유를 그대로 띄운다."""
+    path = TwinView.get_local_path()
+    runner = TwinView.get_runner(path)
     if runner is None:
         raise ValueError("먼저 .twin 을 로드할 것")
-    return runner
+    return path, runner
 
 
 def download_twin(s3_uri: str) -> str:
@@ -47,17 +49,22 @@ def is_loaded() -> bool:
 
 def rom_show(prim_path: str) -> bool:
     """prim path 아래에 rom 포인트 클라우드를 띄운다."""
-    return TwinView.rom_show(prim_path, _require_runner())
+    return TwinView.rom_show(prim_path, _require_target()[1])
 
 
-def play() -> None:
-    """현재 대상 러너를 돌린다."""
-    TwinView.play(_require_runner())
+def play() -> bool:
+    """현재 대상 러너를 돌린다. 이미 재생 중이면 False."""
+    return TwinView.play(*_require_target())
 
 
-def stop() -> None:
-    """현재 대상 러너를 멈춘다."""
-    TwinView.stop(_require_runner())
+def stop() -> bool:
+    """현재 대상 러너를 멈춘다. 재생 중이 아니면 False."""
+    return TwinView.stop(*_require_target())
+
+
+def is_playing(path: str = "") -> bool:
+    """path 가 재생 중인지. path 를 비우면 현재 대상."""
+    return TwinView.is_playing(path)
 
 
 def cleanup() -> None:

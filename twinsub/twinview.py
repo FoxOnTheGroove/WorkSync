@@ -19,6 +19,9 @@ class TwinView:
     # twin path → TwinRunner
     _runners = {}  # type: dict
 
+    # 재생 중인 twin path. 러너마다 따로 봐야 하므로 플래그 하나로 두지 않는다.
+    _playing = set()  # type: set
+
     # prim path → {rom name → RomPointCloud}
     # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
     _rom_views = {}  # type: dict
@@ -107,12 +110,29 @@ class TwinView:
     # ------------------------------------------------------------ 재생
 
     @classmethod
-    def play(cls, runner) -> None:
+    def play(cls, path: str, runner) -> bool:
+        """이미 재생 중이면 넘긴다."""
+        if path in cls._playing:
+            return False
+
         runner.start()
+        cls._playing.add(path)
+        return True
 
     @classmethod
-    def stop(cls, runner) -> None:
+    def stop(cls, path: str, runner) -> bool:
+        """재생 중이 아니면 넘긴다."""
+        if path not in cls._playing:
+            return False
+
         runner.stop()
+        cls._playing.discard(path)
+        return True
+
+    @classmethod
+    def is_playing(cls, path: str = "") -> bool:
+        """path 가 재생 중인지. path 를 비우면 현재 대상."""
+        return (path or cls._local_path) in cls._playing
 
     @classmethod
     def _get_rom_view(cls, path: str, name: str):
@@ -155,6 +175,7 @@ class TwinView:
         cls._local_path = ""
         cls._runners = {}
         cls._rom_views = {}
+        cls._playing = set()
 
     # ------------------------------------------------------------ 내부
 
