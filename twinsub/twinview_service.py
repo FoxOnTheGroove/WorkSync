@@ -11,8 +11,12 @@ __all__ = [
     "is_playing",
     "load_twin",
     "play",
+    "get_interval",
+    "get_scale",
     "rom_show",
     "set_input",
+    "set_interval",
+    "set_scale",
     "stop",
 ]
 
@@ -78,6 +82,24 @@ def play() -> bool:
 def stop() -> bool:
     """현재 대상 러너를 멈춘다. 재생 중이 아니면 False."""
     return TwinView.stop(*_require_target())
+
+
+def set_interval(seconds: float) -> None:
+    """재생 중 필드를 다시 읽는 주기(초). 기본 0.5."""
+    TwinView.set_interval(seconds)
+
+
+def get_interval() -> float:
+    return TwinView.get_interval()
+
+
+def set_scale(scale: float) -> None:
+    """필드 스케일. 기본 1.0."""
+    TwinView.set_scale(scale)
+
+
+def get_scale() -> float:
+    return TwinView.get_scale()
 
 
 def is_playing(path: str = "") -> bool:

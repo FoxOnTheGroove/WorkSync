@@ -22,6 +22,17 @@ class TwinView:
     # 재생 중인 twin path. 러너마다 따로 봐야 하므로 플래그 하나로 두지 않는다.
     _playing = set()  # type: set
 
+    # twin path → 그 트윈을 띄운 prim path. 업데이트 때 어느 뷰를 만질지 찾는다.
+    _prim_paths = {}  # type: dict
+
+    # 재생 중 필드를 다시 읽는 주기(초)와 필드 스케일.
+    _interval = 0.5
+    _scale = 1.0
+
+    # Kit 업데이트 구독. 재생 중인 트윈이 하나라도 있을 때만 살아 있다.
+    _update_sub = None
+    _elapsed = 0.0
+
     # prim path → {rom name → RomPointCloud}
     # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
     _rom_views = {}  # type: dict
@@ -121,7 +132,28 @@ class TwinView:
         if view is not None:
             view.ensure_prim(runner.rom_points[rom_name])
 
+        # 재생 중 업데이트가 어느 prim 아래를 갱신할지 여기서 정해진다.
+        # 항상 현재 대상에 대해 불리므로 _local_path 로 물린다.
+        cls._prim_paths[cls._local_path] = path
         return True
+
+    @classmethod
+    def update_model(cls, path: str, runner, scale: float = None) -> None:
+        """띄워둔 뷰에 최신 필드를 밀어 넣는다."""
+        rom_name = runner.tbrom_names[0]
+
+        views = cls._rom_views.get(path)
+        if views is None:
+            return
+
+        view = views.get(rom_name)
+        if view is None:
+            return
+
+        field = runner.get_rom_field(rom_name)
+        if field is not None:
+            values, dim = field
+            view.update_field(values, dim, cls._scale if scale is None else scale)
 
     # ------------------------------------------------------------ 재생
 
@@ -133,6 +165,7 @@ class TwinView:
 
         runner.start()
         cls._playing.add(path)
+        cls._start_ticking()
         return True
 
     @classmethod
@@ -143,12 +176,82 @@ class TwinView:
 
         runner.stop()
         cls._playing.discard(path)
+
+        # 마지막 하나가 멈추면 구독을 놓는다. 안 그러면 매 프레임 헛돈다.
+        if not cls._playing:
+            cls._stop_ticking()
+
         return True
 
     @classmethod
     def is_playing(cls, path: str = "") -> bool:
         """path 가 재생 중인지. path 를 비우면 현재 대상."""
         return (path or cls._local_path) in cls._playing
+
+    @classmethod
+    def set_interval(cls, seconds: float) -> None:
+        """재생 중 필드를 다시 읽는 주기(초)."""
+        cls._interval = max(0.0, float(seconds))
+
+    @classmethod
+    def get_interval(cls) -> float:
+        return cls._interval
+
+    @classmethod
+    def set_scale(cls, scale: float) -> None:
+        """필드 스케일."""
+        cls._scale = float(scale)
+
+    @classmethod
+    def get_scale(cls) -> float:
+        return cls._scale
+
+    # ------------------------------------------------------------ 업데이트 틱
+
+    @classmethod
+    def _start_ticking(cls):
+        if cls._update_sub is not None:
+            return
+
+        import omni.kit.app
+
+        cls._elapsed = 0.0
+        cls._update_sub = (
+            omni.kit.app.get_app()
+            .get_update_event_stream()
+            .create_subscription_to_pop(cls._on_update, name="twinsub update")
+        )
+
+    @classmethod
+    def _stop_ticking(cls):
+        # 구독 객체를 놓으면 해지된다.
+        cls._update_sub = None
+        cls._elapsed = 0.0
+
+    @classmethod
+    def _on_update(cls, event):
+        try:
+            dt = event.payload["dt"]
+        except (KeyError, TypeError):
+            dt = 0.0
+
+        cls._elapsed += dt
+        if cls._elapsed < cls._interval:
+            return
+        cls._elapsed = 0.0
+
+        # 콜백 안에서 stop 이 불릴 수 있으므로 사본을 돈다.
+        for twin_path in list(cls._playing):
+            runner = cls._runners.get(twin_path)
+            prim_path = cls._prim_paths.get(twin_path)
+            if runner is None or prim_path is None:
+                continue
+
+            # 한 트윈이 터져도 나머지 재생은 계속 가야 한다.
+            try:
+                cls.update_model(prim_path, runner)
+            except Exception as exc:  # noqa: BLE001
+                print("[twinsub] update 실패 ({}): {}".format(twin_path, exc))
 
     @classmethod
     def _get_rom_view(cls, path: str, name: str):
@@ -188,10 +291,12 @@ class TwinView:
         if cls._temp_dir:
             shutil.rmtree(cls._temp_dir, ignore_errors=True)
         cls._temp_dir = None
+        cls._stop_ticking()
         cls._local_path = ""
         cls._runners = {}
         cls._rom_views = {}
         cls._playing = set()
+        cls._prim_paths = {}
 
     # ------------------------------------------------------------ 내부
 
