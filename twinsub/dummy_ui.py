@@ -131,30 +131,27 @@ class DummyUI:
     async def _s3_load_async(self, s3_uri, prim_path):
         self._set_status("downloading ...")
 
-        # 잘못된 uri, 자격증명 없음, 없는 키, 중복 요청 전부 여기로 떨어진다.
-        # 더미 UI라 구분하지 않고 이유만 그대로 띄운다.
+        # 잘못된 uri, 자격증명 없음, 없는 키, 중복 요청, 로드 실패 전부 여기로
+        # 떨어진다. 더미 UI라 구분하지 않고 이유만 그대로 띄운다.
         try:
-            local_path = await tv.download_twin_async(s3_uri)
+            local_path = await tv.download_twin_async(s3_uri, prim_path)
         except Exception as exc:  # noqa: BLE001
-            self._set_status("download 실패: {}".format(exc))
+            # 받는 데까진 갔을 수 있다. 경로만이라도 남겨 어디서 끊겼는지 보인다.
+            self._sync_path_field()
+            self._set_status("s3 load 실패: {}".format(exc))
             return
 
-        # await 뒤는 다시 메인 스레드다. 위젯을 만져도 된다.
-        # 창이 이미 닫혔을 수 있으므로 아래 갱신 함수들은 전부 None 을 확인한다.
+        self._sync_path_field()
+        self._set_status("loaded: {} -> {}".format(local_path, prim_path))
+
+    def _sync_path_field(self):
+        """받아둔 로컬 경로를 Path 필드에 남긴다. 창이 닫혔으면 넘어간다."""
         if self._path_model is None:
             return
 
-        # 받은 경로를 Path 필드에 남긴다. 실패해도 어디까지 갔는지 보인다.
-        self._path_model.set_value(local_path)
-        self._set_status("loading ...")
-
-        try:
-            await tv.load_twin_async(local_path, prim_path)
-        except Exception as exc:  # noqa: BLE001
-            self._set_status("load 실패: {}".format(exc))
-            return
-
-        self._set_status("loaded: {} -> {}".format(local_path, prim_path))
+        path = tv.get_local_path()
+        if path:
+            self._path_model.set_value(path)
 
     def _on_path_load(self):
         # 로드가 띄우기까지 하므로 prim path 도 같이 넘긴다. Show 를 따로 누르지

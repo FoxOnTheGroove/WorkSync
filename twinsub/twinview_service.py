@@ -48,9 +48,19 @@ class TwinViewService:
     # ------------------------------------------------------------ 수명주기
 
     @classmethod
-    def download_twin(cls, s3_uri: str) -> str:
-        """s3 uri 의 .twin 을 임시폴더에 받고 로컬 경로를 반환한다."""
-        return TwinView.download_twin(s3_uri)
+    def download_twin(cls, s3_uri: str, prim_path: str = "") -> str:
+        """s3 uri 의 .twin 을 임시폴더에 받고 로컬 경로를 반환한다.
+
+        prim_path 를 주면 받은 뒤 로드와 표시까지 한다. load_twin 과 같은 모양이다.
+            download_twin(uri)              받기만
+            download_twin(uri, "/World")    받고 로드하고 /World/<rom> 에 띄우기
+        """
+        local_path = TwinView.download_twin(s3_uri)
+
+        if prim_path:
+            cls.load_twin(local_path, prim_path)
+
+        return local_path
 
     @classmethod
     def load_twin(cls, path: str, prim_path: str = "") -> bool:
@@ -91,16 +101,26 @@ class TwinViewService:
         TwinView._notify(TwinView._on_loaded, "on_loaded")
 
     @classmethod
-    async def download_twin_async(cls, s3_uri: str) -> str:
-        """download_twin 을 워커 스레드에서 돌린다. 네트워크가 UI 를 막지 않는다."""
+    async def download_twin_async(cls, s3_uri: str, prim_path: str = "") -> str:
+        """download_twin 을 비동기로. 네트워크가 UI 를 막지 않는다.
+
+        prim_path 를 주면 로드와 표시까지 하고 돌아온다. 돌아온 시점에
+        프림은 이미 씬에 있다.
+        """
         key = ("download", s3_uri.strip())
         if not TwinView.begin_task(key):
             raise ValueError("이미 받는 중이다: {}".format(s3_uri))
 
         try:
-            return await TwinView.download_twin_async(s3_uri)
+            local_path = await TwinView.download_twin_async(s3_uri)
         finally:
+            # 로드는 자기 키로 따로 막으므로 받기가 끝나면 여기서 놓는다.
             TwinView.end_task(key)
+
+        if prim_path:
+            await cls.load_twin_async(local_path, prim_path)
+
+        return local_path
 
     @classmethod
     async def load_twin_async(cls, path: str, prim_path: str = "") -> bool:
