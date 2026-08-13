@@ -19,6 +19,7 @@ _HIT_REACH = 3.0               # 히트 지점에서 반경의 몇 배까지 후
 _CREASE_COS = 0.8660           # 두 면이 30도 이상 벌어지면 크리스
 _VERIFY_LIMIT = 4              # 도달 검사를 해볼 후보 개수
 _VERIFY_SLACK = 1e-3           # 이 비율 안에 들어오면 막힌 게 아니라 그 점에 닿은 것
+_NEAR_MARGIN = 3.0             # reach 의 몇 배까지 미리 잘라 두고 재사용할지
 
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
@@ -751,10 +752,6 @@ class DistanceLineCore:
         if geom is None:
             return surface, []
         geom.calibrate(hit, normal)
-        outline = geom.boundary
-        seen_edges, seen_corners = outline.visibility(
-            _camera_position(view), geom.orientation
-        )
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
@@ -764,12 +761,17 @@ class DistanceLineCore:
             view, proj, hit, geom.extent, size
         )
 
+        outline, edge_ids, corner_ids = geom.boundary.near(_as_np(hit), reach)
+        seen_edges, seen_corners = outline.visibility(
+            _camera_position(view), geom.orientation
+        )
+
         ranked = []
         for flag, kind in _FLAG_TO_KIND:
             if not (cls._snap_mode & flag) or len(ranked) >= _VERIFY_LIMIT:
                 continue
             if kind == SnapKind.VERTEX:
-                points, seen = outline.corners, seen_corners
+                points, seen, source = outline.corners, seen_corners, corner_ids
                 if not len(points):
                     continue
                 pixels, valid = _project_px(points, view_proj, width, height)
@@ -780,7 +782,7 @@ class DistanceLineCore:
                 points, screen, valid = _nearest_on_edges(
                     outline.edge_a, outline.edge_b, cursor_px, view_proj, width, height
                 )
-                seen = seen_edges
+                seen, source = seen_edges, edge_ids
 
             near_hit = np.linalg.norm(points - _as_np(hit), axis=1) <= reach
             usable = valid & near_hit & seen
@@ -792,7 +794,12 @@ class DistanceLineCore:
                     break
                 ranked.append(
                     SnapPoint(
-                        Gf.Vec3d(*points[index]), kind, path, -1, int(index), normal
+                        Gf.Vec3d(*points[index]),
+                        kind,
+                        path,
+                        -1,
+                        int(source[index]),
+                        normal,
                     )
                 )
         return surface, ranked
@@ -1017,6 +1024,8 @@ class _Outline:
         self.edge_b = edge_b
         self.edge_normals = edge_normals
         self.corner_of = corner_of
+        self._along = None
+        self._near = None
 
     @classmethod
     def empty(cls):
@@ -1028,16 +1037,79 @@ class _Outline:
             np.empty((0, 2), dtype=np.int64),
         )
 
+    def near(self, hit, reach):
+        """히트 근처 후보만 남긴 부분집합과 원래 인덱스.
+
+        멀리 있는 후보는 어차피 reach 에서 탈락한다. 그걸 매번 전부 투영하면
+        hover 비용이 외곽선 전체 크기에 비례해 커진다. 여유를 두고 잘라 두고
+        커서가 그 여유를 벗어날 때만 다시 자른다.
+        """
+        cached = self._near
+        if cached is not None:
+            base, margin, result = cached
+            if float(np.linalg.norm(hit - base)) + reach <= margin:
+                return result
+
+        margin = reach * _NEAR_MARGIN
+        edges = np.flatnonzero(self._segment_gap(hit) <= margin * margin)
+        if len(self.corners):
+            corners = np.flatnonzero(
+                _square_lengths(self.corners - hit) <= margin * margin
+            )
+        else:
+            corners = np.empty(0, dtype=np.int64)
+
+        if len(edges) == len(self.edge_a) and len(corners) == len(self.corners):
+            result = self, np.arange(len(self.edge_a)), np.arange(len(self.corners))
+        else:
+            slot = np.full(len(self.corners) or 1, -1, dtype=np.int64)
+            slot[corners] = np.arange(len(corners))
+            picked = self.corner_of[edges]
+            result = (
+                _Outline(
+                    self.corners[corners],
+                    self.edge_a[edges],
+                    self.edge_b[edges],
+                    self.edge_normals[edges],
+                    np.where(picked >= 0, slot[picked], -1),
+                ),
+                edges,
+                corners,
+            )
+        self._near = (np.array(hit, dtype=float), margin, result)
+        return result
+
+    def _segment_gap(self, hit):
+        """히트에서 각 엣지까지의 거리 제곱.
+
+        끝점까지의 거리로 어림하면 긴 엣지가 전부 통과해 걸러지지 않는다.
+        엣지 위 가장 가까운 점은 화면에서 고르든 3D 로 고르든 이 값보다 멀 수
+        없으므로, 이 값으로 자르면 살아남을 후보를 놓치지 않는다.
+        """
+        if self._along is None:
+            direction = self.edge_b - self.edge_a
+            self._along = (direction, 1.0 / np.maximum(_square_lengths(direction), 1e-30))
+        direction, inverse = self._along
+        offset = hit - self.edge_a
+        t = np.clip(np.einsum("ij,ij->i", offset, direction) * inverse, 0.0, 1.0)
+        return _square_lengths(offset - direction * t[:, None])
+
     def visibility(self, camera, orientation=1.0):
         towards = camera - (self.edge_a + self.edge_b) * 0.5
         facing = np.einsum("ijk,ik->ij", self.edge_normals, towards)
         edges = (facing * (orientation or 1.0) > 0.0).any(axis=1)
 
-        corners = np.zeros(len(self.corners), dtype=bool)
+        count = len(self.corners)
+        corners = np.zeros(count, dtype=bool)
         for end in (0, 1):
             slots = self.corner_of[:, end]
             known = slots >= 0
-            np.logical_or.at(corners, slots[known], edges[known])
+            if not known.any():
+                continue
+            corners |= (
+                np.bincount(slots[known], weights=edges[known], minlength=count)[:count]
+                > 0
+            )
         return edges, corners
 
 
@@ -1191,6 +1263,10 @@ def _build_entry(prim, time=None):
     except Exception as exc:
         carb.log_warn(f"[distance_line] cannot prepare geometry for {prim.GetPath()}: {exc}")
         return None
+
+
+def _square_lengths(delta: np.ndarray) -> np.ndarray:
+    return np.einsum("ij,ij->i", delta, delta)
 
 
 def _reached(result, camera, span) -> bool:
