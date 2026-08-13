@@ -9,60 +9,31 @@ from .twin_runner import TwinRunner
 
 class TwinView:
 
-    # 받아둔 .twin 을 두는 폴더 이름. 홈 아래에 만든다.
     TEMP_DIR_NAME = "twin_temp_dir"
 
-    # 마지막으로 로드한 .twin 경로. _runners 에서 현재 대상을 고르는 키다.
-    _local_path = ""
-
-    # twin path → TwinRunner
-    _runners = {}  # type: dict
-
-    # 재생 중인 twin path. 러너마다 따로 봐야 하므로 플래그 하나로 두지 않는다.
-    _playing = set()  # type: set
-
-    # 진행 중인 비동기 작업 키. 같은 작업이 겹쳐 도는 것을 막는다.
-    _inflight = set()  # type: set
-
-    # twin path → 그 트윈을 띄운 prim path. 업데이트 때 어느 뷰를 만질지 찾는다.
-    _prim_paths = {}  # type: dict
-
-    # 재생 중 필드를 다시 읽는 주기(초).
-    _interval = 0.5
-
-    # Kit 업데이트 구독. 재생 중인 트윈이 하나라도 있을 때만 살아 있다.
-    _update_sub = None
-    _elapsed = 0.0
-
-    # 로드/표시 상태가 바뀔 때 부른다. UI 가 자기 버튼 밖의 변화를 따라가는 신호다.
-    _on_loaded = None
-
-    # 매 프레임 부른다. 시뮬레이션 시각처럼 싸게 읽는 값만 여기서 갱신한다.
-    _on_time = None
-
-    # 주기를 채워 필드를 갱신한 뒤 부른다. 무거운 값은 여기서 다시 읽는다.
-    _on_updated = None
-
-    # prim path → {rom name → RomPointCloud}
-    # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
-    _rom_views = {}  # type: dict
-
-    # s3 접속 정보. region 만 고정이고 나머지는 환경변수에서 온다.
     S3_REGION = "us-east-1"
     S3_ACCESS_KEY_ENV = "AWS_ACCESS_KEY"
     S3_SECRET_KEY_ENV = "AWS_SECRET_KEY"
     S3_ENDPOINT_ENV = "AWS_IP"
 
-    # ------------------------------------------------------------ 다운로드
+    _local_path = ""
+    _runners = {}
+    _playing = set()
+    _inflight = set()
+    _prim_paths = {}
+    _rom_views = {}
+
+    _interval = 0.5
+    _update_sub = None
+    _elapsed = 0.0
+
+    _on_loaded = None
+    _on_time = None
+    _on_updated = None
 
     @classmethod
     def _make_s3_client(cls):
-        """환경변수로 s3 클라이언트를 만든다.
-
-        키가 없으면 어느 환경변수가 비었는지 짚어서 올린다. 그대로 두면
-        boto3 가 한참 뒤에 NoCredentialsError 로 터져 원인이 안 보인다.
-        """
-        # boto3 는 Kit 기동 시점에 없을 수 있다. 모듈 import 를 막지 않도록 늦게 올린다.
+        """환경변수로 s3 클라이언트를 만든다."""
         import boto3
         from botocore.config import Config
 
@@ -75,15 +46,10 @@ class TwinView:
         if missing:
             raise ValueError("환경변수가 비어 있다: {}".format(", ".join(missing)))
 
-        # 안 잡혀 있으면 None 을 넘겨 기본 AWS 엔드포인트를 쓴다.
         endpoint_url = os.environ.get(cls.S3_ENDPOINT_ENV) or None
 
         config = None
         if endpoint_url:
-            # 커스텀 엔드포인트(MinIO/Ceph/온프렘)는 가상호스트 방식 주소를
-            # 못 받는 경우가 많다. boto3 기본값이 그 방식이라 bucket.host 로
-            # 붙고, 서버가 버킷을 못 찾아 HeadObject 가 403 으로 떨어진다.
-            # 실제 AWS 는 path-style 을 권장하지 않으므로 커스텀일 때만 켠다.
             config = Config(signature_version="s3v4",
                             s3={"addressing_style": "path"})
 
@@ -98,10 +64,7 @@ class TwinView:
 
     @classmethod
     def _prepare_download(cls, s3_uri: str):
-        """받기 전에 필요한 것을 갖춘다. 여기까진 네트워크를 안 탄다.
-
-        uri 오류나 환경변수 누락은 스레드로 넘기기 전에 여기서 걸린다.
-        """
+        """받기 전 준비를 끝낸다. 여기까진 네트워크를 안 탄다."""
         bucket, key = cls._parse_s3_uri(s3_uri)
 
         name = os.path.basename(key)
@@ -114,10 +77,7 @@ class TwinView:
 
     @classmethod
     def download_twin(cls, s3_uri: str) -> str:
-        """s3 uri 의 .twin 을 임시폴더에 받고 로컬 경로를 반환한다.
-
-        실패하면 예외를 올린다 — 실패 이유를 UI에 그대로 보여주기 위해서다.
-        """
+        """s3 의 .twin 을 폴더에 받고 로컬 경로를 반환한다."""
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         client.download_file(bucket, key, local_path)
 
@@ -126,11 +86,7 @@ class TwinView:
 
     @classmethod
     async def download_twin_async(cls, s3_uri: str) -> str:
-        """전송만 스레드로 넘긴다.
-
-        준비는 부른 스레드에서 끝내므로 uri 오류나 자격증명 누락은 스레드를
-        타기 전에 바로 올라온다.
-        """
+        """전송만 워커 스레드로 넘긴다."""
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         await asyncio.to_thread(client.download_file, bucket, key, local_path)
 
@@ -139,19 +95,12 @@ class TwinView:
 
     @classmethod
     def get_local_path(cls) -> str:
-        """마지막으로 받은 로컬 경로. 없으면 빈 문자열."""
+        """현재 대상 .twin 경로. 없으면 빈 문자열."""
         return cls._local_path
 
     @classmethod
     def discard_temp(cls, path: str) -> bool:
-        """받아둔 임시 .twin 을 지운다. 지웠으면 True.
-
-        우리 임시폴더 바로 아래의 것만 건드린다. 로컬 경로로 직접 로드한
-        원본까지 지우면 복구가 안 된다.
-
-        러너가 이미 서 있으면 파일은 필요 없다는 전제다. load_twin 도
-        캐시에 있으면 파일을 안 본다.
-        """
+        """받아둔 파일을 지운다. 우리 폴더 바로 아래의 것만 건드린다."""
         if not path:
             return False
 
@@ -166,27 +115,18 @@ class TwinView:
 
         return True
 
-    # ------------------------------------------------------------ 로드
-
     @classmethod
     def load_twin(cls, path: str) -> bool:
-        """로컬 .twin 경로로 러너를 세운다.
-
-        s3 를 거치지 않고 경로를 바로 넣어도 되게 다운로드와 분리해 둔다.
-        """
+        """러너를 세운다. 캐시에 있으면 대상만 바꾸고 파일은 안 본다."""
         path = path.strip()
         if not path:
             raise ValueError("경로가 비어 있다")
 
         runner = cls._runners.get(path)
         if runner is None:
-            # 파일은 새로 세울 때만 필요하다. 이미 선 러너로 돌아가는 건
-            # 대상 포인터만 바꾸는 일이라 파일이 지워졌어도 된다.
             if not os.path.isfile(path):
                 raise ValueError("파일이 없다: {}".format(path))
 
-            # 실패하면 _runners 에 넣지 않는다. 반쯤 세워진 러너가 남으면
-            # 다음 동작이 그쪽에 걸린다.
             runner = TwinRunner(path)
             cls._runners[path] = runner
 
@@ -195,11 +135,7 @@ class TwinView:
 
     @classmethod
     def begin_task(cls, key) -> bool:
-        """같은 작업이 이미 돌고 있으면 False.
-
-        느린 작업이 비동기로 나가면 버튼을 두 번 눌러 두 번 도는 일이 생긴다.
-        같은 경로를 두 번 받으면 같은 파일에 동시에 쓴다.
-        """
+        """같은 작업이 이미 돌고 있으면 False."""
         if key in cls._inflight:
             return False
 
@@ -208,22 +144,22 @@ class TwinView:
 
     @classmethod
     def end_task(cls, key) -> None:
+        """진행 중 표시를 놓는다."""
         cls._inflight.discard(key)
 
     @classmethod
     def get_runner(cls, path: str = "") -> object:
-        """path 의 TwinRunner. path 를 비우면 현재 대상. 없으면 None."""
+        """path 의 러너. 비우면 현재 대상. 없으면 None."""
         return cls._runners.get(path or cls._local_path)
 
     @classmethod
     def is_loaded(cls) -> bool:
+        """현재 대상 러너가 있는지."""
         return cls.get_runner() is not None
-
-    # ------------------------------------------------------------ 모델 정보
 
     @classmethod
     def get_inputs(cls, runner) -> dict:
-        """입력 이름 → 현재값. 사본이라 여기 손대도 러너는 안 바뀐다."""
+        """입력 이름 → 현재값. 사본이다."""
         return dict(runner.inputs)
 
     @classmethod
@@ -233,14 +169,17 @@ class TwinView:
 
     @classmethod
     def set_input(cls, runner, name: str, value: float) -> None:
+        """입력 하나를 바꾼다."""
         runner.set_input(name, value)
 
     @classmethod
     def get_step_size(cls, runner) -> float:
+        """트윈의 step size."""
         return float(runner.step_size)
 
     @classmethod
     def set_step_size(cls, runner, value: float) -> None:
+        """step size 를 바꾼다. 양수가 아니면 예외."""
         value = float(value)
         if value <= 0.0:
             raise ValueError("step size 는 양수여야 한다: {}".format(value))
@@ -249,6 +188,7 @@ class TwinView:
 
     @classmethod
     def get_simulation_time(cls, runner) -> float:
+        """트윈 내부 시뮬레이션 시각(초)."""
         return float(runner.evaluation_time)
 
     @classmethod
@@ -259,17 +199,13 @@ class TwinView:
 
     @classmethod
     def set_deform_scale(cls, runner, value: float, rom_name: str = "") -> None:
+        """rom 의 변형 스케일을 바꾼다."""
         rom_name = rom_name or runner.tbrom_names[0]
         runner.set_rom_deform_scale(rom_name, float(value))
 
-    # ------------------------------------------------------------ 표시
-
     @classmethod
     def rom_show(cls, path: str, runner) -> bool:
-        """prim path 아래에 rom 포인트 클라우드를 띄운다.
-
-        지금은 트윈에 TBROM이 하나라고 보고 첫 번째만 쓴다.
-        """
+        """prim path 아래에 rom 포인트 클라우드를 띄운다."""
         rom_name = runner.tbrom_names[0]
 
         if not runner.set_rom_selected(rom_name, True):
@@ -280,21 +216,12 @@ class TwinView:
             view.ensure_prim(runner.rom_points[rom_name])
             cls._ensure_xform(cls._rom_prim_path(path, rom_name))
 
-        # 재생 중 업데이트가 어느 prim 아래를 갱신할지 여기서 정해진다.
-        # 항상 현재 대상에 대해 불리므로 _local_path 로 물린다.
         cls._prim_paths[cls._local_path] = path
         return True
 
     @classmethod
     def _ensure_xform(cls, prim_path: str) -> bool:
-        """포인트 프림에 xformOp 를 달아 옮길 수 있게 한다.
-
-        Points 는 Xformable 을 상속하므로 부모 Xform 을 따로 두지 않아도 된다.
-        ensure_prim 이 만든 프림에는 xformOp 가 없어 트랜스폼이 안 잡힌다.
-
-        이미 있으면 건드리지 않는다 — 뷰포트에서 옮겨둔 것을 Show 가 되돌리면
-        안 된다.
-        """
+        """포인트 프림에 xformOp 를 단다. 이미 있으면 건드리지 않는다."""
         from pxr import Gf, UsdGeom
 
         stage = cls._get_stage()
@@ -337,124 +264,9 @@ class TwinView:
                 scale = cls.get_deform_scale(runner, rom_name)
             view.update_field(values, dim, scale)
 
-    # ------------------------------------------------------------ 재생
-
-    @classmethod
-    def play(cls, path: str, runner) -> bool:
-        """이미 재생 중이면 넘긴다."""
-        if path in cls._playing:
-            return False
-
-        runner.start()
-        cls._playing.add(path)
-        cls._start_ticking()
-        return True
-
-    @classmethod
-    def stop(cls, path: str, runner) -> bool:
-        """재생 중이 아니면 넘긴다."""
-        if path not in cls._playing:
-            return False
-
-        runner.stop()
-        cls._playing.discard(path)
-
-        # 마지막 하나가 멈추면 구독을 놓는다. 안 그러면 매 프레임 헛돈다.
-        if not cls._playing:
-            cls._stop_ticking()
-
-        return True
-
-    @classmethod
-    def get_prim_path(cls, path: str = "") -> str:
-        """그 트윈을 띄운 prim path. 안 띄웠으면 빈 문자열."""
-        return cls._prim_paths.get(path or cls._local_path, "")
-
-    @classmethod
-    def is_playing(cls, path: str = "") -> bool:
-        """path 가 재생 중인지. path 를 비우면 현재 대상."""
-        return (path or cls._local_path) in cls._playing
-
-    @classmethod
-    def set_interval(cls, seconds: float) -> None:
-        """재생 중 필드를 다시 읽는 주기(초)."""
-        cls._interval = max(0.0, float(seconds))
-
-    @classmethod
-    def get_interval(cls) -> float:
-        return cls._interval
-
-    # ------------------------------------------------------------ 업데이트 틱
-
-    @classmethod
-    def _start_ticking(cls):
-        if cls._update_sub is not None:
-            return
-
-        import omni.kit.app
-
-        cls._elapsed = 0.0
-        cls._update_sub = (
-            omni.kit.app.get_app()
-            .get_update_event_stream()
-            .create_subscription_to_pop(cls._on_update, name="twinsub update")
-        )
-
-    @classmethod
-    def _stop_ticking(cls):
-        # 구독 객체를 놓으면 해지된다.
-        cls._update_sub = None
-        cls._elapsed = 0.0
-
-    @classmethod
-    def _on_update(cls, event):
-        try:
-            dt = event.payload["dt"]
-        except (KeyError, TypeError):
-            dt = 0.0
-
-        cls._elapsed += dt
-        if cls._elapsed >= cls._interval:
-            cls._elapsed = 0.0
-
-            # 콜백 안에서 stop 이 불릴 수 있으므로 사본을 돈다.
-            for twin_path in list(cls._playing):
-                runner = cls._runners.get(twin_path)
-                prim_path = cls._prim_paths.get(twin_path)
-                if runner is None or prim_path is None:
-                    continue
-
-                # 한 트윈이 터져도 나머지 재생은 계속 가야 한다.
-                try:
-                    cls.update_model(prim_path, runner)
-                except Exception as exc:  # noqa: BLE001
-                    print("[twinsub] update 실패 ({}): {}".format(twin_path, exc))
-
-            cls._notify(cls._on_updated, "on_updated")
-
-        # 시간은 매 프레임 알린다. 읽기만 하므로 싸고, 주기에 묶어두면
-        # 0.5초씩 튀어서 재생이 멈춘 것처럼 보인다.
-        # 필드 갱신 뒤에 부른다 — 앞에서 부르면 같은 프레임에 진행된 시간을
-        # 한 틱 늦게 보여준다.
-        cls._notify(cls._on_time, "on_time")
-
-    @classmethod
-    def _notify(cls, callback, what):
-        """콜백에서 터진 예외가 구독을 죽이면 재생이 멈춘다. 삼킨다."""
-        if callback is None:
-            return
-
-        try:
-            callback()
-        except Exception as exc:  # noqa: BLE001
-            print("[twinsub] {} 콜백 실패: {}".format(what, exc))
-
     @classmethod
     def _get_rom_view(cls, path: str, name: str):
-        """(prim path, rom 이름) 에 물린 RomPointCloud 를 준다. 없으면 만든다.
-
-        stage 를 못 찾으면 None. 스테이지가 아직 안 열린 상태에서 눌린 경우다.
-        """
+        """(prim path, rom 이름) 에 물린 뷰를 준다. 없으면 만든다."""
         stage = cls._get_stage()
         if stage is None:
             return None
@@ -470,35 +282,135 @@ class TwinView:
 
     @staticmethod
     def _rom_prim_path(path: str, name: str) -> str:
-        """path 가 "/World/" 로 들어와도 "//" 가 생기지 않게 한다."""
+        """prim path 와 rom 이름을 이어 붙인다."""
         return "{}/{}".format(path.rstrip("/"), name)
 
     @staticmethod
     def _get_stage():
+        """현재 USD 스테이지. 안 열려 있으면 None."""
         import omni.usd
 
         return omni.usd.get_context().get_stage()
 
-    # ------------------------------------------------------------ 임시폴더
+    @classmethod
+    def get_prim_path(cls, path: str = "") -> str:
+        """그 트윈을 띄운 prim path. 안 띄웠으면 빈 문자열."""
+        return cls._prim_paths.get(path or cls._local_path, "")
+
+    @classmethod
+    def play(cls, path: str, runner) -> bool:
+        """러너를 돌린다. 이미 재생 중이면 넘긴다."""
+        if path in cls._playing:
+            return False
+
+        runner.start()
+        cls._playing.add(path)
+        cls._start_ticking()
+        return True
+
+    @classmethod
+    def stop(cls, path: str, runner) -> bool:
+        """러너를 멈춘다. 재생 중이 아니면 넘긴다."""
+        if path not in cls._playing:
+            return False
+
+        runner.stop()
+        cls._playing.discard(path)
+
+        if not cls._playing:
+            cls._stop_ticking()
+
+        return True
+
+    @classmethod
+    def is_playing(cls, path: str = "") -> bool:
+        """path 가 재생 중인지. 비우면 현재 대상."""
+        return (path or cls._local_path) in cls._playing
+
+    @classmethod
+    def set_interval(cls, seconds: float) -> None:
+        """재생 중 필드를 다시 읽는 주기(초)."""
+        cls._interval = max(0.0, float(seconds))
+
+    @classmethod
+    def get_interval(cls) -> float:
+        """필드 갱신 주기(초)."""
+        return cls._interval
+
+    @classmethod
+    def _start_ticking(cls):
+        """Kit 업데이트 스트림을 구독한다. 이미 구독 중이면 넘긴다."""
+        if cls._update_sub is not None:
+            return
+
+        import omni.kit.app
+
+        cls._elapsed = 0.0
+        cls._update_sub = (
+            omni.kit.app.get_app()
+            .get_update_event_stream()
+            .create_subscription_to_pop(cls._on_update, name="twinsub update")
+        )
+
+    @classmethod
+    def _stop_ticking(cls):
+        """구독을 놓는다. 놓으면 해지된다."""
+        cls._update_sub = None
+        cls._elapsed = 0.0
+
+    @classmethod
+    def _on_update(cls, event):
+        """매 프레임. 주기를 채우면 필드를 갱신하고, 시각은 늘 알린다."""
+        try:
+            dt = event.payload["dt"]
+        except (KeyError, TypeError):
+            dt = 0.0
+
+        cls._elapsed += dt
+        if cls._elapsed >= cls._interval:
+            cls._elapsed = 0.0
+
+            for twin_path in list(cls._playing):
+                runner = cls._runners.get(twin_path)
+                prim_path = cls._prim_paths.get(twin_path)
+                if runner is None or prim_path is None:
+                    continue
+
+                try:
+                    cls.update_model(prim_path, runner)
+                except Exception as exc:  # noqa: BLE001
+                    print("[twinviewer] update 실패 ({}): {}".format(twin_path, exc))
+
+            cls._notify(cls._on_updated, "on_updated")
+
+        cls._notify(cls._on_time, "on_time")
+
+    @classmethod
+    def _notify(cls, callback, what):
+        """구독자를 부른다. 예외는 삼킨다 — 구독이 죽으면 재생이 멈춘다."""
+        if callback is None:
+            return
+
+        try:
+            callback()
+        except Exception as exc:  # noqa: BLE001
+            print("[twinviewer] {} 콜백 실패: {}".format(what, exc))
 
     @classmethod
     def _temp_dir_path(cls) -> str:
-        """받아둔 .twin 을 두는 폴더.
-
-        시스템 임시폴더는 환경에 따라 쓰기가 막힌다. 홈 아래 고정 경로를 쓴다.
-        """
+        """받아둔 .twin 을 두는 홈 아래 폴더 경로."""
         return os.path.join(os.path.expanduser("~"), cls.TEMP_DIR_NAME)
 
     @classmethod
     def _get_temp_dir(cls) -> str:
-        # 밖에서 지웠을 수도 있으니 매번 확인한다. 이미 있으면 그대로 쓴다.
+        """그 폴더를 보장하고 경로를 준다."""
         temp_dir = cls._temp_dir_path()
         os.makedirs(temp_dir, exist_ok=True)
         return temp_dir
 
     @classmethod
     def cleanup(cls) -> None:
-        """받아둔 폴더를 지우고 상태를 버린다."""
+        """폴더를 지우고 러너/뷰/재생상태를 모두 버린다."""
         shutil.rmtree(cls._temp_dir_path(), ignore_errors=True)
 
         cls._stop_ticking()
@@ -508,15 +420,9 @@ class TwinView:
         cls._playing = set()
         cls._prim_paths = {}
 
-    # ------------------------------------------------------------ 내부
-
     @staticmethod
     def _parse_s3_uri(s3_uri: str) -> tuple:
-        """s3://bucket/key → (bucket, key). s3:// 는 생략해도 된다.
-
-            s3://bucket/key/a.twin
-            bucket/key/a.twin
-        """
+        """s3://bucket/key → (bucket, key). s3:// 는 생략해도 된다."""
         text = s3_uri.strip()
         if not text:
             raise ValueError("경로가 비어 있다")
@@ -526,17 +432,13 @@ class TwinView:
         if parsed.scheme == "s3":
             bucket = parsed.netloc
             key = parsed.path.lstrip("/")
-
-            # "s3:/bucket/key" 처럼 슬래시가 하나면 netloc 이 비어 나온다.
             if not bucket:
                 bucket, _, key = key.partition("/")
 
         elif parsed.scheme:
-            # 다른 스킴이나 윈도우 드라이브 문자(C:)가 여기로 온다.
             raise ValueError("s3 경로가 아니다: {}".format(s3_uri))
 
         else:
-            # 스킴이 없으면 bucket/key 로 본다.
             bucket, _, key = text.lstrip("/").partition("/")
 
         if not bucket or not key:

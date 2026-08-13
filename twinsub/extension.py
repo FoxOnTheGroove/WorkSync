@@ -9,14 +9,13 @@ class TwinSubExtension(omni.ext.IExt):
     _ui = None
 
     def on_startup(self, ext_id):
-        print("[twinsub] startup")
+        print("[twinviewer] startup")
         self._ui = DummyUI()
         self._ui.build_ui()
 
     def on_shutdown(self):
-        print("[twinsub] shutdown")
+        print("[twinviewer] shutdown")
 
-        # 받아둔 .twin 임시폴더를 남기지 않는다.
         TwinViewService.cleanup()
 
         if self._ui:
