@@ -125,9 +125,10 @@ class DummyUI:
         # 위젯 값은 여기서 읽어 넘긴다. 코루틴이 시작되기 전에 창이 닫히면
         # 그 안에서는 모델이 이미 None 이다.
         asyncio.ensure_future(
-            self._s3_load_async(self._uri_model.get_value_as_string()))
+            self._s3_load_async(self._uri_model.get_value_as_string(),
+                                self._prim_path_model.get_value_as_string()))
 
-    async def _s3_load_async(self, s3_uri):
+    async def _s3_load_async(self, s3_uri, prim_path):
         self._set_status("downloading ...")
 
         # 잘못된 uri, 자격증명 없음, 없는 키, 중복 요청 전부 여기로 떨어진다.
@@ -143,9 +144,17 @@ class DummyUI:
         if self._path_model is None:
             return
 
-        # 받기만 하고 로드는 하지 않는다. 로드는 아래 Load 버튼이 맡는다.
+        # 받은 경로를 Path 필드에 남긴다. 실패해도 어디까지 갔는지 보인다.
         self._path_model.set_value(local_path)
-        self._set_status("downloaded: {}".format(local_path))
+        self._set_status("loading ...")
+
+        try:
+            await tv.load_twin_async(local_path, prim_path)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status("load 실패: {}".format(exc))
+            return
+
+        self._set_status("loaded: {} -> {}".format(local_path, prim_path))
 
     def _on_path_load(self):
         # 로드가 띄우기까지 하므로 prim path 도 같이 넘긴다. Show 를 따로 누르지
