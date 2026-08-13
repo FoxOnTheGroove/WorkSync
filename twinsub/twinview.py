@@ -481,14 +481,32 @@ class TwinView:
 
     @staticmethod
     def _parse_s3_uri(s3_uri: str) -> tuple:
-        """s3://bucket/key → (bucket, key)."""
-        parsed = urlparse(s3_uri.strip())
+        """s3://bucket/key → (bucket, key). s3:// 는 생략해도 된다.
 
-        if parsed.scheme != "s3":
-            raise ValueError("s3:// 로 시작해야 한다: {}".format(s3_uri))
+            s3://bucket/key/a.twin
+            bucket/key/a.twin
+        """
+        text = s3_uri.strip()
+        if not text:
+            raise ValueError("경로가 비어 있다")
 
-        bucket = parsed.netloc
-        key = parsed.path.lstrip("/")
+        parsed = urlparse(text)
+
+        if parsed.scheme == "s3":
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+
+            # "s3:/bucket/key" 처럼 슬래시가 하나면 netloc 이 비어 나온다.
+            if not bucket:
+                bucket, _, key = key.partition("/")
+
+        elif parsed.scheme:
+            # 다른 스킴이나 윈도우 드라이브 문자(C:)가 여기로 온다.
+            raise ValueError("s3 경로가 아니다: {}".format(s3_uri))
+
+        else:
+            # 스킴이 없으면 bucket/key 로 본다.
+            bucket, _, key = text.lstrip("/").partition("/")
 
         if not bucket or not key:
             raise ValueError("bucket 과 key 가 모두 필요하다: {}".format(s3_uri))
