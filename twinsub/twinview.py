@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 from urllib.parse import urlparse
 
 from .rom_view import RomPointCloud
@@ -10,9 +11,6 @@ class TwinView:
 
     # 받아둔 .twin 을 두는 폴더 이름. 홈 아래에 만든다.
     TEMP_DIR_NAME = "twin_temp_dir"
-
-    # 우리가 받아서 아직 안 지운 파일. 폴더째 지우지 않고 이것만 정리한다.
-    _temp_files = set()  # type: set
 
     # 마지막으로 로드한 .twin 경로. _runners 에서 현재 대상을 고르는 키다.
     _local_path = ""
@@ -123,7 +121,6 @@ class TwinView:
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         client.download_file(bucket, key, local_path)
 
-        cls._temp_files.add(local_path)
         cls._local_path = local_path
         return local_path
 
@@ -137,7 +134,6 @@ class TwinView:
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         await asyncio.to_thread(client.download_file, bucket, key, local_path)
 
-        cls._temp_files.add(local_path)
         cls._local_path = local_path
         return local_path
 
@@ -162,8 +158,6 @@ class TwinView:
         temp_dir = os.path.abspath(cls._temp_dir_path())
         if os.path.dirname(os.path.abspath(path)) != temp_dir:
             return False
-
-        cls._temp_files.discard(path)
 
         try:
             os.remove(path)
@@ -504,14 +498,8 @@ class TwinView:
 
     @classmethod
     def cleanup(cls) -> None:
-        """받아둔 파일을 지우고 상태를 버린다.
-
-        폴더는 남긴다. 홈 아래 고정 경로라 통째로 지우면 남이 넣어둔 것이나
-        다른 Kit 세션이 받는 중인 것까지 날아간다.
-        """
-        for path in list(cls._temp_files):
-            cls.discard_temp(path)
-        cls._temp_files = set()
+        """받아둔 폴더를 지우고 상태를 버린다."""
+        shutil.rmtree(cls._temp_dir_path(), ignore_errors=True)
 
         cls._stop_ticking()
         cls._local_path = ""
