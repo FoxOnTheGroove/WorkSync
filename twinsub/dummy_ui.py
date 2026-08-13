@@ -88,8 +88,15 @@ class DummyUI:
         tv.set_on_time(self._refresh_sim_time)
         tv.set_on_updated(self._refresh_outputs)
 
+        # API 로 로드/표시한 것도 따라간다.
+        tv.set_on_loaded(self._sync_from_service)
+
+        # 창을 열기 전에 이미 로드돼 있을 수 있다.
+        self._sync_from_service()
+
     def destroy(self):
         # 훅부터 끊는다. 창이 사라진 뒤 틱이 들어오면 죽은 위젯을 만진다.
+        tv.set_on_loaded(None)
         tv.set_on_time(None)
         tv.set_on_updated(None)
 
@@ -156,9 +163,9 @@ class DummyUI:
             self._set_status("load 실패: {}".format(exc))
             return
 
+        # 필드/목록 갱신은 on_loaded 훅이 한다. UI 로 로드하든 API 로 하든
+        # 같은 통로를 타야 한쪽만 갱신되는 일이 없다.
         self._set_status("loaded: {} -> {}".format(path, prim_path))
-        self._refresh_scalars()
-        self._rebuild_io()
 
     def _on_show(self):
         prim_path = self._prim_path_model.get_value_as_string()
@@ -217,6 +224,31 @@ class DummyUI:
             self._set_status("step size 실패: {}".format(exc))
 
     # ------------------------------------------------------------ 갱신
+
+    def _sync_from_service(self):
+        """서비스의 현재 상태를 UI에 그대로 가져온다.
+
+        UI 버튼을 거치지 않은 변화(API 호출, 다른 익스텐션)를 따라가는 통로다.
+        """
+        if self._path_model is None:
+            return
+
+        if not tv.is_loaded():
+            return
+
+        self._suppress = True
+        try:
+            self._path_model.set_value(tv.get_local_path())
+
+            prim_path = tv.get_prim_path()
+            if prim_path:
+                self._prim_path_model.set_value(prim_path)
+        finally:
+            self._suppress = False
+
+        # sim time 은 건드리지 않는다. 첫 play 뒤부터 뜨는 값이다.
+        self._refresh_scalars()
+        self._rebuild_io()
 
     def _refresh_scalars(self):
         """로드된 트윈의 deform scale 과 step size 를 필드에 넣는다."""

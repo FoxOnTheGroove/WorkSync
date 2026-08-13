@@ -35,6 +35,9 @@ class TwinView:
     _update_sub = None
     _elapsed = 0.0
 
+    # 로드/표시 상태가 바뀔 때 부른다. UI 가 자기 버튼 밖의 변화를 따라가는 신호다.
+    _on_loaded = None
+
     # 매 프레임 부른다. 시뮬레이션 시각처럼 싸게 읽는 값만 여기서 갱신한다.
     _on_time = None
 
@@ -269,6 +272,11 @@ class TwinView:
             cls._stop_ticking()
 
         return True
+
+    @classmethod
+    def get_prim_path(cls, path: str = "") -> str:
+        """그 트윈을 띄운 prim path. 안 띄웠으면 빈 문자열."""
+        return cls._prim_paths.get(path or cls._local_path, "")
 
     @classmethod
     def is_playing(cls, path: str = "") -> bool:

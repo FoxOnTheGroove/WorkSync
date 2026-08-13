@@ -66,6 +66,7 @@ class TwinViewService:
         if prim_path:
             cls._show_loaded(path, prim_path)
 
+        cls._notify_loaded()
         return True
 
     @classmethod
@@ -79,6 +80,15 @@ class TwinViewService:
         runner = TwinView.get_runner(path.strip())
         if runner is not None:
             TwinView.rom_show(prim_path, runner)
+
+    @classmethod
+    def _notify_loaded(cls) -> None:
+        """로드/표시 상태가 바뀌었음을 알린다.
+
+        TwinView 가 아니라 여기서 쏜다. load_twin 은 워커 스레드에서도 도는데
+        구독자는 UI 라 메인 스레드여야 하고, 그 경계를 아는 건 이 계층이다.
+        """
+        TwinView._notify(TwinView._on_loaded, "on_loaded")
 
     @classmethod
     async def download_twin_async(cls, s3_uri: str) -> str:
@@ -111,6 +121,7 @@ class TwinViewService:
             if prim_path:
                 cls._show_loaded(path, prim_path)
 
+            cls._notify_loaded()
             return True
         finally:
             TwinView.end_task(key)
@@ -176,7 +187,14 @@ class TwinViewService:
 
         여기서 정해진 prim path 아래를 재생 중 업데이트가 갱신한다.
         """
-        return TwinView.rom_show(prim_path, cls._require_target()[1])
+        shown = TwinView.rom_show(prim_path, cls._require_target()[1])
+        cls._notify_loaded()
+        return shown
+
+    @classmethod
+    def get_prim_path(cls, path: str = "") -> str:
+        """그 트윈을 띄운 prim path. 안 띄웠으면 빈 문자열."""
+        return TwinView.get_prim_path(path)
 
     @classmethod
     def get_deform_scale(cls) -> float:
@@ -215,6 +233,15 @@ class TwinViewService:
         return TwinView.get_interval()
 
     # ------------------------------------------------------------ 이벤트 훅
+
+    @classmethod
+    def set_on_loaded(cls, callback) -> None:
+        """로드/표시 상태가 바뀌면 호출. fn() -> None. None 으로 해제.
+
+        API 로 로드/표시한 것을 UI 가 따라가는 신호다. 이게 없으면 UI 는
+        자기 버튼으로 바꾼 것만 안다.
+        """
+        TwinView._on_loaded = callback
 
     @classmethod
     def set_on_time(cls, callback) -> None:
