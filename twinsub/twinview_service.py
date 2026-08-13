@@ -53,11 +53,12 @@ class TwinViewService:
         return TwinView.download_twin(s3_uri)
 
     @classmethod
-    def load_twin(cls, path: str, prim_path: str = DEFAULT_PRIM_PATH) -> bool:
-        """로컬 .twin 경로로 러너를 세우고 prim_path 아래에 띄운다.
+    def load_twin(cls, path: str, prim_path: str = "") -> bool:
+        """로컬 .twin 경로로 러너를 세운다. 같은 경로면 기존 러너를 재사용한다.
 
-        같은 경로면 기존 러너를 재사용한다.
-        prim_path 를 비우면 띄우지 않는다 — 러너만 필요할 때 쓴다.
+        prim_path 를 주면 그 아래에 띄우는 것까지 한다.
+            load_twin(path)             러너만
+            load_twin(path, "/World")   러너 + /World/<rom> 에 띄우기
         """
         if not TwinView.load_twin(path):
             return False
@@ -92,14 +93,12 @@ class TwinViewService:
             TwinView.end_task(key)
 
     @classmethod
-    async def load_twin_async(cls, path: str,
-                              prim_path: str = DEFAULT_PRIM_PATH) -> bool:
-        """러너를 세우고 prim_path 아래에 띄운다. 돌아오면 프림이 씬에 있다.
+    async def load_twin_async(cls, path: str, prim_path: str = "") -> bool:
+        """load_twin 을 비동기로. prim_path 를 주면 띄우는 것까지 하고 돌아온다.
 
         TwinRunner 인스턴스화가 수 초씩 걸리므로 그 부분만 워커 스레드로 넘긴다.
-        띄우는 쪽은 USD 를 만지므로 await 뒤 메인 스레드에서 한다.
-
-        prim_path 를 비우면 띄우지 않는다 — 러너만 필요할 때 쓴다.
+        띄우는 쪽은 USD 를 만지므로 await 뒤 메인 스레드에서 한다. 그래서
+        prim_path 를 준 경우 await 가 돌아온 시점에 프림은 이미 씬에 있다.
         """
         key = ("load", path.strip())
         if not TwinView.begin_task(key):
