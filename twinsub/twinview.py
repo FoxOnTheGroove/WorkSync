@@ -48,7 +48,41 @@ class TwinView:
     # prim path 별로 나눠 담아야 같은 rom 을 여러 경로 아래에 따로 띄울 수 있다.
     _rom_views = {}  # type: dict
 
+    # s3 접속 정보. region 만 고정이고 나머지는 환경변수에서 온다.
+    S3_REGION = "us-east-1"
+    S3_ACCESS_KEY_ENV = "AWS_ACCESS_KEY"
+    S3_SECRET_KEY_ENV = "AWS_SECRET_KEY"
+    S3_ENDPOINT_ENV = "AWS_IP"
+
     # ------------------------------------------------------------ 다운로드
+
+    @classmethod
+    def _make_s3_client(cls):
+        """환경변수로 s3 클라이언트를 만든다.
+
+        키가 없으면 어느 환경변수가 비었는지 짚어서 올린다. 그대로 두면
+        boto3 가 한참 뒤에 NoCredentialsError 로 터져 원인이 안 보인다.
+        """
+        # boto3 는 Kit 기동 시점에 없을 수 있다. 모듈 import 를 막지 않도록 늦게 올린다.
+        import boto3
+
+        access_key = os.environ.get(cls.S3_ACCESS_KEY_ENV)
+        secret_key = os.environ.get(cls.S3_SECRET_KEY_ENV)
+
+        missing = [name for name, value in ((cls.S3_ACCESS_KEY_ENV, access_key),
+                                            (cls.S3_SECRET_KEY_ENV, secret_key))
+                   if not value]
+        if missing:
+            raise ValueError("환경변수가 비어 있다: {}".format(", ".join(missing)))
+
+        return boto3.client(
+            "s3",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=cls.S3_REGION,
+            # 안 잡혀 있으면 None 을 넘겨 기본 AWS 엔드포인트를 쓴다.
+            endpoint_url=os.environ.get(cls.S3_ENDPOINT_ENV) or None,
+        )
 
     @classmethod
     def download_twin(cls, s3_uri: str) -> str:
@@ -62,11 +96,8 @@ class TwinView:
         if not name:
             raise ValueError("s3 uri 가 파일이 아니라 폴더를 가리킨다: {}".format(s3_uri))
 
-        # boto3 는 Kit 기동 시점에 없을 수 있다. 모듈 import 를 막지 않도록 늦게 올린다.
-        import boto3
-
         local_path = os.path.join(cls._get_temp_dir(), name)
-        boto3.client("s3").download_file(bucket, key, local_path)
+        cls._make_s3_client().download_file(bucket, key, local_path)
 
         cls._local_path = local_path
         return local_path
