@@ -55,57 +55,7 @@ class TwinView:
     S3_SECRET_KEY_ENV = "AWS_SECRET_KEY"
     S3_ENDPOINT_ENV = "AWS_IP"
 
-    # s3 실패 유형별 짚이는 곳. 응답의 Error.Code, 예외 클래스명, HTTP 상태
-    # 순으로 찾는다.
-    _S3_HINTS = {
-        "AccessDenied":
-            "권한이 없거나, 키가 없는데 ListBucket 권한이 없어 404 대신 403 이 온 것이다. "
-            "버킷/키 철자와 정책의 s3:GetObject 를 본다.",
-        "403":
-            "권한이 없거나, 키가 없는데 ListBucket 권한이 없어 404 대신 403 이 온 것이다. "
-            "커스텀 엔드포인트면 주소 방식(path-style)도 의심한다.",
-        "NoSuchKey": "그 키가 없다. 경로 철자를 본다.",
-        "NoSuchBucket": "그 버킷이 없다.",
-        "404": "버킷이나 키가 없다.",
-        "PermanentRedirect": "버킷의 region 이 다르다. 지금 설정된 region 으로는 못 붙는다.",
-        "301": "버킷의 region 이 다르다.",
-        "InvalidAccessKeyId": "액세스 키가 서버에 없는 값이다. AWS_ACCESS_KEY 를 본다.",
-        "SignatureDoesNotMatch": "시크릿 키가 틀렸다. AWS_SECRET_KEY 를 본다.",
-        "RequestTimeTooSkewed": "이 머신 시계가 서버와 어긋났다.",
-        "EndpointConnectionError": "엔드포인트에 못 붙었다. AWS_IP 주소/포트와 서버 상태를 본다.",
-        "ConnectTimeoutError": "엔드포인트 응답이 없다. 방화벽/포트를 본다.",
-        "SSLError": "TLS 문제다. 엔드포인트가 http 인데 https 로 붙었는지 본다.",
-        "NoCredentialsError": "자격증명이 안 잡혔다.",
-    }
-
     # ------------------------------------------------------------ 다운로드
-
-    @classmethod
-    def _log_s3_error(cls, exc, bucket: str, key: str) -> None:
-        """s3 실패를 유형별로 찍는다.
-
-        403 은 원인이 여럿이라 메시지만 봐서는 안 갈린다. 응답에서 뽑을 수
-        있는 것을 다 찍고 짚이는 곳을 같이 남긴다.
-        """
-        response = getattr(exc, "response", None) or {}
-        code = str(response.get("Error", {}).get("Code", "") or "")
-        status = str(response.get("ResponseMetadata", {})
-                     .get("HTTPStatusCode", "") or "")
-        operation = getattr(exc, "operation_name", "") or "?"
-        name = type(exc).__name__
-
-        hint = (cls._S3_HINTS.get(code)
-                or cls._S3_HINTS.get(name)
-                or cls._S3_HINTS.get(status)
-                or "분류되지 않은 실패다. 아래 원문을 본다.")
-
-        print("[twinsub] s3 실패  op={} status={} code={} ({})".format(
-            operation, status or "-", code or "-", name))
-        print("[twinsub]   bucket={} key={}".format(bucket, key))
-        print("[twinsub]   endpoint={} region={}".format(
-            os.environ.get(cls.S3_ENDPOINT_ENV) or "(기본 AWS)", cls.S3_REGION))
-        print("[twinsub]   -> {}".format(hint))
-        print("[twinsub]   원문: {}".format(exc))
 
     @classmethod
     def _make_s3_client(cls):
@@ -171,12 +121,7 @@ class TwinView:
         실패하면 예외를 올린다 — 실패 이유를 UI에 그대로 보여주기 위해서다.
         """
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
-
-        try:
-            client.download_file(bucket, key, local_path)
-        except Exception as exc:  # noqa: BLE001 — 찍고 그대로 올린다
-            cls._log_s3_error(exc, bucket, key)
-            raise
+        client.download_file(bucket, key, local_path)
 
         cls._local_path = local_path
         return local_path
@@ -189,12 +134,7 @@ class TwinView:
         타기 전에 바로 올라온다.
         """
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
-
-        try:
-            await asyncio.to_thread(client.download_file, bucket, key, local_path)
-        except Exception as exc:  # noqa: BLE001 — 찍고 그대로 올린다
-            cls._log_s3_error(exc, bucket, key)
-            raise
+        await asyncio.to_thread(client.download_file, bucket, key, local_path)
 
         cls._local_path = local_path
         return local_path
