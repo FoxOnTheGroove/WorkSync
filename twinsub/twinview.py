@@ -409,11 +409,24 @@ class TwinView:
         return temp_dir
 
     @classmethod
+    def _close_runners(cls) -> None:
+        """들고 있던 러너를 멈추고 닫는다. 하나가 터져도 나머지는 닫는다."""
+        for path, runner in cls._runners.items():
+            try:
+                if path in cls._playing:
+                    runner.stop()
+                runner.close()
+            except Exception as exc:  # noqa: BLE001
+                print("[twinviewer] close 실패 ({}): {}".format(path, exc))
+
+    @classmethod
     def cleanup(cls) -> None:
-        """폴더를 지우고 러너/뷰/재생상태를 모두 버린다."""
+        """폴더를 지우고 러너를 닫고 뷰/재생상태를 모두 버린다."""
+        cls._stop_ticking()
+        cls._close_runners()
+
         shutil.rmtree(cls._temp_dir_path(), ignore_errors=True)
 
-        cls._stop_ticking()
         cls._local_path = ""
         cls._runners = {}
         cls._rom_views = {}
