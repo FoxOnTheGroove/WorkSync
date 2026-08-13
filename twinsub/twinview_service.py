@@ -98,7 +98,7 @@ class TwinViewService:
             raise ValueError("이미 받는 중이다: {}".format(s3_uri))
 
         try:
-            return await cls._to_thread(TwinView.download_twin, s3_uri)
+            return await TwinView.download_twin_async(s3_uri)
         finally:
             TwinView.end_task(key)
 

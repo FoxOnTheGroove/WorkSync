@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import tempfile
@@ -98,10 +99,10 @@ class TwinView:
         )
 
     @classmethod
-    def download_twin(cls, s3_uri: str) -> str:
-        """s3 uri 의 .twin 을 임시폴더에 받고 로컬 경로를 반환한다.
+    def _prepare_download(cls, s3_uri: str):
+        """받기 전에 필요한 것을 갖춘다. 여기까진 네트워크를 안 탄다.
 
-        실패하면 예외를 올린다 — 실패 이유를 UI에 그대로 보여주기 위해서다.
+        uri 오류나 환경변수 누락은 스레드로 넘기기 전에 여기서 걸린다.
         """
         bucket, key = cls._parse_s3_uri(s3_uri)
 
@@ -109,8 +110,31 @@ class TwinView:
         if not name:
             raise ValueError("s3 uri 가 파일이 아니라 폴더를 가리킨다: {}".format(s3_uri))
 
+        client = cls._make_s3_client()
         local_path = os.path.join(cls._get_temp_dir(), name)
-        cls._make_s3_client().download_file(bucket, key, local_path)
+        return client, bucket, key, local_path
+
+    @classmethod
+    def download_twin(cls, s3_uri: str) -> str:
+        """s3 uri 의 .twin 을 임시폴더에 받고 로컬 경로를 반환한다.
+
+        실패하면 예외를 올린다 — 실패 이유를 UI에 그대로 보여주기 위해서다.
+        """
+        client, bucket, key, local_path = cls._prepare_download(s3_uri)
+        client.download_file(bucket, key, local_path)
+
+        cls._local_path = local_path
+        return local_path
+
+    @classmethod
+    async def download_twin_async(cls, s3_uri: str) -> str:
+        """전송만 스레드로 넘긴다.
+
+        준비는 부른 스레드에서 끝내므로 uri 오류나 자격증명 누락은 스레드를
+        타기 전에 바로 올라온다.
+        """
+        client, bucket, key, local_path = cls._prepare_download(s3_uri)
+        await asyncio.to_thread(client.download_file, bucket, key, local_path)
 
         cls._local_path = local_path
         return local_path
