@@ -59,6 +59,8 @@ class TwinViewService:
 
         if prim_path:
             cls.load_twin(local_path, prim_path)
+            # 러너가 섰으니 받아둔 파일은 더 필요 없다.
+            TwinView.discard_temp(local_path)
 
         return local_path
 
@@ -119,6 +121,8 @@ class TwinViewService:
 
         if prim_path:
             await cls.load_twin_async(local_path, prim_path)
+            # 러너가 섰으니 받아둔 파일은 더 필요 없다.
+            TwinView.discard_temp(local_path)
 
         return local_path
 

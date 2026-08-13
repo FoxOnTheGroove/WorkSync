@@ -144,6 +144,30 @@ class TwinView:
         """마지막으로 받은 로컬 경로. 없으면 빈 문자열."""
         return cls._local_path
 
+    @classmethod
+    def discard_temp(cls, path: str) -> bool:
+        """받아둔 임시 .twin 을 지운다. 지웠으면 True.
+
+        우리 임시폴더 바로 아래의 것만 건드린다. 로컬 경로로 직접 로드한
+        원본까지 지우면 복구가 안 된다.
+
+        러너가 이미 서 있으면 파일은 필요 없다는 전제다. load_twin 도
+        캐시에 있으면 파일을 안 본다.
+        """
+        if not path or not cls._temp_dir:
+            return False
+
+        temp_dir = os.path.abspath(cls._temp_dir)
+        if os.path.dirname(os.path.abspath(path)) != temp_dir:
+            return False
+
+        try:
+            os.remove(path)
+        except OSError:
+            return False
+
+        return True
+
     # ------------------------------------------------------------ 로드
 
     @classmethod
@@ -156,11 +180,13 @@ class TwinView:
         if not path:
             raise ValueError("경로가 비어 있다")
 
-        if not os.path.isfile(path):
-            raise ValueError("파일이 없다: {}".format(path))
-
         runner = cls._runners.get(path)
         if runner is None:
+            # 파일은 새로 세울 때만 필요하다. 이미 선 러너로 돌아가는 건
+            # 대상 포인터만 바꾸는 일이라 파일이 지워졌어도 된다.
+            if not os.path.isfile(path):
+                raise ValueError("파일이 없다: {}".format(path))
+
             # 실패하면 _runners 에 넣지 않는다. 반쯤 세워진 러너가 남으면
             # 다음 동작이 그쪽에 걸린다.
             runner = TwinRunner(path)
