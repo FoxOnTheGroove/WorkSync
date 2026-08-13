@@ -65,6 +65,7 @@ class TwinView:
         """
         # boto3 는 Kit 기동 시점에 없을 수 있다. 모듈 import 를 막지 않도록 늦게 올린다.
         import boto3
+        from botocore.config import Config
 
         access_key = os.environ.get(cls.S3_ACCESS_KEY_ENV)
         secret_key = os.environ.get(cls.S3_SECRET_KEY_ENV)
@@ -75,13 +76,25 @@ class TwinView:
         if missing:
             raise ValueError("환경변수가 비어 있다: {}".format(", ".join(missing)))
 
+        # 안 잡혀 있으면 None 을 넘겨 기본 AWS 엔드포인트를 쓴다.
+        endpoint_url = os.environ.get(cls.S3_ENDPOINT_ENV) or None
+
+        config = None
+        if endpoint_url:
+            # 커스텀 엔드포인트(MinIO/Ceph/온프렘)는 가상호스트 방식 주소를
+            # 못 받는 경우가 많다. boto3 기본값이 그 방식이라 bucket.host 로
+            # 붙고, 서버가 버킷을 못 찾아 HeadObject 가 403 으로 떨어진다.
+            # 실제 AWS 는 path-style 을 권장하지 않으므로 커스텀일 때만 켠다.
+            config = Config(signature_version="s3v4",
+                            s3={"addressing_style": "path"})
+
         return boto3.client(
             "s3",
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=cls.S3_REGION,
-            # 안 잡혀 있으면 None 을 넘겨 기본 AWS 엔드포인트를 쓴다.
-            endpoint_url=os.environ.get(cls.S3_ENDPOINT_ENV) or None,
+            endpoint_url=endpoint_url,
+            config=config,
         )
 
     @classmethod
