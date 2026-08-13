@@ -1,7 +1,5 @@
 import asyncio
 import os
-import shutil
-import tempfile
 from urllib.parse import urlparse
 
 from .rom_view import RomPointCloud
@@ -10,9 +8,11 @@ from .twin_runner import TwinRunner
 
 class TwinView:
 
-    # 임시폴더는 세션당 하나만 만들어 재사용한다. 로드할 때마다 새로 파면
-    # 정리할 대상이 흩어진다.
-    _temp_dir = None
+    # 받아둔 .twin 을 두는 폴더 이름. 홈 아래에 만든다.
+    TEMP_DIR_NAME = "twin_temp_dir"
+
+    # 우리가 받아서 아직 안 지운 파일. 폴더째 지우지 않고 이것만 정리한다.
+    _temp_files = set()  # type: set
 
     # 마지막으로 로드한 .twin 경로. _runners 에서 현재 대상을 고르는 키다.
     _local_path = ""
@@ -123,6 +123,7 @@ class TwinView:
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         client.download_file(bucket, key, local_path)
 
+        cls._temp_files.add(local_path)
         cls._local_path = local_path
         return local_path
 
@@ -136,6 +137,7 @@ class TwinView:
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         await asyncio.to_thread(client.download_file, bucket, key, local_path)
 
+        cls._temp_files.add(local_path)
         cls._local_path = local_path
         return local_path
 
@@ -154,12 +156,14 @@ class TwinView:
         러너가 이미 서 있으면 파일은 필요 없다는 전제다. load_twin 도
         캐시에 있으면 파일을 안 본다.
         """
-        if not path or not cls._temp_dir:
+        if not path:
             return False
 
-        temp_dir = os.path.abspath(cls._temp_dir)
+        temp_dir = os.path.abspath(cls._temp_dir_path())
         if os.path.dirname(os.path.abspath(path)) != temp_dir:
             return False
+
+        cls._temp_files.discard(path)
 
         try:
             os.remove(path)
@@ -484,18 +488,31 @@ class TwinView:
     # ------------------------------------------------------------ 임시폴더
 
     @classmethod
+    def _temp_dir_path(cls) -> str:
+        """받아둔 .twin 을 두는 폴더.
+
+        시스템 임시폴더는 환경에 따라 쓰기가 막힌다. 홈 아래 고정 경로를 쓴다.
+        """
+        return os.path.join(os.path.expanduser("~"), cls.TEMP_DIR_NAME)
+
+    @classmethod
     def _get_temp_dir(cls) -> str:
-        # 밖에서 지웠을 수도 있으니 매번 실재하는지 확인한다.
-        if cls._temp_dir is None or not os.path.isdir(cls._temp_dir):
-            cls._temp_dir = tempfile.mkdtemp(prefix="twinsub_")
-        return cls._temp_dir
+        # 밖에서 지웠을 수도 있으니 매번 확인한다. 이미 있으면 그대로 쓴다.
+        temp_dir = cls._temp_dir_path()
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
 
     @classmethod
     def cleanup(cls) -> None:
-        """받아둔 임시폴더를 지운다."""
-        if cls._temp_dir:
-            shutil.rmtree(cls._temp_dir, ignore_errors=True)
-        cls._temp_dir = None
+        """받아둔 파일을 지우고 상태를 버린다.
+
+        폴더는 남긴다. 홈 아래 고정 경로라 통째로 지우면 남이 넣어둔 것이나
+        다른 Kit 세션이 받는 중인 것까지 날아간다.
+        """
+        for path in list(cls._temp_files):
+            cls.discard_temp(path)
+        cls._temp_files = set()
+
         cls._stop_ticking()
         cls._local_path = ""
         cls._runners = {}
