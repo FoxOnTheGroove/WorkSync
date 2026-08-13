@@ -124,6 +124,10 @@ class DistanceLineCore:
     _pending_viewports: tuple = ()
     _pending_line_id = 0
     _selected_line = None
+    _probe_cache: dict = {}
+    _probe_camera = None
+    _probe_rays = 0
+    _probe_saved = 0
 
     @classmethod
     def startup(cls):
@@ -164,6 +168,8 @@ class DistanceLineCore:
             or any(s.armed for s in cls._viewports.values()),
             "tabs": {tab: tuple(members) for tab, members in cls._tabs.items()},
             "maximized": dict(cls._maximized),
+            "probe_rays": cls._probe_rays,
+            "probe_saved": cls._probe_saved,
         }
 
     @classmethod
@@ -709,6 +715,17 @@ class DistanceLineCore:
 
     @classmethod
     def _probe(cls, rq, camera, ranked, slot, surface, deliver):
+        memo = cls._probe_memo(camera)
+        while slot < len(ranked):
+            known = cls._recall(memo, ranked[slot])
+            if known is None:
+                break
+            cls._probe_saved += 1
+            if known:
+                deliver(ranked[slot])
+                return
+            slot += 1
+
         if slot >= len(ranked):
             deliver(surface)
             return
@@ -721,11 +738,14 @@ class DistanceLineCore:
             return
 
         def _on_probe(_ray, result):
-            if _reached(result, camera, span):
+            reached = _reached(result, camera, span)
+            cls._remember(memo, point, reached)
+            if reached:
                 deliver(point)
             else:
                 cls._probe(rq, camera, ranked, slot + 1, surface, deliver)
 
+        cls._probe_rays += 1
         rq.acquire_raycast_query_interface().submit_raycast_query(
             rq.Ray(
                 (camera[0], camera[1], camera[2]),
@@ -733,6 +753,37 @@ class DistanceLineCore:
             ),
             _on_probe,
         )
+
+    @classmethod
+    def _probe_memo(cls, camera) -> dict:
+        """이 카메라 위치에서의 검증 결과 모음.
+
+        가려짐은 카메라에서 후보까지의 선분에만 달려 있으므로 제자리 회전으로는
+        바뀌지 않는다. 위치가 움직이면 통째로 버린다.
+        """
+        key = np.asarray(camera, dtype=float).tobytes()
+        if cls._probe_camera != key:
+            cls._probe_camera = key
+            cls._probe_cache = {}
+        return cls._probe_cache
+
+    @staticmethod
+    def _key_of(point):
+        """꼭지점만 캐시한다. 엣지 위의 점은 커서를 따라 미끄러져 고정되지 않는다."""
+        if point.kind != SnapKind.VERTEX or point.element_index < 0:
+            return None
+        return (point.prim_path, point.element_index)
+
+    @classmethod
+    def _recall(cls, memo: dict, point):
+        key = cls._key_of(point)
+        return None if key is None else memo.get(key)
+
+    @classmethod
+    def _remember(cls, memo: dict, point, reached: bool):
+        key = cls._key_of(point)
+        if key is not None:
+            memo[key] = reached
 
     @classmethod
     def _candidates_from_hit(cls, state, result, ndc, view, proj):
@@ -907,10 +958,13 @@ def _geom_for(prim, time=None):
     if entry is None:
         entry = _build_entry(prim, time) or ()
         _GEOM_CACHE[key] = entry
+        DistanceLineCore._probe_camera = None
     return entry or None
 
 
 def _drop_caches(prim_path=None):
+    DistanceLineCore._probe_camera = None
+    DistanceLineCore._probe_cache = {}
     for cache in (_GEOM_CACHE, _PRIM_CACHE):
         if prim_path is None:
             cache.clear()

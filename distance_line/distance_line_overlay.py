@@ -69,6 +69,8 @@ class DistanceLineOverlay:
         self._selected = None
         self._items = {}
         self._free_slots = []
+        self._preview = None
+        self._marker = None
 
         self._build()
 
@@ -198,31 +200,65 @@ class DistanceLineOverlay:
         self._add(line, self._shape[line_id][2], chosen)
 
     def set_preview(self, start, end, text):
+        """고무줄 선. hover 마다 만들지 않고 좌표만 갈아끼운다."""
         if self._preview_root is None:
             return
-        self._preview_root.clear()
         if start is None or end is None:
+            self._preview_root.visible = False
             return
+        a = (start[0], start[1], start[2])
+        b = (end[0], end[1], end[2])
+        if self._preview is not None:
+            line, holder, label = self._preview
+            try:
+                line.start, line.end = a, b
+                holder.transform = sc.Matrix44.get_translation_matrix(*_midpoint(a, b))
+                label.text = text or ""
+                self._preview_root.visible = True
+                return
+            except Exception as exc:
+                carb.log_warn(f"[distance_line] preview update failed: {exc}")
+                self._preview = None
+
+        self._preview_root.clear()
         with self._preview_root:
-            sc.Line(
-                (start[0], start[1], start[2]),
-                (end[0], end[1], end[2]),
-                color=_PREVIEW_COLOR,
-                thickness=_LINE_THICKNESS,
+            line = sc.Line(a, b, color=_PREVIEW_COLOR, thickness=_LINE_THICKNESS)
+            holder = sc.Transform(
+                transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))
             )
-            if text:
-                _draw_plain_label(start, end, text)
+            with holder:
+                with sc.Transform(
+                    look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
+                ):
+                    label = _label(text or "", _PREVIEW_TEXT_COLOR)
+        self._preview = (line, holder, label)
+        self._preview_root.visible = True
 
     def set_snap_marker(self, snap):
+        """스냅 자리 표시. 마찬가지로 점 하나를 재사용한다."""
         if self._marker_root is None:
             return
-        self._marker_root.clear()
         if snap is None:
+            self._marker_root.visible = False
             return
         color, size = _MARKER_STYLE.get(int(snap.kind), _MARKER_STYLE[_SURFACE])
         p = snap.position
+        spot = [(p[0], p[1], p[2])]
+        if self._marker is not None:
+            try:
+                self._marker.positions = spot
+                self._marker.colors = [color]
+                self._marker.sizes = [size]
+                self._marker_root.visible = True
+                return
+            except Exception as exc:
+                carb.log_warn(f"[distance_line] marker update failed: {exc}")
+                self._marker = None
+
+        self._marker_root.clear()
         with self._marker_root:
-            sc.Points([(p[0], p[1], p[2])], colors=[color], sizes=[size])
+            self._marker = sc.Points(spot, colors=[color], sizes=[size])
+        self._marker_root.visible = True
 
     def screen_size(self):
         for source in (self._frame, self._scene_view):
@@ -267,6 +303,8 @@ class DistanceLineOverlay:
         self._selected = None
         self._items = {}
         self._free_slots = []
+        self._preview = None
+        self._marker = None
         self._frame = None
 
 
@@ -387,13 +425,6 @@ class _Plate:
             "font_size": _PLATE_FONT_SIZE,
         }
 
-
-def _draw_plain_label(a, b, text):
-    with sc.Transform(transform=sc.Matrix44.get_translation_matrix(*_midpoint(a, b))):
-        with sc.Transform(
-            look_at=sc.Transform.LookAt.CAMERA, scale_to=sc.Space.SCREEN
-        ):
-            _label(text, _PREVIEW_TEXT_COLOR)
 
 
 def _label(text: str, color):
