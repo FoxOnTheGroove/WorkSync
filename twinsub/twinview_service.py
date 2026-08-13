@@ -22,6 +22,8 @@ __all__ = ["TwinViewService"]
 
 class TwinViewService:
 
+    DEFAULT_PRIM_PATH = "/World"
+
     # ------------------------------------------------------------ 내부
 
     @classmethod
@@ -51,9 +53,31 @@ class TwinViewService:
         return TwinView.download_twin(s3_uri)
 
     @classmethod
-    def load_twin(cls, path: str) -> bool:
-        """로컬 .twin 경로로 러너를 세운다. 같은 경로면 기존 러너를 재사용한다."""
-        return TwinView.load_twin(path)
+    def load_twin(cls, path: str, prim_path: str = DEFAULT_PRIM_PATH) -> bool:
+        """로컬 .twin 경로로 러너를 세우고 prim_path 아래에 띄운다.
+
+        같은 경로면 기존 러너를 재사용한다.
+        prim_path 를 비우면 띄우지 않는다 — 러너만 필요할 때 쓴다.
+        """
+        if not TwinView.load_twin(path):
+            return False
+
+        if prim_path:
+            cls._show_loaded(path, prim_path)
+
+        return True
+
+    @classmethod
+    def _show_loaded(cls, path: str, prim_path: str) -> None:
+        """방금 로드한 트윈을 띄운다.
+
+        USD 를 만지므로 메인 스레드에서만 부른다.
+        '현재 대상' 대신 이 경로의 러너를 집는다 — 로드가 겹치면 그 사이
+        대상이 바뀌어 있을 수 있다.
+        """
+        runner = TwinView.get_runner(path.strip())
+        if runner is not None:
+            TwinView.rom_show(prim_path, runner)
 
     @classmethod
     async def download_twin_async(cls, s3_uri: str) -> str:
@@ -68,17 +92,27 @@ class TwinViewService:
             TwinView.end_task(key)
 
     @classmethod
-    async def load_twin_async(cls, path: str) -> bool:
-        """load_twin 을 워커 스레드에서 돌린다.
+    async def load_twin_async(cls, path: str,
+                              prim_path: str = DEFAULT_PRIM_PATH) -> bool:
+        """러너를 세우고 prim_path 아래에 띄운다. 돌아오면 프림이 씬에 있다.
 
-        TwinRunner 인스턴스화가 수 초씩 걸린다. 동기로 부르면 그동안 Kit 이 멈춘다.
+        TwinRunner 인스턴스화가 수 초씩 걸리므로 그 부분만 워커 스레드로 넘긴다.
+        띄우는 쪽은 USD 를 만지므로 await 뒤 메인 스레드에서 한다.
+
+        prim_path 를 비우면 띄우지 않는다 — 러너만 필요할 때 쓴다.
         """
         key = ("load", path.strip())
         if not TwinView.begin_task(key):
             raise ValueError("이미 로드 중이다: {}".format(path))
 
         try:
-            return await cls._to_thread(TwinView.load_twin, path)
+            if not await cls._to_thread(TwinView.load_twin, path):
+                return False
+
+            if prim_path:
+                cls._show_loaded(path, prim_path)
+
+            return True
         finally:
             TwinView.end_task(key)
 

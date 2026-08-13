@@ -8,7 +8,9 @@ from .twinview_service import TwinViewService as tv
 class DummyUI:
 
     WINDOW_TITLE = "TwinSub"
-    DEFAULT_PRIM_PATH = "/World"
+
+    # 기본값은 서비스와 같은 것을 쓴다.
+    DEFAULT_PRIM_PATH = tv.DEFAULT_PRIM_PATH
 
     def __init__(self):
         self._window = None
@@ -139,19 +141,22 @@ class DummyUI:
         self._set_status("downloaded: {}".format(local_path))
 
     def _on_path_load(self):
+        # 로드가 띄우기까지 하므로 prim path 도 같이 넘긴다. Show 를 따로 누르지
+        # 않아도 된다.
         asyncio.ensure_future(
-            self._path_load_async(self._path_model.get_value_as_string()))
+            self._path_load_async(self._path_model.get_value_as_string(),
+                                  self._prim_path_model.get_value_as_string()))
 
-    async def _path_load_async(self, path):
+    async def _path_load_async(self, path, prim_path):
         self._set_status("loading ...")
 
         try:
-            await tv.load_twin_async(path)
+            await tv.load_twin_async(path, prim_path)
         except Exception as exc:  # noqa: BLE001
             self._set_status("load 실패: {}".format(exc))
             return
 
-        self._set_status("loaded: {}".format(path))
+        self._set_status("loaded: {} -> {}".format(path, prim_path))
         self._refresh_scalars()
         self._rebuild_io()
 
