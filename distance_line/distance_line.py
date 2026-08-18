@@ -20,6 +20,7 @@ _CREASE_COS = 0.8660           # 두 면이 30도 이상 벌어지면 크리스
 _VERIFY_LIMIT = 4              # 도달 검사를 해볼 후보 개수
 _VERIFY_SLACK = 1e-3           # 이 비율 안에 들어오면 막힌 게 아니라 그 점에 닿은 것
 _NEAR_MARGIN = 3.0             # reach 의 몇 배까지 미리 잘라 두고 재사용할지
+_AIR_REACH_PX = 50.0           # 허공일 때 이 픽셀 안의 외곽선에 붙는다
 
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
@@ -102,6 +103,7 @@ class _ViewportState:
         self.visible = True
         self.snap_busy = False
         self.snap_queued = None
+        self.last_mesh = None
 
 
 class DistanceLineCore:
@@ -602,11 +604,15 @@ class DistanceLineCore:
     def _apply_hover(cls, state, snap):
         state.current_snap = snap
         state.overlay.set_snap_marker(snap)
-        if state.pending is not None and snap is not None:
-            length = cls._length_m(state.pending.position, snap.position)
-            state.overlay.set_preview(
-                state.pending.position, snap.position, _format_length(length)
-            )
+        if state.pending is None:
+            return
+        if snap is None:
+            state.overlay.set_preview(None, None, "")
+            return
+        length = cls._length_m(state.pending.position, snap.position)
+        state.overlay.set_preview(
+            state.pending.position, snap.position, _format_length(length)
+        )
 
     @classmethod
     def _on_click(cls, viewport_id: str, ndc):
@@ -788,7 +794,7 @@ class DistanceLineCore:
     @classmethod
     def _candidates_from_hit(cls, state, result, ndc, view, proj):
         if not getattr(result, "valid", False):
-            return None, []
+            return cls._candidates_in_air(state, ndc, view, proj)
 
         hit = Gf.Vec3d(*result.hit_position)
         normal = Gf.Vec3d(*getattr(result, "normal", (0.0, 1.0, 0.0)))
@@ -803,6 +809,7 @@ class DistanceLineCore:
         if geom is None:
             return surface, []
         geom.calibrate(hit, normal)
+        state.last_mesh = (path, geom)
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
@@ -817,43 +824,95 @@ class DistanceLineCore:
             _camera_position(view), geom.orientation
         )
 
-        ranked = []
-        for flag, kind in _FLAG_TO_KIND:
-            if not (cls._snap_mode & flag) or len(ranked) >= _VERIFY_LIMIT:
-                continue
-            if kind == SnapKind.VERTEX:
-                points, seen, source = outline.corners, seen_corners, corner_ids
-                if not len(points):
-                    continue
-                pixels, valid = _project_px(points, view_proj, width, height)
-                screen = np.linalg.norm(pixels - cursor_px, axis=1)
-            else:
-                if not len(outline.edge_a):
-                    continue
-                points, screen, valid = _nearest_on_edges(
-                    outline.edge_a, outline.edge_b, cursor_px, view_proj, width, height
-                )
-                seen, source = seen_edges, edge_ids
+        batches = []
+        if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
+            pixels, valid = _project_px(outline.corners, view_proj, width, height)
+            batches.append((
+                SnapKind.VERTEX,
+                outline.corners,
+                np.linalg.norm(pixels - cursor_px, axis=1),
+                valid,
+                seen_corners,
+                corner_ids,
+            ))
+        if cls._snap_mode & SnapMode.EDGE and len(outline.edge_a):
+            points, screen, valid = _nearest_on_edges(
+                outline.edge_a, outline.edge_b, cursor_px, view_proj, width, height
+            )
+            batches.append(
+                (SnapKind.EDGE, points, screen, valid, seen_edges, edge_ids)
+            )
 
-            near_hit = np.linalg.norm(points - _as_np(hit), axis=1) <= reach
-            usable = valid & near_hit & seen
+        ranked = cls._rank(
+            batches, cls._snap_radius, path, normal, hit=_as_np(hit), reach=reach
+        )
+        return surface, ranked
+
+    @classmethod
+    def _rank(cls, batches, radius, path, normal, hit=None, reach=None):
+        """후보를 종류 우선순위 다음 화면 거리 순으로 줄 세운다."""
+        ranked = []
+        for kind, points, screen, valid, seen, ids in batches:
+            usable = valid & seen
+            if hit is not None:
+                usable = usable & (np.linalg.norm(points - hit, axis=1) <= reach)
             if not usable.any():
                 continue
             distances = np.where(usable, screen, np.inf)
             for index in np.argsort(distances)[: _VERIFY_LIMIT - len(ranked)]:
-                if float(distances[index]) > cls._snap_radius:
+                if float(distances[index]) > radius:
                     break
                 ranked.append(
                     SnapPoint(
-                        Gf.Vec3d(*points[index]),
-                        kind,
-                        path,
-                        -1,
-                        int(source[index]),
-                        normal,
+                        Gf.Vec3d(*points[index]), kind, path, -1, int(ids[index]), normal
                     )
                 )
-        return surface, ranked
+            if len(ranked) >= _VERIFY_LIMIT:
+                break
+        return ranked
+
+    @classmethod
+    def _candidates_in_air(cls, state, ndc, view, proj):
+        """프림에 안 맞았을 때. 마지막에 맞았던 메시의 외곽선 중 화면에서 가장
+        가까운 점에 붙는다. 표면 히트가 없으므로 폴백 지점은 없다."""
+        if state.last_mesh is None or cls._snap_mode == SnapMode.NONE:
+            return None, []
+        path, geom = state.last_mesh
+        outline = geom.boundary
+        if not len(outline.corners) and not len(outline.edge_a):
+            return None, []
+
+        size = _screen_size(state)
+        cursor_px = np.asarray(_ndc_to_px(ndc, size))
+        view_proj = _matrix_np(view * proj)
+        width, height = size
+        seen_edges, seen_corners = outline.visibility(
+            _camera_position(view), geom.orientation
+        )
+        corner_px, edge_a_px, edge_b_px = outline.screen(view_proj, width, height)
+
+        batches = []
+        if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
+            pixels, valid = corner_px
+            batches.append((
+                SnapKind.VERTEX,
+                outline.corners,
+                np.linalg.norm(pixels - cursor_px, axis=1),
+                valid,
+                seen_corners,
+                np.arange(len(outline.corners)),
+            ))
+        if cls._snap_mode & SnapMode.EDGE and len(outline.edge_a):
+            points, screen, valid = _edge_nearest(
+                outline.edge_a, outline.edge_b, cursor_px,
+                edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
+            )
+            batches.append((
+                SnapKind.EDGE, points, screen, valid, seen_edges,
+                np.arange(len(outline.edge_a)),
+            ))
+
+        return None, cls._rank(batches, _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0))
 
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
@@ -1025,7 +1084,10 @@ def _feature_edges(index, nxt, counts, normals):
 def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
     px_a, ok_a = _project_px(starts, view_proj, width, height)
     px_b, ok_b = _project_px(ends, view_proj, width, height)
+    return _edge_nearest(starts, ends, cursor_px, px_a, ok_a, px_b, ok_b)
 
+
+def _edge_nearest(starts, ends, cursor_px, px_a, ok_a, px_b, ok_b):
     spans = px_b - px_a
     lengths = np.einsum("ij,ij->i", spans, spans)
     safe = np.where(lengths > 1e-12, lengths, 1.0)
@@ -1080,6 +1142,7 @@ class _Outline:
         self.corner_of = corner_of
         self._along = None
         self._near = None
+        self._screen = None
 
     @classmethod
     def empty(cls):
@@ -1132,6 +1195,18 @@ class _Outline:
             )
         self._near = (np.array(hit, dtype=float), margin, result)
         return result
+
+    def screen(self, view_proj, width, height):
+        """카메라별 화면 투영. 히트가 없을 때는 후보를 줄일 수 없어 한 번만 해 둔다."""
+        key = (view_proj.tobytes(), width, height)
+        if self._screen is None or self._screen[0] != key:
+            self._screen = (
+                key,
+                _project_px(self.corners, view_proj, width, height),
+                _project_px(self.edge_a, view_proj, width, height),
+                _project_px(self.edge_b, view_proj, width, height),
+            )
+        return self._screen[1], self._screen[2], self._screen[3]
 
     def _segment_gap(self, hit):
         """히트에서 각 엣지까지의 거리 제곱.
