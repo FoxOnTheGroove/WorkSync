@@ -873,13 +873,14 @@ class DistanceLineCore:
 
     @classmethod
     def _candidates_in_air(cls, state, ndc, view, proj):
-        """프림에 안 맞았을 때. 마지막에 맞았던 메시의 외곽선 중 화면에서 가장
-        가까운 점에 붙는다. 표면 히트가 없으므로 폴백 지점은 없다."""
-        if state.last_mesh is None or cls._snap_mode == SnapMode.NONE:
+        """프림에 안 맞았을 때. 마지막에 맞았던 메시의 외곽선에서 화면상 가장
+        가까운 점에 붙는다. 종류는 스냅 모드를 따르고, 우선순위 없이 가까운 것이
+        이긴다. 표면 히트가 없으므로 폴백 지점은 없다."""
+        if state.last_mesh is None:
             return None, []
         path, geom = state.last_mesh
         outline = geom.boundary
-        if not len(outline.corners) and not len(outline.edge_a):
+        if not len(outline.edge_a):
             return None, []
 
         size = _screen_size(state)
@@ -891,28 +892,59 @@ class DistanceLineCore:
         )
         corner_px, edge_a_px, edge_b_px = outline.screen(view_proj, width, height)
 
-        batches = []
-        if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
-            pixels, valid = corner_px
-            batches.append((
-                SnapKind.VERTEX,
-                outline.corners,
-                np.linalg.norm(pixels - cursor_px, axis=1),
-                valid,
-                seen_corners,
-                np.arange(len(outline.corners)),
-            ))
-        if cls._snap_mode & SnapMode.EDGE and len(outline.edge_a):
+        def on_edges(kind):
             points, screen, valid = _edge_nearest(
                 outline.edge_a, outline.edge_b, cursor_px,
                 edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
             )
-            batches.append((
-                SnapKind.EDGE, points, screen, valid, seen_edges,
-                np.arange(len(outline.edge_a)),
-            ))
+            return (kind, points, screen, valid, seen_edges,
+                    np.arange(len(outline.edge_a)))
 
-        return None, cls._rank(batches, _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0))
+        if cls._snap_mode == SnapMode.NONE:
+            # 외곽선 위의 점은 표면 위의 점이기도 하다. 엣지가 꼭지점까지 덮는다.
+            batches = [on_edges(SnapKind.SURFACE)]
+        else:
+            batches = []
+            if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
+                pixels, valid = corner_px
+                batches.append((
+                    SnapKind.VERTEX,
+                    outline.corners,
+                    np.linalg.norm(pixels - cursor_px, axis=1),
+                    valid,
+                    seen_corners,
+                    np.arange(len(outline.corners)),
+                ))
+            if cls._snap_mode & SnapMode.EDGE:
+                batches.append(on_edges(SnapKind.EDGE))
+
+        return None, cls._nearest_first(
+            batches, _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0)
+        )
+
+    @classmethod
+    def _nearest_first(cls, batches, radius, path, normal):
+        """종류 우선순위 없이 화면 거리만으로 줄 세운다.
+
+        꼭지점 우선은 오브젝트 위 좁은 반경에서나 맞는 규칙이다. 허공의 넓은
+        반경에 그대로 쓰면 멀리 있는 꼭지점이 바로 옆 엣지를 이겨 버린다.
+        """
+        pool = []
+        for kind, points, screen, valid, seen, ids in batches:
+            usable = valid & seen
+            if not usable.any():
+                continue
+            distances = np.where(usable, screen, np.inf)
+            for index in np.argsort(distances)[:_VERIFY_LIMIT]:
+                gap = float(distances[index])
+                if gap > radius:
+                    break
+                pool.append((gap, kind, points[index], int(ids[index])))
+        pool.sort(key=lambda item: item[0])
+        return [
+            SnapPoint(Gf.Vec3d(*position), kind, path, -1, element, normal)
+            for _gap, kind, position, element in pool[:_VERIFY_LIMIT]
+        ]
 
     @classmethod
     def _mesh_entry(cls, prim_path: str, hit=None, time=None):
