@@ -282,8 +282,8 @@ class TwinView:
 
     @staticmethod
     def _rom_prim_path(path: str, name: str) -> str:
-        """prim path 와 rom 이름을 이어 붙인다."""
-        return "{}/{}".format(path.rstrip("/"), name)
+        """prim path 자체에 만든다. 끝 이름은 prim path 쪽이 이긴다."""
+        return path.rstrip("/") or "/{}".format(name)
 
     @staticmethod
     def _get_stage():
