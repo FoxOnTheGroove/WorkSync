@@ -1219,7 +1219,9 @@ def _project_px(world: np.ndarray, view_proj: np.ndarray, width, height):
     homogeneous = np.hstack([world, np.ones((count, 1))])
     clip = homogeneous @ view_proj
     w = clip[:, 3]
-    valid = np.abs(w) > 1e-12
+    # w 가 음수면 카메라 뒤다. 나누면 좌표가 뒤집혀 화면 앞쪽에 그럴듯하게 찍히므로
+    # 부호를 봐야 한다. 직교 투영은 w 가 항상 1 이라 영향이 없다.
+    valid = w > 1e-12
     ndc = np.zeros((count, 3))
     np.divide(clip[:, :3], w[:, None], out=ndc, where=valid[:, None])
     pixels = np.empty((count, 2))
