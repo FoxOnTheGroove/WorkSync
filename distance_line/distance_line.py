@@ -22,6 +22,7 @@ _VERIFY_SLACK = 1e-3           # 이 비율 안에 들어오면 막힌 게 아�
 _NEAR_MARGIN = 3.0             # reach 의 몇 배까지 미리 잘라 두고 재사용할지
 _AIR_REACH_PX = 50.0           # 허공일 때 이 픽셀 안의 메시 외곽선에 붙는다
 _CLOUD_REACH_PX = 50.0         # 허공일 때 이 픽셀 안의 포인트 클라우드 점에 붙는다
+_CLOUD_OVERLAP_PX = 3.0        # 이 픽셀 안이면 같은 자리로 보고 앞의 점을 고른다
 
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
@@ -918,17 +919,25 @@ class DistanceLineCore:
                         np.arange(len(outline.edge_a)), path, _AIR_REACH_PX,
                     ))
 
-        batches.extend(cls._cloud_batches(cursor_px, view_proj, width, height))
+        batches.extend(
+            cls._cloud_batches(
+                cursor_px, view_proj, width, height, _camera_position(view)
+            )
+        )
         if not batches:
             return None, []
         return None, cls._nearest_first(batches, Gf.Vec3d(0, 1, 0))
 
     @classmethod
-    def _cloud_batches(cls, cursor_px, view_proj, width, height):
+    def _cloud_batches(cls, cursor_px, view_proj, width, height, camera):
         """포인트 클라우드는 면도 엣지도 없으니 점 자체가 후보다.
 
         투영본을 x 로 정렬해 두고 커서 좌우 구간만 잘라 보므로, 비용이 전체
         점 개수가 아니라 그 구간에 걸리는 점 개수에 비례한다.
+
+        클라우드는 부피라 앞뒤 점이 같은 픽셀에 겹친다. 화면 거리만 보면 뒤의
+        점이 뽑히므로, 겹친 것들 중에서는 카메라에 가까운 점을 쓴다. 점은
+        레이캐스트에 맞지 않아 가려짐 검증으로는 걸러지지 않는다.
         """
         stage = omni.usd.get_context().get_stage()
         if stage is None:
@@ -943,17 +952,26 @@ class DistanceLineCore:
             if low >= high:
                 continue
             picked = order[low:high]
-            spread = pixels[picked] - cursor_px
-            picked = picked[np.abs(spread[:, 1]) <= _CLOUD_REACH_PX]
+            picked = picked[valid[picked]]
             if not len(picked):
                 continue
+            gaps = np.linalg.norm(pixels[picked] - cursor_px, axis=1)
+            inside = gaps <= _CLOUD_REACH_PX
+            if not inside.any():
+                continue
+            picked, gaps = picked[inside], gaps[inside]
+
+            closest = float(gaps.min())
+            overlapping = picked[gaps <= closest + _CLOUD_OVERLAP_PX]
+            depth = np.linalg.norm(geom.world[overlapping] - camera, axis=1)
+            front = overlapping[np.argsort(depth)][:_VERIFY_LIMIT]
             batches.append((
                 SnapKind.SURFACE,
-                geom.world[picked],
-                np.linalg.norm(pixels[picked] - cursor_px, axis=1),
-                valid[picked],
-                np.ones(len(picked), dtype=bool),
-                picked,
+                geom.world[front],
+                np.full(len(front), closest),
+                np.ones(len(front), dtype=bool),
+                np.ones(len(front), dtype=bool),
+                front,
                 path,
                 _CLOUD_REACH_PX,
             ))
