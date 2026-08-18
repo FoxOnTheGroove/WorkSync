@@ -9,7 +9,7 @@ LOG_PREFIX = "[twinviewer]"
 
 class TwinViewService:
 
-    DEFAULT_PRIM_PATH = "/World"
+    DEFAULT_PRIM_PATH = "/World/TwinRom"
 
     @classmethod
     def _log(cls, message: str) -> None:
