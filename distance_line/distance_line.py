@@ -20,7 +20,8 @@ _CREASE_COS = 0.8660           # 두 면이 30도 이상 벌어지면 크리스
 _VERIFY_LIMIT = 4              # 도달 검사를 해볼 후보 개수
 _VERIFY_SLACK = 1e-3           # 이 비율 안에 들어오면 막힌 게 아니라 그 점에 닿은 것
 _NEAR_MARGIN = 3.0             # reach 의 몇 배까지 미리 잘라 두고 재사용할지
-_AIR_REACH_PX = 50.0           # 허공일 때 이 픽셀 안의 외곽선에 붙는다
+_AIR_REACH_PX = 50.0           # 허공일 때 이 픽셀 안의 메시 외곽선에 붙는다
+_CLOUD_REACH_PX = 50.0         # 허공일 때 이 픽셀 안의 포인트 클라우드 점에 붙는다
 
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
@@ -905,6 +906,7 @@ class DistanceLineCore:
                         seen_corners,
                         np.arange(len(outline.corners)),
                         path,
+                        _AIR_REACH_PX,
                     ))
                 if cls._snap_mode & SnapMode.EDGE:
                     points, screen, valid = _edge_nearest(
@@ -913,13 +915,13 @@ class DistanceLineCore:
                     )
                     batches.append((
                         SnapKind.EDGE, points, screen, valid, seen_edges,
-                        np.arange(len(outline.edge_a)), path,
+                        np.arange(len(outline.edge_a)), path, _AIR_REACH_PX,
                     ))
 
         batches.extend(cls._cloud_batches(cursor_px, view_proj, width, height))
         if not batches:
             return None, []
-        return None, cls._nearest_first(batches, _AIR_REACH_PX, Gf.Vec3d(0, 1, 0))
+        return None, cls._nearest_first(batches, Gf.Vec3d(0, 1, 0))
 
     @classmethod
     def _cloud_batches(cls, cursor_px, view_proj, width, height):
@@ -936,13 +938,13 @@ class DistanceLineCore:
             pixels, valid, order, sorted_x = geom.screen_sorted(
                 view_proj, width, height
             )
-            low = np.searchsorted(sorted_x, cursor_px[0] - _AIR_REACH_PX, "left")
-            high = np.searchsorted(sorted_x, cursor_px[0] + _AIR_REACH_PX, "right")
+            low = np.searchsorted(sorted_x, cursor_px[0] - _CLOUD_REACH_PX, "left")
+            high = np.searchsorted(sorted_x, cursor_px[0] + _CLOUD_REACH_PX, "right")
             if low >= high:
                 continue
             picked = order[low:high]
             spread = pixels[picked] - cursor_px
-            picked = picked[np.abs(spread[:, 1]) <= _AIR_REACH_PX]
+            picked = picked[np.abs(spread[:, 1]) <= _CLOUD_REACH_PX]
             if not len(picked):
                 continue
             batches.append((
@@ -953,18 +955,19 @@ class DistanceLineCore:
                 np.ones(len(picked), dtype=bool),
                 picked,
                 path,
+                _CLOUD_REACH_PX,
             ))
         return batches
 
     @classmethod
-    def _nearest_first(cls, batches, radius, normal):
+    def _nearest_first(cls, batches, normal):
         """종류 우선순위 없이 화면 거리만으로 줄 세운다.
 
         꼭지점 우선은 오브젝트 위 좁은 반경에서나 맞는 규칙이다. 허공의 넓은
         반경에 그대로 쓰면 멀리 있는 꼭지점이 바로 옆 엣지를 이겨 버린다.
         """
         pool = []
-        for kind, points, screen, valid, seen, ids, path in batches:
+        for kind, points, screen, valid, seen, ids, path, radius in batches:
             usable = valid & seen
             if not usable.any():
                 continue
