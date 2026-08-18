@@ -24,6 +24,7 @@ _AIR_REACH_PX = 50.0           # 허공일 때 이 픽셀 안의 외곽선에 �
 
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
+_CLOUD_CACHE: dict = {}        # (스테이지, 타임코드) -> 포인트 클라우드 목록
 
 
 def _log(msg: str):
@@ -873,64 +874,97 @@ class DistanceLineCore:
 
     @classmethod
     def _candidates_in_air(cls, state, ndc, view, proj):
-        """프림에 안 맞았을 때. 마지막에 맞았던 메시의 외곽선에서 화면상 가장
-        가까운 점에 붙는다. 종류는 스냅 모드를 따르고, 우선순위 없이 가까운 것이
-        이긴다. 표면 히트가 없으므로 폴백 지점은 없다."""
-        if state.last_mesh is None:
-            return None, []
-        path, geom = state.last_mesh
-        outline = geom.boundary
-        if not len(outline.edge_a):
-            return None, []
+        """프림에 안 맞았을 때. 화면상 가장 가까운 후보에 붙는다.
 
+        메시는 마지막에 맞았던 것의 외곽선을, 포인트 클라우드는 점 자체를 본다.
+        여기서는 종류 우선순위 없이 가까운 것이 이긴다.
+        """
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
         width, height = size
-        seen_edges, seen_corners = outline.visibility(
-            _camera_position(view), geom.orientation
-        )
-        corner_px, edge_a_px, edge_b_px = outline.screen(view_proj, width, height)
 
-        def on_edges(kind):
-            points, screen, valid = _edge_nearest(
-                outline.edge_a, outline.edge_b, cursor_px,
-                edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
-            )
-            return (kind, points, screen, valid, seen_edges,
-                    np.arange(len(outline.edge_a)))
+        batches = []
+        if state.last_mesh is not None and cls._snap_mode != SnapMode.NONE:
+            path, geom = state.last_mesh
+            outline = geom.boundary
+            if len(outline.edge_a):
+                seen_edges, seen_corners = outline.visibility(
+                    _camera_position(view), geom.orientation
+                )
+                corner_px, edge_a_px, edge_b_px = outline.screen(
+                    view_proj, width, height
+                )
+                if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
+                    pixels, valid = corner_px
+                    batches.append((
+                        SnapKind.VERTEX,
+                        outline.corners,
+                        np.linalg.norm(pixels - cursor_px, axis=1),
+                        valid,
+                        seen_corners,
+                        np.arange(len(outline.corners)),
+                        path,
+                    ))
+                if cls._snap_mode & SnapMode.EDGE:
+                    points, screen, valid = _edge_nearest(
+                        outline.edge_a, outline.edge_b, cursor_px,
+                        edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
+                    )
+                    batches.append((
+                        SnapKind.EDGE, points, screen, valid, seen_edges,
+                        np.arange(len(outline.edge_a)), path,
+                    ))
 
-        if cls._snap_mode == SnapMode.NONE:
-            # 외곽선 위의 점은 표면 위의 점이기도 하다. 엣지가 꼭지점까지 덮는다.
-            batches = [on_edges(SnapKind.SURFACE)]
-        else:
-            batches = []
-            if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
-                pixels, valid = corner_px
-                batches.append((
-                    SnapKind.VERTEX,
-                    outline.corners,
-                    np.linalg.norm(pixels - cursor_px, axis=1),
-                    valid,
-                    seen_corners,
-                    np.arange(len(outline.corners)),
-                ))
-            if cls._snap_mode & SnapMode.EDGE:
-                batches.append(on_edges(SnapKind.EDGE))
-
-        return None, cls._nearest_first(
-            batches, _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0)
-        )
+        batches.extend(cls._cloud_batches(cursor_px, view_proj, width, height))
+        if not batches:
+            return None, []
+        return None, cls._nearest_first(batches, _AIR_REACH_PX, Gf.Vec3d(0, 1, 0))
 
     @classmethod
-    def _nearest_first(cls, batches, radius, path, normal):
+    def _cloud_batches(cls, cursor_px, view_proj, width, height):
+        """포인트 클라우드는 면도 엣지도 없으니 점 자체가 후보다.
+
+        투영본을 x 로 정렬해 두고 커서 좌우 구간만 잘라 보므로, 비용이 전체
+        점 개수가 아니라 그 구간에 걸리는 점 개수에 비례한다.
+        """
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return []
+        batches = []
+        for path, geom in _point_clouds(stage):
+            pixels, valid, order, sorted_x = geom.screen_sorted(
+                view_proj, width, height
+            )
+            low = np.searchsorted(sorted_x, cursor_px[0] - _AIR_REACH_PX, "left")
+            high = np.searchsorted(sorted_x, cursor_px[0] + _AIR_REACH_PX, "right")
+            if low >= high:
+                continue
+            picked = order[low:high]
+            spread = pixels[picked] - cursor_px
+            picked = picked[np.abs(spread[:, 1]) <= _AIR_REACH_PX]
+            if not len(picked):
+                continue
+            batches.append((
+                SnapKind.SURFACE,
+                geom.world[picked],
+                np.linalg.norm(pixels[picked] - cursor_px, axis=1),
+                valid[picked],
+                np.ones(len(picked), dtype=bool),
+                picked,
+                path,
+            ))
+        return batches
+
+    @classmethod
+    def _nearest_first(cls, batches, radius, normal):
         """종류 우선순위 없이 화면 거리만으로 줄 세운다.
 
         꼭지점 우선은 오브젝트 위 좁은 반경에서나 맞는 규칙이다. 허공의 넓은
         반경에 그대로 쓰면 멀리 있는 꼭지점이 바로 옆 엣지를 이겨 버린다.
         """
         pool = []
-        for kind, points, screen, valid, seen, ids in batches:
+        for kind, points, screen, valid, seen, ids, path in batches:
             usable = valid & seen
             if not usable.any():
                 continue
@@ -939,11 +973,11 @@ class DistanceLineCore:
                 gap = float(distances[index])
                 if gap > radius:
                     break
-                pool.append((gap, kind, points[index], int(ids[index])))
+                pool.append((gap, kind, points[index], int(ids[index]), path))
         pool.sort(key=lambda item: item[0])
         return [
-            SnapPoint(Gf.Vec3d(*position), kind, path, -1, element, normal)
-            for _gap, kind, position, element in pool[:_VERIFY_LIMIT]
+            SnapPoint(Gf.Vec3d(*position), kind, source, -1, element, normal)
+            for _gap, kind, position, element, source in pool[:_VERIFY_LIMIT]
         ]
 
     @classmethod
@@ -1043,6 +1077,30 @@ def _has_points(prim, time=None) -> bool:
     return _points_of(prim, time) is not None
 
 
+def _point_clouds(stage, time=None):
+    """스테이지의 포인트 클라우드.
+
+    면이 없어 레이캐스트에 맞지 않는 경우가 많다. 히트로는 찾을 수 없으므로
+    스테이지를 직접 훑는다.
+    """
+    key = (_stage_key(stage), str(time))
+    found = _CLOUD_CACHE.get(key)
+    if found is None:
+        found = []
+        try:
+            walk = Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies())
+        except Exception:
+            walk = stage.Traverse()
+        for prim in walk:
+            if str(prim.GetTypeName()) != "Points":
+                continue
+            geom = _geom_for(prim, time)
+            if geom is not None and len(geom.world):
+                found.append((str(prim.GetPath()), geom))
+        _CLOUD_CACHE[key] = found
+    return found
+
+
 def _geom_for(prim, time=None):
     key = (_stage_key(prim.GetStage()), str(prim.GetPath()), str(time))
     entry = _GEOM_CACHE.get(key)
@@ -1056,6 +1114,8 @@ def _geom_for(prim, time=None):
 def _drop_caches(prim_path=None):
     DistanceLineCore._probe_camera = None
     DistanceLineCore._probe_cache = {}
+    if prim_path is None:
+        _CLOUD_CACHE.clear()
     for cache in (_GEOM_CACHE, _PRIM_CACHE):
         if prim_path is None:
             cache.clear()
@@ -1290,7 +1350,21 @@ class _Geom:
         self._centroids = None
         self._boundary = None
         self._face_normals = None
+        self._screen = None
         self.orientation = 0.0
+
+    def screen_sorted(self, view_proj, width, height):
+        """점 전체를 화면에 투영해 x 순으로 정렬해 둔다.
+
+        카메라가 그대로면 재사용한다. 덕분에 hover 비용이 전체 점 개수가 아니라
+        커서 좌우에 걸리는 점 개수에만 비례한다.
+        """
+        key = (view_proj.tobytes(), width, height)
+        if self._screen is None or self._screen[0] != key:
+            pixels, valid = _project_px(self.world, view_proj, width, height)
+            order = np.argsort(pixels[:, 0], kind="stable")
+            self._screen = (key, pixels, valid, order, pixels[order, 0])
+        return self._screen[1:]
 
     def calibrate(self, hit, hit_normal):
         if self.orientation or self.counts is None:
