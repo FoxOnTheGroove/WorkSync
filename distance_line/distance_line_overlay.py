@@ -428,7 +428,7 @@ class _Plate:
 
 
 def _label(text: str, color):
-    sc.Label(text, alignment=ui.Alignment.CENTER, color=color, size=_LABEL_SIZE)
+    return sc.Label(text, alignment=ui.Alignment.CENTER, color=color, size=_LABEL_SIZE)
 
 
 def _ndc_from(sender):
