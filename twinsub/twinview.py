@@ -204,8 +204,8 @@ class TwinView:
         runner.set_rom_deform_scale(rom_name, float(value))
 
     @classmethod
-    def rom_show(cls, path: str, runner) -> bool:
-        """prim path 아래에 rom 포인트 클라우드를 띄운다."""
+    def rom_show(cls, path: str, runner, pos=None) -> bool:
+        """prim path 에 rom 포인트 클라우드를 띄운다. pos 를 주면 그 자리에."""
         rom_name = runner.tbrom_names[0]
 
         if not runner.set_rom_selected(rom_name, True):
@@ -214,14 +214,14 @@ class TwinView:
         view = cls._get_rom_view(path, rom_name)
         if view is not None:
             view.ensure_prim(runner.rom_points[rom_name])
-            cls._ensure_xform(cls._rom_prim_path(path, rom_name))
+            cls._ensure_xform(cls._rom_prim_path(path, rom_name), pos)
 
         cls._prim_paths[cls._local_path] = path
         return True
 
     @classmethod
-    def _ensure_xform(cls, prim_path: str) -> bool:
-        """포인트 프림에 xformOp 를 단다. 이미 있으면 건드리지 않는다."""
+    def _ensure_xform(cls, prim_path: str, pos=None) -> bool:
+        """xformOp 를 단다. pos 를 주면 translate 를 그 값으로 덮는다."""
         from pxr import Gf, UsdGeom
 
         stage = cls._get_stage()
@@ -236,13 +236,34 @@ class TwinView:
         if not xform:
             return False
 
-        if xform.GetOrderedXformOps():
-            return True
+        ops = xform.GetOrderedXformOps()
+        if not ops:
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+            xform.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+            ops = xform.GetOrderedXformOps()
 
-        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
-        xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-        xform.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+        if pos is not None:
+            cls._set_translate(ops, Gf.Vec3d(*cls._as_vec3(pos)))
+
         return True
+
+    @staticmethod
+    def _as_vec3(pos) -> tuple:
+        """pos 를 (x, y, z) 로 만든다. 셋이 아니면 예외."""
+        values = tuple(float(v) for v in pos)
+        if len(values) != 3:
+            raise ValueError("pos 는 값 세 개여야 한다: {}".format(pos))
+        return values
+
+    @staticmethod
+    def _set_translate(ops, value) -> bool:
+        """xformOp 목록에서 translate 를 찾아 값을 넣는다."""
+        for op in ops:
+            if op.GetOpName().endswith("translate"):
+                op.Set(value)
+                return True
+        return False
 
     @classmethod
     def update_model(cls, path: str, runner, scale: float = None) -> None:

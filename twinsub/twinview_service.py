@@ -32,11 +32,11 @@ class TwinViewService:
         return await loop.run_in_executor(None, fn, *args)
 
     @classmethod
-    def _show_loaded(cls, path: str, prim_path: str) -> None:
+    def _show_loaded(cls, path: str, prim_path: str, pos=None) -> None:
         """방금 로드한 트윈을 띄운다. 메인 스레드에서만 부른다."""
         runner = TwinView.get_runner(path.strip())
         if runner is not None:
-            TwinView.rom_show(prim_path, runner)
+            TwinView.rom_show(prim_path, runner, pos)
 
     @classmethod
     def _notify_loaded(cls) -> None:
@@ -44,20 +44,20 @@ class TwinViewService:
         TwinView._notify(TwinView._on_loaded, "on_loaded")
 
     @classmethod
-    def download_twin(cls, s3_uri: str, prim_path: str = "") -> str:
-        """s3 에서 받는다. prim_path 를 주면 로드와 표시까지 한다."""
+    def download_twin(cls, s3_uri: str, prim_path: str = "", pos=None) -> str:
+        """s3 에서 받는다. prim_path 를 주면 로드와 표시까지, pos 면 그 자리에."""
         local_path = TwinView.download_twin(s3_uri)
         cls._log("download 성공: {}".format(local_path))
 
         if prim_path:
-            cls.load_twin(local_path, prim_path)
+            cls.load_twin(local_path, prim_path, pos)
             if TwinView.discard_temp(local_path):
                 cls._log("임시파일 삭제: {}".format(local_path))
 
         return local_path
 
     @classmethod
-    async def download_twin_async(cls, s3_uri: str, prim_path: str = "") -> str:
+    async def download_twin_async(cls, s3_uri: str, prim_path: str = "", pos=None) -> str:
         """download_twin 을 비동기로. 돌아오면 프림이 씬에 있다."""
         key = ("download", s3_uri.strip())
         if not TwinView.begin_task(key):
@@ -71,29 +71,29 @@ class TwinViewService:
         cls._log("download 성공: {}".format(local_path))
 
         if prim_path:
-            await cls.load_twin_async(local_path, prim_path)
+            await cls.load_twin_async(local_path, prim_path, pos)
             if TwinView.discard_temp(local_path):
                 cls._log("임시파일 삭제: {}".format(local_path))
 
         return local_path
 
     @classmethod
-    def load_twin(cls, path: str, prim_path: str = "") -> bool:
-        """러너를 세운다. prim_path 를 주면 띄우는 것까지 한다."""
+    def load_twin(cls, path: str, prim_path: str = "", pos=None) -> bool:
+        """러너를 세운다. prim_path 를 주면 띄우고, pos 를 주면 그 자리에 둔다."""
         if not TwinView.load_twin(path):
             return False
 
         cls._log("load 성공: {}".format(path))
 
         if prim_path:
-            cls._show_loaded(path, prim_path)
+            cls._show_loaded(path, prim_path, pos)
             cls._log("show 성공: {}".format(prim_path))
 
         cls._notify_loaded()
         return True
 
     @classmethod
-    async def load_twin_async(cls, path: str, prim_path: str = "") -> bool:
+    async def load_twin_async(cls, path: str, prim_path: str = "", pos=None) -> bool:
         """load_twin 을 비동기로. 러너 생성만 워커 스레드로 나간다."""
         key = ("load", path.strip())
         if not TwinView.begin_task(key):
@@ -106,7 +106,7 @@ class TwinViewService:
             cls._log("load 성공: {}".format(path))
 
             if prim_path:
-                cls._show_loaded(path, prim_path)
+                cls._show_loaded(path, prim_path, pos)
                 cls._log("show 성공: {}".format(prim_path))
 
             cls._notify_loaded()
@@ -168,9 +168,9 @@ class TwinViewService:
         return TwinView.get_simulation_time(cls._require_target()[1])
 
     @classmethod
-    def rom_show(cls, prim_path: str) -> bool:
-        """prim path 아래에 rom 포인트 클라우드를 띄운다."""
-        shown = TwinView.rom_show(prim_path, cls._require_target()[1])
+    def rom_show(cls, prim_path: str, pos=None) -> bool:
+        """prim path 에 rom 포인트 클라우드를 띄운다. pos 를 주면 그 자리에."""
+        shown = TwinView.rom_show(prim_path, cls._require_target()[1], pos)
 
         if shown:
             cls._log("show 성공: {}".format(prim_path))
