@@ -873,37 +873,27 @@ class DistanceLineCore:
 
     @classmethod
     def _candidates_in_air(cls, state, ndc, view, proj):
-        """프림에 안 맞았을 때. 마지막에 맞았던 메시의 외곽선에서 화면상 가장
-        가까운 점에 붙는다. 종류는 스냅 모드를 따르고, 우선순위 없이 가까운 것이
-        이긴다. 표면 히트가 없으므로 폴백 지점은 없다."""
+        """프림에 안 맞았을 때. 마지막에 맞았던 메시에 붙는다.
+
+        외곽선은 원래 스냅 반경 안에 있을 때만 쓴다. 매끈한 메시는 실루엣이
+        크리스가 아니라서, 넓은 반경으로 외곽선을 찾으면 윤곽에서 한참 떨어진
+        엣지로 튄다. 그 밖에서는 표면 정점 중 화면상 가장 가까운 점을 쓴다.
+        """
         if state.last_mesh is None:
             return None, []
         path, geom = state.last_mesh
-        outline = geom.boundary
-        if not len(outline.edge_a):
-            return None, []
-
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
         width, height = size
-        seen_edges, seen_corners = outline.visibility(
-            _camera_position(view), geom.orientation
-        )
-        corner_px, edge_a_px, edge_b_px = outline.screen(view_proj, width, height)
 
-        def on_edges(kind):
-            points, screen, valid = _edge_nearest(
-                outline.edge_a, outline.edge_b, cursor_px,
-                edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
+        ranked = []
+        outline = geom.boundary
+        if cls._snap_mode != SnapMode.NONE and len(outline.edge_a):
+            seen_edges, seen_corners = outline.visibility(
+                _camera_position(view), geom.orientation
             )
-            return (kind, points, screen, valid, seen_edges,
-                    np.arange(len(outline.edge_a)))
-
-        if cls._snap_mode == SnapMode.NONE:
-            # 외곽선 위의 점은 표면 위의 점이기도 하다. 엣지가 꼭지점까지 덮는다.
-            batches = [on_edges(SnapKind.SURFACE)]
-        else:
+            corner_px, edge_a_px, edge_b_px = outline.screen(view_proj, width, height)
             batches = []
             if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
                 pixels, valid = corner_px
@@ -916,10 +906,53 @@ class DistanceLineCore:
                     np.arange(len(outline.corners)),
                 ))
             if cls._snap_mode & SnapMode.EDGE:
-                batches.append(on_edges(SnapKind.EDGE))
+                points, screen, valid = _edge_nearest(
+                    outline.edge_a, outline.edge_b, cursor_px,
+                    edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
+                )
+                batches.append((
+                    SnapKind.EDGE, points, screen, valid, seen_edges,
+                    np.arange(len(outline.edge_a)),
+                ))
+            ranked = cls._nearest_first(
+                batches, cls._snap_radius, path, Gf.Vec3d(0, 1, 0)
+            )
+        if ranked:
+            return None, ranked
 
+        position, pairs = geom.wire()
+        pixels, valid = geom.screen(view_proj, width, height)
+        if not len(pairs):
+            batch = (
+                SnapKind.SURFACE,
+                position,
+                np.linalg.norm(pixels - cursor_px, axis=1),
+                valid,
+                np.ones(len(position), dtype=bool),
+                np.arange(len(position)),
+            )
+            return None, cls._nearest_first(
+                [batch], _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0)
+            )
+
+        px_a, px_b = pixels[pairs[:, 0]], pixels[pairs[:, 1]]
+        low, high = np.minimum(px_a, px_b), np.maximum(px_a, px_b)
+        close = np.all(
+            (cursor_px >= low - _AIR_REACH_PX) & (cursor_px <= high + _AIR_REACH_PX),
+            axis=1,
+        )
+        near = np.flatnonzero(close)
+        if not len(near):
+            return None, []
+
+        starts, ends = position[pairs[near, 0]], position[pairs[near, 1]]
+        points, screen, ok = _edge_nearest(
+            starts, ends, cursor_px,
+            px_a[near], valid[pairs[near, 0]], px_b[near], valid[pairs[near, 1]],
+        )
+        batch = (SnapKind.SURFACE, points, screen, ok, np.ones(len(near), bool), near)
         return None, cls._nearest_first(
-            batches, _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0)
+            [batch], _AIR_REACH_PX, path, Gf.Vec3d(0, 1, 0)
         )
 
     @classmethod
@@ -1290,7 +1323,34 @@ class _Geom:
         self._centroids = None
         self._boundary = None
         self._face_normals = None
+        self._wire = None
+        self._screen = None
         self.orientation = 0.0
+
+    def wire(self):
+        """메시의 모든 폴리곤 엣지. 표면에서 가장 가까운 점을 찾는 데 쓴다.
+
+        꼭지점만 보면 성긴 메시에서 빗나간다. 정육면체는 정점이 8개뿐이라
+        실루엣 옆 29px 지점에서 가장 가까운 정점이 61px 떨어져 있다.
+        """
+        if self._wire is None:
+            if self.counts is None:
+                self._wire = (self.world, np.empty((0, 2), dtype=np.int64))
+            else:
+                position, index, nxt, _starts = self._topology()
+                pairs = np.stack([index, nxt], axis=1)
+                pairs = np.sort(pairs, axis=1)
+                pairs = pairs[pairs[:, 0] != pairs[:, 1]]
+                self._wire = (position, np.unique(pairs, axis=0))
+        return self._wire
+
+    def screen(self, view_proj, width, height):
+        """wire 정점의 화면 투영. 카메라가 그대로면 다시 계산하지 않는다."""
+        key = (view_proj.tobytes(), width, height)
+        if self._screen is None or self._screen[0] != key:
+            position, _pairs = self.wire()
+            self._screen = (key, _project_px(position, view_proj, width, height))
+        return self._screen[1]
 
     def calibrate(self, hit, hit_normal):
         if self.orientation or self.counts is None:
