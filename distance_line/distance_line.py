@@ -106,6 +106,7 @@ class _ViewportState:
         self.snap_busy = False
         self.snap_queued = None
         self.last_mesh = None
+        self.hover_ndc = None
 
 
 class DistanceLineCore:
@@ -594,6 +595,7 @@ class DistanceLineCore:
         if state is None or not cls._listening(viewport_id, state):
             return
         cls._hover_seen = True
+        state.hover_ndc = ndc
         cls._resolve_snap(state, ndc, lambda snap: cls._apply_hover(state, snap))
 
     @classmethod
@@ -608,13 +610,40 @@ class DistanceLineCore:
         state.overlay.set_snap_marker(snap)
         if state.pending is None:
             return
-        if snap is None:
-            state.overlay.set_preview(None, None, "")
+        if snap is not None:
+            length = cls._length_m(state.pending.position, snap.position)
+            state.overlay.set_preview(
+                state.pending.position, snap.position, _format_length(length)
+            )
             return
-        length = cls._length_m(state.pending.position, snap.position)
+        drifting = cls._point_in_air(state)
         state.overlay.set_preview(
-            state.pending.position, snap.position, _format_length(length)
+            None if drifting is None else state.pending.position, drifting, ""
         )
+
+    @classmethod
+    def _point_in_air(cls, state):
+        """스냅이 없을 때 고무줄 선의 끝점.
+
+        첫 점을 지나며 카메라를 향하는 평면에 커서 레이를 맞춘다. 지오메트리
+        위의 점이 아니므로 길이는 표시하지 않고 클릭도 받지 않는다. 선만
+        커서를 따라간다.
+        """
+        if state.hover_ndc is None or state.pending is None:
+            return None
+        view, proj = _camera_matrices(state.viewport_api)
+        if view is None:
+            return None
+        origin, direction = _ndc_to_ray(state.hover_ndc, view, proj)
+        origin, direction = _as_np(origin), _as_np(direction)
+        towards = _as_np(state.pending.position) - origin
+        span = float(np.linalg.norm(towards))
+        if span <= 0.0:
+            return None
+        ahead = float(np.dot(direction, towards / span))
+        if ahead <= 1e-6:
+            return None
+        return Gf.Vec3d(*(origin + direction * (span / ahead)))
 
     @classmethod
     def _on_click(cls, viewport_id: str, ndc):
