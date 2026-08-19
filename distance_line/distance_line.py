@@ -906,51 +906,58 @@ class DistanceLineCore:
     def _candidates_in_air(cls, state, ndc, view, proj):
         """프림에 안 맞았을 때. 화면상 가장 가까운 후보에 붙는다.
 
-        메시는 마지막에 맞았던 것의 외곽선을, 포인트 클라우드는 점 자체를 본다.
-        여기서는 종류 우선순위 없이 가까운 것이 이긴다.
+        메시와 포인트 클라우드는 후보를 만드는 방식이 전혀 다르므로 각자
+        따로 모으고, 여기서는 합쳐서 줄만 세운다. 종류 우선순위는 쓰지 않는다.
         """
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
         view_proj = _matrix_np(view * proj)
         width, height = size
 
-        batches = []
-        if state.last_mesh is not None and cls._snap_mode != SnapMode.NONE:
-            path, geom = state.last_mesh
-            outline = geom.boundary
-            if len(outline.edge_a):
-                seen_edges, seen_corners = outline.visibility(
-                    _camera_position(view), geom.orientation
-                )
-                corner_px, edge_a_px, edge_b_px = outline.screen(
-                    view_proj, width, height
-                )
-                if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
-                    pixels, valid = corner_px
-                    batches.append((
-                        SnapKind.VERTEX,
-                        outline.corners,
-                        np.linalg.norm(pixels - cursor_px, axis=1),
-                        valid,
-                        seen_corners,
-                        np.arange(len(outline.corners)),
-                        path,
-                        _AIR_REACH_PX,
-                    ))
-                if cls._snap_mode & SnapMode.EDGE:
-                    points, screen, valid = _edge_nearest(
-                        outline.edge_a, outline.edge_b, cursor_px,
-                        edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
-                    )
-                    batches.append((
-                        SnapKind.EDGE, points, screen, valid, seen_edges,
-                        np.arange(len(outline.edge_a)), path, _AIR_REACH_PX,
-                    ))
-
-        batches.extend(cls._cloud_batches(cursor_px, view_proj, width, height))
+        batches = cls._mesh_batches(
+            state, cursor_px, view_proj, width, height, _camera_position(view)
+        )
+        batches += cls._cloud_batches(cursor_px, view_proj, width, height)
         if not batches:
             return None, []
         return None, cls._nearest_first(batches, Gf.Vec3d(0, 1, 0))
+
+    @classmethod
+    def _mesh_batches(cls, state, cursor_px, view_proj, width, height, camera):
+        """마지막에 맞았던 메시의 외곽선에서 뽑은 후보."""
+        if state.last_mesh is None or cls._snap_mode == SnapMode.NONE:
+            return []
+        path, geom = state.last_mesh
+        outline = geom.boundary
+        if not len(outline.edge_a):
+            return []
+
+        seen_edges, seen_corners = outline.visibility(camera, geom.orientation)
+        corner_px, edge_a_px, edge_b_px = outline.screen(view_proj, width, height)
+
+        batches = []
+        if cls._snap_mode & SnapMode.VERTEX and len(outline.corners):
+            pixels, valid = corner_px
+            batches.append((
+                SnapKind.VERTEX,
+                outline.corners,
+                np.linalg.norm(pixels - cursor_px, axis=1),
+                valid,
+                seen_corners,
+                np.arange(len(outline.corners)),
+                path,
+                _AIR_REACH_PX,
+            ))
+        if cls._snap_mode & SnapMode.EDGE:
+            points, screen, valid = _edge_nearest(
+                outline.edge_a, outline.edge_b, cursor_px,
+                edge_a_px[0], edge_a_px[1], edge_b_px[0], edge_b_px[1],
+            )
+            batches.append((
+                SnapKind.EDGE, points, screen, valid, seen_edges,
+                np.arange(len(outline.edge_a)), path, _AIR_REACH_PX,
+            ))
+        return batches
 
     @classmethod
     def _cloud_batches(cls, cursor_px, view_proj, width, height):
