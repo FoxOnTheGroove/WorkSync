@@ -16,12 +16,11 @@ class TwinView:
     S3_SECRET_KEY_ENV = "AWS_SECRET_KEY"
     S3_ENDPOINT_ENV = "AWS_IP"
 
-    _local_path = ""
     _runners = {}
+    _files = {}
+    _rom_views = {}
     _playing = set()
     _inflight = set()
-    _prim_paths = {}
-    _rom_views = {}
 
     _interval = 0.5
     _update_sub = None
@@ -30,6 +29,20 @@ class TwinView:
     _on_loaded = None
     _on_time = None
     _on_updated = None
+
+    @staticmethod
+    def normalize_key(prim_path: str) -> str:
+        """prim path 를 키로 다듬는다. 절대경로가 아니면 예외."""
+        key = (prim_path or "").strip().rstrip("/")
+        if not key or not key.startswith("/"):
+            raise ValueError("prim path 는 '/' 로 시작하는 절대경로여야 한다: {}".format(prim_path))
+
+        return key
+
+    @staticmethod
+    def _safe_key(prim_path: str) -> str:
+        """조회용. 다듬기만 하고 예외를 내지 않는다."""
+        return (prim_path or "").strip().rstrip("/")
 
     @classmethod
     def _make_s3_client(cls):
@@ -76,27 +89,20 @@ class TwinView:
         return client, bucket, key, local_path
 
     @classmethod
-    def download_twin(cls, s3_uri: str) -> str:
+    def download_file(cls, s3_uri: str) -> str:
         """s3 의 .twin 을 폴더에 받고 로컬 경로를 반환한다."""
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         client.download_file(bucket, key, local_path)
 
-        cls._local_path = local_path
         return local_path
 
     @classmethod
-    async def download_twin_async(cls, s3_uri: str) -> str:
+    async def download_file_async(cls, s3_uri: str) -> str:
         """전송만 워커 스레드로 넘긴다."""
         client, bucket, key, local_path = cls._prepare_download(s3_uri)
         await asyncio.to_thread(client.download_file, bucket, key, local_path)
 
-        cls._local_path = local_path
         return local_path
-
-    @classmethod
-    def get_local_path(cls) -> str:
-        """현재 대상 .twin 경로. 없으면 빈 문자열."""
-        return cls._local_path
 
     @classmethod
     def discard_temp(cls, path: str) -> bool:
@@ -116,22 +122,52 @@ class TwinView:
         return True
 
     @classmethod
-    def load_twin(cls, path: str) -> bool:
-        """러너를 세운다. 캐시에 있으면 대상만 바꾸고 파일은 안 본다."""
+    def load_twin(cls, key: str, path: str) -> str:
+        """key 자리에 러너를 세운다. 파일이 같아도 key 가 다르면 별개 러너다."""
+        key = cls.normalize_key(key)
+
         path = path.strip()
         if not path:
             raise ValueError("경로가 비어 있다")
 
-        runner = cls._runners.get(path)
+        runner = cls._runners.get(key)
+        if runner is not None and cls._files.get(key) != path:
+            cls.unload(key)
+            runner = None
+
         if runner is None:
             if not os.path.isfile(path):
                 raise ValueError("파일이 없다: {}".format(path))
 
-            runner = TwinRunner(path)
-            cls._runners[path] = runner
+            cls._runners[key] = TwinRunner(path)
+            cls._files[key] = path
 
-        cls._local_path = path
+        return key
+
+    @classmethod
+    def unload(cls, key: str) -> bool:
+        """key 하나를 멈추고 닫고 버린다. 없으면 False."""
+        key = cls._safe_key(key)
+
+        runner = cls._runners.pop(key, None)
+        if runner is None:
+            return False
+
+        cls._close_runner(key, runner)
+
+        cls._files.pop(key, None)
+        cls._rom_views.pop(key, None)
+        cls._playing.discard(key)
+
+        if not cls._playing:
+            cls._stop_ticking()
+
         return True
+
+    @classmethod
+    def list_keys(cls) -> list:
+        """등록된 key(prim path) 목록."""
+        return list(cls._runners)
 
     @classmethod
     def begin_task(cls, key) -> bool:
@@ -148,14 +184,19 @@ class TwinView:
         cls._inflight.discard(key)
 
     @classmethod
-    def get_runner(cls, path: str = "") -> object:
-        """path 의 러너. 비우면 현재 대상. 없으면 None."""
-        return cls._runners.get(path or cls._local_path)
+    def get_runner(cls, key: str) -> object:
+        """key 의 러너. 없으면 None."""
+        return cls._runners.get(cls._safe_key(key))
 
     @classmethod
-    def is_loaded(cls) -> bool:
-        """현재 대상 러너가 있는지."""
-        return cls.get_runner() is not None
+    def is_loaded(cls, key: str) -> bool:
+        """key 에 러너가 물려 있는지."""
+        return cls.get_runner(key) is not None
+
+    @classmethod
+    def get_file_path(cls, key: str) -> str:
+        """key 가 물고 있는 .twin 경로. 없으면 빈 문자열."""
+        return cls._files.get(cls._safe_key(key), "")
 
     @classmethod
     def get_inputs(cls, runner) -> dict:
@@ -204,19 +245,19 @@ class TwinView:
         runner.set_rom_deform_scale(rom_name, float(value))
 
     @classmethod
-    def rom_show(cls, path: str, runner, pos=None) -> bool:
-        """prim path 에 rom 포인트 클라우드를 띄운다. pos 를 주면 그 자리에."""
+    def rom_show(cls, key: str, runner, pos=None) -> bool:
+        """key 자리에 rom 포인트 클라우드를 띄운다. pos 를 주면 그 자리에."""
+        key = cls.normalize_key(key)
         rom_name = runner.tbrom_names[0]
 
         if not runner.set_rom_selected(rom_name, True):
             return False
 
-        view = cls._get_rom_view(path, rom_name)
+        view = cls._get_rom_view(key)
         if view is not None:
             view.ensure_prim(runner.rom_points[rom_name])
-            cls._ensure_xform(cls._rom_prim_path(path, rom_name), pos)
+            cls._ensure_xform(key, pos)
 
-        cls._prim_paths[cls._local_path] = path
         return True
 
     @classmethod
@@ -266,17 +307,13 @@ class TwinView:
         return False
 
     @classmethod
-    def update_model(cls, path: str, runner, scale: float = None) -> None:
+    def update_model(cls, key: str, runner, scale: float = None) -> None:
         """띄워둔 뷰에 최신 필드를 밀어 넣는다."""
-        rom_name = runner.tbrom_names[0]
-
-        views = cls._rom_views.get(path)
-        if views is None:
-            return
-
-        view = views.get(rom_name)
+        view = cls._rom_views.get(cls._safe_key(key))
         if view is None:
             return
+
+        rom_name = runner.tbrom_names[0]
 
         field = runner.get_rom_field(rom_name)
         if field is not None:
@@ -286,25 +323,18 @@ class TwinView:
             view.update_field(values, dim, scale)
 
     @classmethod
-    def _get_rom_view(cls, path: str, name: str):
-        """(prim path, rom 이름) 에 물린 뷰를 준다. 없으면 만든다."""
+    def _get_rom_view(cls, key: str):
+        """key 에 물린 뷰를 준다. 없으면 만든다. key 가 곧 prim path 다."""
         stage = cls._get_stage()
         if stage is None:
             return None
 
-        views = cls._rom_views.setdefault(path, {})
-        view = views.get(name)
-
+        view = cls._rom_views.get(key)
         if view is None:
-            view = RomPointCloud(stage, cls._rom_prim_path(path, name))
-            views[name] = view
+            view = RomPointCloud(stage, key)
+            cls._rom_views[key] = view
 
         return view
-
-    @staticmethod
-    def _rom_prim_path(path: str, name: str) -> str:
-        """prim path 자체에 만든다. 끝 이름은 prim path 쪽이 이긴다."""
-        return path.rstrip("/") or "/{}".format(name)
 
     @staticmethod
     def _get_stage():
@@ -314,29 +344,26 @@ class TwinView:
         return omni.usd.get_context().get_stage()
 
     @classmethod
-    def get_prim_path(cls, path: str = "") -> str:
-        """그 트윈을 띄운 prim path. 안 띄웠으면 빈 문자열."""
-        return cls._prim_paths.get(path or cls._local_path, "")
-
-    @classmethod
-    def play(cls, path: str, runner) -> bool:
+    def play(cls, key: str, runner) -> bool:
         """러너를 돌린다. 이미 재생 중이면 넘긴다."""
-        if path in cls._playing:
+        key = cls._safe_key(key)
+        if key in cls._playing:
             return False
 
         runner.start()
-        cls._playing.add(path)
+        cls._playing.add(key)
         cls._start_ticking()
         return True
 
     @classmethod
-    def stop(cls, path: str, runner) -> bool:
+    def stop(cls, key: str, runner) -> bool:
         """러너를 멈춘다. 재생 중이 아니면 넘긴다."""
-        if path not in cls._playing:
+        key = cls._safe_key(key)
+        if key not in cls._playing:
             return False
 
         runner.stop()
-        cls._playing.discard(path)
+        cls._playing.discard(key)
 
         if not cls._playing:
             cls._stop_ticking()
@@ -344,9 +371,9 @@ class TwinView:
         return True
 
     @classmethod
-    def is_playing(cls, path: str = "") -> bool:
-        """path 가 재생 중인지. 비우면 현재 대상."""
-        return (path or cls._local_path) in cls._playing
+    def is_playing(cls, key: str) -> bool:
+        """key 가 재생 중인지."""
+        return cls._safe_key(key) in cls._playing
 
     @classmethod
     def set_interval(cls, seconds: float) -> None:
@@ -381,7 +408,7 @@ class TwinView:
 
     @classmethod
     def _on_update(cls, event):
-        """매 프레임. 주기를 채우면 필드를 갱신하고, 시각은 늘 알린다."""
+        """매 프레임. 주기를 채우면 재생 중인 key 를 모두 갱신한다."""
         try:
             dt = event.payload["dt"]
         except (KeyError, TypeError):
@@ -391,16 +418,15 @@ class TwinView:
         if cls._elapsed >= cls._interval:
             cls._elapsed = 0.0
 
-            for twin_path in list(cls._playing):
-                runner = cls._runners.get(twin_path)
-                prim_path = cls._prim_paths.get(twin_path)
-                if runner is None or prim_path is None:
+            for key in list(cls._playing):
+                runner = cls._runners.get(key)
+                if runner is None:
                     continue
 
                 try:
-                    cls.update_model(prim_path, runner)
+                    cls.update_model(key, runner)
                 except Exception as exc:  # noqa: BLE001
-                    print("[twinviewer] update 실패 ({}): {}".format(twin_path, exc))
+                    print("[twinviewer] update 실패 ({}): {}".format(key, exc))
 
             cls._notify(cls._on_updated, "on_updated")
 
@@ -430,29 +456,29 @@ class TwinView:
         return temp_dir
 
     @classmethod
-    def _close_runners(cls) -> None:
-        """들고 있던 러너를 멈추고 닫는다. 하나가 터져도 나머지는 닫는다."""
-        for path, runner in cls._runners.items():
-            try:
-                if path in cls._playing:
-                    runner.stop()
-                runner.close()
-            except Exception as exc:  # noqa: BLE001
-                print("[twinviewer] close 실패 ({}): {}".format(path, exc))
+    def _close_runner(cls, key: str, runner) -> None:
+        """러너 하나를 멈추고 닫는다. 터져도 삼킨다."""
+        try:
+            if key in cls._playing:
+                runner.stop()
+            runner.close()
+        except Exception as exc:  # noqa: BLE001
+            print("[twinviewer] close 실패 ({}): {}".format(key, exc))
 
     @classmethod
     def cleanup(cls) -> None:
-        """폴더를 지우고 러너를 닫고 뷰/재생상태를 모두 버린다."""
+        """폴더를 지우고 러너를 모두 닫고 뷰/재생상태를 버린다."""
         cls._stop_ticking()
-        cls._close_runners()
+
+        for key, runner in cls._runners.items():
+            cls._close_runner(key, runner)
 
         shutil.rmtree(cls._temp_dir_path(), ignore_errors=True)
 
-        cls._local_path = ""
         cls._runners = {}
+        cls._files = {}
         cls._rom_views = {}
         cls._playing = set()
-        cls._prim_paths = {}
 
     @staticmethod
     def _parse_s3_uri(s3_uri: str) -> tuple:

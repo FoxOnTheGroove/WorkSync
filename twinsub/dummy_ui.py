@@ -18,23 +18,33 @@ class DummyUI:
         self._prim_path_model = None
         self._deform_model = None
         self._step_model = None
+        self._selected_label = None
         self._sim_time_label = None
         self._status_label = None
 
+        self._key = ""
         self._suppress = False
 
+        self._keys_frame = None
         self._io_frame = None
         self._input_models = {}
         self._output_labels = {}
 
     def build_ui(self):
-        self._window = ui.Window(self.WINDOW_TITLE, width=560, height=520)
+        self._window = ui.Window(self.WINDOW_TITLE, width=560, height=620)
 
         with self._window.frame:
             with ui.VStack(spacing=6, height=0):
 
                 with ui.HStack(spacing=6, height=24):
-                    ui.Label("S3 URI", width=60)
+                    ui.Label("Prim Path", width=70)
+                    self._prim_path_model = ui.StringField().model
+                    self._prim_path_model.set_value(self.DEFAULT_PRIM_PATH)
+
+                ui.Separator(height=8)
+
+                with ui.HStack(spacing=6, height=24):
+                    ui.Label("S3 URI", width=70)
                     self._uri_model = ui.StringField().model
 
                 ui.Button("Load", height=28, clicked_fn=self._on_s3_load)
@@ -42,27 +52,29 @@ class DummyUI:
                 ui.Separator(height=8)
 
                 with ui.HStack(spacing=6, height=24):
-                    ui.Label("Path", width=60)
+                    ui.Label("Path", width=70)
                     self._path_model = ui.StringField().model
 
                 ui.Button("Load", height=28, clicked_fn=self._on_path_load)
 
                 ui.Separator(height=8)
 
-                with ui.HStack(spacing=6, height=24):
-                    ui.Label("Prim Path", width=60)
-                    self._prim_path_model = ui.StringField().model
-                    self._prim_path_model.set_value(self.DEFAULT_PRIM_PATH)
+                ui.Label("Loaded")
+                self._keys_frame = ui.Frame(height=0)
+
+                ui.Separator(height=8)
+
+                self._selected_label = ui.Label("")
 
                 ui.Button("Show", height=28, clicked_fn=self._on_show)
 
                 with ui.HStack(spacing=6, height=24):
-                    ui.Label("Deform", width=60)
+                    ui.Label("Deform", width=70)
                     self._deform_model = ui.FloatField().model
                     self._deform_model.add_value_changed_fn(self._on_deform_changed)
 
                 with ui.HStack(spacing=6, height=24):
-                    ui.Label("Step Size", width=60)
+                    ui.Label("Step Size", width=70)
                     self._step_model = ui.FloatField().model
                     self._step_model.add_value_changed_fn(self._on_step_changed)
 
@@ -94,11 +106,13 @@ class DummyUI:
         self._prim_path_model = None
         self._deform_model = None
         self._step_model = None
+        self._selected_label = None
         self._sim_time_label = None
         self._status_label = None
 
         self._input_models = {}
         self._output_labels = {}
+        self._keys_frame = None
         self._io_frame = None
 
         if self._window:
@@ -107,51 +121,45 @@ class DummyUI:
 
     def _on_s3_load(self):
         asyncio.ensure_future(
-            self._s3_load_async(self._uri_model.get_value_as_string(),
-                                self._prim_path_model.get_value_as_string()))
+            self._s3_load_async(self._prim_path_model.get_value_as_string(),
+                                self._uri_model.get_value_as_string()))
 
-    async def _s3_load_async(self, s3_uri, prim_path):
+    async def _s3_load_async(self, prim_path, s3_uri):
         self._set_status("downloading ...")
 
         try:
-            local_path = await tv.download_twin_async(s3_uri, prim_path)
+            key = await tv.download_twin_async(prim_path, s3_uri)
         except Exception as exc:
-            self._sync_path_field()
             self._set_status("s3 load 실패: {}".format(exc))
             return
 
-        self._sync_path_field()
-        self._set_status("loaded: {} -> {}".format(local_path, prim_path))
-
-    def _sync_path_field(self):
-        if self._path_model is None:
-            return
-
-        path = tv.get_local_path()
-        if path:
-            self._path_model.set_value(path)
+        self._select(key)
+        self._set_status("loaded: {} -> {}".format(s3_uri, key))
 
     def _on_path_load(self):
         asyncio.ensure_future(
-            self._path_load_async(self._path_model.get_value_as_string(),
-                                  self._prim_path_model.get_value_as_string()))
+            self._path_load_async(self._prim_path_model.get_value_as_string(),
+                                  self._path_model.get_value_as_string()))
 
-    async def _path_load_async(self, path, prim_path):
+    async def _path_load_async(self, prim_path, path):
         self._set_status("loading ...")
 
         try:
-            await tv.load_twin_async(path, prim_path)
+            key = await tv.load_twin_async(prim_path, path)
         except Exception as exc:
             self._set_status("load 실패: {}".format(exc))
             return
 
-        self._set_status("loaded: {} -> {}".format(path, prim_path))
+        self._select(key)
+        self._set_status("loaded: {} -> {}".format(path, key))
 
     def _on_show(self):
-        prim_path = self._prim_path_model.get_value_as_string()
+        if not self._key:
+            self._set_status("선택된 트윈이 없다")
+            return
 
         try:
-            shown = tv.rom_show(prim_path)
+            shown = tv.rom_show(self._key)
         except Exception as exc:
             self._set_status("show 실패: {}".format(exc))
             return
@@ -160,78 +168,133 @@ class DummyUI:
             self._set_status("show 실패: rom 선택이 거부됐다")
             return
 
-        self._set_status("shown under {}".format(prim_path))
+        self._set_status("shown at {}".format(self._key))
+
+    def _on_unload(self, key):
+        if key == self._key:
+            self._key = ""
+
+        try:
+            tv.unload(key)
+        except Exception as exc:
+            self._set_status("unload 실패: {}".format(exc))
+            return
+
+        self._set_status("unloaded: {}".format(key))
+
+    def _select(self, key):
+        self._key = key
+        self._sync_from_service()
 
     def _on_play(self):
+        if not self._key:
+            self._set_status("선택된 트윈이 없다")
+            return
+
         try:
-            started = tv.play()
+            started = tv.play(self._key)
         except Exception as exc:
             self._set_status("play 실패: {}".format(exc))
             return
 
         self._set_status("playing" if started else "이미 재생 중")
+        self._rebuild_keys()
         self._refresh_sim_time()
         self._refresh_outputs()
 
     def _on_stop(self):
+        if not self._key:
+            self._set_status("선택된 트윈이 없다")
+            return
+
         try:
-            stopped = tv.stop()
+            stopped = tv.stop(self._key)
         except Exception as exc:
             self._set_status("stop 실패: {}".format(exc))
             return
 
         self._set_status("stopped" if stopped else "재생 중이 아님")
+        self._rebuild_keys()
         self._refresh_sim_time()
         self._refresh_outputs()
 
     def _on_deform_changed(self, model):
-        if self._suppress:
+        if self._suppress or not self._key:
             return
 
         try:
-            tv.set_deform_scale(model.get_value_as_float())
+            tv.set_deform_scale(self._key, model.get_value_as_float())
         except Exception as exc:
             self._set_status("deform scale 실패: {}".format(exc))
 
     def _on_step_changed(self, model):
-        if self._suppress:
+        if self._suppress or not self._key:
             return
 
         try:
-            tv.set_step_size(model.get_value_as_float())
+            tv.set_step_size(self._key, model.get_value_as_float())
         except Exception as exc:
             self._set_status("step size 실패: {}".format(exc))
 
     def _sync_from_service(self):
-        if self._path_model is None:
+        if self._prim_path_model is None:
             return
 
-        if not tv.is_loaded():
-            return
+        keys = tv.list_keys()
+        if self._key not in keys:
+            self._key = keys[0] if keys else ""
 
-        self._suppress = True
-        try:
-            self._path_model.set_value(tv.get_local_path())
+        self._rebuild_keys()
 
-            prim_path = tv.get_prim_path()
-            if prim_path:
-                self._prim_path_model.set_value(prim_path)
-        finally:
-            self._suppress = False
+        if self._selected_label:
+            self._selected_label.text = (
+                "selected: {} ({})".format(self._key, tv.get_file_path(self._key))
+                if self._key else "selected: -")
+
+        if self._key:
+            self._suppress = True
+            try:
+                self._prim_path_model.set_value(self._key)
+                self._path_model.set_value(tv.get_file_path(self._key))
+            finally:
+                self._suppress = False
 
         self._refresh_scalars()
         self._rebuild_io()
+
+    def _rebuild_keys(self):
+        if self._keys_frame is None:
+            return
+
+        self._keys_frame.clear()
+
+        with self._keys_frame:
+            with ui.VStack(spacing=2, height=0):
+                for key in tv.list_keys():
+                    with ui.HStack(spacing=6, height=22):
+                        ui.Button(self._key_label(key),
+                                  clicked_fn=lambda k=key: self._select(k))
+                        ui.Button("Unload", width=70,
+                                  clicked_fn=lambda k=key: self._on_unload(k))
+
+    def _key_label(self, key):
+        mark = "*" if key == self._key else " "
+        state = " [playing]" if tv.is_playing(key) else ""
+        return "{} {}{}".format(mark, key, state)
 
     def _refresh_scalars(self):
         if self._deform_model is None or self._step_model is None:
             return
 
-        try:
-            deform = tv.get_deform_scale()
-            step = tv.get_step_size()
-        except Exception as exc:
-            self._set_status("조회 실패: {}".format(exc))
-            return
+        if not self._key:
+            deform, step = 0.0, 0.0
+        else:
+            try:
+                deform = tv.get_deform_scale(self._key)
+                step = tv.get_step_size(self._key)
+            except Exception as exc:
+                self._set_status("조회 실패: {}".format(exc))
+                return
 
         self._suppress = True
         try:
@@ -241,11 +304,11 @@ class DummyUI:
             self._suppress = False
 
     def _refresh_sim_time(self):
-        if self._sim_time_label is None:
+        if self._sim_time_label is None or not self._key:
             return
 
         try:
-            value = tv.get_simulation_time()
+            value = tv.get_simulation_time(self._key)
         except Exception:
             return
 
@@ -260,9 +323,12 @@ class DummyUI:
 
         self._io_frame.clear()
 
+        if not self._key:
+            return
+
         try:
-            inputs = tv.get_inputs()
-            outputs = tv.get_outputs()
+            inputs = tv.get_inputs(self._key)
+            outputs = tv.get_outputs(self._key)
         except Exception as exc:
             self._set_status("입출력 조회 실패: {}".format(exc))
             return
@@ -292,8 +358,11 @@ class DummyUI:
                         self._output_labels[name] = ui.Label(str(outputs[name]))
 
     def _on_input_changed(self, name, model):
+        if self._suppress or not self._key:
+            return
+
         try:
-            tv.set_input(name, model.get_value_as_float())
+            tv.set_input(self._key, name, model.get_value_as_float())
         except Exception as exc:
             self._set_status("set_input 실패: {}".format(exc))
             return
@@ -301,11 +370,11 @@ class DummyUI:
         self._refresh_outputs()
 
     def _refresh_outputs(self):
-        if not self._output_labels:
+        if not self._output_labels or not self._key:
             return
 
         try:
-            outputs = tv.get_outputs()
+            outputs = tv.get_outputs(self._key)
         except Exception:
             return
 
