@@ -122,9 +122,9 @@ class TwinView:
         return True
 
     @classmethod
-    def load_twin(cls, key: str, path: str) -> str:
-        """key 자리에 러너를 세운다. 파일이 같아도 key 가 다르면 별개 러너다."""
-        key = cls.normalize_key(key)
+    def load_twin(cls, path: str, prim_path: str) -> str:
+        """prim path 자리에 러너를 세우고 그 key 를 준다. 파일이 같아도 key 가 다르면 별개다."""
+        key = cls.normalize_key(prim_path)
 
         path = path.strip()
         if not path:

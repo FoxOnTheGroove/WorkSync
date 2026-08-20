@@ -50,13 +50,13 @@ class TwinViewService:
         return local_path
 
     @classmethod
-    def download_twin(cls, key: str, s3_uri: str, pos=None) -> str:
-        """s3 에서 받아 key 자리에 로드하고 띄운다. 임시파일은 지운다."""
-        key = TwinView.normalize_key(key)
+    def download_twin(cls, s3_uri: str, prim_path: str, pos=None) -> str:
+        """s3 에서 받아 prim path 에 로드하고 띄운다. 임시파일은 지우고 key 를 준다."""
+        key = TwinView.normalize_key(prim_path)
 
         local_path = cls.download_file(s3_uri)
         try:
-            cls.load_twin(key, local_path, pos)
+            cls.load_twin(local_path, key, pos)
         finally:
             if TwinView.discard_temp(local_path):
                 cls._log("임시파일 삭제: {}".format(local_path))
@@ -64,9 +64,9 @@ class TwinViewService:
         return key
 
     @classmethod
-    async def download_twin_async(cls, key: str, s3_uri: str, pos=None) -> str:
+    async def download_twin_async(cls, s3_uri: str, prim_path: str, pos=None) -> str:
         """download_twin 을 비동기로. 돌아오면 프림이 씬에 있다."""
-        key = TwinView.normalize_key(key)
+        key = TwinView.normalize_key(prim_path)
 
         if not TwinView.begin_task(key):
             raise ValueError("이미 작업 중이다: {}".format(key))
@@ -76,7 +76,7 @@ class TwinViewService:
             cls._log("download 성공: {}".format(local_path))
 
             try:
-                await cls._load_async(key, local_path, pos)
+                await cls._load_async(local_path, key, pos)
             finally:
                 if TwinView.discard_temp(local_path):
                     cls._log("임시파일 삭제: {}".format(local_path))
@@ -86,9 +86,9 @@ class TwinViewService:
         return key
 
     @classmethod
-    def load_twin(cls, key: str, path: str, pos=None) -> str:
-        """key 자리에 러너를 세우고 띄운다. key(prim path) 를 반환한다."""
-        key = TwinView.load_twin(key, path)
+    def load_twin(cls, path: str, prim_path: str, pos=None) -> str:
+        """prim path 에 러너를 세우고 띄운다. 이후 키로 쓸 prim path 를 반환한다."""
+        key = TwinView.load_twin(path, prim_path)
         cls._log("load 성공: {} -> {}".format(path, key))
 
         cls._show_loaded(key, pos)
@@ -96,22 +96,22 @@ class TwinViewService:
         return key
 
     @classmethod
-    async def load_twin_async(cls, key: str, path: str, pos=None) -> str:
+    async def load_twin_async(cls, path: str, prim_path: str, pos=None) -> str:
         """load_twin 을 비동기로. 러너 생성만 워커 스레드로 나간다."""
-        key = TwinView.normalize_key(key)
+        key = TwinView.normalize_key(prim_path)
 
         if not TwinView.begin_task(key):
             raise ValueError("이미 작업 중이다: {}".format(key))
 
         try:
-            return await cls._load_async(key, path, pos)
+            return await cls._load_async(path, key, pos)
         finally:
             TwinView.end_task(key)
 
     @classmethod
-    async def _load_async(cls, key: str, path: str, pos=None) -> str:
+    async def _load_async(cls, path: str, key: str, pos=None) -> str:
         """러너는 워커 스레드에서, 표시는 메인 스레드에서."""
-        key = await cls._to_thread(TwinView.load_twin, key, path)
+        key = await cls._to_thread(TwinView.load_twin, path, key)
         cls._log("load 성공: {} -> {}".format(path, key))
 
         cls._show_loaded(key, pos)

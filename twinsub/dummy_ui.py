@@ -121,14 +121,14 @@ class DummyUI:
 
     def _on_s3_load(self):
         asyncio.ensure_future(
-            self._s3_load_async(self._prim_path_model.get_value_as_string(),
-                                self._uri_model.get_value_as_string()))
+            self._s3_load_async(self._uri_model.get_value_as_string(),
+                                self._prim_path_model.get_value_as_string()))
 
-    async def _s3_load_async(self, prim_path, s3_uri):
+    async def _s3_load_async(self, s3_uri, prim_path):
         self._set_status("downloading ...")
 
         try:
-            key = await tv.download_twin_async(prim_path, s3_uri)
+            key = await tv.download_twin_async(s3_uri, prim_path)
         except Exception as exc:
             self._set_status("s3 load 실패: {}".format(exc))
             return
@@ -138,14 +138,14 @@ class DummyUI:
 
     def _on_path_load(self):
         asyncio.ensure_future(
-            self._path_load_async(self._prim_path_model.get_value_as_string(),
-                                  self._path_model.get_value_as_string()))
+            self._path_load_async(self._path_model.get_value_as_string(),
+                                  self._prim_path_model.get_value_as_string()))
 
-    async def _path_load_async(self, prim_path, path):
+    async def _path_load_async(self, path, prim_path):
         self._set_status("loading ...")
 
         try:
-            key = await tv.load_twin_async(prim_path, path)
+            key = await tv.load_twin_async(path, prim_path)
         except Exception as exc:
             self._set_status("load 실패: {}".format(exc))
             return
