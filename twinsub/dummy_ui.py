@@ -59,7 +59,10 @@ class DummyUI:
 
                 ui.Separator(height=8)
 
-                ui.Label("Loaded")
+                with ui.HStack(spacing=6, height=24):
+                    ui.Label("Loaded")
+                    ui.Button("Refresh", width=80, clicked_fn=self._on_refresh)
+
                 self._keys_frame = ui.Frame(height=0)
 
                 ui.Separator(height=8)
@@ -186,6 +189,38 @@ class DummyUI:
         self._key = key
         self._sync_from_service()
 
+    def _on_refresh(self):
+        self._key = ""
+
+        self._rebuild_keys()
+        self._clear_controls()
+
+        keys = tv.list_keys()
+        self._set_status("{}개 추적 중. 행을 눌러 대상 선택".format(len(keys))
+                         if keys else "로드된 트윈 없음")
+
+    def _clear_controls(self):
+        self._input_models = {}
+        self._output_labels = {}
+
+        if self._io_frame:
+            self._io_frame.clear()
+
+        if self._selected_label:
+            self._selected_label.text = "selected: -"
+
+        if self._sim_time_label:
+            self._sim_time_label.text = ""
+
+        self._suppress = True
+        try:
+            if self._deform_model:
+                self._deform_model.set_value(0.0)
+            if self._step_model:
+                self._step_model.set_value(0.0)
+        finally:
+            self._suppress = False
+
     def _on_play(self):
         if not self._key:
             self._set_status("선택된 트윈이 없다")
@@ -246,18 +281,21 @@ class DummyUI:
 
         self._rebuild_keys()
 
-        if self._selected_label:
-            self._selected_label.text = (
-                "selected: {} ({})".format(self._key, tv.get_file_path(self._key))
-                if self._key else "selected: -")
+        if not self._key:
+            self._clear_controls()
+            return
 
-        if self._key:
-            self._suppress = True
-            try:
-                self._prim_path_model.set_value(self._key)
-                self._path_model.set_value(tv.get_file_path(self._key))
-            finally:
-                self._suppress = False
+        path = tv.get_file_path(self._key)
+
+        if self._selected_label:
+            self._selected_label.text = "selected: {} ({})".format(self._key, path)
+
+        self._suppress = True
+        try:
+            self._prim_path_model.set_value(self._key)
+            self._path_model.set_value(path)
+        finally:
+            self._suppress = False
 
         self._refresh_scalars()
         self._rebuild_io()
@@ -286,15 +324,12 @@ class DummyUI:
         if self._deform_model is None or self._step_model is None:
             return
 
-        if not self._key:
-            deform, step = 0.0, 0.0
-        else:
-            try:
-                deform = tv.get_deform_scale(self._key)
-                step = tv.get_step_size(self._key)
-            except Exception as exc:
-                self._set_status("조회 실패: {}".format(exc))
-                return
+        try:
+            deform = tv.get_deform_scale(self._key)
+            step = tv.get_step_size(self._key)
+        except Exception as exc:
+            self._set_status("조회 실패: {}".format(exc))
+            return
 
         self._suppress = True
         try:

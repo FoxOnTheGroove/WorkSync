@@ -433,6 +433,26 @@ class TwinView:
         cls._notify(cls._on_time, "on_time")
 
     @classmethod
+    def set_on_loaded(cls, callback) -> None:
+        """로드/언로드/표시가 바뀌면 부를 콜백. None 으로 해제."""
+        cls._on_loaded = callback
+
+    @classmethod
+    def set_on_time(cls, callback) -> None:
+        """재생 중 매 프레임 부를 콜백. None 으로 해제."""
+        cls._on_time = callback
+
+    @classmethod
+    def set_on_updated(cls, callback) -> None:
+        """재생 중 필드를 갱신한 뒤 부를 콜백. None 으로 해제."""
+        cls._on_updated = callback
+
+    @classmethod
+    def notify_loaded(cls) -> None:
+        """로드/표시 상태가 바뀌었음을 구독자에게 알린다."""
+        cls._notify(cls._on_loaded, "on_loaded")
+
+    @classmethod
     def _notify(cls, callback, what):
         """구독자를 부른다. 예외는 삼킨다 — 구독이 죽으면 재생이 멈춘다."""
         if callback is None:

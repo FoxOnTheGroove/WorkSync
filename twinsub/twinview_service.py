@@ -40,7 +40,7 @@ class TwinViewService:
     @classmethod
     def _notify_loaded(cls) -> None:
         """로드/표시 상태가 바뀌었음을 구독자에게 알린다."""
-        TwinView._notify(TwinView._on_loaded, "on_loaded")
+        TwinView.notify_loaded()
 
     @classmethod
     def download_file(cls, s3_uri: str) -> str:
@@ -249,14 +249,14 @@ class TwinViewService:
     @classmethod
     def set_on_loaded(cls, callback) -> None:
         """로드/언로드/표시가 바뀌면 호출. None 으로 해제."""
-        TwinView._on_loaded = callback
+        TwinView.set_on_loaded(callback)
 
     @classmethod
     def set_on_time(cls, callback) -> None:
         """재생 중 매 프레임 호출. None 으로 해제."""
-        TwinView._on_time = callback
+        TwinView.set_on_time(callback)
 
     @classmethod
     def set_on_updated(cls, callback) -> None:
         """재생 중 필드를 갱신한 뒤 호출. None 으로 해제."""
-        TwinView._on_updated = callback
+        TwinView.set_on_updated(callback)
