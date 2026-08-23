@@ -29,6 +29,11 @@ class DistanceLineService:
         DistanceLineCore.set_snap_radius(pixels)
 
     @classmethod
+    def set_cloud_snap(cls, enabled: bool) -> None:
+        """포인트 클라우드 스냅 on/off. 전역이며 스냅 모드와 별개입니다."""
+        DistanceLineCore.set_cloud_snap(enabled)
+
+    @classmethod
     def pick_one(cls, viewport_id=None, on_done=None) -> int:
         """다음 두 번의 클릭으로 직선 하나. 그 직선의 key 를 미리 반환한다.
 

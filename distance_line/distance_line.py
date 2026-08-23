@@ -117,6 +117,7 @@ class DistanceLineCore:
     _snap_mode = SnapMode.ALL
     _changed_callbacks: list = []
     _snap_radius = SNAP_RADIUS_PX
+    _cloud_snap = True
     _registered: dict = {}
     _tabs: dict = {}
     _active_tab = None
@@ -165,6 +166,7 @@ class DistanceLineCore:
         return {
             "snap_mode": cls._snap_mode,
             "snap_radius": cls._snap_radius,
+            "cloud_snap": cls._cloud_snap,
             "host_input": cls._host_input,
             "active_tab": cls._active_tab,
             "selected_viewport": cls._selected,
@@ -361,6 +363,14 @@ class DistanceLineCore:
     @classmethod
     def set_snap_radius(cls, pixels: float):
         cls._snap_radius = max(1.0, float(pixels))
+
+    @classmethod
+    def set_cloud_snap(cls, enabled: bool):
+        cls._cloud_snap = bool(enabled)
+
+    @classmethod
+    def get_cloud_snap(cls) -> bool:
+        return cls._cloud_snap
 
     @classmethod
     def get_snap_radius(cls) -> float:
@@ -917,7 +927,8 @@ class DistanceLineCore:
         batches = cls._mesh_batches(
             state, cursor_px, view_proj, width, height, _camera_position(view)
         )
-        batches += cls._cloud_batches(cursor_px, view_proj, width, height)
+        if cls._cloud_snap:
+            batches += cls._cloud_batches(cursor_px, view_proj, width, height)
         if not batches:
             return None, []
         return None, cls._nearest_first(batches, Gf.Vec3d(0, 1, 0))

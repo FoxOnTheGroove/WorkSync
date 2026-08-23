@@ -96,6 +96,14 @@ class DistanceLineDummyUI:
             height=18,
             style=_MUTED,
         )
+        with ui.HStack(height=24, spacing=6):
+            ui.Label("Point cloud", width=80)
+            box = ui.CheckBox(width=20)
+            box.model.set_value(DistanceLineService.status()["cloud_snap"])
+            box.model.add_value_changed_fn(
+                lambda m: DistanceLineService.set_cloud_snap(m.get_value_as_bool())
+            )
+            ui.Label("snap to points", style=_MUTED)
 
     def _build_actions(self):
         with ui.HStack(height=26, spacing=6):
