@@ -352,8 +352,8 @@ class EbsSimulate:
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
         """Test the left, right and ceiling faces as 3x3 grids.
 
-        Faces and cells follow the EBS prim's local axes
-        (+X front, +/-Y sides, +up ceiling).
+        Faces and cells follow the EBS prim's local axes, named as the front
+        camera sees them: right is -Y, left is +Y, ceiling is +up.
         """
         empty = {face: [False] * (GRID * GRID) for face in FACES}
         stage = self._get_stage()
@@ -437,8 +437,9 @@ class EbsSimulate:
         ordered left to right and top to bottom.
 
         +/-X is the front/back (not evaluated), +/-Y the sides, +up the ceiling.
-        The camera looks from local -X toward +X, so on screen
-        right is -Y and up is +up.
+        The camera looks from local -X toward +X, so screen-right is -Y:
+        the face named "right" is the -Y one, and the ceiling columns are
+        reversed to read left-to-right the same way.
         """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 0                                  # front/back, not evaluated
@@ -448,7 +449,7 @@ class EbsSimulate:
         lo, hi = box.GetMin(), box.GetMax()
         cells = {}
 
-        def make(fixed_axis, outward, row_axis, col_axis):
+        def make(fixed_axis, outward, row_axis, col_axis, flip_cols=False):
             out = []
             row_lo, row_hi = lo[row_axis], hi[row_axis]
             col_lo, col_hi = lo[col_axis], hi[col_axis]
@@ -460,8 +461,9 @@ class EbsSimulate:
                     # rows are flipped so index 0 is the top row
                     cmin[row_axis] = row_hi - (r + 1) * row_step
                     cmax[row_axis] = row_hi - r * row_step
-                    cmin[col_axis] = col_lo + c * col_step
-                    cmax[col_axis] = col_lo + (c + 1) * col_step
+                    col = (GRID - 1 - c) if flip_cols else c
+                    cmin[col_axis] = col_lo + col * col_step
+                    cmax[col_axis] = col_lo + (col + 1) * col_step
                     if outward > 0:
                         cmin[fixed_axis], cmax[fixed_axis] = hi[fixed_axis], hi[fixed_axis] + t
                     else:
@@ -469,9 +471,10 @@ class EbsSimulate:
                     out.append(Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)))
             return out
 
-        cells[FACE_RIGHT]   = make(side_axis, +1, up_axis, front_axis)
-        cells[FACE_LEFT]    = make(side_axis, -1, up_axis, front_axis)
-        cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis)
+        # The camera looks from local -X, so screen-right is -Y.
+        cells[FACE_RIGHT]   = make(side_axis, -1, up_axis, front_axis)
+        cells[FACE_LEFT]    = make(side_axis, +1, up_axis, front_axis)
+        cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis, flip_cols=True)
         return cells
 
     # -- camera --------------------------------------------------------------
