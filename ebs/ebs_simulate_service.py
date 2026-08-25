@@ -35,6 +35,10 @@ class EbsSimulateService:
         return cls._simulate.set_search_root(path)
 
     @classmethod
+    def set_rail_root(cls, path):
+        return cls._simulate.set_rail_root(path)
+
+    @classmethod
     def load_ports(cls):
         return cls._simulate.load_ports()
 

@@ -31,6 +31,7 @@ class EbsDummyUI:
         self._ebs3_field = None
         self._clearance_field = None
         self._root_field = None
+        self._rail_field = None
         self._eqp_field = None
         self._status_label = None
         self._info_label = None
@@ -40,13 +41,14 @@ class EbsDummyUI:
     # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=470, height=660)
+        self._window = ui.Window("EBS Simulate", width=470, height=690)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 self._xml_field  = self._path_row("Port XML:")
                 self._ebs2_field = self._path_row("EBS 2port:")
                 self._ebs3_field = self._path_row("EBS 3port:")
                 self._root_field = self._path_row("Search root:")
+                self._rail_field = self._path_row("Rail root:")
 
                 with ui.HStack(height=24, spacing=4):
                     ui.Label("Clearance:", width=90)
@@ -152,6 +154,7 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_clearance(self._clearance_field.model.get_value_as_float())
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
+        EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
 
     # -- display -------------------------------------------------------------
 

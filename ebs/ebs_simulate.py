@@ -9,7 +9,12 @@ import omni.usd
 __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
-PORT_ID_ATTR = "port-id"      # XML attribute identifying a port: '<equipment>_<n>' 
+PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
+OFFSET_KEY  = "offset"        # distance of a port from its addr, along -Y
+CADX_KEY    = "cad-x"         # rail start point, on the addr group
+CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
+OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
+RAIL_PREFIX = "rail_"
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
@@ -45,6 +50,10 @@ class EbsSimulate:
         self._eqp_index: dict = {}          # "EQP_########" -> prim path
         self._port_map: dict = {}           # "########" -> sorted port indices
         self._port_elements: dict = {}      # "########" -> port elements in port order
+        self._port_offsets: dict = {}       # "########" -> {index: offset}
+        self._port_addr: dict = {}          # "########" -> addr number
+        self._addr_cadx: dict = {}          # addr number -> cad-x
+        self._rail_root: str = ""           # parent path holding the rail prims
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._started: float = 0.0
@@ -67,6 +76,10 @@ class EbsSimulate:
 
     def set_clearance(self, value: float) -> None:
         self._clearance = max(0.0, float(value))
+
+    def set_rail_root(self, path: str) -> None:
+        """Parent prim holding the rail_<a>_<b> prims."""
+        self._rail_root = (path or "").strip()
 
     def set_search_root(self, path: str) -> None:
         """Limit the equipment scan to one subtree, e.g. '/World/Factory'."""
@@ -199,10 +212,21 @@ class EbsSimulate:
     def _do_align(self) -> dict:
         if self._target is None:
             return self._payload(False, "Run Prepare first")
+        stage = self._get_stage()
+        equipment = self._target["equipment"]
+
         with self._stage_timer("align EBS"):
-            self._aligned = self._align_prims(self._target["ebs"], self._target["anchor"])
-        return self._payload(self._aligned,
-                             "EBS aligned" if self._aligned else "EBS alignment failed")
+            target = self.compute_target(stage, self._target["eqp_id"], equipment)
+            if target is not None:
+                self._aligned = self._place_ebs(self._target["ebs"], target, equipment)
+                note = f"EBS placed at port 0 (y={target[1]:.4f})"
+            else:
+                # No usable rail/port data: keep working off the anchor prim.
+                print("[ebs] port geometry unavailable, falling back to the anchor prim")
+                self._aligned = self._align_prims(self._target["ebs"],
+                                                  self._target["anchor"])
+                note = "EBS aligned to the anchor prim"
+        return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
     def _do_collide(self) -> dict:
         if self._target is None:
@@ -345,17 +369,22 @@ class EbsSimulate:
     # -- port count (XML) ----------------------------------------------------
 
     def load_ports(self) -> int:
-        """Parse the XML into '########' -> sorted port indices. Returns the entry count.
+        """Read the XML into port indices, port offsets, addr numbers and cad-x.
 
-        Ports are the elements carrying a 'port-id' attribute of the form
-        '<equipment>_<n>'. Document order is not port order and unrelated
-        stations sit in between, so ports are collected by that attribute and
-        sorted by n rather than by position in the file.
+        The file is a tree of <group name="..."> blocks holding key/value entries:
+        an Addr group carries 'cad-x' and contains one Station group per port,
+        each carrying 'port-id' ('<equipment>_<n>') and 'offset'. Document order
+        is not port order and unrelated stations sit in between, so ports are
+        found by their port-id and sorted by n.
         """
         self._port_map = {}
         self._port_elements = {}
+        self._port_offsets = {}
+        self._port_addr = {}
+        self._addr_cadx = {}
         if not self._xml_path:
             return 0
+
         with self._stage_timer("parse XML"):
             try:
                 root = ET.parse(self._xml_path).getroot()
@@ -363,49 +392,99 @@ class EbsSimulate:
                 print(f"[ebs] XML parse failed: {e}")
                 return 0
 
-            pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
-            found = {}                       # equipment -> {index: element}
+            parents = {child: parent for parent in root.iter() for child in parent}
+            port_pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
+            addr_pattern = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
+
+            # cad-x of every addr, including the neighbours that hold no ports
             for elem in root.iter():
-                port_id = self._attr(elem, PORT_ID_ATTR)
+                m = addr_pattern.match((elem.get("name", "")
+                                        or elem.tag.rsplit("}", 1)[-1]).strip())
+                if not m:
+                    continue
+                cadx = self._as_float(self._key_value(elem, CADX_KEY))
+                if cadx is not None:
+                    self._addr_cadx[int(m.group(1))] = cadx
+
+            found = {}                       # equipment -> {index: (station, offset, addr)}
+            for elem in root.iter():
+                station, port_id = self._provider_of(elem, PORT_ID_KEY, parents)
                 if not port_id:
                     continue
-                m = pattern.match(port_id.strip())
-                if m:
-                    found.setdefault(m.group(1).upper(), {})[int(m.group(2))] = elem
-
-            if not found:
-                # Older files may not carry the attribute; fall back to scanning
-                # every tag, attribute and text value for the same pattern.
-                print(f"[ebs] no '{PORT_ID_ATTR}' attribute found, "
-                      "falling back to a loose token scan")
-                for elem in root.iter():
-                    for token in self._tokens(elem):
-                        m = pattern.match(token)
-                        if m:
-                            found.setdefault(m.group(1).upper(), {})[int(m.group(2))] = elem
+                m = port_pattern.match(port_id.strip())
+                if not m:
+                    continue
+                equipment, index = m.group(1).upper(), int(m.group(2))
+                offset = self._as_float(self._key_value(station, OFFSET_KEY))
+                _, addr_number = self._owning_addr(station, parents, addr_pattern)
+                found.setdefault(equipment, {})[index] = (station, offset, addr_number)
 
             for key, by_index in found.items():
                 indices = sorted(by_index)
                 self._port_map[key] = indices
-                self._port_elements[key] = [by_index[i] for i in indices]
+                self._port_elements[key] = [by_index[i][0] for i in indices]
+                self._port_offsets[key] = {i: by_index[i][1] for i in indices}
+                addrs = {by_index[i][2] for i in indices if by_index[i][2] is not None}
+                if len(addrs) > 1:
+                    print(f"[ebs] {key}: ports span several addr blocks: {sorted(addrs)}")
+                self._port_addr[key] = min(addrs) if addrs else None
                 if indices != list(range(1, len(indices) + 1)):
                     print(f"[ebs] {key}: port indices are not 1..N: {indices}")
         return len(self._port_map)
 
+    # -- XML helpers ---------------------------------------------------------
+
+    def _provider_of(self, elem, key: str, parents: dict):
+        """Return (owning group, value) for a key carried by this element.
+
+        A key is either an attribute on a group, or a child entry written as
+        key="..." value="...". Both shapes appear in these files.
+        """
+        value = self._attr(elem, key)
+        if value:
+            return elem, value
+        if (self._attr(elem, "key") or "").lower() == key.lower():
+            own = self._attr(elem, "value") or (elem.text or "").strip()
+            if own:
+                return parents.get(elem, elem), own
+        return None, ""
+
+    def _key_value(self, elem, key: str) -> str:
+        """Value of a key on a group: its own attribute, or a direct child entry."""
+        if elem is None:
+            return ""
+        value = self._attr(elem, key)
+        if value:
+            return value
+        for child in list(elem):
+            if (self._attr(child, "key") or "").lower() == key.lower():
+                return self._attr(child, "value") or (child.text or "").strip()
+        return ""
+
     @staticmethod
-    def _tokens(elem) -> list:
-        """Every string on an element: tag name, attribute keys/values and text."""
-        out = [elem.tag.rsplit("}", 1)[-1]]
-        for k, v in elem.attrib.items():
-            out.append(k.rsplit("}", 1)[-1])
-            out.append(v)
-        if elem.text:
-            out.append(elem.text)
-        return [t.strip() for t in out if t and t.strip()]
+    def _owning_addr(elem, parents: dict, pattern):
+        """Nearest ancestor group whose name looks like 'Addr#####'."""
+        current = elem
+        while current is not None:
+            for candidate in (current.get("name", ""), current.tag.rsplit("}", 1)[-1]):
+                m = pattern.match((candidate or "").strip())
+                if m:
+                    return current, int(m.group(1))
+            current = parents.get(current)
+        return None, None
+
+    @staticmethod
+    def _as_float(text) -> "float | None":
+        try:
+            return float(str(text).strip())
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _attr(elem, name: str) -> str:
         """Attribute lookup that ignores XML namespaces on the attribute name."""
+        if elem is None:
+            return ""
         value = elem.attrib.get(name)
         if value is not None:
             return value
@@ -425,7 +504,118 @@ class EbsSimulate:
             self.load_ports()
         return list(self._port_map.get(eqp_id.upper(), []))
 
+    # -- rail and port geometry ----------------------------------------------
+
+    def find_rail(self, stage: Usd.Stage, addr_number: int):
+        """Find the rail_<addr>_<neighbour> prim and return (prim, neighbour)."""
+        prefix = f"{RAIL_PREFIX}{addr_number}_"
+
+        def match(prim):
+            name = prim.GetName().lower()
+            if not name.startswith(prefix):
+                return None
+            parts = name.split("_")
+            if len(parts) < 3 or not parts[2].isdigit():
+                return None
+            return int(parts[2])
+
+        root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
+        if root is not None and root.IsValid():
+            for child in root.GetChildren():         # rails sit right under the root
+                neighbour = match(child)
+                if neighbour is not None:
+                    return child, neighbour
+            print(f"[ebs] no {prefix}* under {self._rail_root}, scanning the stage")
+
+        for prim, _ in self._walk(stage):            # fallback: pruned stage scan
+            neighbour = match(prim)
+            if neighbour is not None:
+                return prim, neighbour
+        return None, None
+
+    def compute_port_zero_y(self, stage: Usd.Stage, eqp_id: str) -> "float | None":
+        """Y of the virtual port 0, which is where the EBS goes.
+
+        The addr sits at the rail's start point, the rail prim sits at its
+        midpoint, and ports run from the addr in -Y at a constant spacing:
+        along the line the order is 1, 2, (3), addr. Port 0 is one more step
+        past port 1, so its offset extrapolates from the first two ports.
+        """
+        key = eqp_id.upper()
+        addr_a = self._port_addr.get(key)
+        if addr_a is None:
+            print(f"[ebs] {key}: no addr block found for its ports")
+            return None
+
+        rail, addr_b = self.find_rail(stage, addr_a)
+        if rail is None:
+            print(f"[ebs] {key}: no {RAIL_PREFIX}{addr_a}_* prim found")
+            return None
+
+        cadx_a, cadx_b = self._addr_cadx.get(addr_a), self._addr_cadx.get(addr_b)
+        if cadx_a is None or cadx_b is None:
+            print(f"[ebs] {key}: missing {CADX_KEY} for addr {addr_a} or {addr_b}")
+            return None
+
+        offsets = self._port_offsets.get(key, {})
+        first, second = offsets.get(1), offsets.get(2)
+        if first is None or second is None:
+            print(f"[ebs] {key}: needs the offsets of ports 1 and 2, got {offsets}")
+            return None
+
+        spacing = first - second
+        if spacing <= 0:
+            print(f"[ebs] {key}: port 1 should sit further from the addr than port 2 "
+                  f"(offsets {first}, {second})")
+        third = offsets.get(3)
+        if third is not None and abs((second - third) - spacing) > 1e-6:
+            print(f"[ebs] {key}: port spacing is uneven: "
+                  f"{first - second} vs {second - third}")
+
+        rail_y = self._local_translation(rail)[1]
+        length = (cadx_b - cadx_a) / CAD_PER_UNIT
+        addr_y = rail_y - length / 2.0                   # rail start = addr position
+        offset_zero = 2.0 * first - second               # one step past port 1
+        return addr_y - offset_zero / OFFSET_PER_UNIT    # offsets run in -Y
+
+    def compute_target(self, stage: Usd.Stage, eqp_id: str, equipment: Usd.Prim):
+        """Placement point for the EBS: rail X, virtual port 0 Y, equipment Z."""
+        y = self.compute_port_zero_y(stage, eqp_id)
+        if y is None:
+            return None
+        rail, _ = self.find_rail(stage, self._port_addr.get(eqp_id.upper()))
+        if rail is None:
+            return None
+        return Gf.Vec3d(self._local_translation(rail)[0], y,
+                        self._local_translation(equipment)[2])
+
+    @staticmethod
+    def _local_translation(prim: Usd.Prim) -> Gf.Vec3d:
+        xformable = UsdGeom.Xformable(prim)
+        if not xformable:
+            return Gf.Vec3d(0.0, 0.0, 0.0)
+        return xformable.GetLocalTransformation(
+            Usd.TimeCode.Default()).ExtractTranslation()
+
     # -- alignment -----------------------------------------------------------
+
+    def _place_ebs(self, ebs_prim: Usd.Prim, position: Gf.Vec3d,
+                   equipment: Usd.Prim) -> bool:
+        """Write the computed point onto the EBS, rotated like the equipment.
+
+        Positions are still handled in local space for now; the world-space
+        conversion between the differing parents comes later.
+        """
+        stage = self._get_stage()
+        xformable = UsdGeom.Xformable(ebs_prim)
+        if stage is None or not xformable:
+            return False
+
+        tc = Usd.TimeCode.Default()
+        rotation = self._normalized_rows(
+            UsdGeom.Xformable(equipment).GetLocalTransformation(tc))
+        scale = self._extract_scale(xformable.GetLocalTransformation(tc))
+        return self._write_transform(stage, xformable, rotation, scale, position)
 
     def _align_prims(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
         """Match the EBS position and rotation to the anchor, keeping its own scale."""
@@ -451,24 +641,26 @@ class EbsSimulate:
         # Take only its orientation and position; the EBS keeps the scale it had.
         rotation = self._normalized_rows(target_local)
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
-        translation = target_local.ExtractTranslation()
+        return self._write_transform(stage, xformable, rotation, scale,
+                                     target_local.ExtractTranslation())
+
+    def _write_transform(self, stage, xformable, rotation, scale, translation) -> bool:
+        """Author scale, rotation and position as one transform op."""
         matrix = Gf.Matrix4d(
             rotation[0][0] * scale[0], rotation[0][1] * scale[0], rotation[0][2] * scale[0], 0.0,
             rotation[1][0] * scale[1], rotation[1][1] * scale[1], rotation[1][2] * scale[1], 0.0,
             rotation[2][0] * scale[2], rotation[2][1] * scale[2], rotation[2][2] * scale[2], 0.0,
             translation[0], translation[1], translation[2], 1.0,
         )
-
         # Author into the session layer so the source layers stay untouched.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             try:
-                # One transform op carries scale, rotation and position together.
                 xformable.ClearXformOpOrder()
                 xformable.AddTransformOp().Set(matrix)
                 return True
             except Exception as e:
                 print(f"[ebs] transform op failed, translate only: {e}")
-                api = UsdGeom.XformCommonAPI(ebs_prim)
+                api = UsdGeom.XformCommonAPI(xformable.GetPrim())
                 return bool(api and api.SetTranslate(Gf.Vec3d(translation)))
 
     @staticmethod
