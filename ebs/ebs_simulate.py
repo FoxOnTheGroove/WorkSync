@@ -36,6 +36,9 @@ class EbsSimulate:
         self._port_map: dict = {}           # "########" -> port count
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._timings: list = []            # [label, elapsed_ms] for the last run
+        self._started: float = 0.0
+        self._target: dict = None           # prepared equipment / EBS for the step buttons
+        self._aligned: bool = False
         self._result: dict = {}
 
     # -- settings ------------------------------------------------------------
@@ -65,9 +68,16 @@ class EbsSimulate:
         self._port_map = {}
         self._bounds_cache = {}
         self._timings = []
+        self._target = None
+        self._aligned = False
         self._result = {}
 
     # -- timing --------------------------------------------------------------
+
+    def _begin(self) -> None:
+        """Start a fresh timing record for one button press."""
+        self._timings = []
+        self._started = time.perf_counter()
 
     @contextmanager
     def _stage_timer(self, label: str):
@@ -78,71 +88,117 @@ class EbsSimulate:
         finally:
             self._timings.append([label, (time.perf_counter() - started) * 1000.0])
 
-    # -- entry point ---------------------------------------------------------
+    # -- steps ---------------------------------------------------------------
+
+    def prepare(self, equipment: str = "") -> dict:
+        """Step 0: resolve the equipment, its port count and the matching EBS prim."""
+        self._begin()
+        return self._do_prepare(equipment)
+
+    def focus(self) -> dict:
+        """Step 1: move the camera in front of the prepared equipment."""
+        self._begin()
+        return self._do_focus()
+
+    def align(self) -> dict:
+        """Step 2: move the EBS onto the prepared equipment."""
+        self._begin()
+        return self._do_align()
+
+    def collide(self) -> dict:
+        """Step 3: run the collision check for the aligned EBS."""
+        self._begin()
+        return self._do_collide()
 
     def simulate(self, equipment: str = "") -> dict:
-        """Simulate for the given equipment name/path, or the current selection if empty."""
-        self._timings = []
-        started = time.perf_counter()
+        """Run every step in order."""
+        self._begin()
+        result = self._do_prepare(equipment)
+        if not result["ok"]:
+            return result
+        result = self._do_focus()
+        if not result["ok"]:
+            return result
+        result = self._do_align()
+        if not result["ok"]:
+            return result
+        return self._do_collide()
+
+    # -- step bodies (shared by the single-step buttons and simulate) ---------
+
+    def _do_prepare(self, equipment: str) -> dict:
+        self._target = None
+        self._aligned = False
 
         stage = self._get_stage()
         if stage is None:
-            return self._fail("No stage open")
+            return self._payload(False, "No stage open")
 
         with self._stage_timer("resolve equipment"):
             eqp_prim = (self._resolve_by_name(stage, equipment) if equipment.strip()
                         else self._resolve_by_selection(stage))
         if eqp_prim is None:
-            return self._fail("Equipment prim not found: "
-                              f"{equipment.strip() or '(no selection)'}")
+            return self._payload(False, "Equipment prim not found: "
+                                 f"{equipment.strip() or '(no selection)'}")
 
         eqp_id = self._equipment_id(eqp_prim)
-
-        with self._stage_timer("camera focus"):
-            self.focus(str(eqp_prim.GetPath()))
 
         with self._stage_timer("port lookup"):
             port_count = self.get_port_count(eqp_id)
         if port_count is None:
-            return self._fail(f"No port info for '{eqp_id}' in XML",
-                              equipment=eqp_prim, eqp_id=eqp_id)
+            return self._payload(False, f"No port info for '{eqp_id}' in XML",
+                                 equipment=eqp_prim, eqp_id=eqp_id)
         if port_count not in (2, 3):
-            return self._fail(f"{port_count}-port equipment: no matching EBS",
-                              equipment=eqp_prim, eqp_id=eqp_id,
-                              port_count=port_count)
+            return self._payload(False, f"{port_count}-port equipment: no matching EBS",
+                                 equipment=eqp_prim, eqp_id=eqp_id, port_count=port_count)
 
         ebs_path = self._ebs_path_2port if port_count == 2 else self._ebs_path_3port
         ebs_prim = stage.GetPrimAtPath(ebs_path) if ebs_path else None
         if ebs_prim is None or not ebs_prim.IsValid():
-            return self._fail(f"Invalid {port_count}-port EBS prim path: {ebs_path}",
-                              equipment=eqp_prim, eqp_id=eqp_id,
-                              port_count=port_count)
+            return self._payload(False, f"Invalid {port_count}-port EBS prim path: {ebs_path}",
+                                 equipment=eqp_prim, eqp_id=eqp_id, port_count=port_count)
 
-        with self._stage_timer("align EBS"):
-            anchor = self._descend_first_child(eqp_prim, ANCHOR_DEPTH)
-            aligned = self.align(ebs_prim, anchor)
-        if not aligned:
-            return self._fail("EBS alignment failed",
-                              equipment=eqp_prim, eqp_id=eqp_id,
-                              port_count=port_count, ebs=ebs_prim)
-
-        cells = self.check_collision(ebs_prim, exclude=[eqp_prim, ebs_prim])
-        hit_count = sum(sum(1 for c in v if c) for v in cells.values())
-
-        self._result = {
-            "ok": True,
-            "reason": "No collision" if hit_count == 0 else f"{hit_count} cell(s) blocked",
-            "equipment": str(eqp_prim.GetPath()),
-            "equipment_id": eqp_id,
+        anchor = self._descend_first_child(eqp_prim, ANCHOR_DEPTH)
+        self._target = {
+            "equipment": eqp_prim,
+            "eqp_id": eqp_id,
             "port_count": port_count,
-            "ebs": str(ebs_prim.GetPath()),
-            "anchor": str(anchor.GetPath()),
-            "cells": cells,
-            "hit_count": hit_count,
-            "timings": list(self._timings),
-            "total_ms": (time.perf_counter() - started) * 1000.0,
+            "ebs": ebs_prim,
+            "anchor": anchor,
         }
-        return dict(self._result)
+        return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
+
+    def _do_focus(self) -> dict:
+        if self._target is None:
+            return self._payload(False, "Run Prepare first")
+        with self._stage_timer("camera focus"):
+            moved = self._move_camera(str(self._target["equipment"].GetPath()))
+        return self._payload(moved, "Camera moved" if moved else "Camera focus failed")
+
+    def _do_align(self) -> dict:
+        if self._target is None:
+            return self._payload(False, "Run Prepare first")
+        with self._stage_timer("align EBS"):
+            self._aligned = self._align_prims(self._target["ebs"], self._target["anchor"])
+        return self._payload(self._aligned,
+                             "EBS aligned" if self._aligned else "EBS alignment failed")
+
+    def _do_collide(self) -> dict:
+        if self._target is None:
+            return self._payload(False, "Run Prepare first")
+        if not self._aligned:
+            return self._payload(False, "Run Align first")
+
+        cells = self.check_collision(
+            self._target["ebs"],
+            exclude=[self._target["equipment"], self._target["ebs"]],
+        )
+        hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+        return self._payload(
+            True,
+            "No collision" if hit_count == 0 else f"{hit_count} cell(s) blocked",
+            cells=cells, hit_count=hit_count,
+        )
 
     # -- equipment lookup ----------------------------------------------------
 
@@ -258,7 +314,7 @@ class EbsSimulate:
 
     # -- alignment -----------------------------------------------------------
 
-    def align(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
+    def _align_prims(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
         """Match the EBS position and rotation to the anchor prim."""
         stage = self._get_stage()
         if stage is None or not anchor_prim.IsValid():
@@ -420,7 +476,7 @@ class EbsSimulate:
 
     # -- camera --------------------------------------------------------------
 
-    def focus(self, prim_path: str) -> bool:
+    def _move_camera(self, prim_path: str) -> bool:
         """Put the camera in front of the prim (its local +X) and fill the view like F."""
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
@@ -508,18 +564,25 @@ class EbsSimulate:
     def _get_stage() -> "Usd.Stage | None":
         return omni.usd.get_context().get_stage()
 
-    def _fail(self, reason: str, equipment=None, eqp_id="", port_count=None, ebs=None) -> dict:
+    def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
+                 equipment=None, eqp_id: str = "", port_count=None) -> dict:
+        """Build the result dict. Target fields come from the prepared target
+        unless explicitly passed (prepare reports them before the target is set)."""
+        target = self._target or {}
+        equipment = equipment or target.get("equipment")
+        ebs = target.get("ebs")
+        anchor = target.get("anchor")
         self._result = {
-            "ok": False,
+            "ok": ok,
             "reason": reason,
             "equipment": str(equipment.GetPath()) if equipment else "",
-            "equipment_id": eqp_id,
-            "port_count": port_count,
+            "equipment_id": eqp_id or target.get("eqp_id", ""),
+            "port_count": port_count if port_count is not None else target.get("port_count"),
             "ebs": str(ebs.GetPath()) if ebs else "",
-            "anchor": "",
-            "cells": {face: [False] * (GRID * GRID) for face in FACES},
-            "hit_count": 0,
+            "anchor": str(anchor.GetPath()) if anchor else "",
+            "cells": cells,
+            "hit_count": hit_count,
             "timings": list(self._timings),
-            "total_ms": sum(t[1] for t in self._timings),
+            "total_ms": (time.perf_counter() - self._started) * 1000.0,
         }
         return dict(self._result)

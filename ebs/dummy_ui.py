@@ -39,7 +39,7 @@ class EbsDummyUI:
     # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=470, height=600)
+        self._window = ui.Window("EBS Simulate", width=470, height=630)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 self._xml_field  = self._path_row("Port XML:")
@@ -62,6 +62,12 @@ class EbsDummyUI:
                 with ui.HStack(height=28, spacing=4):
                     ui.Button("SIM", clicked_fn=self._on_simulate)
                     ui.Button("Rebuild Index", width=110, clicked_fn=self._on_rebuild_index)
+
+                with ui.HStack(height=26, spacing=4):
+                    ui.Button("1 Prepare", clicked_fn=self._on_prepare)
+                    ui.Button("2 Camera", clicked_fn=self._on_camera)
+                    ui.Button("3 Align", clicked_fn=self._on_align)
+                    ui.Button("4 Collide", clicked_fn=self._on_collide)
 
                 self._status_label = ui.Label("Ready", height=20)
                 self._info_label = ui.Label("", height=20,
@@ -118,10 +124,23 @@ class EbsDummyUI:
 
     def _on_simulate(self):
         self._apply_settings()
-        result = EbsSimulateService.simulate(
-            self._eqp_field.model.get_value_as_string()
-        )
-        self._render(result)
+        self._render(EbsSimulateService.simulate(
+            self._eqp_field.model.get_value_as_string()))
+
+    def _on_prepare(self):
+        self._apply_settings()
+        self._render(EbsSimulateService.prepare(
+            self._eqp_field.model.get_value_as_string()))
+
+    def _on_camera(self):
+        self._render(EbsSimulateService.focus())
+
+    def _on_align(self):
+        self._render(EbsSimulateService.align())
+
+    def _on_collide(self):
+        self._apply_settings()
+        self._render(EbsSimulateService.collide())
 
     def _apply_settings(self):
         EbsSimulateService.set_xml_path(self._xml_field.model.get_value_as_string())
@@ -139,11 +158,13 @@ class EbsDummyUI:
             return
 
         ok = result.get("ok", False)
-        cells = result.get("cells", {})
+        cells = result.get("cells")
+        # Steps before the collision check carry no cells: grey the grids out so a
+        # stale result is never read as current.
         for face, rects in self._cells.items():
-            values = cells.get(face, [])
+            values = (cells or {}).get(face, [])
             for i, rect in enumerate(rects):
-                if not ok:
+                if not ok or cells is None:
                     color = COLOR_DISABLED
                 else:
                     color = COLOR_HIT if (i < len(values) and values[i]) else COLOR_CLEAR

@@ -47,8 +47,20 @@ class EbsSimulateService:
         return cls._simulate.get_port_count(eqp_id)
 
     @classmethod
-    def focus(cls, prim_path):
-        return cls._simulate.focus(prim_path)
+    def prepare(cls, equipment=""):
+        return cls._simulate.prepare(equipment)
+
+    @classmethod
+    def focus(cls):
+        return cls._simulate.focus()
+
+    @classmethod
+    def align(cls):
+        return cls._simulate.align()
+
+    @classmethod
+    def collide(cls):
+        return cls._simulate.collide()
 
     @classmethod
     def simulate(cls, equipment=""):
