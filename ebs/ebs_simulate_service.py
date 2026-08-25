@@ -1,10 +1,10 @@
-from .ebs_simulate import EbsSimulate
+from .ebs_simulate import EbsSimulate, FACES, GRID
 
-__all__ = ["EbsSimulateService"]
+__all__ = ["EbsSimulateService", "FACES", "GRID"]
 
 
 class EbsSimulateService:
-    """EBS 시뮬레이션 공개 API. 구현부(EbsSimulate) 접근은 이 클래스로만."""
+    """EBS 시뮬레이션 공개 API. 구현부 접근은 이 클래스로만."""
 
     _simulate = None
 
@@ -14,24 +14,46 @@ class EbsSimulateService:
 
     @classmethod
     def finalize(cls):
+        if cls._simulate:
+            cls._simulate.teardown()
         cls._simulate = None
 
     @classmethod
-    def start(cls):
-        pass
+    def set_xml_path(cls, path):
+        return cls._simulate.set_xml_path(path)
 
     @classmethod
-    def stop(cls):
-        pass
+    def set_ebs_paths(cls, path_2port, path_3port):
+        return cls._simulate.set_ebs_paths(path_2port, path_3port)
 
     @classmethod
-    def reset(cls):
-        pass
+    def set_clearance(cls, value):
+        return cls._simulate.set_clearance(value)
 
     @classmethod
-    def step(cls):
-        pass
+    def load_ports(cls):
+        return cls._simulate.load_ports()
+
+    @classmethod
+    def build_index(cls):
+        return cls._simulate.build_index()
+
+    @classmethod
+    def get_selected_equipment(cls):
+        return cls._simulate.get_selected_equipment()
+
+    @classmethod
+    def get_port_count(cls, eqp_id):
+        return cls._simulate.get_port_count(eqp_id)
+
+    @classmethod
+    def focus(cls, prim_path):
+        return cls._simulate.focus(prim_path)
+
+    @classmethod
+    def simulate(cls, equipment=""):
+        return cls._simulate.simulate(equipment)
 
     @classmethod
     def get_result(cls):
-        pass
+        return cls._simulate.get_result()
