@@ -315,7 +315,7 @@ class EbsSimulate:
     # -- alignment -----------------------------------------------------------
 
     def _align_prims(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
-        """Match the EBS position and rotation to the anchor prim."""
+        """Match the EBS position and rotation to the anchor, keeping its own scale."""
         stage = self._get_stage()
         if stage is None or not anchor_prim.IsValid():
             return False
@@ -334,18 +334,43 @@ class EbsSimulate:
         # Row-vector convention: M_local * M_parent = M_world
         target_local = anchor_world * parent_world.GetInverse()
 
+        # The anchor sits deep inside the equipment and carries its own scale.
+        # Take only its orientation and position; the EBS keeps the scale it had.
+        rotation = self._normalized_rows(target_local)
+        scale = self._extract_scale(xformable.GetLocalTransformation(tc))
+        translation = target_local.ExtractTranslation()
+        matrix = Gf.Matrix4d(
+            rotation[0][0] * scale[0], rotation[0][1] * scale[0], rotation[0][2] * scale[0], 0.0,
+            rotation[1][0] * scale[1], rotation[1][1] * scale[1], rotation[1][2] * scale[1], 0.0,
+            rotation[2][0] * scale[2], rotation[2][1] * scale[2], rotation[2][2] * scale[2], 0.0,
+            translation[0], translation[1], translation[2], 1.0,
+        )
+
         # Author into the session layer so the source layers stay untouched.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             try:
-                # One transform op carries position and rotation together.
+                # One transform op carries scale, rotation and position together.
                 xformable.ClearXformOpOrder()
-                xformable.AddTransformOp().Set(target_local)
+                xformable.AddTransformOp().Set(matrix)
                 return True
             except Exception as e:
                 print(f"[ebs] transform op failed, translate only: {e}")
                 api = UsdGeom.XformCommonAPI(ebs_prim)
-                return bool(api and api.SetTranslate(
-                    Gf.Vec3d(target_local.ExtractTranslation())))
+                return bool(api and api.SetTranslate(Gf.Vec3d(translation)))
+
+    @staticmethod
+    def _normalized_rows(matrix: Gf.Matrix4d) -> list:
+        """Rotation rows of a matrix with any scale divided out."""
+        rows = matrix.ExtractRotationMatrix()
+        return [Gf.Vec3d(rows[i][0], rows[i][1], rows[i][2]).GetNormalized()
+                for i in range(3)]
+
+    @staticmethod
+    def _extract_scale(matrix: Gf.Matrix4d) -> Gf.Vec3d:
+        """Per-axis scale of a matrix, i.e. the length of each rotation row."""
+        rows = matrix.ExtractRotationMatrix()
+        scale = [Gf.Vec3d(rows[i][0], rows[i][1], rows[i][2]).GetLength() for i in range(3)]
+        return Gf.Vec3d(*[v if v > 1e-12 else 1.0 for v in scale])
 
     # -- collision -----------------------------------------------------------
 
