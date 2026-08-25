@@ -296,8 +296,19 @@ class EbsSimulate:
             prim = stage.GetPrimAtPath(path)
             return prim if prim.IsValid() else None
 
-        # No full index yet: stop at the first match instead of scanning
-        # everything. The index is still built later, when collision needs it.
+        # Try the obvious path first: equipment usually sits directly under the
+        # search root, and one GetPrimAtPath beats any amount of walking.
+        started = time.perf_counter()
+        direct = f"{self._search_root.rstrip('/')}/{key}" if self._search_root else f"/{key}"
+        prim = stage.GetPrimAtPath(direct)
+        if prim.IsValid():
+            self._eqp_index[key] = direct
+            self._timings.append(["find equipment (direct path)",
+                                  (time.perf_counter() - started) * 1000.0])
+            return prim
+
+        # Not there: fall back to scanning, stopping at the first match.
+        # The full index is still built later, when collision needs it.
         visited = 0
         started = time.perf_counter()
         found = None
