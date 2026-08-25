@@ -218,7 +218,8 @@ class EbsSimulate:
         with self._stage_timer("align EBS"):
             target = self.compute_target(stage, self._target["eqp_id"], equipment)
             if target is not None:
-                self._aligned = self._place_ebs(self._target["ebs"], target, equipment)
+                self._aligned = self._place_ebs(self._target["ebs"], target,
+                                                self._target["anchor"])
                 note = f"EBS placed at port 0 (y={target[1]:.4f})"
             else:
                 # No usable rail/port data: keep working off the anchor prim.
@@ -600,11 +601,13 @@ class EbsSimulate:
     # -- alignment -----------------------------------------------------------
 
     def _place_ebs(self, ebs_prim: Usd.Prim, position: Gf.Vec3d,
-                   equipment: Usd.Prim) -> bool:
-        """Write the computed point onto the EBS, rotated like the equipment.
+                   anchor: Usd.Prim) -> bool:
+        """Write the computed point onto the EBS, rotated like the anchor prim.
 
-        Positions are still handled in local space for now; the world-space
-        conversion between the differing parents comes later.
+        The anchor's accumulated orientation is used, the same one the previous
+        anchor-only alignment applied. Positions are still handled in local
+        space for now; the world-space conversion between the differing parents
+        comes later.
         """
         stage = self._get_stage()
         xformable = UsdGeom.Xformable(ebs_prim)
@@ -613,7 +616,7 @@ class EbsSimulate:
 
         tc = Usd.TimeCode.Default()
         rotation = self._normalized_rows(
-            UsdGeom.Xformable(equipment).GetLocalTransformation(tc))
+            UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(tc))
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
         return self._write_transform(stage, xformable, rotation, scale, position)
 
