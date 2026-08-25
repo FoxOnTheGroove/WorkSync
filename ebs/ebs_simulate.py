@@ -1,5 +1,7 @@
 import re
+import time
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 
 from pxr import Usd, UsdGeom, Gf
 import omni.usd
@@ -8,37 +10,41 @@ __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
 
-# 시뮬레이션 판정 면. 전/후/바닥은 보지 않는다.
+# Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-GRID = 3                 # 면당 3x3 분할
-ANCHOR_DEPTH = 6         # 장비 프림에서 첫 자식을 타고 내려갈 단계 수
+GRID = 3                 # 3x3 subdivision per face
+ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
 
 
 class EbsSimulate:
-    """EBS 시뮬레이션 구현부.
+    """EBS simulation implementation.
 
-    모든 계산과 USD 접근은 이 클래스가 담당한다.
-    외부에는 EbsSimulateService만 노출된다.
+    All computation and USD access lives here.
+    Only EbsSimulateService is exposed to the outside.
     """
 
     def __init__(self):
         self._xml_path: str = ""
         self._ebs_path_2port: str = ""
         self._ebs_path_3port: str = ""
-        self._clearance: float = 1.0        # 각 면 바깥으로 검사할 두께
+        self._clearance: float = 1.0        # thickness probed outward from each face
         self._eqp_index: dict = {}          # "EQP_########" -> prim path
         self._port_map: dict = {}           # "########" -> port count
+        self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
+        self._timings: list = []            # [label, elapsed_ms] for the last run
         self._result: dict = {}
 
-    # ── 설정 ─────────────────────────────────────────────────────────────────
+    # -- settings ------------------------------------------------------------
 
     def set_xml_path(self, path: str) -> None:
-        self._xml_path = (path or "").strip()
-        self._port_map = {}
+        path = (path or "").strip()
+        if path != self._xml_path:
+            self._port_map = {}
+        self._xml_path = path
 
     def set_ebs_paths(self, path_2port: str, path_3port: str) -> None:
         self._ebs_path_2port = (path_2port or "").strip()
@@ -50,29 +56,53 @@ class EbsSimulate:
     def get_result(self) -> dict:
         return dict(self._result)
 
+    def get_timings(self) -> list:
+        """[label, elapsed_ms] recorded during the last run."""
+        return [list(t) for t in self._timings]
+
     def teardown(self) -> None:
         self._eqp_index = {}
         self._port_map = {}
+        self._bounds_cache = {}
+        self._timings = []
         self._result = {}
 
-    # ── 시뮬레이션 진입점 ────────────────────────────────────────────────────
+    # -- timing --------------------------------------------------------------
+
+    @contextmanager
+    def _stage_timer(self, label: str):
+        """Record how long one step of the run took."""
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._timings.append([label, (time.perf_counter() - started) * 1000.0])
+
+    # -- entry point ---------------------------------------------------------
 
     def simulate(self, equipment: str = "") -> dict:
-        """장비명(또는 경로)으로, 비어 있으면 현재 선택으로 시뮬레이션한다."""
+        """Simulate for the given equipment name/path, or the current selection if empty."""
+        self._timings = []
+        started = time.perf_counter()
+
         stage = self._get_stage()
         if stage is None:
             return self._fail("No stage open")
 
-        eqp_prim = (self._resolve_by_name(stage, equipment) if equipment.strip()
-                    else self._resolve_by_selection(stage))
+        with self._stage_timer("resolve equipment"):
+            eqp_prim = (self._resolve_by_name(stage, equipment) if equipment.strip()
+                        else self._resolve_by_selection(stage))
         if eqp_prim is None:
             return self._fail("Equipment prim not found: "
                               f"{equipment.strip() or '(no selection)'}")
 
         eqp_id = self._equipment_id(eqp_prim)
-        self.focus(str(eqp_prim.GetPath()))
 
-        port_count = self.get_port_count(eqp_id)
+        with self._stage_timer("camera focus"):
+            self.focus(str(eqp_prim.GetPath()))
+
+        with self._stage_timer("port lookup"):
+            port_count = self.get_port_count(eqp_id)
         if port_count is None:
             return self._fail(f"No port info for '{eqp_id}' in XML",
                               equipment=eqp_prim, eqp_id=eqp_id)
@@ -88,8 +118,10 @@ class EbsSimulate:
                               equipment=eqp_prim, eqp_id=eqp_id,
                               port_count=port_count)
 
-        anchor = self._descend_first_child(eqp_prim, ANCHOR_DEPTH)
-        if not self.align(ebs_prim, anchor):
+        with self._stage_timer("align EBS"):
+            anchor = self._descend_first_child(eqp_prim, ANCHOR_DEPTH)
+            aligned = self.align(ebs_prim, anchor)
+        if not aligned:
             return self._fail("EBS alignment failed",
                               equipment=eqp_prim, eqp_id=eqp_id,
                               port_count=port_count, ebs=ebs_prim)
@@ -107,29 +139,34 @@ class EbsSimulate:
             "anchor": str(anchor.GetPath()),
             "cells": cells,
             "hit_count": hit_count,
+            "timings": list(self._timings),
+            "total_ms": (time.perf_counter() - started) * 1000.0,
         }
         return dict(self._result)
 
-    # ── 장비 프림 조회 ───────────────────────────────────────────────────────
+    # -- equipment lookup ----------------------------------------------------
 
     def build_index(self) -> int:
-        """EQP_ 프림 인덱스를 다시 만든다. 하부로는 내려가지 않아 대용량에서도 가볍다."""
+        """Rebuild the EQP_ prim index. Descent stops at each equipment, so it
+        never walks the meshes inside them - that is what keeps it cheap here."""
         stage = self._get_stage()
         self._eqp_index = {}
+        self._bounds_cache = {}
         if stage is None:
             return 0
-        stack = list(stage.GetPseudoRoot().GetChildren())
-        while stack:
-            prim = stack.pop()
-            name = prim.GetName().upper()
-            if name.startswith(EQP_PREFIX):
-                self._eqp_index[name] = str(prim.GetPath())
-                continue          # 장비 내부 메시까지 순회하지 않는다
-            stack.extend(prim.GetChildren())
+        with self._stage_timer("build index"):
+            stack = list(stage.GetPseudoRoot().GetChildren())
+            while stack:
+                prim = stack.pop()
+                name = prim.GetName().upper()
+                if name.startswith(EQP_PREFIX):
+                    self._eqp_index[name] = str(prim.GetPath())
+                    continue          # do not descend into equipment internals
+                stack.extend(prim.GetChildren())
         return len(self._eqp_index)
 
     def get_selected_equipment(self) -> str:
-        """현재 선택(메시)에서 조상을 거슬러 올라가 장비 경로를 반환한다."""
+        """Walk up from the selected mesh to the owning equipment prim path."""
         stage = self._get_stage()
         prim = self._resolve_by_selection(stage) if stage else None
         return str(prim.GetPath()) if prim else ""
@@ -145,7 +182,7 @@ class EbsSimulate:
         return None
 
     def _resolve_by_name(self, stage: Usd.Stage, text: str) -> "Usd.Prim | None":
-        """'########', 'EQP_########', 전체 경로 모두 허용."""
+        """Accepts '########', 'EQP_########' or a full prim path."""
         text = text.strip()
         if text.startswith("/"):
             prim = stage.GetPrimAtPath(text)
@@ -168,7 +205,7 @@ class EbsSimulate:
 
     @staticmethod
     def _descend_first_child(prim: Usd.Prim, depth: int) -> Usd.Prim:
-        """첫 자식을 depth 단계 따라 내려간다. 도중에 끊기면 마지막 프림."""
+        """Follow child(0) down `depth` levels; stop early at the deepest prim."""
         current = prim
         for _ in range(depth):
             children = current.GetChildren()
@@ -177,33 +214,34 @@ class EbsSimulate:
             current = children[0]
         return current
 
-    # ── 포트 개수 (XML) ──────────────────────────────────────────────────────
+    # -- port count (XML) ----------------------------------------------------
 
     def load_ports(self) -> int:
-        """XML을 읽어 '########' -> 포트 개수 맵을 만든다. 항목 수를 반환."""
+        """Parse the XML into '########' -> port count. Returns the entry count."""
         self._port_map = {}
         if not self._xml_path:
             return 0
-        try:
-            root = ET.parse(self._xml_path).getroot()
-        except Exception as e:
-            print(f"[ebs] XML parse failed: {e}")
-            return 0
+        with self._stage_timer("parse XML"):
+            try:
+                root = ET.parse(self._xml_path).getroot()
+            except Exception as e:
+                print(f"[ebs] XML parse failed: {e}")
+                return 0
 
-        pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
-        for elem in root.iter():
-            for token in self._tokens(elem):
-                m = pattern.match(token)
-                if not m:
-                    continue
-                key, index = m.group(1).upper(), int(m.group(2))
-                if index > self._port_map.get(key, 0):
-                    self._port_map[key] = index
+            pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
+            for elem in root.iter():
+                for token in self._tokens(elem):
+                    m = pattern.match(token)
+                    if not m:
+                        continue
+                    key, index = m.group(1).upper(), int(m.group(2))
+                    if index > self._port_map.get(key, 0):
+                        self._port_map[key] = index
         return len(self._port_map)
 
     @staticmethod
     def _tokens(elem) -> list:
-        """태그명·속성 키/값·텍스트 어디에 있든 포트 키를 주워 담는다."""
+        """Collect port keys wherever they sit: tag name, attribute key/value or text."""
         out = [elem.tag.rsplit("}", 1)[-1]]
         for k, v in elem.attrib.items():
             out.append(k.rsplit("}", 1)[-1])
@@ -213,15 +251,15 @@ class EbsSimulate:
         return [t.strip() for t in out if t and t.strip()]
 
     def get_port_count(self, eqp_id: str) -> "int | None":
-        """장비 ID의 포트 개수. 최대 인덱스가 곧 포트 수."""
+        """Port count of an equipment: the highest index found is the count."""
         if not self._port_map:
             self.load_ports()
         return self._port_map.get(eqp_id.upper())
 
-    # ── 정렬 ─────────────────────────────────────────────────────────────────
+    # -- alignment -----------------------------------------------------------
 
     def align(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
-        """EBS의 위치와 회전을 anchor에 맞춘다."""
+        """Match the EBS position and rotation to the anchor prim."""
         stage = self._get_stage()
         if stage is None or not anchor_prim.IsValid():
             return False
@@ -237,13 +275,13 @@ class EbsSimulate:
         if parent and parent.IsValid() and UsdGeom.Xformable(parent):
             parent_world = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(tc)
 
-        # 행벡터 규약: M_local * M_parent = M_world
+        # Row-vector convention: M_local * M_parent = M_world
         target_local = anchor_world * parent_world.GetInverse()
 
-        # 원본 레이어를 더럽히지 않도록 세션 레이어에 기록한다.
+        # Author into the session layer so the source layers stay untouched.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             try:
-                # 회전까지 한 번에 담기 위해 transform op 하나로 덮어쓴다.
+                # One transform op carries position and rotation together.
                 xformable.ClearXformOpOrder()
                 xformable.AddTransformOp().Set(target_local)
                 return True
@@ -253,12 +291,13 @@ class EbsSimulate:
                 return bool(api and api.SetTranslate(
                     Gf.Vec3d(target_local.ExtractTranslation())))
 
-    # ── 충돌 판정 ────────────────────────────────────────────────────────────
+    # -- collision -----------------------------------------------------------
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
-        """좌·우·천장 3면을 3x3으로 나눠 각 칸의 충돌 여부를 반환한다.
+        """Test the left, right and ceiling faces as 3x3 grids.
 
-        면과 셀은 EBS 프림의 로컬 축을 따른다 (+X 정면, ±Y 좌우, +Z 천장).
+        Faces and cells follow the EBS prim's local axes
+        (+X front, +/-Y sides, +up ceiling).
         """
         empty = {face: [False] * (GRID * GRID) for face in FACES}
         stage = self._get_stage()
@@ -268,59 +307,86 @@ class EbsSimulate:
         cache = UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,          # 대용량 스테이지에서 지오메트리 순회 회피
+            useExtentsHint=True,          # read extentsHint instead of walking geometry
         )
-        # GfBBox3d: GetRange()는 프림 로컬 박스, GetMatrix()는 로컬→월드.
-        ebs_bbox = cache.ComputeWorldBound(ebs_prim)
-        local_box = ebs_bbox.GetRange()
-        to_world = ebs_bbox.GetMatrix()
+
+        with self._stage_timer("EBS bounds"):
+            # GfBBox3d: GetRange() is the local box, GetMatrix() maps it to world.
+            ebs_bbox = cache.ComputeWorldBound(ebs_prim)
+            local_box = ebs_bbox.GetRange()
+            to_world = ebs_bbox.GetMatrix()
+            world_box = ebs_bbox.ComputeAlignedRange()
         if local_box.IsEmpty():
             return empty
 
-        # 로컬 축을 따라 자른 셀을, 각각 월드 AABB로 변환해 검사한다.
-        cells = {
-            face: [Gf.BBox3d(cell, to_world).ComputeAlignedRange() for cell in boxes]
-            for face, boxes in self._build_cells(local_box).items()
-        }
-
-        # broad phase: EBS를 여유만큼 부풀린 범위에 걸치는 장비만 후보로 남긴다.
-        world_box = ebs_bbox.ComputeAlignedRange()
-        margin = Gf.Vec3d(self._clearance, self._clearance, self._clearance)
-        search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
-        skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
+        with self._stage_timer("build cells"):
+            # Cells are cut along the local axes, then converted to world AABBs.
+            cells = {
+                face: [Gf.BBox3d(cell, to_world).ComputeAlignedRange() for cell in boxes]
+                for face, boxes in self._build_cells(local_box).items()
+            }
 
         if not self._eqp_index:
             self.build_index()
 
-        candidates = []
+        with self._stage_timer(f"equipment bounds ({len(self._eqp_index)})"):
+            missing = self._cache_bounds(stage, cache)
+
+        with self._stage_timer("broad phase"):
+            # Keep only equipment overlapping the EBS box grown by the clearance.
+            margin = Gf.Vec3d(self._clearance, self._clearance, self._clearance)
+            search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
+            skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
+            candidates = [
+                box for path, box in self._bounds_cache.items()
+                if not any(path == s or path.startswith(s + "/") for s in skip)
+                and not Gf.Range3d.GetIntersection(box, search).IsEmpty()
+            ]
+
+        with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
+            result = {face: [False] * (GRID * GRID) for face in FACES}
+            for face, boxes in cells.items():
+                for i, cell in enumerate(boxes):
+                    for box in candidates:
+                        if not Gf.Range3d.GetIntersection(box, cell).IsEmpty():
+                            result[face][i] = True
+                            break
+
+        if missing:
+            print(f"[ebs] {missing} equipment prim(s) had no usable bound")
+        return result
+
+    def _cache_bounds(self, stage, cache) -> int:
+        """Compute and cache the world bound of every equipment prim.
+
+        Equipment does not move, so this is paid once and reused by later runs.
+        """
+        missing = 0
         for path in self._eqp_index.values():
-            if any(path == s or path.startswith(s + "/") for s in skip):
+            if path in self._bounds_cache:
                 continue
             prim = stage.GetPrimAtPath(path)
             if not prim.IsValid():
+                missing += 1
                 continue
             box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-            if not box.IsEmpty() and not Gf.Range3d.GetIntersection(box, search).IsEmpty():
-                candidates.append(box)
-
-        result = {face: [False] * (GRID * GRID) for face in FACES}
-        for face, boxes in cells.items():
-            for i, cell in enumerate(boxes):
-                for box in candidates:
-                    if not Gf.Range3d.GetIntersection(box, cell).IsEmpty():
-                        result[face][i] = True
-                        break
-        return result
+            if box.IsEmpty():
+                missing += 1
+                continue
+            self._bounds_cache[path] = box
+        return missing
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
-        """프림 로컬 축 기준으로 면별 3x3 셀을 만든다. 순서는 좌→우, 위→아래.
+        """Build the 3x3 cells per face in the prim's local axes,
+        ordered left to right and top to bottom.
 
-        +X가 정면(판정 제외), ±Y가 좌우, +up이 천장.
-        카메라가 로컬 +X에서 -X를 보므로 화면 오른쪽이 +Y, 화면 위가 +up이 된다.
+        +X is the front (not evaluated), +/-Y the sides, +up the ceiling.
+        The camera looks from local +X toward -X, so on screen
+        right is +Y and up is +up.
         """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
-        front_axis = 0                                  # 전후 (판정 제외 방향)
-        side_axis = 3 - up_axis - front_axis            # 좌우 (Z-up이면 Y)
+        front_axis = 0                                  # front/back, not evaluated
+        side_axis = 3 - up_axis - front_axis            # sides (Y when Z-up)
         t = self._clearance
 
         lo, hi = box.GetMin(), box.GetMax()
@@ -335,7 +401,7 @@ class EbsSimulate:
             for r in range(GRID):
                 for c in range(GRID):
                     cmin, cmax = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-                    # 위→아래 순서가 되도록 행을 뒤집는다
+                    # rows are flipped so index 0 is the top row
                     cmin[row_axis] = row_hi - (r + 1) * row_step
                     cmax[row_axis] = row_hi - r * row_step
                     cmin[col_axis] = col_lo + c * col_step
@@ -352,10 +418,10 @@ class EbsSimulate:
         cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis)
         return cells
 
-    # ── 카메라 ───────────────────────────────────────────────────────────────
+    # -- camera --------------------------------------------------------------
 
     def focus(self, prim_path: str) -> bool:
-        """대상 프림의 정면(로컬 +X쪽)에 카메라를 두고 F키처럼 화면에 채운다."""
+        """Put the camera in front of the prim (its local +X) and fill the view like F."""
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
         except Exception as e:
@@ -384,14 +450,14 @@ class EbsSimulate:
 
         self._place_front_camera(stage, viewport, prim, center, distance)
         try:
-            frame_viewport_prims(viewport, prims=[prim_path])   # 방향은 두고 크기만 맞춘다
+            frame_viewport_prims(viewport, prims=[prim_path])   # keep direction, fit size
         except Exception as e:
             print(f"[ebs] camera framing failed: {e}")
             return False
         return True
 
     def _place_front_camera(self, stage, viewport, prim, center, distance) -> bool:
-        """프림 로컬 +X에서 -X를 바라보도록 카메라를 배치한다."""
+        """Aim the camera from the prim's local +X toward -X."""
         cam_prim = stage.GetPrimAtPath(str(viewport.camera_path))
         if not cam_prim.IsValid():
             return False
@@ -400,10 +466,10 @@ class EbsSimulate:
         local_to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
         rot = local_to_world.ExtractRotationMatrix()
         up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
-        front = Gf.Vec3d(rot[0][0], rot[0][1], rot[0][2]).GetNormalized()          # 로컬 +X
+        front = Gf.Vec3d(rot[0][0], rot[0][1], rot[0][2]).GetNormalized()          # local +X
         up    = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
 
-        # 카메라는 로컬 -Z를 바라본다 → Z_cam = 시선의 반대 = front
+        # A camera looks down its local -Z, so Z_cam is the opposite of the view direction.
         z_cam = front
         x_cam = Gf.Cross(up, z_cam).GetNormalized()
         y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
@@ -416,7 +482,7 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        # 뷰포트 카메라는 세션 레이어 프림이므로 세션 레이어에 기록해야 반영된다.
+        # The viewport camera is a session-layer prim, so author there for it to take effect.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             xformable = UsdGeom.Xformable(cam_prim)
             transform_op = next(
@@ -433,10 +499,10 @@ class EbsSimulate:
                     return False
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
-                coi.Set(Gf.Vec3d(0.0, 0.0, -distance))   # 궤도 회전 중심을 대상에 맞춘다
+                coi.Set(Gf.Vec3d(0.0, 0.0, -distance))   # orbit around the target
         return True
 
-    # ── 내부 ─────────────────────────────────────────────────────────────────
+    # -- internals -----------------------------------------------------------
 
     @staticmethod
     def _get_stage() -> "Usd.Stage | None":
@@ -453,5 +519,7 @@ class EbsSimulate:
             "anchor": "",
             "cells": {face: [False] * (GRID * GRID) for face in FACES},
             "hit_count": 0,
+            "timings": list(self._timings),
+            "total_ms": sum(t[1] for t in self._timings),
         }
         return dict(self._result)

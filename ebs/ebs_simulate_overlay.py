@@ -4,7 +4,7 @@ __all__ = ["EbsSimulateOverlay"]
 
 
 class EbsSimulateOverlay:
-    """공개 API를 사용하는 뷰포트 오버레이 UI."""
+    """Viewport overlay UI driven by the public API. Not implemented yet."""
 
     _instances = {}
 

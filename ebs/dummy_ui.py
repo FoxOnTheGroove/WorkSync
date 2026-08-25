@@ -10,11 +10,19 @@ COLOR_DISABLED = 0xFF2A2A2A      # not evaluated
 CELL_SIZE      = 26
 CELL_GAP       = 2
 
+LOG_STYLE = {
+    "background_color": 0xFF1E1E1E,
+    "border_color":     0xFF555555,
+    "border_width":     1,
+    "border_radius":    4,
+    "padding":          4,
+}
+
 FACE_LABEL = {"left": "Left", "ceiling": "Ceiling", "right": "Right"}
 
 
 class EbsDummyUI:
-    """공개 API(EbsSimulateService)만 사용하는 더미 UI."""
+    """Dummy UI driven only by the public API (EbsSimulateService)."""
 
     def __init__(self):
         self._window = None
@@ -25,17 +33,18 @@ class EbsDummyUI:
         self._eqp_field = None
         self._status_label = None
         self._info_label = None
+        self._log_stack = None
         self._cells = {}          # face -> list[ui.Rectangle]
 
-    # ── 빌드 ─────────────────────────────────────────────────────────────────
+    # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=460, height=460)
+        self._window = ui.Window("EBS Simulate", width=470, height=600)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
-                self._xml_field       = self._path_row("Port XML:", "")
-                self._ebs2_field      = self._path_row("EBS 2port:", "")
-                self._ebs3_field      = self._path_row("EBS 3port:", "")
+                self._xml_field  = self._path_row("Port XML:")
+                self._ebs2_field = self._path_row("EBS 2port:")
+                self._ebs3_field = self._path_row("EBS 3port:")
 
                 with ui.HStack(height=24, spacing=4):
                     ui.Label("Clearance:", width=90)
@@ -60,13 +69,15 @@ class EbsDummyUI:
 
                 ui.Separator(height=6)
                 self._build_grids()
-                ui.Spacer()
 
-    def _path_row(self, label: str, default: str):
+                ui.Label("Timing", height=18, style={"font_size": 12, "color": 0xFFAAAAAA})
+                with ui.ScrollingFrame(height=ui.Fraction(1), style=LOG_STYLE):
+                    self._log_stack = ui.VStack(spacing=1)
+
+    def _path_row(self, label: str):
         with ui.HStack(height=24, spacing=4):
             ui.Label(label, width=90)
             field = ui.StringField()
-            field.model.set_value(default)
         return field
 
     def _build_grids(self):
@@ -88,7 +99,7 @@ class EbsDummyUI:
                                 ))
                     self._cells[face] = rects
 
-    # ── 핸들러 ───────────────────────────────────────────────────────────────
+    # -- handlers ------------------------------------------------------------
 
     def _on_pick_selected(self):
         path = EbsSimulateService.get_selected_equipment()
@@ -99,9 +110,11 @@ class EbsDummyUI:
         self._set_status(f"Selected: {path}")
 
     def _on_rebuild_index(self):
+        self._apply_settings()
         count = EbsSimulateService.build_index()
         ports = EbsSimulateService.load_ports()
         self._set_status(f"Equipment: {count}  |  XML port entries: {ports}")
+        self._log_timings(EbsSimulateService.get_timings())
 
     def _on_simulate(self):
         self._apply_settings()
@@ -118,7 +131,7 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_clearance(self._clearance_field.model.get_value_as_float())
 
-    # ── 표시 ─────────────────────────────────────────────────────────────────
+    # -- display -------------------------------------------------------------
 
     def _render(self, result: dict):
         if not result:
@@ -142,15 +155,45 @@ class EbsDummyUI:
             f"{result.get('equipment_id', '')}  |  port {port if port is not None else '-'}"
             f"  |  {result.get('ebs', '') or '-'}"
         )
+        self._log_timings(result.get("timings", []), result.get("total_ms"))
+
+    def _log_timings(self, timings: list, total_ms: float = None):
+        """Show how long each step took, slowest step highlighted."""
+        if self._log_stack is None:
+            return
+        self._log_stack.clear()
+        if not timings:
+            with self._log_stack:
+                ui.Label("(no timing recorded)", style={"color": 0xFF888888,
+                                                        "font_size": 12})
+            return
+
+        slowest = max(t[1] for t in timings)
+        with self._log_stack:
+            for label, elapsed in timings:
+                color = 0xFF6699FF if elapsed >= slowest else 0xFFBBBBBB
+                with ui.HStack(height=16):
+                    ui.Label(str(label), style={"font_size": 12, "color": color})
+                    ui.Label(f"{elapsed:8.1f} ms", width=90,
+                             alignment=ui.Alignment.RIGHT_CENTER,
+                             style={"font_size": 12, "color": color})
+            if total_ms is not None:
+                ui.Separator(height=4)
+                with ui.HStack(height=16):
+                    ui.Label("total", style={"font_size": 12, "color": 0xFFFFFFFF})
+                    ui.Label(f"{total_ms:8.1f} ms", width=90,
+                             alignment=ui.Alignment.RIGHT_CENTER,
+                             style={"font_size": 12, "color": 0xFFFFFFFF})
 
     def _set_status(self, text: str):
         if self._status_label:
             self._status_label.text = text
 
-    # ── 정리 ─────────────────────────────────────────────────────────────────
+    # -- teardown ------------------------------------------------------------
 
     def destroy(self):
         self._cells = {}
+        self._log_stack = None
         if self._window:
             self._window.destroy()
             self._window = None

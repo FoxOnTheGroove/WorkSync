@@ -4,7 +4,7 @@ __all__ = ["EbsSimulateService", "FACES", "GRID"]
 
 
 class EbsSimulateService:
-    """EBS 시뮬레이션 공개 API. 구현부 접근은 이 클래스로만."""
+    """Public API for the EBS simulation. The implementation is reached only through here."""
 
     _simulate = None
 
@@ -57,3 +57,7 @@ class EbsSimulateService:
     @classmethod
     def get_result(cls):
         return cls._simulate.get_result()
+
+    @classmethod
+    def get_timings(cls):
+        return cls._simulate.get_timings()
