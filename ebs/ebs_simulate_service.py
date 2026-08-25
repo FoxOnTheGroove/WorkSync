@@ -31,6 +31,10 @@ class EbsSimulateService:
         return cls._simulate.set_clearance(value)
 
     @classmethod
+    def set_search_root(cls, path):
+        return cls._simulate.set_search_root(path)
+
+    @classmethod
     def load_ports(cls):
         return cls._simulate.load_ports()
 

@@ -17,6 +17,14 @@ FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 3                 # 3x3 subdivision per face
+
+# Prim types that can never contain equipment. Descending into them is what made
+# the first scan expensive: geometry subtrees are where nearly all prims live.
+PRUNE_TYPES = frozenset({
+    "Mesh", "Points", "BasisCurves", "NurbsCurves", "Capsule", "Cone", "Cube",
+    "Cylinder", "Sphere", "Plane", "GeomSubset",
+    "Material", "Shader", "NodeGraph", "Camera",
+})
 ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
 
 
@@ -32,6 +40,7 @@ class EbsSimulate:
         self._ebs_path_2port: str = ""
         self._ebs_path_3port: str = ""
         self._clearance: float = 1.0        # thickness probed outward from each face
+        self._search_root: str = ""         # limit the scan to this subtree when set
         self._eqp_index: dict = {}          # "EQP_########" -> prim path
         self._port_map: dict = {}           # "########" -> port count
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
@@ -55,6 +64,14 @@ class EbsSimulate:
 
     def set_clearance(self, value: float) -> None:
         self._clearance = max(0.0, float(value))
+
+    def set_search_root(self, path: str) -> None:
+        """Limit the equipment scan to one subtree, e.g. '/World/Factory'."""
+        path = (path or "").strip()
+        if path != self._search_root:
+            self._eqp_index = {}
+            self._bounds_cache = {}
+        self._search_root = path
 
     def get_result(self) -> dict:
         return dict(self._result)
@@ -203,23 +220,50 @@ class EbsSimulate:
     # -- equipment lookup ----------------------------------------------------
 
     def build_index(self) -> int:
-        """Rebuild the EQP_ prim index. Descent stops at each equipment, so it
-        never walks the meshes inside them - that is what keeps it cheap here."""
+        """Rebuild the EQP_ prim index.
+
+        Descent stops at each equipment and at any geometry or material prim, so
+        the scan never enters the subtrees that hold nearly all of the prims.
+        """
         stage = self._get_stage()
         self._eqp_index = {}
         self._bounds_cache = {}
         if stage is None:
             return 0
-        with self._stage_timer("build index"):
-            stack = list(stage.GetPseudoRoot().GetChildren())
-            while stack:
-                prim = stack.pop()
-                name = prim.GetName().upper()
-                if name.startswith(EQP_PREFIX):
-                    self._eqp_index[name] = str(prim.GetPath())
-                    continue          # do not descend into equipment internals
-                stack.extend(prim.GetChildren())
+        visited = 0
+        started = time.perf_counter()
+        for prim, name in self._walk(stage):
+            visited += 1
+            if name.startswith(EQP_PREFIX):
+                self._eqp_index[name] = str(prim.GetPath())
+        self._timings.append([f"build index (visited {visited})",
+                              (time.perf_counter() - started) * 1000.0])
         return len(self._eqp_index)
+
+    def _walk(self, stage: Usd.Stage):
+        """Yield (prim, upper-case name) for every prim that could be equipment.
+
+        Equipment prims are yielded without descending into them; geometry and
+        material subtrees are skipped entirely.
+        """
+        root = None
+        if self._search_root:
+            root = stage.GetPrimAtPath(self._search_root)
+            if not root.IsValid():
+                print(f"[ebs] search root not found, scanning the whole stage: "
+                      f"{self._search_root}")
+                root = None
+        stack = list((root or stage.GetPseudoRoot()).GetChildren())
+        while stack:
+            prim = stack.pop()
+            name = prim.GetName().upper()
+            yield prim, name
+            if name.startswith(EQP_PREFIX):
+                continue              # do not descend into equipment internals
+            type_name = prim.GetTypeName()
+            if type_name in PRUNE_TYPES or type_name.endswith("Light"):
+                continue              # geometry and shading never hold equipment
+            stack.extend(prim.GetChildren())
 
     def get_selected_equipment(self) -> str:
         """Walk up from the selected mesh to the owning equipment prim path."""
@@ -246,13 +290,26 @@ class EbsSimulate:
         key = text.upper()
         if not key.startswith(EQP_PREFIX):
             key = EQP_PREFIX + key
-        if key not in self._eqp_index:
-            self.build_index()
+
         path = self._eqp_index.get(key)
-        if not path:
-            return None
-        prim = stage.GetPrimAtPath(path)
-        return prim if prim.IsValid() else None
+        if path:
+            prim = stage.GetPrimAtPath(path)
+            return prim if prim.IsValid() else None
+
+        # No full index yet: stop at the first match instead of scanning
+        # everything. The index is still built later, when collision needs it.
+        visited = 0
+        started = time.perf_counter()
+        found = None
+        for prim, name in self._walk(stage):
+            visited += 1
+            if name == key:
+                self._eqp_index[key] = str(prim.GetPath())
+                found = prim
+                break
+        self._timings.append([f"find equipment (visited {visited})",
+                              (time.perf_counter() - started) * 1000.0])
+        return found
 
     @staticmethod
     def _equipment_id(prim: Usd.Prim) -> str:
