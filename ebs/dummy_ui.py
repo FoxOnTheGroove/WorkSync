@@ -4,13 +4,13 @@ from .ebs_simulate_service import EbsSimulateService, FACES, GRID
 
 __all__ = ["EbsDummyUI"]
 
-COLOR_HIT      = 0xFF3333DD      # 충돌 (ABGR: 빨강)
-COLOR_CLEAR    = 0xFF4C4C4C      # 여유
-COLOR_DISABLED = 0xFF2A2A2A      # 판정 안 함
+COLOR_HIT      = 0xFF3333DD      # collision (ABGR: red)
+COLOR_CLEAR    = 0xFF4C4C4C      # clear
+COLOR_DISABLED = 0xFF2A2A2A      # not evaluated
 CELL_SIZE      = 26
 CELL_GAP       = 2
 
-FACE_LABEL = {"left": "좌", "ceiling": "천장", "right": "우"}
+FACE_LABEL = {"left": "Left", "ceiling": "Ceiling", "right": "Right"}
 
 
 class EbsDummyUI:
@@ -46,15 +46,15 @@ class EbsDummyUI:
                 ui.Separator(height=6)
 
                 with ui.HStack(height=24, spacing=4):
-                    ui.Label("장비:", width=90)
+                    ui.Label("Equipment:", width=90)
                     self._eqp_field = ui.StringField()
-                    ui.Button("선택에서", width=64, clicked_fn=self._on_pick_selected)
+                    ui.Button("From Sel", width=64, clicked_fn=self._on_pick_selected)
 
                 with ui.HStack(height=28, spacing=4):
                     ui.Button("SIM", clicked_fn=self._on_simulate)
-                    ui.Button("인덱스 재생성", width=110, clicked_fn=self._on_rebuild_index)
+                    ui.Button("Rebuild Index", width=110, clicked_fn=self._on_rebuild_index)
 
-                self._status_label = ui.Label("대기 중", height=20)
+                self._status_label = ui.Label("Ready", height=20)
                 self._info_label = ui.Label("", height=20,
                                             style={"color": 0xFF999999, "font_size": 12})
 
@@ -93,15 +93,15 @@ class EbsDummyUI:
     def _on_pick_selected(self):
         path = EbsSimulateService.get_selected_equipment()
         if not path:
-            self._set_status("선택에서 장비를 찾지 못함")
+            self._set_status("No equipment found in selection")
             return
         self._eqp_field.model.set_value(path)
-        self._set_status(f"선택: {path}")
+        self._set_status(f"Selected: {path}")
 
     def _on_rebuild_index(self):
         count = EbsSimulateService.build_index()
         ports = EbsSimulateService.load_ports()
-        self._set_status(f"장비 {count}개 / XML 포트 항목 {ports}개")
+        self._set_status(f"Equipment: {count}  |  XML port entries: {ports}")
 
     def _on_simulate(self):
         self._apply_settings()
@@ -122,7 +122,7 @@ class EbsDummyUI:
 
     def _render(self, result: dict):
         if not result:
-            self._set_status("결과 없음")
+            self._set_status("No result")
             return
 
         ok = result.get("ok", False)
