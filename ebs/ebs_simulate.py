@@ -61,36 +61,36 @@ class EbsSimulate:
         """장비명(또는 경로)으로, 비어 있으면 현재 선택으로 시뮬레이션한다."""
         stage = self._get_stage()
         if stage is None:
-            return self._fail("스테이지가 열려 있지 않음")
+            return self._fail("No stage open")
 
         eqp_prim = (self._resolve_by_name(stage, equipment) if equipment.strip()
                     else self._resolve_by_selection(stage))
         if eqp_prim is None:
-            return self._fail("장비 프림을 찾지 못함: "
-                              f"{equipment.strip() or '(선택 없음)'}")
+            return self._fail("Equipment prim not found: "
+                              f"{equipment.strip() or '(no selection)'}")
 
         eqp_id = self._equipment_id(eqp_prim)
         self.focus(str(eqp_prim.GetPath()))
 
         port_count = self.get_port_count(eqp_id)
         if port_count is None:
-            return self._fail(f"XML에서 '{eqp_id}' 포트 정보를 찾지 못함",
+            return self._fail(f"No port info for '{eqp_id}' in XML",
                               equipment=eqp_prim, eqp_id=eqp_id)
         if port_count not in (2, 3):
-            return self._fail(f"{port_count}포트 장비: 지원 EBS 없음",
+            return self._fail(f"{port_count}-port equipment: no matching EBS",
                               equipment=eqp_prim, eqp_id=eqp_id,
                               port_count=port_count)
 
         ebs_path = self._ebs_path_2port if port_count == 2 else self._ebs_path_3port
         ebs_prim = stage.GetPrimAtPath(ebs_path) if ebs_path else None
         if ebs_prim is None or not ebs_prim.IsValid():
-            return self._fail(f"{port_count}port EBS 프림 경로가 유효하지 않음: {ebs_path}",
+            return self._fail(f"Invalid {port_count}-port EBS prim path: {ebs_path}",
                               equipment=eqp_prim, eqp_id=eqp_id,
                               port_count=port_count)
 
         anchor = self._descend_first_child(eqp_prim, ANCHOR_DEPTH)
         if not self.align(ebs_prim, anchor):
-            return self._fail("EBS 정렬 실패",
+            return self._fail("EBS alignment failed",
                               equipment=eqp_prim, eqp_id=eqp_id,
                               port_count=port_count, ebs=ebs_prim)
 
@@ -99,7 +99,7 @@ class EbsSimulate:
 
         self._result = {
             "ok": True,
-            "reason": "충돌 없음" if hit_count == 0 else f"{hit_count}칸 충돌",
+            "reason": "No collision" if hit_count == 0 else f"{hit_count} cell(s) blocked",
             "equipment": str(eqp_prim.GetPath()),
             "equipment_id": eqp_id,
             "port_count": port_count,
@@ -187,7 +187,7 @@ class EbsSimulate:
         try:
             root = ET.parse(self._xml_path).getroot()
         except Exception as e:
-            print(f"[ebs] XML 파싱 실패: {e}")
+            print(f"[ebs] XML parse failed: {e}")
             return 0
 
         pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
@@ -221,7 +221,7 @@ class EbsSimulate:
     # ── 정렬 ─────────────────────────────────────────────────────────────────
 
     def align(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
-        """EBS의 위치를 anchor 위치에 맞춘다. 회전은 건드리지 않는다."""
+        """EBS의 위치와 회전을 anchor에 맞춘다."""
         stage = self._get_stage()
         if stage is None or not anchor_prim.IsValid():
             return False
@@ -230,27 +230,36 @@ class EbsSimulate:
             return False
 
         tc = Usd.TimeCode.Default()
-        target_world = UsdGeom.Xformable(anchor_prim).ComputeLocalToWorldTransform(tc).ExtractTranslation()
+        anchor_world = UsdGeom.Xformable(anchor_prim).ComputeLocalToWorldTransform(tc)
 
         parent = ebs_prim.GetParent()
-        parent_xf = Gf.Matrix4d(1.0)
+        parent_world = Gf.Matrix4d(1.0)
         if parent and parent.IsValid() and UsdGeom.Xformable(parent):
-            parent_xf = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(tc)
-        target_local = parent_xf.GetInverse().Transform(Gf.Vec3d(target_world))
+            parent_world = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(tc)
+
+        # 행벡터 규약: M_local * M_parent = M_world
+        target_local = anchor_world * parent_world.GetInverse()
 
         # 원본 레이어를 더럽히지 않도록 세션 레이어에 기록한다.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            if not UsdGeom.XformCommonAPI(ebs_prim).SetTranslate(Gf.Vec3d(target_local)):
-                attr = ebs_prim.GetAttribute("xformOp:translate")
-                if not attr or not attr.IsValid():
-                    return False
-                attr.Set(Gf.Vec3d(target_local))
-        return True
+            try:
+                # 회전까지 한 번에 담기 위해 transform op 하나로 덮어쓴다.
+                xformable.ClearXformOpOrder()
+                xformable.AddTransformOp().Set(target_local)
+                return True
+            except Exception as e:
+                print(f"[ebs] transform op failed, translate only: {e}")
+                api = UsdGeom.XformCommonAPI(ebs_prim)
+                return bool(api and api.SetTranslate(
+                    Gf.Vec3d(target_local.ExtractTranslation())))
 
     # ── 충돌 판정 ────────────────────────────────────────────────────────────
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
-        """좌·우·천장 3면을 3x3으로 나눠 각 칸의 충돌 여부를 반환한다."""
+        """좌·우·천장 3면을 3x3으로 나눠 각 칸의 충돌 여부를 반환한다.
+
+        면과 셀은 EBS 프림의 로컬 축을 따른다 (+X 정면, ±Y 좌우, +Z 천장).
+        """
         empty = {face: [False] * (GRID * GRID) for face in FACES}
         stage = self._get_stage()
         if stage is None:
@@ -261,15 +270,23 @@ class EbsSimulate:
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
             useExtentsHint=True,          # 대용량 스테이지에서 지오메트리 순회 회피
         )
-        ebs_box = cache.ComputeWorldBound(ebs_prim).ComputeAlignedRange()
-        if ebs_box.IsEmpty():
+        # GfBBox3d: GetRange()는 프림 로컬 박스, GetMatrix()는 로컬→월드.
+        ebs_bbox = cache.ComputeWorldBound(ebs_prim)
+        local_box = ebs_bbox.GetRange()
+        to_world = ebs_bbox.GetMatrix()
+        if local_box.IsEmpty():
             return empty
 
-        cells = self._build_cells(ebs_box)
+        # 로컬 축을 따라 자른 셀을, 각각 월드 AABB로 변환해 검사한다.
+        cells = {
+            face: [Gf.BBox3d(cell, to_world).ComputeAlignedRange() for cell in boxes]
+            for face, boxes in self._build_cells(local_box).items()
+        }
 
         # broad phase: EBS를 여유만큼 부풀린 범위에 걸치는 장비만 후보로 남긴다.
+        world_box = ebs_bbox.ComputeAlignedRange()
         margin = Gf.Vec3d(self._clearance, self._clearance, self._clearance)
-        search = Gf.Range3d(ebs_box.GetMin() - margin, ebs_box.GetMax() + margin)
+        search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
         skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
 
         if not self._eqp_index:
@@ -296,10 +313,14 @@ class EbsSimulate:
         return result
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
-        """면별 3x3 셀 범위를 만든다. 셀 순서는 좌→우, 위→아래."""
+        """프림 로컬 축 기준으로 면별 3x3 셀을 만든다. 순서는 좌→우, 위→아래.
+
+        +X가 정면(판정 제외), ±Y가 좌우, +up이 천장.
+        카메라가 로컬 +X에서 -X를 보므로 화면 오른쪽이 +Y, 화면 위가 +up이 된다.
+        """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
-        side_axis = 0                                   # 좌우
-        depth_axis = 3 - up_axis - side_axis            # 전후 (판정 제외 방향)
+        front_axis = 0                                  # 전후 (판정 제외 방향)
+        side_axis = 3 - up_axis - front_axis            # 좌우 (Z-up이면 Y)
         t = self._clearance
 
         lo, hi = box.GetMin(), box.GetMax()
@@ -326,25 +347,94 @@ class EbsSimulate:
                     out.append(Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)))
             return out
 
-        cells[FACE_RIGHT]   = make(side_axis, +1, up_axis, depth_axis)
-        cells[FACE_LEFT]    = make(side_axis, -1, up_axis, depth_axis)
-        cells[FACE_CEILING] = make(up_axis,   +1, depth_axis, side_axis)
+        cells[FACE_RIGHT]   = make(side_axis, +1, up_axis, front_axis)
+        cells[FACE_LEFT]    = make(side_axis, -1, up_axis, front_axis)
+        cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis)
         return cells
 
     # ── 카메라 ───────────────────────────────────────────────────────────────
 
     def focus(self, prim_path: str) -> bool:
-        """옴니버스 F키와 동일하게 대상 프림에 카메라를 맞춘다."""
+        """대상 프림의 정면(로컬 +X쪽)에 카메라를 두고 F키처럼 화면에 채운다."""
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
-            viewport = get_active_viewport()
-            if viewport is None:
-                return False
-            frame_viewport_prims(viewport, prims=[prim_path])
-            return True
         except Exception as e:
-            print(f"[ebs] 카메라 프레이밍 실패: {e}")
+            print(f"[ebs] viewport utility unavailable: {e}")
             return False
+
+        stage = self._get_stage()
+        viewport = get_active_viewport()
+        if stage is None or viewport is None:
+            return False
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return False
+
+        cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+        box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        if box.IsEmpty():
+            return False
+        center = (box.GetMin() + box.GetMax()) * 0.5
+        diagonal = (box.GetMax() - box.GetMin()).GetLength()
+        distance = max(diagonal * 1.5, 1.0)
+
+        self._place_front_camera(stage, viewport, prim, center, distance)
+        try:
+            frame_viewport_prims(viewport, prims=[prim_path])   # 방향은 두고 크기만 맞춘다
+        except Exception as e:
+            print(f"[ebs] camera framing failed: {e}")
+            return False
+        return True
+
+    def _place_front_camera(self, stage, viewport, prim, center, distance) -> bool:
+        """프림 로컬 +X에서 -X를 바라보도록 카메라를 배치한다."""
+        cam_prim = stage.GetPrimAtPath(str(viewport.camera_path))
+        if not cam_prim.IsValid():
+            return False
+
+        tc = Usd.TimeCode.Default()
+        local_to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
+        rot = local_to_world.ExtractRotationMatrix()
+        up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
+        front = Gf.Vec3d(rot[0][0], rot[0][1], rot[0][2]).GetNormalized()          # 로컬 +X
+        up    = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
+
+        # 카메라는 로컬 -Z를 바라본다 → Z_cam = 시선의 반대 = front
+        z_cam = front
+        x_cam = Gf.Cross(up, z_cam).GetNormalized()
+        y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
+        eye = Gf.Vec3d(center) + z_cam * distance
+
+        matrix = Gf.Matrix4d(
+            x_cam[0], x_cam[1], x_cam[2], 0.0,
+            y_cam[0], y_cam[1], y_cam[2], 0.0,
+            z_cam[0], z_cam[1], z_cam[2], 0.0,
+            eye[0],   eye[1],   eye[2],   1.0,
+        )
+
+        # 뷰포트 카메라는 세션 레이어 프림이므로 세션 레이어에 기록해야 반영된다.
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            xformable = UsdGeom.Xformable(cam_prim)
+            transform_op = next(
+                (op for op in xformable.GetOrderedXformOps()
+                 if op.GetOpName() == "xformOp:transform"), None)
+            if transform_op is not None:
+                transform_op.Set(matrix)
+            else:
+                try:
+                    xformable.ClearXformOpOrder()
+                    xformable.AddTransformOp().Set(matrix)
+                except Exception as e:
+                    print(f"[ebs] camera transform failed: {e}")
+                    return False
+            coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
+            if coi and coi.IsValid():
+                coi.Set(Gf.Vec3d(0.0, 0.0, -distance))   # 궤도 회전 중심을 대상에 맞춘다
+        return True
 
     # ── 내부 ─────────────────────────────────────────────────────────────────
 
