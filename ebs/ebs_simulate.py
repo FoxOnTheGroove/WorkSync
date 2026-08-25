@@ -436,9 +436,9 @@ class EbsSimulate:
         """Build the 3x3 cells per face in the prim's local axes,
         ordered left to right and top to bottom.
 
-        +X is the front (not evaluated), +/-Y the sides, +up the ceiling.
-        The camera looks from local +X toward -X, so on screen
-        right is +Y and up is +up.
+        +/-X is the front/back (not evaluated), +/-Y the sides, +up the ceiling.
+        The camera looks from local -X toward +X, so on screen
+        right is -Y and up is +up.
         """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 0                                  # front/back, not evaluated
@@ -477,7 +477,7 @@ class EbsSimulate:
     # -- camera --------------------------------------------------------------
 
     def _move_camera(self, prim_path: str) -> bool:
-        """Put the camera in front of the prim (its local +X) and fill the view like F."""
+        """Put the camera in front of the prim (its local -X) and fill the view like F."""
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
         except Exception as e:
@@ -513,7 +513,7 @@ class EbsSimulate:
         return True
 
     def _place_front_camera(self, stage, viewport, prim, center, distance) -> bool:
-        """Aim the camera from the prim's local +X toward -X."""
+        """Aim the camera from the prim's local -X toward +X."""
         cam_prim = stage.GetPrimAtPath(str(viewport.camera_path))
         if not cam_prim.IsValid():
             return False
@@ -522,7 +522,7 @@ class EbsSimulate:
         local_to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
         rot = local_to_world.ExtractRotationMatrix()
         up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
-        front = Gf.Vec3d(rot[0][0], rot[0][1], rot[0][2]).GetNormalized()          # local +X
+        front = -Gf.Vec3d(rot[0][0], rot[0][1], rot[0][2]).GetNormalized()         # local -X
         up    = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
 
         # A camera looks down its local -Z, so Z_cam is the opposite of the view direction.
