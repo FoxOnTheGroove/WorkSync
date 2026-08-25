@@ -9,6 +9,7 @@ import omni.usd
 __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
+PORT_ID_ATTR = "port-id"      # XML attribute identifying a port: '<equipment>_<n>' 
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
@@ -42,7 +43,8 @@ class EbsSimulate:
         self._clearance: float = 1.0        # thickness probed outward from each face
         self._search_root: str = ""         # limit the scan to this subtree when set
         self._eqp_index: dict = {}          # "EQP_########" -> prim path
-        self._port_map: dict = {}           # "########" -> port count
+        self._port_map: dict = {}           # "########" -> sorted port indices
+        self._port_elements: dict = {}      # "########" -> port elements in port order
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._started: float = 0.0
@@ -56,6 +58,7 @@ class EbsSimulate:
         path = (path or "").strip()
         if path != self._xml_path:
             self._port_map = {}
+            self._port_elements = {}
         self._xml_path = path
 
     def set_ebs_paths(self, path_2port: str, path_3port: str) -> None:
@@ -83,6 +86,7 @@ class EbsSimulate:
     def teardown(self) -> None:
         self._eqp_index = {}
         self._port_map = {}
+        self._port_elements = {}
         self._bounds_cache = {}
         self._timings = []
         self._target = None
@@ -341,8 +345,15 @@ class EbsSimulate:
     # -- port count (XML) ----------------------------------------------------
 
     def load_ports(self) -> int:
-        """Parse the XML into '########' -> port count. Returns the entry count."""
+        """Parse the XML into '########' -> sorted port indices. Returns the entry count.
+
+        Ports are the elements carrying a 'port-id' attribute of the form
+        '<equipment>_<n>'. Document order is not port order and unrelated
+        stations sit in between, so ports are collected by that attribute and
+        sorted by n rather than by position in the file.
+        """
         self._port_map = {}
+        self._port_elements = {}
         if not self._xml_path:
             return 0
         with self._stage_timer("parse XML"):
@@ -353,19 +364,37 @@ class EbsSimulate:
                 return 0
 
             pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
+            found = {}                       # equipment -> {index: element}
             for elem in root.iter():
-                for token in self._tokens(elem):
-                    m = pattern.match(token)
-                    if not m:
-                        continue
-                    key, index = m.group(1).upper(), int(m.group(2))
-                    if index > self._port_map.get(key, 0):
-                        self._port_map[key] = index
+                port_id = self._attr(elem, PORT_ID_ATTR)
+                if not port_id:
+                    continue
+                m = pattern.match(port_id.strip())
+                if m:
+                    found.setdefault(m.group(1).upper(), {})[int(m.group(2))] = elem
+
+            if not found:
+                # Older files may not carry the attribute; fall back to scanning
+                # every tag, attribute and text value for the same pattern.
+                print(f"[ebs] no '{PORT_ID_ATTR}' attribute found, "
+                      "falling back to a loose token scan")
+                for elem in root.iter():
+                    for token in self._tokens(elem):
+                        m = pattern.match(token)
+                        if m:
+                            found.setdefault(m.group(1).upper(), {})[int(m.group(2))] = elem
+
+            for key, by_index in found.items():
+                indices = sorted(by_index)
+                self._port_map[key] = indices
+                self._port_elements[key] = [by_index[i] for i in indices]
+                if indices != list(range(1, len(indices) + 1)):
+                    print(f"[ebs] {key}: port indices are not 1..N: {indices}")
         return len(self._port_map)
 
     @staticmethod
     def _tokens(elem) -> list:
-        """Collect port keys wherever they sit: tag name, attribute key/value or text."""
+        """Every string on an element: tag name, attribute keys/values and text."""
         out = [elem.tag.rsplit("}", 1)[-1]]
         for k, v in elem.attrib.items():
             out.append(k.rsplit("}", 1)[-1])
@@ -374,11 +403,27 @@ class EbsSimulate:
             out.append(elem.text)
         return [t.strip() for t in out if t and t.strip()]
 
+    @staticmethod
+    def _attr(elem, name: str) -> str:
+        """Attribute lookup that ignores XML namespaces on the attribute name."""
+        value = elem.attrib.get(name)
+        if value is not None:
+            return value
+        for k, v in elem.attrib.items():
+            if k.rsplit("}", 1)[-1] == name:
+                return v
+        return ""
+
     def get_port_count(self, eqp_id: str) -> "int | None":
-        """Port count of an equipment: the highest index found is the count."""
+        """Number of ports of an equipment, i.e. how many port-ids it has."""
+        indices = self.get_port_indices(eqp_id)
+        return len(indices) if indices else None
+
+    def get_port_indices(self, eqp_id: str) -> list:
+        """Port indices of an equipment, sorted ascending."""
         if not self._port_map:
             self.load_ports()
-        return self._port_map.get(eqp_id.upper())
+        return list(self._port_map.get(eqp_id.upper(), []))
 
     # -- alignment -----------------------------------------------------------
 
