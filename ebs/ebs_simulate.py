@@ -220,7 +220,8 @@ class EbsSimulate:
             if target is not None:
                 self._aligned = self._place_ebs(self._target["ebs"], target,
                                                 self._target["anchor"])
-                note = f"EBS placed at port 0 (y={target[1]:.4f})"
+                note = ("EBS placed at port 0, world "
+                        f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f})")
             else:
                 # No usable rail/port data: keep working off the anchor prim.
                 print("[ebs] port geometry unavailable, falling back to the anchor prim")
@@ -580,15 +581,26 @@ class EbsSimulate:
         return addr_y - offset_zero / OFFSET_PER_UNIT    # offsets run in -Y
 
     def compute_target(self, stage: Usd.Stage, eqp_id: str, equipment: Usd.Prim):
-        """Placement point for the EBS: rail X, virtual port 0 Y, equipment Z."""
+        """World point the EBS has to sit on.
+
+        X and Y are computed in the rail's own space - the rail's X and the
+        virtual port 0 - and then lifted into world space. Z stays the
+        equipment's world Z. The rail, the equipment and the EBS live under
+        different parents, so everything meets in world space.
+        """
         y = self.compute_port_zero_y(stage, eqp_id)
         if y is None:
             return None
         rail, _ = self.find_rail(stage, self._port_addr.get(eqp_id.upper()))
         if rail is None:
             return None
-        return Gf.Vec3d(self._local_translation(rail)[0], y,
-                        self._local_translation(equipment)[2])
+
+        rail_local = self._local_translation(rail)
+        in_rail_space = Gf.Vec3d(rail_local[0], y, rail_local[2])
+        world = self._parent_world(rail).Transform(in_rail_space)
+        equipment_world = UsdGeom.Xformable(equipment).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()).ExtractTranslation()
+        return Gf.Vec3d(world[0], world[1], equipment_world[2])
 
     @staticmethod
     def _local_translation(prim: Usd.Prim) -> Gf.Vec3d:
@@ -598,16 +610,25 @@ class EbsSimulate:
         return xformable.GetLocalTransformation(
             Usd.TimeCode.Default()).ExtractTranslation()
 
+    @staticmethod
+    def _parent_world(prim: Usd.Prim) -> Gf.Matrix4d:
+        """Local-to-world transform of a prim's parent, i.e. the space its
+        local translation is expressed in."""
+        parent = prim.GetParent() if prim else None
+        if parent and parent.IsValid() and UsdGeom.Xformable(parent):
+            return UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default())
+        return Gf.Matrix4d(1.0)
+
     # -- alignment -----------------------------------------------------------
 
-    def _place_ebs(self, ebs_prim: Usd.Prim, position: Gf.Vec3d,
+    def _place_ebs(self, ebs_prim: Usd.Prim, world_position: Gf.Vec3d,
                    anchor: Usd.Prim) -> bool:
-        """Write the computed point onto the EBS, rotated like the anchor prim.
+        """Put the EBS on a world point, rotated like the anchor prim.
 
-        The anchor's accumulated orientation is used, the same one the previous
-        anchor-only alignment applied. Positions are still handled in local
-        space for now; the world-space conversion between the differing parents
-        comes later.
+        The point and the anchor's orientation are both brought into the EBS
+        parent's space before they are written, so the EBS lands on that exact
+        world point whatever its own parent does.
         """
         stage = self._get_stage()
         xformable = UsdGeom.Xformable(ebs_prim)
@@ -615,10 +636,12 @@ class EbsSimulate:
             return False
 
         tc = Usd.TimeCode.Default()
-        rotation = self._normalized_rows(
-            UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(tc))
+        to_ebs_space = self._parent_world(ebs_prim).GetInverse()
+        anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(tc)
+        rotation = self._normalized_rows(anchor_world * to_ebs_space)
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
-        return self._write_transform(stage, xformable, rotation, scale, position)
+        return self._write_transform(stage, xformable, rotation, scale,
+                                     to_ebs_space.Transform(world_position))
 
     def _align_prims(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
         """Match the EBS position and rotation to the anchor, keeping its own scale."""
@@ -632,13 +655,8 @@ class EbsSimulate:
         tc = Usd.TimeCode.Default()
         anchor_world = UsdGeom.Xformable(anchor_prim).ComputeLocalToWorldTransform(tc)
 
-        parent = ebs_prim.GetParent()
-        parent_world = Gf.Matrix4d(1.0)
-        if parent and parent.IsValid() and UsdGeom.Xformable(parent):
-            parent_world = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(tc)
-
         # Row-vector convention: M_local * M_parent = M_world
-        target_local = anchor_world * parent_world.GetInverse()
+        target_local = anchor_world * self._parent_world(ebs_prim).GetInverse()
 
         # The anchor sits deep inside the equipment and carries its own scale.
         # Take only its orientation and position; the EBS keeps the scale it had.
