@@ -1,3 +1,4 @@
+import math
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -666,23 +667,99 @@ class EbsSimulate:
                                      target_local.ExtractTranslation())
 
     def _write_transform(self, stage, xformable, rotation, scale, translation) -> bool:
-        """Author scale, rotation and position as one transform op."""
-        matrix = Gf.Matrix4d(
-            rotation[0][0] * scale[0], rotation[0][1] * scale[0], rotation[0][2] * scale[0], 0.0,
-            rotation[1][0] * scale[1], rotation[1][1] * scale[1], rotation[1][2] * scale[1], 0.0,
-            rotation[2][0] * scale[2], rotation[2][1] * scale[2], rotation[2][2] * scale[2], 0.0,
-            translation[0], translation[1], translation[2], 1.0,
-        )
+        """Write position and orientation into the prim's existing xform ops.
+
+        Prims here usually carry translate / orient / scale ops, so those are
+        set in place: the scale op is left alone (the EBS keeps its own size)
+        and nothing about the op stack changes. Only when there is no usable
+        op does this fall back to authoring a single transform op.
+        """
+        ops = {op.GetOpName(): op for op in xformable.GetOrderedXformOps()}
+
         # Author into the session layer so the source layers stay untouched.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if "xformOp:transform" in ops:
+                ops["xformOp:transform"].Set(
+                    self._compose(rotation, scale, translation))
+                return True
+
+            if "xformOp:translate" in ops and self._set_rotation(ops, rotation):
+                ops["xformOp:translate"].Set(Gf.Vec3d(translation))
+                return True
+
+            print("[ebs] no usable xform ops, authoring a single transform op")
             try:
                 xformable.ClearXformOpOrder()
-                xformable.AddTransformOp().Set(matrix)
+                xformable.AddTransformOp().Set(
+                    self._compose(rotation, scale, translation))
                 return True
             except Exception as e:
                 print(f"[ebs] transform op failed, translate only: {e}")
                 api = UsdGeom.XformCommonAPI(xformable.GetPrim())
                 return bool(api and api.SetTranslate(Gf.Vec3d(translation)))
+
+    def _set_rotation(self, ops: dict, rotation) -> bool:
+        """Set whichever rotation op the prim already has. False if it has none."""
+        matrix = self._compose(rotation, Gf.Vec3d(1.0, 1.0, 1.0),
+                               Gf.Vec3d(0.0, 0.0, 0.0))
+        orient = ops.get("xformOp:orient")
+        if orient is not None:
+            quat = matrix.ExtractRotationQuat()
+            precision = orient.GetPrecision()
+            if precision == UsdGeom.XformOp.PrecisionFloat:
+                quat = Gf.Quatf(quat)
+            elif precision == UsdGeom.XformOp.PrecisionHalf:
+                quat = Gf.Quath(Gf.Quatf(quat))
+            orient.Set(quat)
+            return True
+
+        for order in ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"):
+            op = ops.get(f"xformOp:rotate{order}")
+            if op is not None:
+                angles = self._euler(rotation, order)
+                op.Set(Gf.Vec3f(*angles) if op.GetPrecision() ==
+                       UsdGeom.XformOp.PrecisionFloat else Gf.Vec3d(*angles))
+                return True
+        return False
+
+    @staticmethod
+    def _compose(rotation, scale, translation) -> Gf.Matrix4d:
+        """Build a matrix from rotation rows, per-axis scale and a translation."""
+        return Gf.Matrix4d(
+            rotation[0][0] * scale[0], rotation[0][1] * scale[0], rotation[0][2] * scale[0], 0.0,
+            rotation[1][0] * scale[1], rotation[1][1] * scale[1], rotation[1][2] * scale[1], 0.0,
+            rotation[2][0] * scale[2], rotation[2][1] * scale[2], rotation[2][2] * scale[2], 0.0,
+            translation[0], translation[1], translation[2], 1.0,
+        )
+
+    @staticmethod
+    def _euler(rotation, order: str = "XYZ") -> tuple:
+        """Euler angles in degrees for a rotation given as three unit rows.
+
+        USD applies rotate<ABC> as Ra * Rb * Rc on row vectors. The angles are
+        recovered for XYZ and the other orders follow by permuting the axes.
+        """
+        axes = {"X": 0, "Y": 1, "Z": 2}
+        a, b, c = (axes[ch] for ch in order)          # first, second, third axis
+        m = [[rotation[i][j] for j in range(3)] for i in range(3)]
+
+        # Reorder rows and columns so the maths below is always the XYZ case.
+        p = [a, b, c]
+        sign = 1.0 if order in ("XYZ", "YZX", "ZXY") else -1.0
+        r = [[m[p[i]][p[j]] for j in range(3)] for i in range(3)]
+
+        beta = math.asin(max(-1.0, min(1.0, -sign * r[0][2])))
+        if abs(math.cos(beta)) < 1e-9:                 # gimbal lock
+            alpha = 0.0
+            gamma = math.atan2(-sign * r[1][0], r[1][1])
+        else:
+            alpha = math.atan2(sign * r[1][2], r[2][2])
+            gamma = math.atan2(sign * r[0][1], r[0][0])
+
+        values = [0.0, 0.0, 0.0]
+        values[a], values[b], values[c] = (math.degrees(alpha), math.degrees(beta),
+                                           math.degrees(gamma))
+        return tuple(values)
 
     @staticmethod
     def _normalized_rows(matrix: Gf.Matrix4d) -> list:
