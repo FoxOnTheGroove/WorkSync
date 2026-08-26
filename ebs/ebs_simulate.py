@@ -207,7 +207,10 @@ class EbsSimulate:
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         with self._stage_timer("camera focus"):
-            moved = self._move_camera(str(self._target["equipment"].GetPath()))
+            # Frame the whole equipment, but take the facing from the anchor -
+            # the same prim that supplies the rotation and Z of the placement.
+            moved = self._move_camera(str(self._target["equipment"].GetPath()),
+                                      self._target["anchor"])
         return self._payload(moved, "Camera moved" if moved else "Camera focus failed")
 
     def _do_align(self) -> dict:
@@ -575,7 +578,22 @@ class EbsSimulate:
         direction = 1.0 if length >= 0 else -1.0
         addr_y = rail_y - length / 2.0                   # rail start = addr position
         offset_zero = offsets[1] + spacing               # one step past port 1
-        return addr_y + direction * offset_zero / OFFSET_PER_UNIT
+        shift = direction * offset_zero / OFFSET_PER_UNIT
+        y = addr_y + shift
+
+        gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
+                for i in sorted(offsets) if i + 1 in offsets]
+        print(f"[ebs] {key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
+        print(f"[ebs]   cad-x {cadx_a:.3f} -> {cadx_b:.3f} = {cadx_b - cadx_a:+.3f} "
+              f"/ {CAD_PER_UNIT:.4f} = {length:+.4f} units, direction {direction:+.0f}")
+        print(f"[ebs]   rail.y {rail_y:.4f} - {length:+.4f}/2 = addr_y {addr_y:.4f}")
+        print(f"[ebs]   offsets " +
+              ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
+              f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
+        print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
+              f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
+        print(f"[ebs]   y = {addr_y:.4f} {shift:+.4f} = {y:.4f}")
+        return y
 
     def _port_spacing(self, key: str, offsets: dict) -> "float | None":
         """Distance between neighbouring ports, averaged over the pairs present.
@@ -618,7 +636,13 @@ class EbsSimulate:
         world = self._parent_world(rail).Transform(in_rail_space)
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
-        return Gf.Vec3d(world[0], world[1], anchor_world[2])
+        target = Gf.Vec3d(world[0], world[1], anchor_world[2])
+        print(f"[ebs]   rail space ({in_rail_space[0]:.4f}, {in_rail_space[1]:.4f}, "
+              f"{in_rail_space[2]:.4f}) -> world ({world[0]:.4f}, {world[1]:.4f}, "
+              f"{world[2]:.4f})")
+        print(f"[ebs]   target = rail x {target[0]:.4f}, port0 y {target[1]:.4f}, "
+              f"anchor z {target[2]:.4f}  [{anchor.GetName()}]")
+        return target
 
     @staticmethod
     def _local_translation(prim: Usd.Prim) -> Gf.Vec3d:
@@ -658,8 +682,10 @@ class EbsSimulate:
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(tc)
         rotation = self._normalized_rows(anchor_world * to_ebs_space)
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
-        return self._write_transform(stage, xformable, rotation, scale,
-                                     to_ebs_space.Transform(world_position))
+        local = to_ebs_space.Transform(world_position)
+        print(f"[ebs]   EBS local translate ({local[0]:.4f}, {local[1]:.4f}, "
+              f"{local[2]:.4f}), rotation from {anchor.GetName()}")
+        return self._write_transform(stage, xformable, rotation, scale, local)
 
     def _align_prims(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
         """Match the EBS position and rotation to the anchor, keeping its own scale."""
@@ -924,8 +950,14 @@ class EbsSimulate:
 
     # -- camera --------------------------------------------------------------
 
-    def _move_camera(self, prim_path: str) -> bool:
-        """Put the camera in front of the prim (its local -X) and fill the view like F."""
+    def _move_camera(self, prim_path: str, facing: Usd.Prim = None) -> bool:
+        """Fill the view with the prim, seen from the front of `facing`.
+
+        The facing prim decides which way is the front (its local -X); the
+        framed prim decides how much of the screen is filled. They differ
+        because the anchor sets the orientation while the whole equipment is
+        what should be visible.
+        """
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
         except Exception as e:
@@ -952,7 +984,7 @@ class EbsSimulate:
         diagonal = (box.GetMax() - box.GetMin()).GetLength()
         distance = max(diagonal * 1.5, 1.0)
 
-        self._place_front_camera(stage, viewport, prim, center, distance)
+        self._place_front_camera(stage, viewport, facing or prim, center, distance)
         try:
             frame_viewport_prims(viewport, prims=[prim_path])   # keep direction, fit size
         except Exception as e:
