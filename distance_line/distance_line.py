@@ -134,102 +134,10 @@ class DistanceLineCore:
     _probe_camera = None
     _probe_rays = 0
     _probe_saved = 0
-    _watching = False
-    _stage_sub = None
-    _objects_listener = None
 
     @classmethod
     def startup(cls):
         cls._started = True
-        cls._watch_stage()
-
-    @classmethod
-    def _watch_stage(cls):
-        """스테이지 변경을 직접 듣는다.
-
-        이게 되면 pick_one 마다 캐시를 버리지 않아도 된다. 톱니처럼 특징이
-        조밀한 메시는 외곽선 계산이 수백 ms 라, 측정을 시작할 때마다 다시 하면
-        그대로 멈칫한다.
-        """
-        try:
-            stream = omni.usd.get_context().get_stage_event_stream()
-            cls._stage_sub = stream.create_subscription_to_pop(
-                cls._on_stage_event, name="distance_line stage"
-            )
-            cls._listen_objects()
-            cls._watching = True
-        except Exception as exc:
-            cls._watching = False
-            carb.log_warn(
-                f"[distance_line] cannot watch the stage, caches drop per pick: {exc}"
-            )
-
-    @classmethod
-    def _listen_objects(cls):
-        from pxr import Tf
-
-        cls._unlisten_objects()
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            return
-        cls._objects_listener = Tf.Notice.Register(
-            Usd.Notice.ObjectsChanged, cls._on_objects_changed, stage
-        )
-
-    @classmethod
-    def _unlisten_objects(cls):
-        if cls._objects_listener is not None:
-            try:
-                cls._objects_listener.Revoke()
-            except Exception:
-                pass
-            cls._objects_listener = None
-
-    @classmethod
-    def _on_stage_event(cls, event):
-        """스테이지가 열리거나 닫힐 때만. 선택 변경 같은 것에는 반응하지 않는다."""
-        try:
-            kind = omni.usd.StageEventType(event.type)
-        except Exception:
-            return
-        if kind not in (
-            omni.usd.StageEventType.OPENED,
-            omni.usd.StageEventType.CLOSED,
-        ):
-            return
-        _drop_caches()
-        try:
-            cls._listen_objects()
-        except Exception as exc:
-            carb.log_warn(f"[distance_line] cannot re-listen after stage swap: {exc}")
-
-    @classmethod
-    def _on_objects_changed(cls, notice, sender):
-        """우리가 캐시해 둔 프림이 바뀔 때만 버린다.
-
-        카메라를 돌리면 카메라 프림의 xform 이 USD 에 써져서 이 통지가 매
-        프레임 온다. 걸러내지 않으면 캐시를 안 버리려던 것이 오히려 더 자주
-        버리는 결과가 된다.
-        """
-        try:
-            paths = list(notice.GetResyncedPaths()) + list(
-                notice.GetChangedInfoOnlyPaths()
-            )
-        except Exception:
-            _drop_caches()
-            return
-        try:
-            for path in paths:
-                prim_path = str(path.GetPrimPath())
-                if prim_path in ("", "/"):
-                    _drop_caches()
-                    return
-                if _is_cached(prim_path):
-                    _drop_caches(prim_path)
-        except Exception as exc:
-            # USD 통지 콜백 안이다. 여기서 터지면 곤란하니 전부 버리고 넘어간다.
-            carb.log_warn(f"[distance_line] cache drop failed, clearing all: {exc}")
-            _drop_caches()
 
     @classmethod
     def shutdown(cls):
@@ -244,9 +152,6 @@ class DistanceLineCore:
         cls._selected_line = None
         cls._lines.clear()
         cls._changed_callbacks.clear()
-        cls._unlisten_objects()
-        cls._stage_sub = None
-        cls._watching = False
         _drop_caches()
         cls._next_line_id = 1
         cls._started = False
@@ -479,8 +384,7 @@ class DistanceLineCore:
     @classmethod
     def pick_one(cls, viewport_id=None, on_done=None) -> int:
         cls._require_started()
-        if not cls._watching:
-            _drop_caches()
+        _drop_caches()
 
         if viewport_id:
             state = cls._viewports.get(viewport_id)
@@ -1257,35 +1161,17 @@ def _geom_for(prim, time=None):
     return entry or None
 
 
-def _is_cached(prim_path: str) -> bool:
-    """이 프림의 지오메트리를 들고 있는가. 카메라처럼 무관한 프림을 걸러낸다."""
-    if any(key[1] == prim_path for key in _GEOM_CACHE):
-        return True
-    if any(key[1] == prim_path for key in _PRIM_CACHE):
-        return True
-    return any(
-        path == prim_path for found in _CLOUD_CACHE.values() for path, _geom in found
-    )
-
-
 def _drop_caches(prim_path=None):
     DistanceLineCore._probe_camera = None
     DistanceLineCore._probe_cache = {}
+    if prim_path is None:
+        _CLOUD_CACHE.clear()
     for cache in (_GEOM_CACHE, _PRIM_CACHE):
         if prim_path is None:
             cache.clear()
         else:
             for key in [k for k in cache if k[1] == prim_path]:
                 cache.pop(key, None)
-    if prim_path is None:
-        _CLOUD_CACHE.clear()
-    else:
-        for key in [
-            k
-            for k, found in _CLOUD_CACHE.items()
-            if any(path == prim_path for path, _geom in found)
-        ]:
-            _CLOUD_CACHE.pop(key, None)
 
 
 def _descendants(prim):
@@ -1335,40 +1221,6 @@ def _feature_edges(index, nxt, counts, normals):
     other = np.where(single, chosen, chosen + 1)
     sides = np.stack([normals[face_of[chosen]], normals[face_of[other]]], axis=1)
     return pairs[chosen], sides, len(group)
-
-
-def _outline_corners(position, edges):
-    """외곽선이 꺾이는 정점. 만나는 엣지가 2개가 아니거나 충분히 꺾이면 꼭지점이다.
-
-    톱니 메시는 외곽선 엣지가 수만 개까지 가므로 정점마다 파이썬으로 돌면 안 된다.
-    """
-    ends = edges.ravel()
-    partners = edges[:, ::-1].ravel()
-    order = np.argsort(ends, kind="stable")
-    ends, partners = ends[order], partners[order]
-    vertices, first_at, degree = np.unique(
-        ends, return_index=True, return_counts=True
-    )
-
-    corner = degree != 2
-    forked = np.flatnonzero(degree == 2)
-    if len(forked):
-        at = first_at[forked]
-        here = position[vertices[forked]]
-        left = position[partners[at]] - here
-        right = position[partners[at + 1]] - here
-        span_l = np.linalg.norm(left, axis=1)
-        span_r = np.linalg.norm(right, axis=1)
-        usable = (span_l > 1e-12) & (span_r > 1e-12)
-        cosine = np.zeros(len(forked))
-        np.divide(
-            np.einsum("ij,ij->i", left, right),
-            span_l * span_r,
-            out=cosine,
-            where=usable,
-        )
-        corner[forked] = usable & (cosine > _CORNER_COS)
-    return vertices[corner]
 
 
 def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
@@ -1639,13 +1491,36 @@ class _Geom:
         if len(edges) == 0:
             return _Outline.empty()
 
-        corners = _outline_corners(position, edges)
-        slot = np.full(len(position), -1, dtype=np.int64)
-        slot[corners] = np.arange(len(corners))
-        corner_of = slot[edges].reshape(len(edges), 2)
+        neighbours = {}
+        for a, b in edges:
+            neighbours.setdefault(int(a), []).append(int(b))
+            neighbours.setdefault(int(b), []).append(int(a))
+
+        corners = []
+        for vertex, around in neighbours.items():
+            if len(around) != 2:
+                corners.append(vertex)
+                continue
+            here = position[vertex]
+            first = position[around[0]] - here
+            second = position[around[1]] - here
+            n1, n2 = np.linalg.norm(first), np.linalg.norm(second)
+            if n1 < 1e-12 or n2 < 1e-12:
+                continue
+            if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
+                corners.append(vertex)
+
+        corners = sorted(corners)
+        slot_of = {vertex: slot for slot, vertex in enumerate(corners)}
+        corner_of = np.array(
+            [[slot_of.get(int(a), -1), slot_of.get(int(b), -1)] for a, b in edges],
+            dtype=np.int64,
+        ).reshape(len(edges), 2)
 
         return _Outline(
-            corners=position[corners] if len(corners) else np.empty((0, 3)),
+            corners=position[np.asarray(corners, dtype=np.int64)]
+            if corners
+            else np.empty((0, 3)),
             edge_a=position[edges[:, 0]],
             edge_b=position[edges[:, 1]],
             edge_normals=sides,
