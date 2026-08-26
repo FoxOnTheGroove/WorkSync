@@ -18,6 +18,11 @@ CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
 
+GEOMETRY_TYPES = frozenset({
+    "Mesh", "Points", "BasisCurves", "NurbsCurves",
+    "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
+})
+
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
 MARKER_OPACITY = 0.35
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
@@ -30,6 +35,7 @@ FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 3                 # 3x3 subdivision per face
+OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 
 # Prim types that can never contain equipment. Descending into them is what made
 # the first scan expensive: geometry subtrees are where nearly all prims live.
@@ -63,6 +69,7 @@ class EbsSimulate:
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._rail_root: str = ""           # parent path holding the rail prims
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
+        self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._started: float = 0.0
         self._target: dict = None           # prepared equipment / EBS for the step buttons
@@ -110,6 +117,7 @@ class EbsSimulate:
         self._port_map = {}
         self._port_elements = {}
         self._bounds_cache = {}
+        self._mesh_bounds = {}
         self._timings = []
         self._target = None
         self._aligned = False
@@ -249,6 +257,7 @@ class EbsSimulate:
         cells = self.check_collision(
             self._target["ebs"],
             exclude=[self._target["equipment"], self._target["ebs"]],
+            split=self._target["equipment"],
         )
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         with self._stage_timer("draw markers"):
@@ -270,6 +279,7 @@ class EbsSimulate:
         stage = self._get_stage()
         self._eqp_index = {}
         self._bounds_cache = {}
+        self._mesh_bounds = {}
         if stage is None:
             return 0
         visited = 0
@@ -921,8 +931,13 @@ class EbsSimulate:
 
     # -- collision -----------------------------------------------------------
 
-    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
+    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
+                        split: Usd.Prim = None) -> dict:
         """Test the left, right and ceiling faces as 3x3 grids.
+
+        `split` is an equipment whose meshes are tested one by one instead of
+        as a single box: the EBS is mounted on it, so its overall bounds always
+        overlap, but individual parts of it can still catch on the faces.
 
         Faces and cells follow the EBS prim's local axes, named as the front
         camera sees them: right is +X, left is -X, ceiling is +up.
@@ -969,16 +984,23 @@ class EbsSimulate:
             candidates = [
                 (path, box) for path, box in self._bounds_cache.items()
                 if not any(path == s or path.startswith(s + "/") for s in skip)
-                and not Gf.Range3d.GetIntersection(box, search).IsEmpty()
+                and self._overlaps(box, search)
             ]
+            coarse = len(candidates)
+            if split is not None and split.IsValid():
+                candidates += [
+                    (path, box) for path, box in self._geometry_bounds(split, cache)
+                    if self._overlaps(box, search)
+                ]
 
         size = local_box.GetMax() - local_box.GetMin()
         print(f"[ebs] collision: EBS local size ({size[0]:.3f}, {size[1]:.3f}, "
               f"{size[2]:.3f}), clearance {self._clearance}")
         print(f"[ebs]   world box {tuple(round(v, 3) for v in world_box.GetMin())} .. "
               f"{tuple(round(v, 3) for v in world_box.GetMax())}")
-        print(f"[ebs]   {len(self._bounds_cache)} equipment bounds, "
-              f"{len(candidates)} within clearance, skipping {skip}")
+        print(f"[ebs]   {len(self._bounds_cache)} equipment bounds, {coarse} within "
+              f"clearance, plus {len(candidates) - coarse} meshes of the mounting "
+              f"equipment, skipping {skip}")
 
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * (GRID * GRID) for face in FACES}
@@ -986,7 +1008,7 @@ class EbsSimulate:
             for face, boxes in cells.items():
                 for i, cell in enumerate(boxes):
                     for path, box in candidates:
-                        if not Gf.Range3d.GetIntersection(box, cell).IsEmpty():
+                        if self._overlaps(box, cell):
                             result[face][i] = True
                             hits.setdefault(path.rsplit("/", 1)[-1], []).append(
                                 f"{face}[{i}]")
@@ -1001,6 +1023,46 @@ class EbsSimulate:
         if missing:
             print(f"[ebs] {missing} equipment prim(s) had no usable bound")
         return result
+
+    @staticmethod
+    def _overlaps(a: Gf.Range3d, b: Gf.Range3d) -> bool:
+        """True when two boxes share volume, not just a face.
+
+        The EBS is mounted on its equipment, so surfaces line up exactly all the
+        time; requiring a real overlap keeps those from reading as blocked.
+        """
+        overlap = Gf.Range3d.GetIntersection(a, b)
+        if overlap.IsEmpty():
+            return False
+        extent = overlap.GetMax() - overlap.GetMin()
+        return all(extent[i] > OVERLAP_EPS for i in range(3))
+
+    def _geometry_bounds(self, prim: Usd.Prim, cache) -> list:
+        """World bounds of each geometry prim under `prim`, cached per equipment.
+
+        The equipment does not move, so this is paid once. Descent stops at each
+        geometry prim, so nested meshes are counted once and materials are not
+        walked at all.
+        """
+        key = str(prim.GetPath())
+        if key in self._mesh_bounds:
+            return self._mesh_bounds[key]
+
+        bounds = []
+        stack = [prim]
+        while stack:
+            current = stack.pop()
+            type_name = current.GetTypeName()
+            if type_name in GEOMETRY_TYPES:
+                box = cache.ComputeWorldBound(current).ComputeAlignedRange()
+                if not box.IsEmpty():
+                    bounds.append((str(current.GetPath()), box))
+                continue
+            if type_name in PRUNE_TYPES or type_name.endswith("Light"):
+                continue
+            stack.extend(current.GetChildren())
+        self._mesh_bounds[key] = bounds
+        return bounds
 
     def _cache_bounds(self, stage, cache) -> int:
         """Compute and cache the world bound of every equipment prim.
