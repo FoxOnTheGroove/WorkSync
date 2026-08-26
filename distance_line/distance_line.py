@@ -205,7 +205,12 @@ class DistanceLineCore:
 
     @classmethod
     def _on_objects_changed(cls, notice, sender):
-        """바뀐 프림의 캐시만 버린다. 무엇이 바뀌었는지 모르면 전부 버린다."""
+        """우리가 캐시해 둔 프림이 바뀔 때만 버린다.
+
+        카메라를 돌리면 카메라 프림의 xform 이 USD 에 써져서 이 통지가 매
+        프레임 온다. 걸러내지 않으면 캐시를 안 버리려던 것이 오히려 더 자주
+        버리는 결과가 된다.
+        """
         try:
             paths = list(notice.GetResyncedPaths()) + list(
                 notice.GetChangedInfoOnlyPaths()
@@ -213,15 +218,13 @@ class DistanceLineCore:
         except Exception:
             _drop_caches()
             return
-        if not paths:
-            return
         for path in paths:
             prim_path = str(path.GetPrimPath())
             if prim_path in ("", "/"):
                 _drop_caches()
                 return
-            _drop_caches(prim_path)
-        _CLOUD_CACHE.clear()
+            if _is_cached(prim_path):
+                _drop_caches(prim_path)
 
     @classmethod
     def shutdown(cls):
@@ -1249,17 +1252,35 @@ def _geom_for(prim, time=None):
     return entry or None
 
 
+def _is_cached(prim_path: str) -> bool:
+    """이 프림의 지오메트리를 들고 있는가. 카메라처럼 무관한 프림을 걸러낸다."""
+    if any(key[1] == prim_path for key in _GEOM_CACHE):
+        return True
+    if any(key[1] == prim_path for key in _PRIM_CACHE):
+        return True
+    return any(
+        path == prim_path for found in _CLOUD_CACHE.values() for path, _geom in found
+    )
+
+
 def _drop_caches(prim_path=None):
     DistanceLineCore._probe_camera = None
     DistanceLineCore._probe_cache = {}
-    if prim_path is None:
-        _CLOUD_CACHE.clear()
     for cache in (_GEOM_CACHE, _PRIM_CACHE):
         if prim_path is None:
             cache.clear()
         else:
             for key in [k for k in cache if k[1] == prim_path]:
                 cache.pop(key, None)
+    if prim_path is None:
+        _CLOUD_CACHE.clear()
+    else:
+        for key in [
+            k
+            for k, found in _CLOUD_CACHE.items()
+            if any(path == prim_path for path, _geom in found)
+        ]:
+            _CLOUD_CACHE.pop(key, None)
 
 
 def _descendants(prim):
