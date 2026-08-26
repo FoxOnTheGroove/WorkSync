@@ -76,6 +76,7 @@ class EbsSimulate:
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._precision: str = PRECISION_TRI
         self._timings: list = []            # [label, elapsed_ms] for the last run
+        self._notes: list = []              # diagnostics for the last run, shown in the UI
         self._started: float = 0.0
         self._target: dict = None           # prepared equipment / EBS for the step buttons
         self._aligned: bool = False
@@ -139,9 +140,18 @@ class EbsSimulate:
     # -- timing --------------------------------------------------------------
 
     def _begin(self) -> None:
-        """Start a fresh timing record for one button press."""
+        """Start a fresh timing and diagnostics record for one button press."""
         self._timings = []
+        self._notes = []
         self._started = time.perf_counter()
+
+    def _note(self, text: str) -> None:
+        """Record a diagnostic line: printed, and carried back to the UI."""
+        self._notes.append(text)
+        print(f"[ebs] {text}")
+
+    def get_notes(self) -> list:
+        return list(self._notes)
 
     @contextmanager
     def _stage_timer(self, label: str):
@@ -1018,13 +1028,12 @@ class EbsSimulate:
                            if self._overlaps(box, search)]
 
         size = local_box.GetMax() - local_box.GetMin()
-        print(f"[ebs] collision ({self._precision}): EBS local size ({size[0]:.3f}, "
-              f"{size[1]:.3f}, {size[2]:.3f}), clearance {self._clearance}")
-        print(f"[ebs]   world box {tuple(round(v, 3) for v in world_box.GetMin())} .. "
-              f"{tuple(round(v, 3) for v in world_box.GetMax())}")
-        print(f"[ebs]   {len(self._bounds_cache)} equipment bounds, {len(near)} within "
-              f"clearance -> {coarse} candidates, plus "
-              f"{len(candidates) - coarse} from the mounting equipment, skipping {skip}")
+        self._note(f"precision {self._precision}, clearance {self._clearance}, "
+                   f"EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
+        self._note(f"EBS world box {tuple(round(v, 2) for v in world_box.GetMin())} .. "
+                   f"{tuple(round(v, 2) for v in world_box.GetMax())}")
+        self._note(f"{len(self._bounds_cache)} equipment -> {len(near)} near -> "
+                   f"{coarse} candidates + {len(candidates) - coarse} own meshes")
 
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * (GRID * GRID) for face in FACES}
@@ -1047,13 +1056,17 @@ class EbsSimulate:
                             f"{face}[{i}]")
                         break
             if triangle_tests:
-                print(f"[ebs]   {triangle_tests} triangle tests")
+                self._note(f"{triangle_tests} triangle tests")
+            elif self._precision == PRECISION_TRI and candidates:
+                self._note("no candidate reached a cell, so no triangle was tested")
 
         if hits:
             for name, where in sorted(hits.items()):
-                print(f"[ebs]   hit by {name}: {', '.join(where)}")
+                self._note(f"hit by {name}: {', '.join(where)}")
         elif candidates:
-            print("[ebs]   candidates were near but none reached a cell")
+            self._note("candidates were near but none reached a cell")
+        else:
+            self._note("nothing within clearance - raise it if that looks wrong")
 
         if missing:
             print(f"[ebs] {missing} equipment prim(s) had no usable bound")
@@ -1446,6 +1459,7 @@ class EbsSimulate:
             "cells": cells,
             "hit_count": hit_count,
             "timings": list(self._timings),
+            "notes": list(self._notes),
             "total_ms": (time.perf_counter() - self._started) * 1000.0,
         }
         return dict(self._result)

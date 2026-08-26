@@ -86,7 +86,7 @@ class EbsDummyUI:
                 ui.Separator(height=6)
                 self._build_grids()
 
-                ui.Label("Timing", height=18, style={"font_size": 12, "color": 0xFFAAAAAA})
+                ui.Label("Log", height=18, style={"font_size": 12, "color": 0xFFAAAAAA})
                 with ui.ScrollingFrame(height=ui.Fraction(1), style=LOG_STYLE):
                     self._log_stack = ui.VStack(spacing=1)
 
@@ -130,7 +130,8 @@ class EbsDummyUI:
         count = EbsSimulateService.build_index()
         ports = EbsSimulateService.load_ports()
         self._set_status(f"Equipment: {count}  |  XML port entries: {ports}")
-        self._log_timings(EbsSimulateService.get_timings())
+        self._log_timings(EbsSimulateService.get_timings(), None,
+                          EbsSimulateService.get_notes())
 
     def _on_simulate(self):
         self._apply_settings()
@@ -195,19 +196,29 @@ class EbsDummyUI:
             f"{result.get('equipment_id', '')}  |  port {port if port is not None else '-'}"
             f"  |  {result.get('ebs', '') or '-'}"
         )
-        self._log_timings(result.get("timings", []), result.get("total_ms"))
+        self._log_timings(result.get("timings", []), result.get("total_ms"),
+                          result.get("notes", []))
 
-    def _log_timings(self, timings: list, total_ms: float = None):
-        """Show how long each step took, slowest step highlighted."""
+    def _log_timings(self, timings: list, total_ms: float = None, notes: list = None):
+        """Show what the run did: diagnostics first, then per-step timings."""
         if self._log_stack is None:
             return
         self._log_stack.clear()
-        if not timings:
+        if not timings and not notes:
             with self._log_stack:
-                ui.Label("(no timing recorded)", style={"color": 0xFF888888,
-                                                        "font_size": 12})
+                ui.Label("(nothing recorded)", style={"color": 0xFF888888,
+                                                      "font_size": 12})
             return
 
+        with self._log_stack:
+            for note in (notes or []):
+                ui.Label(str(note), height=16,
+                         style={"font_size": 12, "color": 0xFFCFCFA0})
+            if notes and timings:
+                ui.Separator(height=4)
+
+        if not timings:
+            return
         slowest = max(t[1] for t in timings)
         with self._log_stack:
             for label, elapsed in timings:

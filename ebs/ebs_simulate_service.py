@@ -87,5 +87,9 @@ class EbsSimulateService:
         return cls._simulate.get_result()
 
     @classmethod
+    def get_notes(cls):
+        return cls._simulate.get_notes()
+
+    @classmethod
     def get_timings(cls):
         return cls._simulate.get_timings()
