@@ -12,7 +12,8 @@ __all__ = ["EbsSimulate"]
 EQP_PREFIX = "EQP_"
 PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
 OFFSET_KEY  = "offset"        # port distance from its addr, along the rail direction
-CADX_KEY    = "cad-x"         # rail start point, on the addr group
+CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
+CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
@@ -53,7 +54,7 @@ class EbsSimulate:
         self._port_elements: dict = {}      # "########" -> port elements in port order
         self._port_offsets: dict = {}       # "########" -> {index: offset}
         self._port_addr: dict = {}          # "########" -> addr number
-        self._addr_cadx: dict = {}          # addr number -> cad-x
+        self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._rail_root: str = ""           # parent path holding the rail prims
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._timings: list = []            # [label, elapsed_ms] for the last run
@@ -385,7 +386,7 @@ class EbsSimulate:
         self._port_elements = {}
         self._port_offsets = {}
         self._port_addr = {}
-        self._addr_cadx = {}
+        self._addr_cad = {}
         if not self._xml_path:
             return 0
 
@@ -400,15 +401,16 @@ class EbsSimulate:
             port_pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
             addr_pattern = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
 
-            # cad-x of every addr, including the neighbours that hold no ports
+            # cad of every addr, including the neighbours that hold no ports
             for elem in root.iter():
                 m = addr_pattern.match((elem.get("name", "")
                                         or elem.tag.rsplit("}", 1)[-1]).strip())
                 if not m:
                     continue
                 cadx = self._as_float(self._key_value(elem, CADX_KEY))
-                if cadx is not None:
-                    self._addr_cadx[int(m.group(1))] = cadx
+                cady = self._as_float(self._key_value(elem, CADY_KEY))
+                if cadx is not None or cady is not None:
+                    self._addr_cad[int(m.group(1))] = (cadx or 0.0, cady or 0.0)
 
             found = {}                       # equipment -> {index: (station, offset, addr)}
             for elem in root.iter():
@@ -537,17 +539,18 @@ class EbsSimulate:
                 return prim, neighbour
         return None, None
 
-    def compute_port_zero_y(self, stage: Usd.Stage, eqp_id: str) -> "float | None":
-        """Y of the virtual port 0, which is where the EBS goes.
+    def compute_rail_point(self, stage: Usd.Stage, eqp_id: str):
+        """Where the virtual port 0 sits, in the rail's own space.
 
-        The addr sits at the rail's start point, the rail prim sits at its
-        midpoint, and ports run from the addr along the rail at a constant
-        spacing: on the line the order is 1, 2, (3), addr. Port 0 is one more
-        step past port 1, so its offset extrapolates from the first two ports.
+        Returns (point, axis) with the point as a Gf.Vec3d and axis 0 or 1 for
+        the axis the rail runs along. The addr sits at the rail's start point
+        and the rail prim at its midpoint, so the start is half a rail length
+        back from it. Ports run from the addr along the rail at a constant
+        spacing - on the line the order is 1, 2, (3), addr - and port 0 is one
+        more step past port 1.
 
-        A rail can run either way along Y. Only cad-x is read for now, so its
-        direction is taken from the sign of the span between the two addrs;
-        rails running along other axes will need cad-y as well.
+        A rail runs along X or Y: only one of cad-x / cad-y differs between the
+        two addrs, and that difference gives both the axis and the direction.
         """
         key = eqp_id.upper()
         addr_a = self._port_addr.get(key)
@@ -560,40 +563,50 @@ class EbsSimulate:
             print(f"[ebs] {key}: no {RAIL_PREFIX}{addr_a}_* prim found")
             return None
 
-        cadx_a, cadx_b = self._addr_cadx.get(addr_a), self._addr_cadx.get(addr_b)
-        if cadx_a is None or cadx_b is None:
-            print(f"[ebs] {key}: missing {CADX_KEY} for addr {addr_a} or {addr_b}")
+        cad_a, cad_b = self._addr_cad.get(addr_a), self._addr_cad.get(addr_b)
+        if cad_a is None or cad_b is None:
+            print(f"[ebs] {key}: missing cad values for addr {addr_a} or {addr_b}")
             return None
+
+        span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
+        axis = 0 if abs(span[0]) >= abs(span[1]) else 1      # the axis that changes
+        if min(abs(span[0]), abs(span[1])) > 1e-6:
+            print(f"[ebs] {key}: both cad axes change between addr {addr_a} and "
+                  f"{addr_b} ({span}), taking the larger one")
 
         offsets = self._port_offsets.get(key, {})
         spacing = self._port_spacing(key, offsets)
         if spacing is None:
             return None
 
-        # The rail may run either way along Y, and cad-x follows it, so the
-        # signed length carries the direction: the half-length that locates the
-        # start point and the offsets that walk from it both use that sign.
-        rail_y = self._local_translation(rail)[1]
-        length = (cadx_b - cadx_a) / CAD_PER_UNIT
+        length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
         direction = 1.0 if length >= 0 else -1.0
-        addr_y = rail_y - length / 2.0                   # rail start = addr position
-        offset_zero = offsets[1] + spacing               # one step past port 1
+        rail_local = self._local_translation(rail)
+        start = rail_local[axis] - length / 2.0              # rail start = addr position
+        offset_zero = offsets[1] + spacing                   # one step past port 1
         shift = direction * offset_zero / OFFSET_PER_UNIT
-        y = addr_y + shift
 
+        coords = [rail_local[0], rail_local[1], rail_local[2]]
+        coords[axis] = start + shift                         # the other axes stay as-is
+        point = Gf.Vec3d(*coords)
+
+        name = "XY"[axis]
         gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
                 for i in sorted(offsets) if i + 1 in offsets]
         print(f"[ebs] {key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
-        print(f"[ebs]   cad-x {cadx_a:.3f} -> {cadx_b:.3f} = {cadx_b - cadx_a:+.3f} "
-              f"/ {CAD_PER_UNIT:.4f} = {length:+.4f} units, direction {direction:+.0f}")
-        print(f"[ebs]   rail.y {rail_y:.4f} - {length:+.4f}/2 = addr_y {addr_y:.4f}")
+        print(f"[ebs]   cad {cad_a} -> {cad_b}, span ({span[0]:+.3f}, {span[1]:+.3f})"
+              f" -> runs along {name}, direction {direction:+.0f}")
+        print(f"[ebs]   length {span[axis]:+.3f} / {CAD_PER_UNIT:.4f} = {length:+.4f} units")
+        print(f"[ebs]   rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
+              f"= start {start:.4f}")
         print(f"[ebs]   offsets " +
               ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
               f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
         print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
               f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
-        print(f"[ebs]   y = {addr_y:.4f} {shift:+.4f} = {y:.4f}")
-        return y
+        print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
+              f" (rail's other axes kept)")
+        return point, axis
 
     def _port_spacing(self, key: str, offsets: dict) -> "float | None":
         """Distance between neighbouring ports, averaged over the pairs present.
@@ -619,20 +632,18 @@ class EbsSimulate:
     def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
         """World point the EBS has to sit on.
 
-        X and Y are computed in the rail's own space - the rail's X and the
-        virtual port 0 - and then lifted into world space. Z stays the anchor
-        prim's world Z. The rail, the anchor and the EBS live under different
-        parents, so everything meets in world space.
+        X and Y come from the rail: the axis it runs along carries the virtual
+        port 0, the other axis keeps the rail's own value. That point is lifted
+        into world space. Z stays the anchor prim's world Z. The rail, the
+        anchor and the EBS live under different parents, so everything meets in
+        world space.
         """
-        y = self.compute_port_zero_y(stage, eqp_id)
-        if y is None:
+        found = self.compute_rail_point(stage, eqp_id)
+        if found is None:
             return None
-        rail, _ = self.find_rail(stage, self._port_addr.get(eqp_id.upper()))
-        if rail is None:
-            return None
+        in_rail_space, _ = found
 
-        rail_local = self._local_translation(rail)
-        in_rail_space = Gf.Vec3d(rail_local[0], y, rail_local[2])
+        rail, _ = self.find_rail(stage, self._port_addr.get(eqp_id.upper()))
         world = self._parent_world(rail).Transform(in_rail_space)
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
@@ -640,8 +651,8 @@ class EbsSimulate:
         print(f"[ebs]   rail space ({in_rail_space[0]:.4f}, {in_rail_space[1]:.4f}, "
               f"{in_rail_space[2]:.4f}) -> world ({world[0]:.4f}, {world[1]:.4f}, "
               f"{world[2]:.4f})")
-        print(f"[ebs]   target = rail x {target[0]:.4f}, port0 y {target[1]:.4f}, "
-              f"anchor z {target[2]:.4f}  [{anchor.GetName()}]")
+        print(f"[ebs]   target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})"
+              f"  [rail xy, anchor z from {anchor.GetName()}]")
         return target
 
     @staticmethod
@@ -951,12 +962,11 @@ class EbsSimulate:
     # -- camera --------------------------------------------------------------
 
     def _move_camera(self, prim_path: str, facing: Usd.Prim = None) -> bool:
-        """Fill the view with the prim, seen from the front of `facing`.
+        """Fill the view with the prim, seen head-on from world +X.
 
-        The facing prim decides which way is the front (its local -X); the
-        framed prim decides how much of the screen is filled. They differ
-        because the anchor sets the orientation while the whole equipment is
-        what should be visible.
+        The camera sits on the world +X side and looks toward -X. When a facing
+        prim is given its world position is what the camera centres on, so the
+        anchor stays in the middle while the whole equipment is framed.
         """
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
@@ -984,7 +994,11 @@ class EbsSimulate:
         diagonal = (box.GetMax() - box.GetMin()).GetLength()
         distance = max(diagonal * 1.5, 1.0)
 
-        self._place_front_camera(stage, viewport, facing or prim, center, distance)
+        if facing is not None and facing.IsValid():
+            centre_on = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()).ExtractTranslation()
+            center = Gf.Vec3d(centre_on[0], centre_on[1], centre_on[2])
+        self._place_front_camera(stage, viewport, center, distance)
         try:
             frame_viewport_prims(viewport, prims=[prim_path])   # keep direction, fit size
         except Exception as e:
@@ -992,21 +1006,18 @@ class EbsSimulate:
             return False
         return True
 
-    def _place_front_camera(self, stage, viewport, prim, center, distance) -> bool:
-        """Aim the camera from the prim's local -X toward +X."""
+    def _place_front_camera(self, stage, viewport, center, distance) -> bool:
+        """Aim the camera from world +X toward -X, with the stage up axis up."""
         cam_prim = stage.GetPrimAtPath(str(viewport.camera_path))
         if not cam_prim.IsValid():
             return False
 
-        tc = Usd.TimeCode.Default()
-        local_to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
-        rot = local_to_world.ExtractRotationMatrix()
-        up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
-        front = -Gf.Vec3d(rot[0][0], rot[0][1], rot[0][2]).GetNormalized()         # local -X
-        up    = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
-
-        # A camera looks down its local -Z, so Z_cam is the opposite of the view direction.
-        z_cam = front
+        up = (Gf.Vec3d(0.0, 1.0, 0.0)
+              if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y
+              else Gf.Vec3d(0.0, 0.0, 1.0))
+        # A camera looks down its local -Z, so Z_cam is the opposite of the
+        # view direction: looking toward -X means Z_cam is world +X.
+        z_cam = Gf.Vec3d(1.0, 0.0, 0.0)
         x_cam = Gf.Cross(up, z_cam).GetNormalized()
         y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
         eye = Gf.Vec3d(center) + z_cam * distance
