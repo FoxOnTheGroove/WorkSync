@@ -91,6 +91,10 @@ class EbsSimulateService:
         return cls._simulate.get_result()
 
     @classmethod
+    def get_grid_shape(cls):
+        return cls._simulate.get_grid_shape()
+
+    @classmethod
     def get_notes(cls):
         return cls._simulate.get_notes()
 

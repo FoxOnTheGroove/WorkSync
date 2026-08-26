@@ -1,12 +1,23 @@
 import omni.ui as ui
 
-from .ebs_simulate_service import EbsSimulateService, FACES, GRID
+from .ebs_simulate_service import EbsSimulateService, FACES
 
 __all__ = ["EbsDummyUI"]
 
 COLOR_HIT      = 0xFF3333DD      # collision (ABGR: red)
-COLOR_CLEAR    = 0xFF4C4C4C      # clear
+COLOR_CLEAR    = 0xFF4C7C4C      # clear
 COLOR_DISABLED = 0xFF2A2A2A      # not evaluated
+CHECKER_SHADE  = 0.72            # every other cell is dimmed, marking the grid
+
+
+def shade(colour: int, dark: bool) -> int:
+    """The same ABGR colour, dimmed a little, for the checkerboard's other square."""
+    if not dark:
+        return colour
+    out = colour & 0xFF000000
+    for shift in (0, 8, 16):
+        out |= int(((colour >> shift) & 0xFF) * CHECKER_SHADE) << shift
+    return out
 CELL_SIZE      = 26
 CELL_GAP       = 2
 
@@ -37,6 +48,7 @@ class EbsDummyUI:
         self._status_label = None
         self._info_label = None
         self._log_stack = None
+        self._grid_row = None
         self._cells = {}          # face -> list[ui.Rectangle]
 
     # -- build ---------------------------------------------------------------
@@ -84,6 +96,7 @@ class EbsDummyUI:
                                             style={"color": 0xFF999999, "font_size": 12})
 
                 ui.Separator(height=6)
+                self._grid_row = ui.VStack(height=0)
                 self._build_grids()
 
                 ui.Label("Log", height=18, style={"font_size": 12, "color": 0xFFAAAAAA})
@@ -96,24 +109,45 @@ class EbsDummyUI:
             field = ui.StringField()
         return field
 
-    def _build_grids(self):
+    def _build_grids(self, shape: dict = None, cells: dict = None):
+        """Draw one grid per face, sized as the run reported it.
+
+        Cell counts differ per face and per EBS, so the squares are rebuilt each
+        time rather than laid out once. Neighbouring cells alternate between the
+        plain colour and a shaded one, which is what makes the grid readable
+        without drawing lines.
+        """
+        if self._grid_row is None:
+            return
+        self._grid_row.clear()
         self._cells = {}
-        with ui.HStack(height=GRID * (CELL_SIZE + CELL_GAP) + 24, spacing=16):
-            for face in FACES:
-                with ui.VStack(width=GRID * (CELL_SIZE + CELL_GAP), spacing=CELL_GAP):
-                    ui.Label(FACE_LABEL.get(face, face), height=18,
-                             alignment=ui.Alignment.CENTER,
-                             style={"font_size": 13, "color": 0xFFCCCCCC})
-                    rects = []
-                    for _ in range(GRID):
-                        with ui.HStack(height=CELL_SIZE, spacing=CELL_GAP):
-                            for _ in range(GRID):
-                                rects.append(ui.Rectangle(
-                                    width=CELL_SIZE,
-                                    style={"background_color": COLOR_DISABLED,
-                                           "border_radius": 2},
-                                ))
-                    self._cells[face] = rects
+        with self._grid_row:
+            with ui.HStack(spacing=16):
+                for face in FACES:
+                    rows, cols = (shape or {}).get(face, (1, 1))
+                    values = (cells or {}).get(face) or []
+                    with ui.VStack(width=cols * (CELL_SIZE + CELL_GAP),
+                                   spacing=CELL_GAP):
+                        ui.Label(f"{FACE_LABEL.get(face, face)} {rows}x{cols}",
+                                 height=18, alignment=ui.Alignment.CENTER,
+                                 style={"font_size": 13, "color": 0xFFCCCCCC})
+                        rects = []
+                        for r in range(rows):
+                            with ui.HStack(height=CELL_SIZE, spacing=CELL_GAP):
+                                for c in range(cols):
+                                    i = r * cols + c
+                                    blocked = bool(i < len(values) and values[i])
+                                    if cells is None:
+                                        colour = COLOR_DISABLED
+                                    else:
+                                        colour = shade(
+                                            COLOR_HIT if blocked else COLOR_CLEAR,
+                                            (r + c) % 2 == 1)
+                                    rects.append(ui.Rectangle(
+                                        width=CELL_SIZE,
+                                        style={"background_color": colour,
+                                               "border_radius": 2}))
+                        self._cells[face] = rects
 
     # -- handlers ------------------------------------------------------------
 
@@ -177,14 +211,8 @@ class EbsDummyUI:
         cells = result.get("cells")
         # Steps before the collision check carry no cells: grey the grids out so a
         # stale result is never read as current.
-        for face, rects in self._cells.items():
-            values = (cells or {}).get(face, [])
-            for i, rect in enumerate(rects):
-                if not ok or cells is None:
-                    color = COLOR_DISABLED
-                else:
-                    color = COLOR_HIT if (i < len(values) and values[i]) else COLOR_CLEAR
-                rect.style = {"background_color": color, "border_radius": 2}
+        self._build_grids(result.get("grid") or EbsSimulateService.get_grid_shape(),
+                          cells if ok else None)
 
         self._set_status(result.get("reason", ""))
         port = result.get("port_count")
@@ -240,6 +268,7 @@ class EbsDummyUI:
 
     def destroy(self):
         self._cells = {}
+        self._grid_row = None
         self._log_stack = None
         if self._window:
             self._window.destroy()

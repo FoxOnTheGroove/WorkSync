@@ -27,6 +27,7 @@ MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell
 MARKER_OPACITY = 0.35
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
 COLOR_CLEAR    = (0.35, 0.75, 0.4)
+CHECKER_SHADE  = 0.72     # every other cell is shaded, so the grid reads as a grid
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
@@ -34,7 +35,8 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-GRID = 5                 # NxN subdivision per face
+GRID = 5                 # divisions given to the longest edge; the others get
+                         # an integer count that keeps the cells near square
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PRECISION_BBOX = "bbox"      # one box per equipment
 PRECISION_MESH = "mesh"      # one box per mesh
@@ -75,6 +77,7 @@ class EbsSimulate:
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
+        self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
         self._precision: str = PRECISION_TRI
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._notes: list = []              # diagnostics for the last run, shown in the UI
@@ -995,10 +998,9 @@ class EbsSimulate:
         Faces and cells follow the EBS prim's local axes, named as the front
         camera sees them: right is +X, left is -X, ceiling is +up.
         """
-        empty = {face: [False] * (GRID * GRID) for face in FACES}
         stage = self._get_stage()
         if stage is None:
-            return empty
+            return {face: [] for face in FACES}
         self._visible = {}          # visibility can change between runs
 
         cache = UsdGeom.BBoxCache(
@@ -1014,7 +1016,7 @@ class EbsSimulate:
             to_world = ebs_bbox.GetMatrix()
             world_box = ebs_bbox.ComputeAlignedRange()
         if local_box.IsEmpty():
-            return empty
+            return {face: [] for face in FACES}
 
         with self._stage_timer("build cells"):
             # Cells are cut along the local axes, then converted to world AABBs.
@@ -1072,7 +1074,7 @@ class EbsSimulate:
                    + (f", {hidden} hidden skipped" if hidden else ""))
 
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
-            result = {face: [False] * (GRID * GRID) for face in FACES}
+            result = {face: [False] * len(boxes) for face, boxes in cells.items()}
             hits = {}
             triangle_tests = 0
             boxed_only = set()
@@ -1309,12 +1311,15 @@ class EbsSimulate:
         return missing
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
-        """Build the 3x3 cells per face in the prim's local axes,
-        ordered left to right and top to bottom.
+        """Cells per face in the prim's local axes, left to right, top to bottom.
 
         +/-Y is the front/back (not evaluated), +/-X the sides, +up the ceiling.
         The camera stands on local -Y and looks toward +Y, so screen-right is
         +X and the grids read the same way round as the view does.
+
+        The longest edge of the EBS is cut into GRID divisions and every other
+        edge takes the whole number of those that fits it best, so the cells come
+        out as square as the box allows: 5x5 on a cube, 5x3 on a flatter one.
         """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis                        # front/back, not evaluated
@@ -1322,24 +1327,30 @@ class EbsSimulate:
         t = self._clearance
 
         lo, hi = box.GetMin(), box.GetMax()
-        cells = {}
+        extent = [hi[i] - lo[i] for i in range(3)]
+        unit = max(extent) / GRID if max(extent) > 0 else 1.0
+        divisions = [max(1, int(round(extent[i] / unit))) if unit > 0 else 1
+                     for i in range(3)]
 
-        def make(fixed_axis, outward, row_axis, col_axis, flip_cols=False):
+        cells = {}
+        shapes = {}
+
+        def make(fixed_axis, outward, row_axis, col_axis):
             """Cells as (probe range, surface quad) in the box's own space."""
+            rows, cols = divisions[row_axis], divisions[col_axis]
             out = []
             row_lo, row_hi = lo[row_axis], hi[row_axis]
             col_lo, col_hi = lo[col_axis], hi[col_axis]
-            row_step = (row_hi - row_lo) / GRID
-            col_step = (col_hi - col_lo) / GRID
-            for r in range(GRID):
-                for c in range(GRID):
+            row_step = (row_hi - row_lo) / rows
+            col_step = (col_hi - col_lo) / cols
+            for r in range(rows):
+                for c in range(cols):
                     cmin, cmax = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
                     # rows are flipped so index 0 is the top row
                     cmin[row_axis] = row_hi - (r + 1) * row_step
                     cmax[row_axis] = row_hi - r * row_step
-                    col = (GRID - 1 - c) if flip_cols else c
-                    cmin[col_axis] = col_lo + col * col_step
-                    cmax[col_axis] = col_lo + (col + 1) * col_step
+                    cmin[col_axis] = col_lo + c * col_step
+                    cmax[col_axis] = col_lo + (c + 1) * col_step
                     if outward > 0:
                         surface = hi[fixed_axis]
                         cmin[fixed_axis], cmax[fixed_axis] = surface, surface + t
@@ -1356,13 +1367,19 @@ class EbsSimulate:
                         corner[col_axis] = cmax[col_axis] if c_end else cmin[col_axis]
                         quad.append(tuple(corner))
                     out.append((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad))
-            return out
+            return out, (rows, cols)
 
         # Looking along +Y with the up axis up puts +X on the right of the screen.
-        cells[FACE_RIGHT]   = make(side_axis, +1, up_axis, front_axis)
-        cells[FACE_LEFT]    = make(side_axis, -1, up_axis, front_axis)
-        cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis)
+        for face, args in ((FACE_RIGHT,   (side_axis, +1, up_axis, front_axis)),
+                           (FACE_LEFT,    (side_axis, -1, up_axis, front_axis)),
+                           (FACE_CEILING, (up_axis,   +1, front_axis, side_axis))):
+            cells[face], shapes[face] = make(*args)
+        self._grid_shape = shapes
         return cells
+
+    def get_grid_shape(self) -> dict:
+        """Rows and columns of each face's grid, as of the last run."""
+        return dict(self._grid_shape)
 
     # -- collision markers ---------------------------------------------------
 
@@ -1388,20 +1405,30 @@ class EbsSimulate:
             return 0
 
         drawn = 0
+        built = self._build_cells(local_box)
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, MARKER_ROOT)
-            materials = {
-                True: self._marker_material(stage, "blocked", COLOR_BLOCKED),
-                False: self._marker_material(stage, "clear", COLOR_CLEAR),
-            }
-            for face, boxes in self._build_cells(local_box).items():
+            # Four materials rather than two: neighbouring cells alternate
+            # between the plain colour and a shaded one, so the grid lines read
+            # without drawing any.
+            materials = {}
+            for blocked, base in ((True, COLOR_BLOCKED), (False, COLOR_CLEAR)):
+                for dark in (False, True):
+                    colour = self.shade(base, dark)
+                    name = f"{'blocked' if blocked else 'clear'}{'_dark' if dark else ''}"
+                    materials[(blocked, dark)] = (
+                        self._marker_material(stage, name, colour), colour)
+
+            for face, boxes in built.items():
                 flags = cells.get(face, [])
+                cols = self._grid_shape.get(face, (1, 1))[1]
                 for i, (_, quad) in enumerate(boxes):
                     blocked = bool(i < len(flags) and flags[i])
+                    dark = ((i // cols) + (i % cols)) % 2 == 1
+                    material, colour = materials[(blocked, dark)]
                     points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
                     self._marker_quad(stage, f"{MARKER_ROOT}/{face}_{i}", points,
-                                      materials[blocked],
-                                      COLOR_BLOCKED if blocked else COLOR_CLEAR)
+                                      material, colour)
                     drawn += 1
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
@@ -1414,6 +1441,11 @@ class EbsSimulate:
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             if stage.GetPrimAtPath(MARKER_ROOT).IsValid():
                 stage.RemovePrim(MARKER_ROOT)
+
+    @staticmethod
+    def shade(colour, dark: bool):
+        """The same colour, dimmed a little, for the checkerboard's other square."""
+        return tuple(c * CHECKER_SHADE for c in colour) if dark else tuple(colour)
 
     @staticmethod
     def _marker_quad(stage, path: str, points: list, material, color) -> None:
@@ -1562,6 +1594,7 @@ class EbsSimulate:
             "anchor": str(anchor.GetPath()) if anchor else "",
             "cells": cells,
             "hit_count": hit_count,
+            "grid": dict(self._grid_shape),
             "timings": list(self._timings),
             "notes": list(self._notes),
             "total_ms": (time.perf_counter() - self._started) * 1000.0,
