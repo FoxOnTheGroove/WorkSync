@@ -11,7 +11,7 @@ __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
 PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
-OFFSET_KEY  = "offset"        # distance of a port from its addr, along -Y
+OFFSET_KEY  = "offset"        # distance of a port from its addr, along +Y
 CADX_KEY    = "cad-x"         # rail start point, on the addr group
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
@@ -214,20 +214,18 @@ class EbsSimulate:
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         stage = self._get_stage()
-        equipment = self._target["equipment"]
+        anchor = self._target["anchor"]
 
         with self._stage_timer("align EBS"):
-            target = self.compute_target(stage, self._target["eqp_id"], equipment)
+            target = self.compute_target(stage, self._target["eqp_id"], anchor)
             if target is not None:
-                self._aligned = self._place_ebs(self._target["ebs"], target,
-                                                self._target["anchor"])
+                self._aligned = self._place_ebs(self._target["ebs"], target, anchor)
                 note = ("EBS placed at port 0, world "
                         f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f})")
             else:
                 # No usable rail/port data: keep working off the anchor prim.
                 print("[ebs] port geometry unavailable, falling back to the anchor prim")
-                self._aligned = self._align_prims(self._target["ebs"],
-                                                  self._target["anchor"])
+                self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
@@ -540,7 +538,7 @@ class EbsSimulate:
         """Y of the virtual port 0, which is where the EBS goes.
 
         The addr sits at the rail's start point, the rail prim sits at its
-        midpoint, and ports run from the addr in -Y at a constant spacing:
+        midpoint, and ports run from the addr in +Y at a constant spacing:
         along the line the order is 1, 2, (3), addr. Port 0 is one more step
         past port 1, so its offset extrapolates from the first two ports.
         """
@@ -579,15 +577,15 @@ class EbsSimulate:
         length = (cadx_b - cadx_a) / CAD_PER_UNIT
         addr_y = rail_y - length / 2.0                   # rail start = addr position
         offset_zero = 2.0 * first - second               # one step past port 1
-        return addr_y - offset_zero / OFFSET_PER_UNIT    # offsets run in -Y
+        return addr_y + offset_zero / OFFSET_PER_UNIT    # offsets run in +Y
 
-    def compute_target(self, stage: Usd.Stage, eqp_id: str, equipment: Usd.Prim):
+    def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
         """World point the EBS has to sit on.
 
         X and Y are computed in the rail's own space - the rail's X and the
-        virtual port 0 - and then lifted into world space. Z stays the
-        equipment's world Z. The rail, the equipment and the EBS live under
-        different parents, so everything meets in world space.
+        virtual port 0 - and then lifted into world space. Z stays the anchor
+        prim's world Z. The rail, the anchor and the EBS live under different
+        parents, so everything meets in world space.
         """
         y = self.compute_port_zero_y(stage, eqp_id)
         if y is None:
@@ -599,9 +597,9 @@ class EbsSimulate:
         rail_local = self._local_translation(rail)
         in_rail_space = Gf.Vec3d(rail_local[0], y, rail_local[2])
         world = self._parent_world(rail).Transform(in_rail_space)
-        equipment_world = UsdGeom.Xformable(equipment).ComputeLocalToWorldTransform(
+        anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
-        return Gf.Vec3d(world[0], world[1], equipment_world[2])
+        return Gf.Vec3d(world[0], world[1], anchor_world[2])
 
     @staticmethod
     def _local_translation(prim: Usd.Prim) -> Gf.Vec3d:
