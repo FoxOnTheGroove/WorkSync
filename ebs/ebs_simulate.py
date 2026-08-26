@@ -53,7 +53,8 @@ class EbsSimulate:
         self._port_map: dict = {}           # "########" -> sorted port indices
         self._port_elements: dict = {}      # "########" -> port elements in port order
         self._port_offsets: dict = {}       # "########" -> {index: offset}
-        self._port_addr: dict = {}          # "########" -> addr number
+        self._port_addr: dict = {}          # "########" -> base addr number
+        self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._rail_root: str = ""           # parent path holding the rail prims
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
@@ -386,6 +387,7 @@ class EbsSimulate:
         self._port_elements = {}
         self._port_offsets = {}
         self._port_addr = {}
+        self._port_addr_of = {}
         self._addr_cad = {}
         if not self._xml_path:
             return 0
@@ -430,10 +432,16 @@ class EbsSimulate:
                 self._port_map[key] = indices
                 self._port_elements[key] = [by_index[i][0] for i in indices]
                 self._port_offsets[key] = {i: by_index[i][1] for i in indices}
-                addrs = {by_index[i][2] for i in indices if by_index[i][2] is not None}
-                if len(addrs) > 1:
-                    print(f"[ebs] {key}: ports span several addr blocks: {sorted(addrs)}")
-                self._port_addr[key] = min(addrs) if addrs else None
+                by_port = {i: by_index[i][2] for i in indices
+                           if by_index[i][2] is not None}
+                self._port_addr_of[key] = by_port
+                # The port with the highest number sits next to the addr, so its
+                # block is the one this equipment belongs to. Lower-numbered ports
+                # reach further and can fall into a neighbouring addr's block.
+                self._port_addr[key] = by_port[max(by_port)] if by_port else None
+                if len(set(by_port.values())) > 1:
+                    print(f"[ebs] {key}: ports span several addr blocks {by_port}, "
+                          f"base addr {self._port_addr[key]}")
                 if indices != list(range(1, len(indices) + 1)):
                     print(f"[ebs] {key}: port indices are not 1..N: {indices}")
         return len(self._port_map)
@@ -574,13 +582,13 @@ class EbsSimulate:
             print(f"[ebs] {key}: both cad axes change between addr {addr_a} and "
                   f"{addr_b} ({span}), taking the larger one")
 
-        offsets = self._port_offsets.get(key, {})
+        length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
+        direction = 1.0 if length >= 0 else -1.0
+
+        offsets = self._rebase_offsets(key, addr_a, axis, direction)
         spacing = self._port_spacing(key, offsets)
         if spacing is None:
             return None
-
-        length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
-        direction = 1.0 if length >= 0 else -1.0
         rail_local = self._local_translation(rail)
         start = rail_local[axis] - length / 2.0              # rail start = addr position
         offset_zero = offsets[1] + spacing                   # one step past port 1
@@ -607,6 +615,37 @@ class EbsSimulate:
         print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
               f" (rail's other axes kept)")
         return point, axis
+
+    def _rebase_offsets(self, key: str, base_addr: int, axis: int,
+                        direction: float) -> dict:
+        """Offsets of every port measured from the same addr.
+
+        A port's offset is measured from the addr block it is written in, and
+        the lower-numbered ports reach far enough to fall into a neighbouring
+        block. Such an offset is shifted by the distance between that addr and
+        the base one, so all of them share an origin again.
+        """
+        offsets = dict(self._port_offsets.get(key, {}))
+        addr_of = self._port_addr_of.get(key, {})
+        base_cad = self._addr_cad.get(base_addr)
+        if base_cad is None:
+            return offsets
+
+        for index, offset in list(offsets.items()):
+            addr = addr_of.get(index)
+            if addr is None or addr == base_addr:
+                continue
+            cad = self._addr_cad.get(addr)
+            if cad is None:
+                print(f"[ebs] {key}: port {index} sits in addr {addr}, which has no cad")
+                continue
+            gap = (cad[axis] - base_cad[axis]) / CAD_PER_UNIT      # signed, in units
+            shift = direction * gap * OFFSET_PER_UNIT
+            offsets[index] = offset + shift
+            print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
+                  f"{offset:.1f} {shift:+.1f} = {offsets[index]:.1f} "
+                  f"(addr gap {gap:+.4f} units)")
+        return offsets
 
     def _port_spacing(self, key: str, offsets: dict) -> "float | None":
         """Distance between neighbouring ports, averaged over the pairs present.
@@ -962,11 +1001,11 @@ class EbsSimulate:
     # -- camera --------------------------------------------------------------
 
     def _move_camera(self, prim_path: str, facing: Usd.Prim = None) -> bool:
-        """Fill the view with the prim, seen head-on from world +X.
+        """Fill the view with the prim, seen from the facing prim's local -Y.
 
-        The camera sits on the world +X side and looks toward -X. When a facing
-        prim is given its world position is what the camera centres on, so the
-        anchor stays in the middle while the whole equipment is framed.
+        The facing prim decides both the direction - the camera stands on its
+        local -Y side and looks toward +Y - and the point the view centres on,
+        so the anchor stays in the middle while the whole equipment is framed.
         """
         try:
             from omni.kit.viewport.utility import get_active_viewport, frame_viewport_prims
@@ -994,11 +1033,12 @@ class EbsSimulate:
         diagonal = (box.GetMax() - box.GetMin()).GetLength()
         distance = max(diagonal * 1.5, 1.0)
 
-        if facing is not None and facing.IsValid():
-            centre_on = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
-                Usd.TimeCode.Default()).ExtractTranslation()
-            center = Gf.Vec3d(centre_on[0], centre_on[1], centre_on[2])
-        self._place_front_camera(stage, viewport, center, distance)
+        facing = facing if (facing is not None and facing.IsValid()) else prim
+        centre_on = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()).ExtractTranslation()
+        self._place_front_camera(stage, viewport, facing,
+                                 Gf.Vec3d(centre_on[0], centre_on[1], centre_on[2]),
+                                 distance)
         try:
             frame_viewport_prims(viewport, prims=[prim_path])   # keep direction, fit size
         except Exception as e:
@@ -1006,18 +1046,22 @@ class EbsSimulate:
             return False
         return True
 
-    def _place_front_camera(self, stage, viewport, center, distance) -> bool:
-        """Aim the camera from world +X toward -X, with the stage up axis up."""
+    def _place_front_camera(self, stage, viewport, facing, center, distance) -> bool:
+        """Aim the camera from the facing prim's local -Y toward its local +Y."""
         cam_prim = stage.GetPrimAtPath(str(viewport.camera_path))
         if not cam_prim.IsValid():
             return False
 
-        up = (Gf.Vec3d(0.0, 1.0, 0.0)
-              if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y
-              else Gf.Vec3d(0.0, 0.0, 1.0))
-        # A camera looks down its local -Z, so Z_cam is the opposite of the
-        # view direction: looking toward -X means Z_cam is world +X.
-        z_cam = Gf.Vec3d(1.0, 0.0, 0.0)
+        rot = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()).ExtractRotationMatrix()
+        up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
+        # Row 1 is the prim's local +Y in world terms; the view runs along it,
+        # so the camera stands on the -Y side.
+        view = Gf.Vec3d(rot[1][0], rot[1][1], rot[1][2]).GetNormalized()
+        up = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
+
+        # A camera looks down its local -Z, so Z_cam is the opposite of the view.
+        z_cam = -view
         x_cam = Gf.Cross(up, z_cam).GetNormalized()
         y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
         eye = Gf.Vec3d(center) + z_cam * distance
