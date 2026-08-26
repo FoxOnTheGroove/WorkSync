@@ -925,7 +925,7 @@ class EbsSimulate:
         """Test the left, right and ceiling faces as 3x3 grids.
 
         Faces and cells follow the EBS prim's local axes, named as the front
-        camera sees them: right is -Y, left is +Y, ceiling is +up.
+        camera sees them: right is +X, left is -X, ceiling is +up.
         """
         empty = {face: [False] * (GRID * GRID) for face in FACES}
         stage = self._get_stage()
@@ -967,19 +967,36 @@ class EbsSimulate:
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
             candidates = [
-                box for path, box in self._bounds_cache.items()
+                (path, box) for path, box in self._bounds_cache.items()
                 if not any(path == s or path.startswith(s + "/") for s in skip)
                 and not Gf.Range3d.GetIntersection(box, search).IsEmpty()
             ]
 
+        size = local_box.GetMax() - local_box.GetMin()
+        print(f"[ebs] collision: EBS local size ({size[0]:.3f}, {size[1]:.3f}, "
+              f"{size[2]:.3f}), clearance {self._clearance}")
+        print(f"[ebs]   world box {tuple(round(v, 3) for v in world_box.GetMin())} .. "
+              f"{tuple(round(v, 3) for v in world_box.GetMax())}")
+        print(f"[ebs]   {len(self._bounds_cache)} equipment bounds, "
+              f"{len(candidates)} within clearance, skipping {skip}")
+
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * (GRID * GRID) for face in FACES}
+            hits = {}
             for face, boxes in cells.items():
                 for i, cell in enumerate(boxes):
-                    for box in candidates:
+                    for path, box in candidates:
                         if not Gf.Range3d.GetIntersection(box, cell).IsEmpty():
                             result[face][i] = True
+                            hits.setdefault(path.rsplit("/", 1)[-1], []).append(
+                                f"{face}[{i}]")
                             break
+
+        if hits:
+            for name, where in sorted(hits.items()):
+                print(f"[ebs]   hit by {name}: {', '.join(where)}")
+        elif candidates:
+            print("[ebs]   candidates were near but none reached a cell")
 
         if missing:
             print(f"[ebs] {missing} equipment prim(s) had no usable bound")
@@ -1009,14 +1026,13 @@ class EbsSimulate:
         """Build the 3x3 cells per face in the prim's local axes,
         ordered left to right and top to bottom.
 
-        +/-X is the front/back (not evaluated), +/-Y the sides, +up the ceiling.
-        The camera looks from local -X toward +X, so screen-right is -Y:
-        the face named "right" is the -Y one, and the ceiling columns are
-        reversed to read left-to-right the same way.
+        +/-Y is the front/back (not evaluated), +/-X the sides, +up the ceiling.
+        The camera stands on local -Y and looks toward +Y, so screen-right is
+        +X and the grids read the same way round as the view does.
         """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
-        front_axis = 0                                  # front/back, not evaluated
-        side_axis = 3 - up_axis - front_axis            # sides (Y when Z-up)
+        front_axis = 3 - up_axis                        # front/back, not evaluated
+        side_axis = 3 - up_axis - front_axis            # sides (X when Z-up)
         t = self._clearance
 
         lo, hi = box.GetMin(), box.GetMax()
@@ -1056,10 +1072,10 @@ class EbsSimulate:
                     out.append((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad))
             return out
 
-        # The camera looks from local -X, so screen-right is -Y.
-        cells[FACE_RIGHT]   = make(side_axis, -1, up_axis, front_axis)
-        cells[FACE_LEFT]    = make(side_axis, +1, up_axis, front_axis)
-        cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis, flip_cols=True)
+        # Looking along +Y with the up axis up puts +X on the right of the screen.
+        cells[FACE_RIGHT]   = make(side_axis, +1, up_axis, front_axis)
+        cells[FACE_LEFT]    = make(side_axis, -1, up_axis, front_axis)
+        cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis)
         return cells
 
     # -- collision markers ---------------------------------------------------
