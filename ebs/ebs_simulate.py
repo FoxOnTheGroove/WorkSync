@@ -520,38 +520,87 @@ class EbsSimulate:
 
     # -- rail and port geometry ----------------------------------------------
 
-    def find_rail(self, stage: Usd.Stage, addr_number: int):
-        """Find the rail_<addr>_<neighbour> prim and return (prim, neighbour)."""
+    def find_rail(self, stage: Usd.Stage, addr_number: int, prefer=()):
+        """Pick the rail leaving this addr. Returns (prim, neighbour, axis).
+
+        Several rails can start at the same addr, so the candidates are filtered
+        down: only a straight one counts, meaning exactly one of cad-x / cad-y
+        differs between the two addrs. When ports spilled into neighbouring
+        blocks, the rail running towards those is the one to take.
+        """
         prefix = f"{RAIL_PREFIX}{addr_number}_"
 
-        def match(prim):
+        def neighbour_of(prim):
             name = prim.GetName().lower()
             if not name.startswith(prefix):
                 return None
             parts = name.split("_")
-            if len(parts) < 3 or not parts[2].isdigit():
-                return None
-            return int(parts[2])
+            return int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else None
 
+        found = []
         root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
         if root is not None and root.IsValid():
-            for child in root.GetChildren():         # rails sit right under the root
-                neighbour = match(child)
-                if neighbour is not None:
-                    return child, neighbour
-            print(f"[ebs] no {prefix}* under {self._rail_root}, scanning the stage")
+            found = [(p, n) for p in root.GetChildren()
+                     if (n := neighbour_of(p)) is not None]
+            if not found:
+                print(f"[ebs] no {prefix}* under {self._rail_root}, scanning the stage")
+        if not found:
+            found = [(p, n) for p, _ in self._walk(stage)
+                     if (n := neighbour_of(p)) is not None]
+        if not found:
+            return None, None, None
 
-        for prim, _ in self._walk(stage):            # fallback: pruned stage scan
-            neighbour = match(prim)
-            if neighbour is not None:
-                return prim, neighbour
-        return None, None
+        straight = []
+        for prim, neighbour in found:
+            axis = self._rail_axis(addr_number, neighbour)
+            if axis is None:
+                print(f"[ebs]   skipping {prim.GetName()}: not a straight rail "
+                      f"along one cad axis")
+                continue
+            straight.append((prim, neighbour, axis))
+        if not straight:
+            print(f"[ebs] {prefix}*: no straight rail among "
+                  f"{[p.GetName() for p, _ in found]}")
+            return None, None, None
+
+        if len(straight) > 1 and prefer:
+            # Ports reached into these addrs, so the rail heading there is ours.
+            for prim, neighbour, axis in straight:
+                if neighbour in prefer:
+                    print(f"[ebs]   {prim.GetName()} chosen: it ends at addr "
+                          f"{neighbour}, where a port sits")
+                    return prim, neighbour, axis
+            base_cad = self._addr_cad.get(addr_number)
+            for prim, neighbour, axis in straight:
+                if any(abs(self._addr_cad[a][axis] - base_cad[axis]) > 1e-6
+                       for a in prefer if a in self._addr_cad):
+                    print(f"[ebs]   {prim.GetName()} chosen: it runs along the axis "
+                          f"the spilled ports differ on")
+                    return prim, neighbour, axis
+
+        if len(straight) > 1:
+            print(f"[ebs] {prefix}*: several straight rails "
+                  f"{[(p.GetName(), n) for p, n, _ in straight]}, taking the first")
+        return straight[0]
+
+    def _rail_axis(self, addr_a: int, addr_b: int) -> "int | None":
+        """Axis a rail runs along, or None when it is not straight.
+
+        Only one of cad-x / cad-y may differ between the two addrs; a rail that
+        moves on both is a corner, and not one of the rails we place along.
+        """
+        cad_a, cad_b = self._addr_cad.get(addr_a), self._addr_cad.get(addr_b)
+        if cad_a is None or cad_b is None:
+            return None
+        span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
+        moves = [i for i in (0, 1) if abs(span[i]) > 1e-6]
+        return moves[0] if len(moves) == 1 else None
 
     def compute_rail_point(self, stage: Usd.Stage, eqp_id: str):
         """Where the virtual port 0 sits, in the rail's own space.
 
-        Returns (point, axis) with the point as a Gf.Vec3d and axis 0 or 1 for
-        the axis the rail runs along. The addr sits at the rail's start point
+        Returns (point, axis, rail) with the point as a Gf.Vec3d and axis 0 or
+        1 for the axis the rail runs along. The addr sits at the rail's start point
         and the rail prim at its midpoint, so the start is half a rail length
         back from it. Ports run from the addr along the rail at a constant
         spacing - on the line the order is 1, 2, (3), addr - and port 0 is one
@@ -566,21 +615,16 @@ class EbsSimulate:
             print(f"[ebs] {key}: no addr block found for its ports")
             return None
 
-        rail, addr_b = self.find_rail(stage, addr_a)
+        # Ports that spilled into other blocks tell us which rail to follow.
+        spilled = {a for i, a in self._port_addr_of.get(key, {}).items()
+                   if a != addr_a}
+        rail, addr_b, axis = self.find_rail(stage, addr_a, prefer=spilled)
         if rail is None:
-            print(f"[ebs] {key}: no {RAIL_PREFIX}{addr_a}_* prim found")
+            print(f"[ebs] {key}: no straight {RAIL_PREFIX}{addr_a}_* rail found")
             return None
 
-        cad_a, cad_b = self._addr_cad.get(addr_a), self._addr_cad.get(addr_b)
-        if cad_a is None or cad_b is None:
-            print(f"[ebs] {key}: missing cad values for addr {addr_a} or {addr_b}")
-            return None
-
+        cad_a, cad_b = self._addr_cad[addr_a], self._addr_cad[addr_b]
         span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
-        axis = 0 if abs(span[0]) >= abs(span[1]) else 1      # the axis that changes
-        if min(abs(span[0]), abs(span[1])) > 1e-6:
-            print(f"[ebs] {key}: both cad axes change between addr {addr_a} and "
-                  f"{addr_b} ({span}), taking the larger one")
 
         length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
         direction = 1.0 if length >= 0 else -1.0
@@ -614,7 +658,7 @@ class EbsSimulate:
               f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
         print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
               f" (rail's other axes kept)")
-        return point, axis
+        return point, axis, rail
 
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:
@@ -680,9 +724,8 @@ class EbsSimulate:
         found = self.compute_rail_point(stage, eqp_id)
         if found is None:
             return None
-        in_rail_space, _ = found
+        in_rail_space, _, rail = found
 
-        rail, _ = self.find_rail(stage, self._port_addr.get(eqp_id.upper()))
         world = self._parent_world(rail).Transform(in_rail_space)
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
