@@ -181,7 +181,8 @@ class EbsDummyUI:
 
     def _on_clear_markers(self):
         EbsSimulateService.clear_markers()
-        self._set_status("Markers cleared")
+        EbsSimulateService.release_camera()
+        self._set_status("Markers cleared, camera released")
 
     def _on_collide(self):
         self._apply_settings()

@@ -83,6 +83,14 @@ class EbsSimulateService:
         return cls._simulate.simulate(equipment)
 
     @classmethod
+    def make_camera(cls):
+        return cls._simulate.make_camera()
+
+    @classmethod
+    def release_camera(cls):
+        return cls._simulate.release_camera()
+
+    @classmethod
     def clear_markers(cls):
         return cls._simulate.clear_markers()
 
