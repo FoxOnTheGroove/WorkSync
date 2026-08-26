@@ -218,13 +218,18 @@ class DistanceLineCore:
         except Exception:
             _drop_caches()
             return
-        for path in paths:
-            prim_path = str(path.GetPrimPath())
-            if prim_path in ("", "/"):
-                _drop_caches()
-                return
-            if _is_cached(prim_path):
-                _drop_caches(prim_path)
+        try:
+            for path in paths:
+                prim_path = str(path.GetPrimPath())
+                if prim_path in ("", "/"):
+                    _drop_caches()
+                    return
+                if _is_cached(prim_path):
+                    _drop_caches(prim_path)
+        except Exception as exc:
+            # USD 통지 콜백 안이다. 여기서 터지면 곤란하니 전부 버리고 넘어간다.
+            carb.log_warn(f"[distance_line] cache drop failed, clearing all: {exc}")
+            _drop_caches()
 
     @classmethod
     def shutdown(cls):
