@@ -36,6 +36,9 @@ FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 3                 # 3x3 subdivision per face
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
+PRECISION_BBOX = "bbox"      # one box per equipment
+PRECISION_MESH = "mesh"      # one box per mesh
+PRECISION_TRI  = "triangle"  # the mesh triangles themselves
 
 # Prim types that can never contain equipment. Descending into them is what made
 # the first scan expensive: geometry subtrees are where nearly all prims live.
@@ -70,6 +73,8 @@ class EbsSimulate:
         self._rail_root: str = ""           # parent path holding the rail prims
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
+        self._triangles: dict = {}          # mesh path -> world-space triangles
+        self._precision: str = PRECISION_TRI
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._started: float = 0.0
         self._target: dict = None           # prepared equipment / EBS for the step buttons
@@ -91,6 +96,13 @@ class EbsSimulate:
 
     def set_clearance(self, value: float) -> None:
         self._clearance = max(0.0, float(value))
+
+    def set_precision(self, mode: str) -> None:
+        """How closely collisions are tested: 'bbox', 'mesh' or 'triangle'."""
+        if mode in (PRECISION_BBOX, PRECISION_MESH, PRECISION_TRI):
+            self._precision = mode
+        else:
+            print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
 
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
@@ -118,6 +130,7 @@ class EbsSimulate:
         self._port_elements = {}
         self._bounds_cache = {}
         self._mesh_bounds = {}
+        self._triangles = {}
         self._timings = []
         self._target = None
         self._aligned = False
@@ -280,6 +293,7 @@ class EbsSimulate:
         self._eqp_index = {}
         self._bounds_cache = {}
         self._mesh_bounds = {}
+        self._triangles = {}
         if stage is None:
             return 0
         visited = 0
@@ -981,38 +995,59 @@ class EbsSimulate:
             margin = Gf.Vec3d(self._clearance, self._clearance, self._clearance)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-            candidates = [
-                (path, box) for path, box in self._bounds_cache.items()
-                if not any(path == s or path.startswith(s + "/") for s in skip)
-                and self._overlaps(box, search)
-            ]
-            coarse = len(candidates)
-            if split is not None and split.IsValid():
-                candidates += [
-                    (path, box) for path, box in self._geometry_bounds(split, cache)
-                    if self._overlaps(box, search)
-                ]
+            near = [(path, box) for path, box in self._bounds_cache.items()
+                    if not any(path == s or path.startswith(s + "/") for s in skip)
+                    and self._overlaps(box, search)]
+
+        # Narrow down: one box per mesh, then the mesh triangles themselves.
+        # Each pass only sees what the previous one let through.
+        candidates = list(near)
+        if self._precision in (PRECISION_MESH, PRECISION_TRI):
+            with self._stage_timer("mesh bounds"):
+                refined = []
+                for path, _ in near:
+                    prim = stage.GetPrimAtPath(path)
+                    refined += [(mesh_path, box)
+                                for mesh_path, box in self._geometry_bounds(prim, cache)
+                                if self._overlaps(box, search)]
+                candidates = refined
+        coarse = len(candidates)
+        if split is not None and split.IsValid():
+            candidates += [(path, box)
+                           for path, box in self._geometry_bounds(split, cache)
+                           if self._overlaps(box, search)]
 
         size = local_box.GetMax() - local_box.GetMin()
-        print(f"[ebs] collision: EBS local size ({size[0]:.3f}, {size[1]:.3f}, "
-              f"{size[2]:.3f}), clearance {self._clearance}")
+        print(f"[ebs] collision ({self._precision}): EBS local size ({size[0]:.3f}, "
+              f"{size[1]:.3f}, {size[2]:.3f}), clearance {self._clearance}")
         print(f"[ebs]   world box {tuple(round(v, 3) for v in world_box.GetMin())} .. "
               f"{tuple(round(v, 3) for v in world_box.GetMax())}")
-        print(f"[ebs]   {len(self._bounds_cache)} equipment bounds, {coarse} within "
-              f"clearance, plus {len(candidates) - coarse} meshes of the mounting "
-              f"equipment, skipping {skip}")
+        print(f"[ebs]   {len(self._bounds_cache)} equipment bounds, {len(near)} within "
+              f"clearance -> {coarse} candidates, plus "
+              f"{len(candidates) - coarse} from the mounting equipment, skipping {skip}")
 
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * (GRID * GRID) for face in FACES}
             hits = {}
+            triangle_tests = 0
             for face, boxes in cells.items():
                 for i, cell in enumerate(boxes):
                     for path, box in candidates:
-                        if self._overlaps(box, cell):
-                            result[face][i] = True
-                            hits.setdefault(path.rsplit("/", 1)[-1], []).append(
-                                f"{face}[{i}]")
-                            break
+                        if not self._overlaps(box, cell):
+                            continue
+                        if self._precision == PRECISION_TRI:
+                            triangles = self._mesh_triangles(stage, path)
+                            if triangles:
+                                triangle_tests += len(triangles)
+                                if not any(self._triangle_hits_box(t, cell)
+                                           for t in triangles):
+                                    continue      # the box overlapped, the mesh does not
+                        result[face][i] = True
+                        hits.setdefault(path.rsplit("/", 1)[-1], []).append(
+                            f"{face}[{i}]")
+                        break
+            if triangle_tests:
+                print(f"[ebs]   {triangle_tests} triangle tests")
 
         if hits:
             for name, where in sorted(hits.items()):
@@ -1023,6 +1058,78 @@ class EbsSimulate:
         if missing:
             print(f"[ebs] {missing} equipment prim(s) had no usable bound")
         return result
+
+    def _mesh_triangles(self, stage, path: str) -> list:
+        """World-space triangles of one mesh, cached by prim path.
+
+        Only meshes that survived the box passes ever get here, so the point
+        arrays of the whole stage are never read.
+        """
+        if path in self._triangles:
+            return self._triangles[path]
+
+        triangles = []
+        prim = stage.GetPrimAtPath(path)
+        mesh = UsdGeom.Mesh(prim) if prim and prim.IsValid() else None
+        if mesh:
+            tc = Usd.TimeCode.Default()
+            points = mesh.GetPointsAttr().Get(tc)
+            counts = mesh.GetFaceVertexCountsAttr().Get(tc)
+            indices = mesh.GetFaceVertexIndicesAttr().Get(tc)
+            if points and counts and indices:
+                to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
+                world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
+                cursor = 0
+                for count in counts:
+                    if count >= 3 and cursor + count <= len(indices):
+                        fan = [world[indices[cursor + k]] for k in range(count)]
+                        # Triangulate the face as a fan around its first vertex.
+                        for k in range(1, count - 1):
+                            triangles.append((fan[0], fan[k], fan[k + 1]))
+                    cursor += count
+        self._triangles[path] = triangles
+        return triangles
+
+    @staticmethod
+    def _triangle_hits_box(triangle, box: Gf.Range3d) -> bool:
+        """Exact triangle / axis-aligned box overlap (separating axis test)."""
+        lo, hi = box.GetMin(), box.GetMax()
+        centre = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+        half = [(hi[i] - lo[i]) * 0.5 for i in range(3)]
+        v = [[triangle[j][i] - centre[i] for i in range(3)] for j in range(3)]
+
+        # 1. the box's own three axes
+        for i in range(3):
+            if min(v[0][i], v[1][i], v[2][i]) > half[i] or \
+               max(v[0][i], v[1][i], v[2][i]) < -half[i]:
+                return False
+
+        edges = [[v[1][i] - v[0][i] for i in range(3)],
+                 [v[2][i] - v[1][i] for i in range(3)],
+                 [v[0][i] - v[2][i] for i in range(3)]]
+
+        # 2. the triangle's plane
+        normal = [edges[0][1] * edges[1][2] - edges[0][2] * edges[1][1],
+                  edges[0][2] * edges[1][0] - edges[0][0] * edges[1][2],
+                  edges[0][0] * edges[1][1] - edges[0][1] * edges[1][0]]
+        reach = sum(half[i] * abs(normal[i]) for i in range(3))
+        distance = sum(normal[i] * v[0][i] for i in range(3))
+        if abs(distance) > reach:
+            return False
+
+        # 3. the nine edge / box-axis cross products
+        for edge in edges:
+            for i in range(3):
+                j, k = (i + 1) % 3, (i + 2) % 3
+                axis = [0.0, 0.0, 0.0]
+                axis[j], axis[k] = -edge[k], edge[j]
+                if abs(axis[j]) < 1e-12 and abs(axis[k]) < 1e-12:
+                    continue
+                projected = [sum(axis[m] * v[n][m] for m in range(3)) for n in range(3)]
+                reach = sum(half[m] * abs(axis[m]) for m in range(3))
+                if min(projected) > reach or max(projected) < -reach:
+                    return False
+        return True
 
     @staticmethod
     def _overlaps(a: Gf.Range3d, b: Gf.Range3d) -> bool:

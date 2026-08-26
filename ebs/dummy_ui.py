@@ -30,6 +30,7 @@ class EbsDummyUI:
         self._ebs2_field = None
         self._ebs3_field = None
         self._clearance_field = None
+        self._precision = None
         self._root_field = None
         self._rail_field = None
         self._eqp_field = None
@@ -54,6 +55,10 @@ class EbsDummyUI:
                     ui.Label("Clearance:", width=90)
                     self._clearance_field = ui.FloatField(width=70)
                     self._clearance_field.model.set_value(1.0)
+                    ui.Spacer(width=12)
+                    ui.Label("Precision:", width=68)
+                    self._precision = ui.ComboBox(2, "bbox", "mesh", "triangle",
+                                                  width=90)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -160,6 +165,9 @@ class EbsDummyUI:
         EbsSimulateService.set_clearance(self._clearance_field.model.get_value_as_float())
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
         EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
+        modes = ("bbox", "mesh", "triangle")
+        index = self._precision.model.get_item_value_model().get_value_as_int()
+        EbsSimulateService.set_precision(modes[max(0, min(index, 2))])
 
     # -- display -------------------------------------------------------------
 
