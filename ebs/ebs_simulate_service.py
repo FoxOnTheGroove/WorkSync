@@ -67,12 +67,12 @@ class EbsSimulateService:
         return cls._simulate.prepare(equipment)
 
     @classmethod
-    def focus(cls):
-        return cls._simulate.focus()
-
-    @classmethod
     def align(cls):
         return cls._simulate.align()
+
+    @classmethod
+    def focus(cls):
+        return cls._simulate.focus()
 
     @classmethod
     def collide(cls):

@@ -209,15 +209,15 @@ class EbsSimulate:
             return self._payload(False, "Run Init first")
         return self._do_prepare(equipment)
 
-    def focus(self) -> dict:
-        """Step 1: move the camera in front of the prepared equipment."""
-        self._begin()
-        return self._do_focus()
-
     def align(self) -> dict:
         """Step 2: move the EBS onto the prepared equipment."""
         self._begin()
         return self._do_align()
+
+    def focus(self) -> dict:
+        """Step 3: frame the placed EBS. Align has to have run first."""
+        self._begin()
+        return self._do_focus()
 
     def collide(self) -> dict:
         """Step 3: run the collision check for the aligned EBS."""
@@ -232,10 +232,10 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return result
-        result = self._do_focus()
+        result = self._do_align()
         if not result["ok"]:
             return result
-        result = self._do_align()
+        result = self._do_focus()
         if not result["ok"]:
             return result
         return self._do_collide()
@@ -287,12 +287,15 @@ class EbsSimulate:
     def _do_focus(self) -> dict:
         if self._target is None:
             return self._payload(False, "Run Prepare first")
+        if not self._aligned:
+            return self._payload(False, "Run Align first")
         with self._stage_timer("camera focus"):
-            # Frame the whole equipment, but take the facing from the anchor -
-            # the same prim that supplies the rotation and Z of the placement.
-            moved = self._move_camera(str(self._target["equipment"].GetPath()),
+            # Frame the EBS where it now sits, the way F frames a selection.
+            # The anchor still decides which way is the front.
+            moved = self._move_camera(str(self._target["ebs"].GetPath()),
                                       self._target["anchor"])
-        return self._payload(moved, "Camera moved" if moved else "Camera focus failed")
+        return self._payload(moved, "Camera on the EBS" if moved
+                             else "Camera focus failed")
 
     def _do_align(self) -> dict:
         if self._target is None:
@@ -1574,7 +1577,8 @@ class EbsSimulate:
         """Fill the view with the prim, seen from the facing prim's local -Y.
 
         The camera stands on the facing prim's local -Y side and looks toward
-        +Y, centred on it, at the distance that just fits the framed prim. Its
+        +Y, centred on the framed prim's bounds, at the distance that just fits
+        them - the way F frames a selection. Its
         clipping range is then closed in around the target, so whatever sits in
         front of or behind it drops out of the view while the sides stay.
         """
@@ -1610,12 +1614,13 @@ class EbsSimulate:
         x_cam = Gf.Cross(up, z_cam).GetNormalized()
         y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
 
-        centre = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
-            tc).ExtractTranslation()
-        centre = Gf.Vec3d(centre[0], centre[1], centre[2])
-        corners = self._box_corners(self._world_range(prim))
+        framed = self._world_range(prim)
+        corners = self._box_corners(framed)
         if not corners:
             return False
+        # Centre on the framed prim itself, so it lands in the middle of the view.
+        centre = Gf.Vec3d(*[(framed.GetMin()[i] + framed.GetMax()[i]) * 0.5
+                            for i in range(3)])
 
         distance = self._fit_distance(cam_prim, viewport, corners, centre,
                                       x_cam, y_cam, z_cam)
@@ -1629,7 +1634,7 @@ class EbsSimulate:
 
         # Depth of the target along the view, measured from the eye.
         slab = corners + self._box_corners(
-            self._world_range(self._target["ebs"]) if self._target else None)
+            self._world_range(self._target["equipment"]) if self._target else None)
         depths = [Gf.Dot(Gf.Vec3d(*c) - eye, -z_cam) for c in slab]
         near, far = min(depths), max(depths)
         margin = max((far - near) * CAMERA_SLAB, 1e-3)

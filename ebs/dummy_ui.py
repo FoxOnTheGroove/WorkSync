@@ -86,8 +86,8 @@ class EbsDummyUI:
 
                 with ui.HStack(height=26, spacing=4):
                     ui.Button("1 Prepare", clicked_fn=self._on_prepare)
-                    ui.Button("2 Camera", clicked_fn=self._on_camera)
-                    ui.Button("3 Align", clicked_fn=self._on_align)
+                    ui.Button("2 Align", clicked_fn=self._on_align)
+                    ui.Button("3 Camera", clicked_fn=self._on_camera)
                     ui.Button("4 Collide", clicked_fn=self._on_collide)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
 
@@ -173,11 +173,11 @@ class EbsDummyUI:
         self._render(EbsSimulateService.prepare(
             self._eqp_field.model.get_value_as_string()))
 
-    def _on_camera(self):
-        self._render(EbsSimulateService.focus())
-
     def _on_align(self):
         self._render(EbsSimulateService.align())
+
+    def _on_camera(self):
+        self._render(EbsSimulateService.focus())
 
     def _on_clear_markers(self):
         EbsSimulateService.clear_markers()
