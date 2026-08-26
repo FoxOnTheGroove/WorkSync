@@ -11,7 +11,7 @@ __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
 PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
-OFFSET_KEY  = "offset"        # distance of a port from its addr, along +Y
+OFFSET_KEY  = "offset"        # port distance from its addr, along the rail direction
 CADX_KEY    = "cad-x"         # rail start point, on the addr group
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
@@ -538,9 +538,13 @@ class EbsSimulate:
         """Y of the virtual port 0, which is where the EBS goes.
 
         The addr sits at the rail's start point, the rail prim sits at its
-        midpoint, and ports run from the addr in +Y at a constant spacing:
-        along the line the order is 1, 2, (3), addr. Port 0 is one more step
-        past port 1, so its offset extrapolates from the first two ports.
+        midpoint, and ports run from the addr along the rail at a constant
+        spacing: on the line the order is 1, 2, (3), addr. Port 0 is one more
+        step past port 1, so its offset extrapolates from the first two ports.
+
+        A rail can run either way along Y. Only cad-x is read for now, so its
+        direction is taken from the sign of the span between the two addrs;
+        rails running along other axes will need cad-y as well.
         """
         key = eqp_id.upper()
         addr_a = self._port_addr.get(key)
@@ -559,25 +563,40 @@ class EbsSimulate:
             return None
 
         offsets = self._port_offsets.get(key, {})
-        first, second = offsets.get(1), offsets.get(2)
-        if first is None or second is None:
+        spacing = self._port_spacing(key, offsets)
+        if spacing is None:
+            return None
+
+        # The rail may run either way along Y, and cad-x follows it, so the
+        # signed length carries the direction: the half-length that locates the
+        # start point and the offsets that walk from it both use that sign.
+        rail_y = self._local_translation(rail)[1]
+        length = (cadx_b - cadx_a) / CAD_PER_UNIT
+        direction = 1.0 if length >= 0 else -1.0
+        addr_y = rail_y - length / 2.0                   # rail start = addr position
+        offset_zero = offsets[1] + spacing               # one step past port 1
+        return addr_y + direction * offset_zero / OFFSET_PER_UNIT
+
+    def _port_spacing(self, key: str, offsets: dict) -> "float | None":
+        """Distance between neighbouring ports, averaged over the pairs present.
+
+        Two ports give one gap; a third gives a second one and the two are
+        averaged. Ports sit at a constant spacing with the lower numbers
+        further from the addr, so each gap is offset(n) - offset(n + 1).
+        """
+        gaps = [offsets[i] - offsets[i + 1]
+                for i in sorted(offsets) if i + 1 in offsets]
+        if 1 not in offsets or not gaps:
             print(f"[ebs] {key}: needs the offsets of ports 1 and 2, got {offsets}")
             return None
 
-        spacing = first - second
+        spacing = sum(gaps) / len(gaps)
         if spacing <= 0:
-            print(f"[ebs] {key}: port 1 should sit further from the addr than port 2 "
-                  f"(offsets {first}, {second})")
-        third = offsets.get(3)
-        if third is not None and abs((second - third) - spacing) > 1e-6:
-            print(f"[ebs] {key}: port spacing is uneven: "
-                  f"{first - second} vs {second - third}")
-
-        rail_y = self._local_translation(rail)[1]
-        length = (cadx_b - cadx_a) / CAD_PER_UNIT
-        addr_y = rail_y - length / 2.0                   # rail start = addr position
-        offset_zero = 2.0 * first - second               # one step past port 1
-        return addr_y + offset_zero / OFFSET_PER_UNIT    # offsets run in +Y
+            print(f"[ebs] {key}: ports should get closer to the addr as the number "
+                  f"rises, got {offsets}")
+        if len(gaps) > 1 and max(gaps) - min(gaps) > 1e-6:
+            print(f"[ebs] {key}: port spacing is uneven {gaps}, using {spacing}")
+        return spacing
 
     def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
         """World point the EBS has to sit on.
