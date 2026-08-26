@@ -950,14 +950,22 @@ class DistanceLineCore:
         view_proj = _matrix_np(view * proj)
         width, height = size
 
-        batches = cls._mesh_batches(
+        mesh_batches = cls._mesh_batches(
             state, cursor_px, view_proj, width, height, _camera_position(view)
         )
+        batches = list(mesh_batches)
         if cls._cloud_snap:
             batches += cls._cloud_batches(cursor_px, view_proj, width, height)
         if not batches:
+            state.last_mesh = None
             return None, []
-        return None, cls._nearest_first(batches, Gf.Vec3d(0, 1, 0))
+
+        ranked = cls._nearest_first(batches, Gf.Vec3d(0, 1, 0))
+        if not ranked and mesh_batches:
+            # 커서가 그 메시에서 완전히 벗어났다. 계속 들고 있으면 나중에
+            # 엉뚱한 곳에서 그 외곽선이 되살아난다.
+            state.last_mesh = None
+        return None, ranked
 
     @classmethod
     def _mesh_batches(cls, state, cursor_px, view_proj, width, height, camera):
@@ -1190,6 +1198,11 @@ def _geom_for(prim, time=None):
 def _drop_caches(prim_path=None):
     DistanceLineCore._probe_camera = None
     DistanceLineCore._probe_cache = {}
+    # 뷰포트가 들고 있는 _Geom 도 같이 놓는다. 안 놓으면 캐시에서 사라진 낡은
+    # 월드 좌표를 계속 참조해, 프림이 움직였을 때 예전 자리에 스냅한다.
+    for state in DistanceLineCore._viewports.values():
+        if state.last_mesh is not None and prim_path in (None, state.last_mesh[0]):
+            state.last_mesh = None
     if prim_path is None:
         _CLOUD_CACHE.clear()
     for cache in (_GEOM_CACHE, _PRIM_CACHE):
