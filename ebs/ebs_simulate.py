@@ -1039,6 +1039,7 @@ class EbsSimulate:
             result = {face: [False] * (GRID * GRID) for face in FACES}
             hits = {}
             triangle_tests = 0
+            boxed_only = set()
             for face, boxes in cells.items():
                 for i, cell in enumerate(boxes):
                     for path, box in candidates:
@@ -1051,12 +1052,20 @@ class EbsSimulate:
                                 if not any(self._triangle_hits_box(t, cell)
                                            for t in triangles):
                                     continue      # the box overlapped, the mesh does not
+                            else:
+                                # Nothing to test: keep the box result, but say so
+                                # rather than let it pass as a triangle hit.
+                                boxed_only.add(path)
                         result[face][i] = True
                         hits.setdefault(path.rsplit("/", 1)[-1], []).append(
                             f"{face}[{i}]")
                         break
             if triangle_tests:
                 self._note(f"{triangle_tests} triangle tests")
+            if boxed_only:
+                self._note(f"{len(boxed_only)} of the blocking prims had no triangles, "
+                           f"judged by box: "
+                           f"{', '.join(sorted(p.rsplit('/', 1)[-1] for p in boxed_only))}")
             elif self._precision == PRECISION_TRI and candidates:
                 self._note("no candidate reached a cell, so no triangle was tested")
 
@@ -1076,7 +1085,9 @@ class EbsSimulate:
         """World-space triangles of one mesh, cached by prim path.
 
         Only meshes that survived the box passes ever get here, so the point
-        arrays of the whole stage are never read.
+        arrays of the whole stage are never read. Returns an empty list when the
+        prim carries no triangles to test - a Cube or a Sphere, or a mesh whose
+        points cannot be read - and the caller has to decide what that means.
         """
         if path in self._triangles:
             return self._triangles[path]
@@ -1086,10 +1097,13 @@ class EbsSimulate:
         mesh = UsdGeom.Mesh(prim) if prim and prim.IsValid() else None
         if mesh:
             tc = Usd.TimeCode.Default()
-            points = mesh.GetPointsAttr().Get(tc)
-            counts = mesh.GetFaceVertexCountsAttr().Get(tc)
-            indices = mesh.GetFaceVertexIndicesAttr().Get(tc)
-            if points and counts and indices:
+            points = self._attr_value(mesh.GetPointsAttr(), tc)
+            counts = self._attr_value(mesh.GetFaceVertexCountsAttr(), tc)
+            indices = self._attr_value(mesh.GetFaceVertexIndicesAttr(), tc)
+            if points is None or counts is None or indices is None:
+                self._note(f"{path.rsplit('/', 1)[-1]}: no point data, "
+                           f"falling back to its box")
+            else:
                 to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
                 world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
                 cursor = 0
@@ -1100,8 +1114,23 @@ class EbsSimulate:
                         for k in range(1, count - 1):
                             triangles.append((fan[0], fan[k], fan[k + 1]))
                     cursor += count
+        elif prim and prim.IsValid():
+            self._note(f"{path.rsplit('/', 1)[-1]} is a "
+                       f"{prim.GetTypeName()}, tested as its box")
         self._triangles[path] = triangles
         return triangles
+
+    @staticmethod
+    def _attr_value(attr, tc):
+        """Attribute value at the default time, or at its first time sample."""
+        if not attr or not attr.IsValid():
+            return None
+        value = attr.Get(tc)
+        if value is None or len(value) == 0:
+            samples = attr.GetTimeSamples()
+            if samples:
+                value = attr.Get(samples[0])
+        return value if value is not None and len(value) else None
 
     @staticmethod
     def _triangle_hits_box(triangle, box: Gf.Range3d) -> bool:
