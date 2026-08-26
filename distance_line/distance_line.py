@@ -1249,6 +1249,41 @@ def _feature_edges(index, nxt, counts, normals):
     return pairs[chosen], sides, len(group)
 
 
+def _outline_corners(position, edges):
+    """외곽선이 꺾이는 정점. 만나는 엣지가 2개가 아니거나 충분히 꺾이면 꼭지점.
+
+    얇은 원기둥이 수천 개인 메시는 외곽선 엣지가 면보다 많고 정점마다 꼭지점이
+    잡힌다. 정점마다 파이썬으로 돌면 그게 빌드 시간의 대부분이 된다.
+    """
+    ends = edges.ravel()
+    partners = edges[:, ::-1].ravel()
+    order = np.argsort(ends, kind="stable")
+    ends, partners = ends[order], partners[order]
+    vertices, first_at, degree = np.unique(
+        ends, return_index=True, return_counts=True
+    )
+
+    corner = degree != 2
+    forked = np.flatnonzero(degree == 2)
+    if len(forked):
+        at = first_at[forked]
+        here = position[vertices[forked]]
+        left = position[partners[at]] - here
+        right = position[partners[at + 1]] - here
+        span_l = np.linalg.norm(left, axis=1)
+        span_r = np.linalg.norm(right, axis=1)
+        usable = (span_l > 1e-12) & (span_r > 1e-12)
+        cosine = np.zeros(len(forked))
+        np.divide(
+            np.einsum("ij,ij->i", left, right),
+            span_l * span_r,
+            out=cosine,
+            where=usable,
+        )
+        corner[forked] = usable & (cosine > _CORNER_COS)
+    return vertices[corner]
+
+
 def _nearest_on_edges(starts, ends, cursor_px, view_proj, width, height):
     px_a, ok_a = _project_px(starts, view_proj, width, height)
     px_b, ok_b = _project_px(ends, view_proj, width, height)
@@ -1545,36 +1580,13 @@ class _Geom:
         if len(edges) == 0:
             return _Outline.empty()
 
-        neighbours = {}
-        for a, b in edges:
-            neighbours.setdefault(int(a), []).append(int(b))
-            neighbours.setdefault(int(b), []).append(int(a))
-
-        corners = []
-        for vertex, around in neighbours.items():
-            if len(around) != 2:
-                corners.append(vertex)
-                continue
-            here = position[vertex]
-            first = position[around[0]] - here
-            second = position[around[1]] - here
-            n1, n2 = np.linalg.norm(first), np.linalg.norm(second)
-            if n1 < 1e-12 or n2 < 1e-12:
-                continue
-            if float(np.dot(first / n1, second / n2)) > _CORNER_COS:
-                corners.append(vertex)
-
-        corners = sorted(corners)
-        slot_of = {vertex: slot for slot, vertex in enumerate(corners)}
-        corner_of = np.array(
-            [[slot_of.get(int(a), -1), slot_of.get(int(b), -1)] for a, b in edges],
-            dtype=np.int64,
-        ).reshape(len(edges), 2)
+        corners = _outline_corners(position, edges)
+        slot = np.full(len(position), -1, dtype=np.int64)
+        slot[corners] = np.arange(len(corners))
+        corner_of = slot[edges].reshape(len(edges), 2)
 
         return _Outline(
-            corners=position[np.asarray(corners, dtype=np.int64)]
-            if corners
-            else np.empty((0, 3)),
+            corners=position[corners] if len(corners) else np.empty((0, 3)),
             edge_a=position[edges[:, 0]],
             edge_b=position[edges[:, 1]],
             edge_normals=sides,
