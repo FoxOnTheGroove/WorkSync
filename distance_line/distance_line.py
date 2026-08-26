@@ -26,6 +26,29 @@ _CLOUD_REACH_PX = 50.0         # 허공일 때 이 픽셀 안의 포인트 클�
 _GEOM_CACHE: dict = {}         # (스테이지, 경로, 타임코드) -> _Geom
 _PRIM_CACHE: dict = {}         # (스테이지, 히트 경로, 타임코드) -> 해소 결과
 _CLOUD_CACHE: dict = {}        # (스테이지, 타임코드) -> 포인트 클라우드 목록
+_BOUNDARY_POOL = None          # 외곽선을 메인 스레드 밖에서 만든다
+
+
+def _boundary_pool():
+    """외곽선 빌드용 워커. 하나만 두어 메시들이 줄을 서게 한다."""
+    global _BOUNDARY_POOL
+    if _BOUNDARY_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _BOUNDARY_POOL = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="distance_line"
+        )
+    return _BOUNDARY_POOL
+
+
+def _close_boundary_pool():
+    global _BOUNDARY_POOL
+    if _BOUNDARY_POOL is not None:
+        try:
+            _BOUNDARY_POOL.shutdown(wait=False)
+        except Exception:
+            pass
+        _BOUNDARY_POOL = None
 
 
 def _log(msg: str):
@@ -152,6 +175,7 @@ class DistanceLineCore:
         cls._selected_line = None
         cls._lines.clear()
         cls._changed_callbacks.clear()
+        _close_boundary_pool()
         _drop_caches()
         cls._next_line_id = 1
         cls._started = False
@@ -849,7 +873,9 @@ class DistanceLineCore:
         geom = cls._mesh_entry(path, hit, time)
         if geom is None:
             return surface, []
-        geom.calibrate(hit, normal)
+        ready = geom.boundary
+        if len(ready.edge_a):
+            geom.calibrate(hit, normal)
         state.last_mesh = (path, geom)
         size = _screen_size(state)
         cursor_px = np.asarray(_ndc_to_px(ndc, size))
@@ -860,7 +886,7 @@ class DistanceLineCore:
             view, proj, hit, geom.extent, size
         )
 
-        outline, edge_ids, corner_ids = geom.boundary.near(_as_np(hit), reach)
+        outline, edge_ids, corner_ids = ready.near(_as_np(hit), reach)
         seen_edges, seen_corners = outline.visibility(
             _camera_position(view), geom.orientation
         )
@@ -1403,6 +1429,7 @@ class _Geom:
         self._boundary = None
         self._face_normals = None
         self._screen = None
+        self._building = None
         self.orientation = 0.0
 
     def screen_sorted(self, view_proj, width, height):
@@ -1461,8 +1488,35 @@ class _Geom:
 
     @property
     def boundary(self):
-        if self._boundary is None:
-            self._boundary = self._find_boundary()
+        """외곽선. 아직 없으면 워커에 맡기고 빈 것을 준다.
+
+        웰딩부터 크리스 판정까지 전부 이미 뽑아 둔 numpy 배열 위에서만 돌고
+        USD 를 건드리지 않으므로 스레드로 넘길 수 있다. 큰 메시는 이게 수백
+        ms 라 메인 스레드에서 하면 앱이 그만큼 멈춘다.
+
+        준비되기 전에는 그 메시가 표면 스냅만 된다.
+        """
+        if self._boundary is not None:
+            return self._boundary
+
+        if self._building is None:
+            try:
+                self._building = _boundary_pool().submit(self._find_boundary)
+            except Exception as exc:
+                carb.log_warn(f"[distance_line] no worker, building inline: {exc}")
+                self._boundary = self._find_boundary()
+                return self._boundary
+            return _Outline.empty()
+
+        if not self._building.done():
+            return _Outline.empty()
+
+        try:
+            self._boundary = self._building.result()
+        except Exception as exc:
+            carb.log_warn(f"[distance_line] outline build failed: {exc}")
+            self._boundary = _Outline.empty()
+        self._building = None
         return self._boundary
 
     def _weld(self):
