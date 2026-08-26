@@ -74,6 +74,7 @@ class EbsSimulate:
         self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
+        self._visible: dict = {}            # prim path -> visibility, for one run
         self._precision: str = PRECISION_TRI
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._notes: list = []              # diagnostics for the last run, shown in the UI
@@ -132,6 +133,7 @@ class EbsSimulate:
         self._bounds_cache = {}
         self._mesh_bounds = {}
         self._triangles = {}
+        self._visible = {}
         self._timings = []
         self._target = None
         self._aligned = False
@@ -970,6 +972,7 @@ class EbsSimulate:
         stage = self._get_stage()
         if stage is None:
             return empty
+        self._visible = {}          # visibility can change between runs
 
         cache = UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
@@ -1005,9 +1008,12 @@ class EbsSimulate:
             margin = Gf.Vec3d(self._clearance, self._clearance, self._clearance)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-            near = [(path, box) for path, box in self._bounds_cache.items()
-                    if not any(path == s or path.startswith(s + "/") for s in skip)
-                    and self._overlaps(box, search)]
+            overlapping = [(path, box) for path, box in self._bounds_cache.items()
+                           if not any(path == s or path.startswith(s + "/") for s in skip)
+                           and self._overlaps(box, search)]
+            near = [(path, box) for path, box in overlapping
+                    if self._is_visible(stage, path)]
+            hidden = len(overlapping) - len(near)
 
         # Narrow down: one box per mesh, then the mesh triangles themselves.
         # Each pass only sees what the previous one let through.
@@ -1017,15 +1023,20 @@ class EbsSimulate:
                 refined = []
                 for path, _ in near:
                     prim = stage.GetPrimAtPath(path)
-                    refined += [(mesh_path, box)
-                                for mesh_path, box in self._geometry_bounds(prim, cache)
-                                if self._overlaps(box, search)]
+                    for mesh_path, box in self._geometry_bounds(prim, cache):
+                        if not self._overlaps(box, search):
+                            continue
+                        if not self._is_visible(stage, mesh_path):
+                            hidden += 1
+                            continue
+                        refined.append((mesh_path, box))
                 candidates = refined
         coarse = len(candidates)
         if split is not None and split.IsValid():
             candidates += [(path, box)
                            for path, box in self._geometry_bounds(split, cache)
-                           if self._overlaps(box, search)]
+                           if self._overlaps(box, search)
+                           and self._is_visible(stage, path)]
 
         size = local_box.GetMax() - local_box.GetMin()
         self._note(f"precision {self._precision}, clearance {self._clearance}, "
@@ -1033,7 +1044,8 @@ class EbsSimulate:
         self._note(f"EBS world box {tuple(round(v, 2) for v in world_box.GetMin())} .. "
                    f"{tuple(round(v, 2) for v in world_box.GetMax())}")
         self._note(f"{len(self._bounds_cache)} equipment -> {len(near)} near -> "
-                   f"{coarse} candidates + {len(candidates) - coarse} own meshes")
+                   f"{coarse} candidates + {len(candidates) - coarse} own meshes"
+                   + (f", {hidden} hidden skipped" if hidden else ""))
 
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * (GRID * GRID) for face in FACES}
@@ -1172,6 +1184,24 @@ class EbsSimulate:
                 if min(projected) > reach or max(projected) < -reach:
                     return False
         return True
+
+    def _is_visible(self, stage, path: str) -> bool:
+        """Whether a prim renders, inherited visibility included.
+
+        Answers are memoised for the run: ComputeVisibility walks the ancestors
+        every time, and the same branches come up again and again.
+        """
+        if path in self._visible:
+            return self._visible[path]
+        prim = stage.GetPrimAtPath(path)
+        visible = True
+        if prim and prim.IsValid():
+            imageable = UsdGeom.Imageable(prim)
+            if imageable:
+                visible = imageable.ComputeVisibility(
+                    Usd.TimeCode.Default()) != UsdGeom.Tokens.invisible
+        self._visible[path] = visible
+        return visible
 
     @staticmethod
     def _overlaps(a: Gf.Range3d, b: Gf.Range3d) -> bool:
