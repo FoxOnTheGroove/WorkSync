@@ -75,6 +75,10 @@ class EbsSimulateService:
         return cls._simulate.simulate(equipment)
 
     @classmethod
+    def clear_markers(cls):
+        return cls._simulate.clear_markers()
+
+    @classmethod
     def get_result(cls):
         return cls._simulate.get_result()
 

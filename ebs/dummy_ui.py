@@ -72,6 +72,7 @@ class EbsDummyUI:
                     ui.Button("2 Camera", clicked_fn=self._on_camera)
                     ui.Button("3 Align", clicked_fn=self._on_align)
                     ui.Button("4 Collide", clicked_fn=self._on_collide)
+                    ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
 
                 self._status_label = ui.Label("Ready", height=20)
                 self._info_label = ui.Label("", height=20,
@@ -141,6 +142,10 @@ class EbsDummyUI:
 
     def _on_align(self):
         self._render(EbsSimulateService.align())
+
+    def _on_clear_markers(self):
+        EbsSimulateService.clear_markers()
+        self._set_status("Markers cleared")
 
     def _on_collide(self):
         self._apply_settings()

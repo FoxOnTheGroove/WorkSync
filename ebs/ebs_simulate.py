@@ -4,7 +4,7 @@ import time
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 
-from pxr import Usd, UsdGeom, Gf
+from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
 
 __all__ = ["EbsSimulate"]
@@ -17,6 +17,11 @@ CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
+
+MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
+MARKER_OPACITY = 0.35
+COLOR_BLOCKED  = (0.9, 0.1, 0.1)
+COLOR_CLEAR    = (0.35, 0.75, 0.4)
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
@@ -100,6 +105,7 @@ class EbsSimulate:
         return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
+        self.clear_markers()
         self._eqp_index = {}
         self._port_map = {}
         self._port_elements = {}
@@ -245,6 +251,8 @@ class EbsSimulate:
             exclude=[self._target["equipment"], self._target["ebs"]],
         )
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+        with self._stage_timer("draw markers"):
+            self.show_markers(self._target["ebs"], cells)
         return self._payload(
             True,
             "No collision" if hit_count == 0 else f"{hit_count} cell(s) blocked",
@@ -942,7 +950,8 @@ class EbsSimulate:
         with self._stage_timer("build cells"):
             # Cells are cut along the local axes, then converted to world AABBs.
             cells = {
-                face: [Gf.BBox3d(cell, to_world).ComputeAlignedRange() for cell in boxes]
+                face: [Gf.BBox3d(rng, to_world).ComputeAlignedRange()
+                       for rng, _ in boxes]
                 for face, boxes in self._build_cells(local_box).items()
             }
 
@@ -1014,6 +1023,7 @@ class EbsSimulate:
         cells = {}
 
         def make(fixed_axis, outward, row_axis, col_axis, flip_cols=False):
+            """Cells as (probe range, surface quad) in the box's own space."""
             out = []
             row_lo, row_hi = lo[row_axis], hi[row_axis]
             col_lo, col_hi = lo[col_axis], hi[col_axis]
@@ -1029,10 +1039,21 @@ class EbsSimulate:
                     cmin[col_axis] = col_lo + col * col_step
                     cmax[col_axis] = col_lo + (col + 1) * col_step
                     if outward > 0:
-                        cmin[fixed_axis], cmax[fixed_axis] = hi[fixed_axis], hi[fixed_axis] + t
+                        surface = hi[fixed_axis]
+                        cmin[fixed_axis], cmax[fixed_axis] = surface, surface + t
                     else:
-                        cmin[fixed_axis], cmax[fixed_axis] = lo[fixed_axis] - t, lo[fixed_axis]
-                    out.append(Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)))
+                        surface = lo[fixed_axis]
+                        cmin[fixed_axis], cmax[fixed_axis] = surface - t, surface
+
+                    # The quad sits flat on the EBS surface, spanning the cell.
+                    quad = []
+                    for r_end, c_end in ((0, 0), (0, 1), (1, 1), (1, 0)):
+                        corner = [0.0, 0.0, 0.0]
+                        corner[fixed_axis] = surface
+                        corner[row_axis] = cmax[row_axis] if r_end else cmin[row_axis]
+                        corner[col_axis] = cmax[col_axis] if c_end else cmin[col_axis]
+                        quad.append(tuple(corner))
+                    out.append((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad))
             return out
 
         # The camera looks from local -X, so screen-right is -Y.
@@ -1040,6 +1061,85 @@ class EbsSimulate:
         cells[FACE_LEFT]    = make(side_axis, +1, up_axis, front_axis)
         cells[FACE_CEILING] = make(up_axis,   +1, front_axis, side_axis, flip_cols=True)
         return cells
+
+    # -- collision markers ---------------------------------------------------
+
+    def show_markers(self, ebs_prim: Usd.Prim, cells: dict) -> int:
+        """Draw the 3x3 grids as translucent quads on the EBS surfaces.
+
+        Everything is rebuilt from scratch on each run and lives in the session
+        layer, so the markers never reach the source layers.
+        """
+        stage = self._get_stage()
+        if stage is None:
+            return 0
+        self.clear_markers()
+
+        cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+        bbox = cache.ComputeWorldBound(ebs_prim)
+        local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
+        if local_box.IsEmpty():
+            return 0
+
+        drawn = 0
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            UsdGeom.Scope.Define(stage, MARKER_ROOT)
+            materials = {
+                True: self._marker_material(stage, "blocked", COLOR_BLOCKED),
+                False: self._marker_material(stage, "clear", COLOR_CLEAR),
+            }
+            for face, boxes in self._build_cells(local_box).items():
+                flags = cells.get(face, [])
+                for i, (_, quad) in enumerate(boxes):
+                    blocked = bool(i < len(flags) and flags[i])
+                    points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
+                    self._marker_quad(stage, f"{MARKER_ROOT}/{face}_{i}", points,
+                                      materials[blocked],
+                                      COLOR_BLOCKED if blocked else COLOR_CLEAR)
+                    drawn += 1
+        print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
+        return drawn
+
+    def clear_markers(self) -> None:
+        """Remove the markers drawn by the previous run."""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if stage.GetPrimAtPath(MARKER_ROOT).IsValid():
+                stage.RemovePrim(MARKER_ROOT)
+
+    @staticmethod
+    def _marker_quad(stage, path: str, points: list, material, color) -> None:
+        mesh = UsdGeom.Mesh.Define(stage, path)
+        mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
+        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3]))
+        mesh.CreateDoubleSidedAttr(True)
+        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
+        mesh.CreateDisplayOpacityAttr(Vt.FloatArray([MARKER_OPACITY]))
+        if material:
+            UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+
+    @staticmethod
+    def _marker_material(stage, name: str, color):
+        """Translucent preview surface, one per state, reused by every quad."""
+        path = f"{MARKER_ROOT}/Looks/{name}"
+        material = UsdShade.Material.Define(stage, path)
+        shader = UsdShade.Shader.Define(stage, path + "/shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(color[0] * 0.6, color[1] * 0.6, color[2] * 0.6))
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(MARKER_OPACITY)
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.9)
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        return material
 
     # -- camera --------------------------------------------------------------
 
