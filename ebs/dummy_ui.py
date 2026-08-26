@@ -69,8 +69,8 @@ class EbsDummyUI:
                     ui.Button("From Sel", width=64, clicked_fn=self._on_pick_selected)
 
                 with ui.HStack(height=28, spacing=4):
+                    ui.Button("INIT", width=70, clicked_fn=self._on_init)
                     ui.Button("SIM", clicked_fn=self._on_simulate)
-                    ui.Button("Rebuild Index", width=110, clicked_fn=self._on_rebuild_index)
 
                 with ui.HStack(height=26, spacing=4):
                     ui.Button("1 Prepare", clicked_fn=self._on_prepare)
@@ -125,13 +125,9 @@ class EbsDummyUI:
         self._eqp_field.model.set_value(path)
         self._set_status(f"Selected: {path}")
 
-    def _on_rebuild_index(self):
+    def _on_init(self):
         self._apply_settings()
-        count = EbsSimulateService.build_index()
-        ports = EbsSimulateService.load_ports()
-        self._set_status(f"Equipment: {count}  |  XML port entries: {ports}")
-        self._log_timings(EbsSimulateService.get_timings(), None,
-                          EbsSimulateService.get_notes())
+        self._render(EbsSimulateService.init())
 
     def _on_simulate(self):
         self._apply_settings()

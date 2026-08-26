@@ -47,6 +47,10 @@ class EbsSimulateService:
         return cls._simulate.load_ports()
 
     @classmethod
+    def init(cls):
+        return cls._simulate.init()
+
+    @classmethod
     def build_index(cls):
         return cls._simulate.build_index()
 

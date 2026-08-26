@@ -34,7 +34,7 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-GRID = 3                 # 3x3 subdivision per face
+GRID = 5                 # NxN subdivision per face
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PRECISION_BBOX = "bbox"      # one box per equipment
 PRECISION_MESH = "mesh"      # one box per mesh
@@ -79,6 +79,7 @@ class EbsSimulate:
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._notes: list = []              # diagnostics for the last run, shown in the UI
         self._started: float = 0.0
+        self._ready: bool = False           # set by init(), required before prepare()
         self._target: dict = None           # prepared equipment / EBS for the step buttons
         self._aligned: bool = False
         self._result: dict = {}
@@ -90,6 +91,7 @@ class EbsSimulate:
         if path != self._xml_path:
             self._port_map = {}
             self._port_elements = {}
+            self._ready = False          # the port table has to be read again
         self._xml_path = path
 
     def set_ebs_paths(self, path_2port: str, path_3port: str) -> None:
@@ -116,6 +118,7 @@ class EbsSimulate:
         if path != self._search_root:
             self._eqp_index = {}
             self._bounds_cache = {}
+            self._ready = False          # the stage has to be scanned again
         self._search_root = path
 
     def get_result(self) -> dict:
@@ -135,6 +138,7 @@ class EbsSimulate:
         self._triangles = {}
         self._visible = {}
         self._timings = []
+        self._ready = False
         self._target = None
         self._aligned = False
         self._result = {}
@@ -166,9 +170,33 @@ class EbsSimulate:
 
     # -- steps ---------------------------------------------------------------
 
-    def prepare(self, equipment: str = "") -> dict:
-        """Step 0: resolve the equipment, its port count and the matching EBS prim."""
+    def init(self) -> dict:
+        """Step 0: scan the stage and the XML once, so the steps can be cheap.
+
+        Everything cached here - the equipment index, their bounds, the port
+        table - survives until this runs again, and nothing else builds it.
+        """
         self._begin()
+        self._ready = False
+        self._target = None
+        self._aligned = False
+        self._triangles = {}
+
+        equipment = self.build_index()
+        ports = self.load_ports()
+        self._ready = equipment > 0 and ports > 0
+        self._note(f"indexed {equipment} equipment, {ports} port entries")
+        if not equipment:
+            return self._payload(False, "No EQP_ prims found - check the search root")
+        if not ports:
+            return self._payload(False, "No ports read - check the XML path")
+        return self._payload(True, f"Ready: {equipment} equipment, {ports} port entries")
+
+    def prepare(self, equipment: str = "") -> dict:
+        """Step 1: resolve the equipment, its port count and the matching EBS prim."""
+        self._begin()
+        if not self._ready:
+            return self._payload(False, "Run Init first")
         return self._do_prepare(equipment)
 
     def focus(self) -> dict:
@@ -187,8 +215,10 @@ class EbsSimulate:
         return self._do_collide()
 
     def simulate(self, equipment: str = "") -> dict:
-        """Run every step in order."""
+        """Run every step in order. Init has to have run first."""
         self._begin()
+        if not self._ready:
+            return self._payload(False, "Run Init first")
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return result
@@ -386,7 +416,6 @@ class EbsSimulate:
             return prim
 
         # Not there: fall back to scanning, stopping at the first match.
-        # The full index is still built later, when collision needs it.
         visited = 0
         started = time.perf_counter()
         found = None
@@ -558,8 +587,6 @@ class EbsSimulate:
 
     def get_port_indices(self, eqp_id: str) -> list:
         """Port indices of an equipment, sorted ascending."""
-        if not self._port_map:
-            self.load_ports()
         return list(self._port_map.get(eqp_id.upper(), []))
 
     # -- rail and port geometry ----------------------------------------------
@@ -997,9 +1024,6 @@ class EbsSimulate:
                 for face, boxes in self._build_cells(local_box).items()
             }
 
-        if not self._eqp_index:
-            self.build_index()
-
         with self._stage_timer(f"equipment bounds ({len(self._eqp_index)})"):
             missing = self._cache_bounds(stage, cache)
 
@@ -1052,34 +1076,55 @@ class EbsSimulate:
             hits = {}
             triangle_tests = 0
             boxed_only = set()
-            for face, boxes in cells.items():
-                for i, cell in enumerate(boxes):
-                    for path, box in candidates:
-                        if not self._overlaps(box, cell):
-                            continue
-                        if self._precision == PRECISION_TRI:
-                            triangles = self._mesh_triangles(stage, path)
-                            if triangles:
-                                triangle_tests += len(triangles)
-                                if not any(self._triangle_hits_box(t, cell)
-                                           for t in triangles):
-                                    continue      # the box overlapped, the mesh does not
-                            else:
-                                # Nothing to test: keep the box result, but say so
-                                # rather than let it pass as a triangle hit.
-                                boxed_only.add(path)
-                        result[face][i] = True
-                        hits.setdefault(path.rsplit("/", 1)[-1], []).append(
-                            f"{face}[{i}]")
-                        break
+            flat = [(face, i, cell)
+                    for face, boxes in cells.items() for i, cell in enumerate(boxes)]
+
+            # Walk the candidates, not the cells: a mesh's triangles are then
+            # read and tested once each, against only the cells its box reaches.
+            for path, box in candidates:
+                targets = [entry for entry in flat
+                           if not result[entry[0]][entry[1]]
+                           and self._overlaps(box, entry[2])]
+                if not targets:
+                    continue
+
+                triangles = (self._mesh_triangles(stage, path)
+                             if self._precision == PRECISION_TRI else None)
+                if triangles:
+                    triangle_tests += len(triangles)
+                    for triangle in triangles:
+                        remaining = [e for e in targets if not result[e[0]][e[1]]]
+                        if not remaining:
+                            break
+                        lo = [min(v[i] for v in triangle) for i in range(3)]
+                        hi = [max(v[i] for v in triangle) for i in range(3)]
+                        tri_box = Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
+                        for face, i, cell in remaining:
+                            # A flat triangle has a flat box, so this pre-filter
+                            # only asks for contact; the exact test decides.
+                            if (not Gf.Range3d.GetIntersection(tri_box, cell).IsEmpty()
+                                    and self._triangle_hits_box(triangle, cell)):
+                                result[face][i] = True
+                                hits.setdefault(path.rsplit("/", 1)[-1], []).append(
+                                    f"{face}[{i}]")
+                    continue
+
+                if self._precision == PRECISION_TRI:
+                    # Nothing to test: keep the box result, but say so rather
+                    # than let it pass as a triangle hit.
+                    boxed_only.add(path)
+                for face, i, _ in targets:
+                    result[face][i] = True
+                    hits.setdefault(path.rsplit("/", 1)[-1], []).append(f"{face}[{i}]")
+
             if triangle_tests:
                 self._note(f"{triangle_tests} triangle tests")
+            elif self._precision == PRECISION_TRI and candidates:
+                self._note("no candidate reached a cell, so no triangle was tested")
             if boxed_only:
                 self._note(f"{len(boxed_only)} of the blocking prims had no triangles, "
                            f"judged by box: "
                            f"{', '.join(sorted(p.rsplit('/', 1)[-1] for p in boxed_only))}")
-            elif self._precision == PRECISION_TRI and candidates:
-                self._note("no candidate reached a cell, so no triangle was tested")
 
         if hits:
             for name, where in sorted(hits.items()):
