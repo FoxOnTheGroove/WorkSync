@@ -1011,7 +1011,7 @@ class EbsSimulate:
 
         with self._stage_timer("EBS bounds"):
             # GfBBox3d: GetRange() is the local box, GetMatrix() maps it to world.
-            ebs_bbox = cache.ComputeWorldBound(ebs_prim)
+            ebs_bbox = self._ebs_bound(ebs_prim)
             local_box = ebs_bbox.GetRange()
             to_world = ebs_bbox.GetMatrix()
             world_box = ebs_bbox.ComputeAlignedRange()
@@ -1067,6 +1067,9 @@ class EbsSimulate:
         size = local_box.GetMax() - local_box.GetMin()
         self._note(f"precision {self._precision}, clearance {self._clearance}, "
                    f"EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
+        self._note(f"EBS local box {tuple(round(v, 3) for v in local_box.GetMin())} .. "
+                   f"{tuple(round(v, 3) for v in local_box.GetMax())} "
+                   f"(the cells tile exactly this)")
         self._note(f"EBS world box {tuple(round(v, 2) for v in world_box.GetMin())} .. "
                    f"{tuple(round(v, 2) for v in world_box.GetMax())}")
         self._note(f"{len(self._bounds_cache)} equipment -> {len(near)} near -> "
@@ -1263,6 +1266,36 @@ class EbsSimulate:
         extent = overlap.GetMax() - overlap.GetMin()
         return all(extent[i] > OVERLAP_EPS for i in range(3))
 
+    def _ebs_bound(self, prim: Usd.Prim):
+        """Bound of the EBS itself, computed from its geometry.
+
+        The scene scan reads extentsHint because it has hundreds of prims to
+        get through, but a hint can be stale or padded and this one box decides
+        where every cell and marker goes, so it is measured directly. When the
+        two disagree the run says so.
+        """
+        exact = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=False,
+        ).ComputeWorldBound(prim)
+
+        hinted = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        ).ComputeWorldBound(prim).ComputeAlignedRange()
+        measured = exact.ComputeAlignedRange()
+        if not hinted.IsEmpty() and not measured.IsEmpty():
+            slack = max(abs(hinted.GetMin()[i] - measured.GetMin()[i]) for i in range(3))
+            slack = max(slack, max(abs(hinted.GetMax()[i] - measured.GetMax()[i])
+                                   for i in range(3)))
+            span = max(measured.GetMax()[i] - measured.GetMin()[i] for i in range(3))
+            if span > 0 and slack > span * 0.01:
+                self._note(f"the EBS extentsHint is off by {slack:.3f}, "
+                           f"using the measured bound")
+        return exact
+
     def _geometry_bounds(self, prim: Usd.Prim, cache) -> list:
         """World bounds of each geometry prim under `prim`, cached per equipment.
 
@@ -1394,12 +1427,7 @@ class EbsSimulate:
             return 0
         self.clear_markers()
 
-        cache = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        )
-        bbox = cache.ComputeWorldBound(ebs_prim)
+        bbox = self._ebs_bound(ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
             return 0
