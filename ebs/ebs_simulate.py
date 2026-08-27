@@ -1682,9 +1682,9 @@ class EbsSimulate:
         if not points:
             return 0
 
-        # The laser hangs from the rail down to the floor, so it reads against
-        # the equipment below it. Its thickness follows the equipment's size, so
-        # it looks the same whatever the stage's units are.
+        # The laser hangs from the rail down to the EBS's own z, so it spans
+        # exactly the drop the port has to bridge. Its thickness follows the
+        # equipment's size, so it looks the same whatever the stage's units are.
         box = self._world_range((self._target or {}).get("equipment"))
         if box is None:
             span = 1.0
@@ -1692,8 +1692,6 @@ class EbsSimulate:
             lo, hi = box.GetMin(), box.GetMax()
             span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
         top = self._port_rail_z
-        height = max(abs(top), 1e-3)
-        centre_z = top / 2.0                 # rail at one end, world z 0 at the other
         radius = max(span * LASER_RADIUS, 1e-5)
 
         drawn = 0
@@ -1702,12 +1700,14 @@ class EbsSimulate:
             for index in sorted(points):
                 colour = LASER_COLOR_0 if index == 0 else LASER_COLOR
                 spot = points[index]
+                bottom = spot[2]             # where the EBS sits
+                height = max(abs(top - bottom), 1e-3)
                 self._laser_cylinder(stage, f"{LASER_ROOT}/port_{index}",
-                                     Gf.Vec3d(spot[0], spot[1], centre_z),
+                                     Gf.Vec3d(spot[0], spot[1], (top + bottom) / 2.0),
                                      radius, height, colour)
                 drawn += 1
         print(f"[ebs] drew {drawn} port lasers under {LASER_ROOT}, "
-              f"radius {radius:.4f}, rail z {top:.4f} down to 0")
+              f"radius {radius:.4f}, rail z {top:.4f} down to the EBS z")
         return drawn
 
     def clear_port_lasers(self) -> None:
