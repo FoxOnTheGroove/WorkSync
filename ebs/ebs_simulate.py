@@ -853,11 +853,13 @@ class EbsSimulate:
         """The offset scale, taken from the file's own segment lengths.
 
         Every straight segment is measured twice over: by cad, whose scale is
-        known, and by its span in offset units. The ratio between them is the
-        offset scale, so it is read rather than assumed - and the assumption is
-        only the fallback for a file that carries no usable segment.
+        known, and by its span in offset units. If the two are simply
+        proportional then the ratio is the scale. Fitting a line through them
+        says whether that holds - a span that is a distance *plus* something
+        would show up as an intercept, and the ratio would then drift with the
+        length rather than being one number.
         """
-        ratios = []
+        pairs = []
         for addr, links in self._addr_next.items():
             for neighbour, span in links:
                 axis = self._rail_axis(addr, neighbour)
@@ -866,21 +868,47 @@ class EbsSimulate:
                 cad_a, cad_b = self._addr_cad[addr], self._addr_cad[neighbour]
                 length = abs(cad_b[axis] - cad_a[axis]) / CAD_PER_UNIT
                 if length > 1e-9:
-                    ratios.append(span / length)
-        if not ratios:
+                    pairs.append((length, span))
+        if not pairs:
             return None
 
-        ratios.sort()
+        ratios = sorted(span / length for length, span in pairs)
         middle = ratios[len(ratios) // 2]
         spread = (ratios[-1] - ratios[0]) / middle if middle else 0.0
-        note = f"offset scale {middle:,.0f} per unit, from {len(ratios)} segments"
+
+        note = f"offset scale {middle:,.0f} per unit, from {len(pairs)} segments"
         if abs(middle - OFFSET_PER_UNIT) > OFFSET_PER_UNIT * 0.01:
             note += f" (not the {OFFSET_PER_UNIT:,.0f} assumed)"
         if spread > 0.01:
-            note += (f"; the segments disagree by {spread:.1%} "
-                     f"({ratios[0]:,.0f}..{ratios[-1]:,.0f})")
+            note += (f"; they range {ratios[0]:,.0f}..{ratios[-1]:,.0f}, "
+                     f"{spread:.1%} apart")
         self._note(note)
+
+        slope, intercept = self._fit_line(pairs)
+        if slope is not None:
+            typical = sorted(span for _, span in pairs)[len(pairs) // 2]
+            note = f"fitted span = {slope:,.0f} x length {intercept:+,.0f}"
+            if abs(intercept) > abs(typical) * 0.01:
+                note += (f" - the offset is not simply proportional, it carries a "
+                         f"fixed {intercept:+,.0f} on top")
+            self._note(note)
         return middle
+
+    @staticmethod
+    def _fit_line(pairs) -> tuple:
+        """Least squares fit of span against length: (slope, intercept)."""
+        n = len(pairs)
+        if n < 2:
+            return None, None
+        sx = sum(length for length, _ in pairs)
+        sy = sum(span for _, span in pairs)
+        sxx = sum(length * length for length, _ in pairs)
+        sxy = sum(length * span for length, span in pairs)
+        denominator = n * sxx - sx * sx
+        if abs(denominator) < 1e-12:
+            return None, None
+        slope = (n * sxy - sx * sy) / denominator
+        return slope, (sy - slope * sx) / n
 
     def _chain_span(self, start: int, target: int, axis: int,
                     direction: float) -> "float | None":
