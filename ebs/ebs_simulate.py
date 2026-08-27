@@ -18,6 +18,19 @@ CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
 
+def _children(prim):
+    """Children of a prim, instance proxies included.
+
+    Plain GetChildren stops dead at an instanceable prim, so anything brought
+    in by an instanced reference - which is how a factory carries hundreds of
+    identical machines - would never be reached at all.
+    """
+    try:
+        return prim.GetFilteredChildren(Usd.TraverseInstanceProxies())
+    except Exception:
+        return prim.GetChildren()
+
+
 SKIP_TYPES = frozenset({"Material", "Shader", "NodeGraph", "GeomSubset", "Camera"})
 
 GEOMETRY_TYPES = frozenset({
@@ -403,7 +416,7 @@ class EbsSimulate:
                 print(f"[ebs] search root not found, scanning the whole stage: "
                       f"{self._search_root}")
                 root = None
-        stack = list((root or stage.GetPseudoRoot()).GetChildren())
+        stack = list(_children(root or stage.GetPseudoRoot()))
         while stack:
             prim = stack.pop()
             name = prim.GetName().upper()
@@ -413,7 +426,7 @@ class EbsSimulate:
             type_name = prim.GetTypeName()
             if type_name in PRUNE_TYPES or type_name.endswith("Light"):
                 continue              # geometry and shading never hold equipment
-            stack.extend(prim.GetChildren())
+            stack.extend(_children(prim))
 
     def get_selected_equipment(self) -> str:
         """Walk up from the selected mesh to the owning equipment prim path."""
@@ -481,7 +494,7 @@ class EbsSimulate:
         """Follow child(0) down `depth` levels; stop early at the deepest prim."""
         current = prim
         for _ in range(depth):
-            children = current.GetChildren()
+            children = _children(current)
             if not children:
                 break
             current = children[0]
@@ -653,7 +666,7 @@ class EbsSimulate:
         found = []
         root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
         if root is not None and root.IsValid():
-            found = [(p, n) for p in root.GetChildren()
+            found = [(p, n) for p in _children(root)
                      if (n := neighbour_of(p)) is not None]
             if not found:
                 print(f"[ebs] no {prefix}* under {self._rail_root}, scanning the stage")
@@ -1309,7 +1322,7 @@ class EbsSimulate:
         walls, ceilings, piping and terrain are found the same way equipment is.
         """
         found, visited = [], 0
-        stack = list(stage.GetPseudoRoot().GetChildren())
+        stack = list(_children(stage.GetPseudoRoot()))
         while stack:
             prim = stack.pop()
             path = str(prim.GetPath())
@@ -1330,7 +1343,7 @@ class EbsSimulate:
             if type_name in GEOMETRY_TYPES:
                 found.append((path, box))
                 continue
-            stack.extend(prim.GetChildren())
+            stack.extend(_children(prim))
         return found, visited
 
     def _geometry_bounds(self, prim: Usd.Prim, cache) -> list:
@@ -1356,7 +1369,7 @@ class EbsSimulate:
                 continue
             if type_name in PRUNE_TYPES or type_name.endswith("Light"):
                 continue
-            stack.extend(current.GetChildren())
+            stack.extend(_children(current))
         self._mesh_bounds[key] = bounds
         return bounds
 
