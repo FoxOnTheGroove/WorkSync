@@ -41,6 +41,7 @@ class EbsDummyUI:
         self._ebs2_field = None
         self._ebs3_field = None
         self._precision = None
+        self._offset_field = None
         self._root_field = None
         self._rail_field = None
         self._eqp_field = None
@@ -66,6 +67,9 @@ class EbsDummyUI:
                     ui.Label("Precision:", width=90)
                     self._precision = ui.ComboBox(2, "bbox", "mesh", "triangle",
                                                   width=90)
+                    ui.Label("Offset/unit:", width=76)
+                    self._offset_field = ui.FloatField(width=90)
+                    self._offset_field.model.set_value(100000.0)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -188,6 +192,7 @@ class EbsDummyUI:
             self._eqp_field.model.get_value_as_string()))
 
     def _on_align(self):
+        self._apply_settings()
         self._render(EbsSimulateService.align())
 
     def _on_camera(self):
@@ -214,6 +219,8 @@ class EbsDummyUI:
         modes = ("bbox", "mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_precision(modes[max(0, min(index, 2))])
+        EbsSimulateService.set_offset_per_unit(
+            self._offset_field.model.get_value_as_float())
 
     # -- display -------------------------------------------------------------
 
