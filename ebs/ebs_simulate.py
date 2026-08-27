@@ -585,8 +585,6 @@ class EbsSimulate:
                 _, addr_number = self._owning_addr(station, parents, addr_pattern)
                 found.setdefault(equipment, {})[index] = (station, offset, addr_number)
 
-            self._report_offset_scale()
-
             for key, by_index in found.items():
                 indices = sorted(by_index)
                 self._port_map[key] = indices
@@ -845,36 +843,6 @@ class EbsSimulate:
             print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
                   f"{offset:.1f} + {span:.1f} = {offsets[index]:.1f}")
         return offsets
-
-    def _report_offset_scale(self) -> "float | None":
-        """Check the assumed offset scale against the file's own segment lengths.
-
-        Every straight segment is measured twice over: by cad, whose scale is
-        known, and by its span in offset units. The ratio is the offset scale,
-        so the file says what it is rather than us assuming it.
-        """
-        ratios = []
-        for addr, links in self._addr_next.items():
-            for neighbour, span in links:
-                axis = self._rail_axis(addr, neighbour)
-                if axis is None or span <= 0:
-                    continue
-                cad_a, cad_b = self._addr_cad[addr], self._addr_cad[neighbour]
-                length = abs(cad_b[axis] - cad_a[axis]) / CAD_PER_UNIT
-                if length > 1e-9:
-                    ratios.append(span / length)
-        if not ratios:
-            return None
-
-        ratios.sort()
-        middle = ratios[len(ratios) // 2]
-        spread = (ratios[-1] - ratios[0]) / middle if middle else 0.0
-        note = (f"offset scale from {len(ratios)} segments: {middle:,.0f} per unit"
-                f" (assumed {OFFSET_PER_UNIT:,.0f})")
-        if spread > 0.01:
-            note += f", but they disagree by {spread:.1%} ({ratios[0]:,.0f}..{ratios[-1]:,.0f})"
-        self._note(note)
-        return middle
 
     def _chain_span(self, start: int, target: int, axis: int,
                     direction: float) -> "float | None":
