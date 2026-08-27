@@ -868,13 +868,10 @@ class EbsSimulate:
         the rail's direction is what makes a segment the next one. Anything
         else an addr points at is a branch turning off.
         """
-        forward = [(neighbour, span)
-                   for neighbour, span in self._addr_next.get(addr, ())
-                   if self._is_forward(addr, neighbour, axis, direction)]
-        if len(forward) > 1:
-            print(f"[ebs] addr {addr} has {len(forward)} straight segments running the "
-                  f"same way {[n for n, _ in forward]}, taking the first")
-        return forward[0] if forward else None
+        for neighbour, span in self._addr_next.get(addr, ()):
+            if self._is_forward(addr, neighbour, axis, direction):
+                return neighbour, span
+        return None
 
     def _segment_length(self, a: int, b: int, axis: int) -> "float | None":
         cad_a, cad_b = self._addr_cad.get(a), self._addr_cad.get(b)
