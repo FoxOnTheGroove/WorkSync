@@ -25,7 +25,8 @@ GEOMETRY_TYPES = frozenset({
 
 CAMERA_PATH    = "/EbsCamera"             # session-layer camera owned by this extension
 CAMERA_FILL    = 0.9                      # how much of the view the target fills
-CAMERA_SLAB    = 0.2                      # clip this much past the target, front and back
+CAMERA_SLAB    = 0.2                      # clip this much in front of the target
+CAMERA_FAR     = 1.0e6                    # the far plane stays open
 
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
 MARKER_OPACITY = 0.35
@@ -1518,9 +1519,9 @@ class EbsSimulate:
     def make_camera(self) -> bool:
         """Create the camera this extension drives, replacing any earlier one.
 
-        It lives in the session layer, so it never reaches the saved scene, and
-        the viewport is switched to it - which is what keeps the user's own
-        perspective camera untouched.
+        It lives in the session layer, so it never reaches the saved scene. The
+        viewport is left alone here: it only switches over when the camera step
+        actually runs, so the perspective camera stays usable in between.
         """
         stage = self._get_stage()
         if stage is None:
@@ -1538,14 +1539,8 @@ class EbsSimulate:
                                  Sdf.ValueTypeNames.Vector3d).Set(
                                      Gf.Vec3d(0.0, 0.0, -100.0))
 
-        viewport = self._viewport()
-        if viewport is not None:
-            self._previous_camera = str(viewport.camera_path)
-            try:
-                viewport.camera_path = CAMERA_PATH
-            except Exception as e:
-                print(f"[ebs] could not switch the viewport camera: {e}")
-        self._note(f"camera {CAMERA_PATH} created")
+        self._note(f"camera {CAMERA_PATH} created (the viewport switches to it "
+                   f"when the camera step runs)")
         return True
 
     def release_camera(self) -> None:
@@ -1578,9 +1573,9 @@ class EbsSimulate:
 
         The camera stands on the facing prim's local -Y side and looks toward
         +Y, centred on the framed prim's bounds, at the distance that just fits
-        them - the way F frames a selection. Its
-        clipping range is then closed in around the target, so whatever sits in
-        front of or behind it drops out of the view while the sides stay.
+        them - the way F frames a selection. The near plane is then brought up
+        to just in front of the target, so whatever stands between the camera
+        and it is culled; the sides and everything behind stay visible.
         """
         stage = self._get_stage()
         viewport = self._viewport()
@@ -1594,6 +1589,8 @@ class EbsSimulate:
             print("[ebs] no camera - run Init first")
             return False
         if str(viewport.camera_path) != CAMERA_PATH:
+            # Remember whatever the viewport was on, to give it back on release.
+            self._previous_camera = str(viewport.camera_path)
             try:
                 viewport.camera_path = CAMERA_PATH
             except Exception as e:
@@ -1632,13 +1629,15 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        # Depth of the target along the view, measured from the eye.
+        # Depth of the target along the view, measured from the eye. Only the
+        # near plane closes in, so whatever stands in front of the target is
+        # culled while everything behind it stays visible.
         slab = corners + self._box_corners(
             self._world_range(self._target["equipment"]) if self._target else None)
         depths = [Gf.Dot(Gf.Vec3d(*c) - eye, -z_cam) for c in slab]
         near, far = min(depths), max(depths)
         margin = max((far - near) * CAMERA_SLAB, 1e-3)
-        near, far = max(near - margin, distance * 1e-4), far + margin
+        near, far = max(near - margin, distance * 1e-4), CAMERA_FAR
 
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             xformable = UsdGeom.Xformable(cam_prim)
@@ -1655,9 +1654,8 @@ class EbsSimulate:
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))   # orbit around the target
-        self._note(f"camera at {distance:.2f} from the target, "
-                   f"clipping {near:.2f} .. {far:.2f} (anything nearer or "
-                   f"further is culled)")
+        self._note(f"camera at {distance:.2f} from the target, near plane "
+                   f"{near:.2f} (anything in front of that is culled)")
         return True
 
     def _world_range(self, prim) -> "Gf.Range3d | None":
