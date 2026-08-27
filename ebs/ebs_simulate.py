@@ -44,6 +44,7 @@ GRID = 5                 # divisions given to the longest edge; the others get
                          # an integer count that keeps the cells near square
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
+REACH_RATIO = 1.5        # how far out to look for the nearest mesh, same share
 PRECISION_BBOX = "bbox"      # one box per equipment
 PRECISION_MESH = "mesh"      # one box per mesh
 PRECISION_TRI  = "triangle"  # the mesh triangles themselves
@@ -84,6 +85,7 @@ class EbsSimulate:
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
         self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
+        self._face_planes: dict = {}        # face -> (axis, outward, coord, rows, cols)
         self._previous_camera = None        # viewport camera to restore on release
         self._precision: str = PRECISION_TRI
         self._timings: list = []            # [label, elapsed_ms] for the last run
@@ -348,12 +350,25 @@ class EbsSimulate:
             split=self._target["equipment"],
         )
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+        with self._stage_timer("measure clear faces"):
+            distances = self.measure_faces(
+                self._target["ebs"], cells,
+                exclude=[self._target["equipment"], self._target["ebs"]],
+                split=self._target["equipment"],
+            )
+        for face, found in distances.items():
+            if found.get("distance") is None:
+                self._note(f"{face}: clear, nothing within "
+                           f"{found.get('reach', 0):.3f}")
+            else:
+                self._note(f"{face}: clear, nearest {found['distance']:.4f} away "
+                           f"({found['prim'].rsplit('/', 1)[-1]})")
         with self._stage_timer("draw markers"):
             self.show_markers(self._target["ebs"], cells)
         return self._payload(
             True,
             "No collision" if hit_count == 0 else f"{hit_count} cell(s) blocked",
-            cells=cells, hit_count=hit_count,
+            cells=cells, hit_count=hit_count, distances=distances,
         )
 
     # -- equipment lookup ----------------------------------------------------
@@ -1398,6 +1413,7 @@ class EbsSimulate:
 
         cells = {}
         shapes = {}
+        faces = {}
 
         def make(fixed_axis, outward, row_axis, col_axis):
             """Cells as (probe range, surface quad) in the box's own space."""
@@ -1431,19 +1447,155 @@ class EbsSimulate:
                         corner[col_axis] = cmax[col_axis] if c_end else cmin[col_axis]
                         quad.append(tuple(corner))
                     out.append((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad))
-            return out, (rows, cols)
+            return out, (rows, cols), (fixed_axis, outward,
+                                       hi[fixed_axis] if outward > 0 else lo[fixed_axis],
+                                       row_axis, col_axis)
 
         # Looking along +Y with the up axis up puts +X on the right of the screen.
         for face, args in ((FACE_RIGHT,   (side_axis, +1, up_axis, front_axis)),
                            (FACE_LEFT,    (side_axis, -1, up_axis, front_axis)),
                            (FACE_CEILING, (up_axis,   +1, front_axis, side_axis))):
-            cells[face], shapes[face] = make(*args)
+            cells[face], shapes[face], faces[face] = make(*args)
         self._grid_shape = shapes
+        self._face_planes = faces
         return cells
 
     def get_grid_shape(self) -> dict:
         """Rows and columns of each face's grid, as of the last run."""
         return dict(self._grid_shape)
+
+    def measure_faces(self, ebs_prim: Usd.Prim, cells: dict, exclude: list = None,
+                      split: Usd.Prim = None) -> dict:
+        """For each face with nothing touching it, how far the nearest mesh is.
+
+        The measurement runs straight out along the face normal: the face is
+        extruded outward and only what lies inside that prism counts, so a
+        machine off to one side is not reported as being above. Distances are
+        cheap to bound and expensive to confirm, so candidates are ordered by
+        the bound their box gives and only the ones that could still win have
+        their triangles read.
+        """
+        stage = self._get_stage()
+        if stage is None:
+            return {}
+        bbox = self._ebs_bound(ebs_prim)
+        local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
+        if local_box.IsEmpty() or not self._face_planes:
+            return {}
+
+        reach = max(local_box.GetMax()[i] - local_box.GetMin()[i]
+                    for i in range(3)) * REACH_RATIO
+        skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
+        cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+
+        results = {}
+        for face, (axis, outward, coord, _, _) in self._face_planes.items():
+            if any(cells.get(face, [])):
+                continue                       # something is touching it already
+            prism = self._face_prism(local_box, axis, outward, coord, reach)
+            world_prism = Gf.BBox3d(prism, to_world).ComputeAlignedRange()
+            found = self._nearest_in_prism(stage, cache, prism, world_prism, to_world,
+                                           axis, outward, coord, skip, split)
+            results[face] = found or {"distance": None, "prim": "", "reach": reach}
+        return results
+
+    @staticmethod
+    def _face_prism(box: Gf.Range3d, axis: int, outward: int, coord: float,
+                    reach: float) -> Gf.Range3d:
+        """The face's rectangle, extruded outward as far as we care to look."""
+        lo = [box.GetMin()[i] for i in range(3)]
+        hi = [box.GetMax()[i] for i in range(3)]
+        if outward > 0:
+            lo[axis], hi[axis] = coord, coord + reach
+        else:
+            lo[axis], hi[axis] = coord - reach, coord
+        return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
+
+    def _nearest_in_prism(self, stage, cache, prism, world_prism, to_world,
+                          axis, outward, coord, skip, split):
+        """Nearest geometry inside the prism, measured along the face normal."""
+        candidates = []
+        sources = list(self._bounds_cache.items())
+        for path, box in sources:
+            if any(path == s or path.startswith(s + "/") for s in skip):
+                continue
+            if not self._overlaps(box, world_prism) or not self._is_visible(stage, path):
+                continue
+            prim = stage.GetPrimAtPath(path)
+            for mesh_path, mesh_box in self._geometry_bounds(prim, cache):
+                if self._overlaps(mesh_box, world_prism) and self._is_visible(stage, mesh_path):
+                    candidates.append((mesh_path, mesh_box))
+        if split is not None and split.IsValid():
+            candidates += [(p, b) for p, b in self._geometry_bounds(split, cache)
+                           if self._overlaps(b, world_prism) and self._is_visible(stage, p)]
+        if not candidates:
+            return None
+
+        # A box can only ever be as close as its nearest corner, so that bound
+        # orders the search and ends it: once the best real distance is shorter
+        # than the next bound, nothing left can beat it.
+        inverse = to_world.GetInverse()
+        bounded = []
+        for path, box in candidates:
+            local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
+            gap = self._gap_along(local, axis, outward, coord)
+            if gap is not None:
+                bounded.append((gap, path, local))
+        bounded.sort(key=lambda item: item[0])
+
+        best, best_path = None, ""
+        for gap, path, local in bounded:
+            if best is not None and gap >= best:
+                break
+            if self._precision != PRECISION_TRI:
+                best, best_path = gap, path
+                continue
+            triangles = self._mesh_triangles(stage, path)
+            if not triangles:
+                best, best_path = gap, path          # nothing to refine with
+                continue
+            for triangle in triangles:
+                local_tri = [inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
+                distance = self._triangle_gap(local_tri, prism, axis, outward, coord)
+                if distance is not None and (best is None or distance < best):
+                    best, best_path = distance, path
+        if best is None:
+            return None
+        return {"distance": max(best, 0.0), "prim": best_path}
+
+    @staticmethod
+    def _gap_along(box, axis: int, outward: int, coord: float) -> "float | None":
+        """Distance from the face plane to a box, along the face normal."""
+        if outward > 0:
+            gap = box.GetMin()[axis] - coord
+        else:
+            gap = coord - box.GetMax()[axis]
+        return None if gap < 0 else gap
+
+    @staticmethod
+    def _triangle_gap(triangle, prism, axis: int, outward: int,
+                      coord: float) -> "float | None":
+        """Nearest point of a triangle inside the prism, along the face normal.
+
+        Only vertices that sit within the prism's cross-section count, so
+        geometry that merely passes by the side of the face is not measured as
+        being in front of it.
+        """
+        lo, hi = prism.GetMin(), prism.GetMax()
+        best = None
+        for vertex in triangle:
+            inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
+                         for i in range(3) if i != axis)
+            if not inside:
+                continue
+            gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
+            if gap >= 0 and (best is None or gap < best):
+                best = gap
+        return best
 
     # -- collision markers ---------------------------------------------------
 
@@ -1726,7 +1878,8 @@ class EbsSimulate:
         return omni.usd.get_context().get_stage()
 
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
-                 equipment=None, eqp_id: str = "", port_count=None) -> dict:
+                 equipment=None, eqp_id: str = "", port_count=None,
+                 distances: dict = None) -> dict:
         """Build the result dict. Target fields come from the prepared target
         unless explicitly passed (prepare reports them before the target is set)."""
         target = self._target or {}
@@ -1744,6 +1897,7 @@ class EbsSimulate:
             "cells": cells,
             "hit_count": hit_count,
             "grid": dict(self._grid_shape),
+            "distances": distances or {},
             "timings": list(self._timings),
             "notes": list(self._notes),
             "total_ms": (time.perf_counter() - self._started) * 1000.0,

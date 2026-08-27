@@ -53,7 +53,7 @@ class EbsDummyUI:
     # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=470, height=690)
+        self._window = ui.Window("EBS Simulate", width=470, height=720)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
                 self._xml_field  = self._path_row("Port XML:")
@@ -104,7 +104,8 @@ class EbsDummyUI:
             field = ui.StringField()
         return field
 
-    def _build_grids(self, shape: dict = None, cells: dict = None):
+    def _build_grids(self, shape: dict = None, cells: dict = None,
+                     distances: dict = None):
         """Draw one grid per face, sized as the run reported it.
 
         Cell counts differ per face and per EBS, so the squares are rebuilt each
@@ -121,11 +122,16 @@ class EbsDummyUI:
                 for face in FACES:
                     rows, cols = (shape or {}).get(face, (1, 1))
                     values = (cells or {}).get(face) or []
+                    found = (distances or {}).get(face)
                     with ui.VStack(width=cols * (CELL_SIZE + CELL_GAP),
                                    spacing=CELL_GAP):
                         ui.Label(f"{FACE_LABEL.get(face, face)} {rows}x{cols}",
                                  height=18, alignment=ui.Alignment.CENTER,
                                  style={"font_size": 13, "color": 0xFFCCCCCC})
+                        ui.Label(self._face_note(found, any(values), cells),
+                                 height=16, alignment=ui.Alignment.CENTER,
+                                 word_wrap=True,
+                                 style={"font_size": 11, "color": 0xFF9FD0A0})
                         rects = []
                         for r in range(rows):
                             with ui.HStack(height=CELL_SIZE, spacing=CELL_GAP):
@@ -143,6 +149,19 @@ class EbsDummyUI:
                                         style={"background_color": colour,
                                                "border_radius": 2}))
                         self._cells[face] = rects
+
+    @staticmethod
+    def _face_note(found: dict, blocked: bool, cells) -> str:
+        """One line under a grid: how far the nearest mesh is, or that it is blocked."""
+        if cells is None:
+            return " "
+        if blocked:
+            return "blocked"
+        if not found:
+            return "-"
+        if found.get("distance") is None:
+            return f"clear > {found.get('reach', 0):.2f}"
+        return f"{found['distance']:.3f}  {found.get('prim', '').rsplit('/', 1)[-1]}"
 
     # -- handlers ------------------------------------------------------------
 
@@ -207,7 +226,8 @@ class EbsDummyUI:
         # Steps before the collision check carry no cells: grey the grids out so a
         # stale result is never read as current.
         self._build_grids(result.get("grid") or EbsSimulateService.get_grid_shape(),
-                          cells if ok else None)
+                          cells if ok else None,
+                          result.get("distances") if ok else None)
 
         self._set_status(result.get("reason", ""))
         port = result.get("port_count")
