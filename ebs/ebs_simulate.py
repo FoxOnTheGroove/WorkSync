@@ -18,7 +18,7 @@ NEXT_KEY    = "next-address"  # addr a NextAddr group points at
 SPAN_KEYS   = ("distance-puls", "distance-plus")   # that segment's length, in offset units
 MAX_HOPS    = 8               # how far along the chain a port may have been written
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
-OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
+OFFSET_PER_UNIT = 100000.0        # offset units per stage unit, until the file says otherwise
 RAIL_PREFIX = "rail_"
 
 def _children(prim):
@@ -98,6 +98,7 @@ class EbsSimulate:
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._addr_next: dict = {}          # addr number -> [(next addr, span)]
+        self._offset_scale: float = OFFSET_PER_UNIT   # offset units per stage unit
         self._rail_root: str = ""           # parent path holding the rail prims
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
@@ -522,6 +523,7 @@ class EbsSimulate:
         self._port_addr_of = {}
         self._addr_cad = {}
         self._addr_next = {}
+        self._offset_scale = OFFSET_PER_UNIT
         if not self._xml_path:
             return 0
 
@@ -585,7 +587,7 @@ class EbsSimulate:
                 _, addr_number = self._owning_addr(station, parents, addr_pattern)
                 found.setdefault(equipment, {})[index] = (station, offset, addr_number)
 
-            self._report_offset_scale()
+            self._offset_scale = self._read_offset_scale() or OFFSET_PER_UNIT
 
             for key, by_index in found.items():
                 indices = sorted(by_index)
@@ -794,7 +796,7 @@ class EbsSimulate:
         rail_local = self._local_translation(rail)
         start = rail_local[axis] - length / 2.0              # rail start = addr position
         offset_zero = offsets[1] + spacing                   # one step past port 1
-        shift = direction * offset_zero / OFFSET_PER_UNIT
+        shift = direction * offset_zero / self._offset_scale
 
         coords = [rail_local[0], rail_local[1], rail_local[2]]
         coords[axis] = start + shift                         # the other axes stay as-is
@@ -813,7 +815,8 @@ class EbsSimulate:
               ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
               f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
         print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
-              f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
+              f" / {self._offset_scale:.0f} = "
+              f"{offset_zero / self._offset_scale:.4f} units")
         print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
               f" (rail's other axes kept)")
         return point, axis, rail
@@ -846,12 +849,13 @@ class EbsSimulate:
                   f"{offset:.1f} + {span:.1f} = {offsets[index]:.1f}")
         return offsets
 
-    def _report_offset_scale(self) -> "float | None":
-        """Check the assumed offset scale against the file's own segment lengths.
+    def _read_offset_scale(self) -> "float | None":
+        """The offset scale, taken from the file's own segment lengths.
 
         Every straight segment is measured twice over: by cad, whose scale is
-        known, and by its span in offset units. The ratio is the offset scale,
-        so the file says what it is rather than us assuming it.
+        known, and by its span in offset units. The ratio between them is the
+        offset scale, so it is read rather than assumed - and the assumption is
+        only the fallback for a file that carries no usable segment.
         """
         ratios = []
         for addr, links in self._addr_next.items():
@@ -869,10 +873,12 @@ class EbsSimulate:
         ratios.sort()
         middle = ratios[len(ratios) // 2]
         spread = (ratios[-1] - ratios[0]) / middle if middle else 0.0
-        note = (f"offset scale from {len(ratios)} segments: {middle:,.0f} per unit"
-                f" (assumed {OFFSET_PER_UNIT:,.0f})")
+        note = f"offset scale {middle:,.0f} per unit, from {len(ratios)} segments"
+        if abs(middle - OFFSET_PER_UNIT) > OFFSET_PER_UNIT * 0.01:
+            note += f" (not the {OFFSET_PER_UNIT:,.0f} assumed)"
         if spread > 0.01:
-            note += f", but they disagree by {spread:.1%} ({ratios[0]:,.0f}..{ratios[-1]:,.0f})"
+            note += (f"; the segments disagree by {spread:.1%} "
+                     f"({ratios[0]:,.0f}..{ratios[-1]:,.0f})")
         self._note(note)
         return middle
 
