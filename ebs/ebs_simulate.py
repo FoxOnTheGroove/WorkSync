@@ -49,6 +49,12 @@ COLOR_BLOCKED  = (0.9, 0.1, 0.1)
 COLOR_CLEAR    = (0.35, 0.75, 0.4)
 CHECKER_SHADE  = 0.72     # every other cell is shaded, so the grid reads as a grid
 
+LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
+LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
+LASER_COLOR_0  = (1.0, 0.75, 0.0)   # the virtual port 0 the EBS is placed on
+LASER_RADIUS   = 0.004    # laser radius, as a share of the equipment's bbox diagonal
+LASER_HEIGHT   = 3.0      # laser height, in equipment bbox diagonals
+
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -99,6 +105,7 @@ class EbsSimulate:
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
         self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
+        self._port_world: dict = {}         # port index -> world point, from the last align
         self._face_planes: dict = {}        # face -> (axis, outward, coord, rows, cols)
         self._previous_camera = None        # viewport camera to restore on release
         self._precision: str = PRECISION_TRI
@@ -174,6 +181,7 @@ class EbsSimulate:
     def teardown(self) -> None:
         self.release_camera()
         self.clear_markers()
+        self.clear_port_lasers()
         self._eqp_index = {}
         self._port_map = {}
         self._port_elements = {}
@@ -346,8 +354,16 @@ class EbsSimulate:
             else:
                 # No usable rail/port data: keep working off the anchor prim.
                 print("[ebs] port geometry unavailable, falling back to the anchor prim")
+                self._port_world = {}
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
+
+        # A laser on every port position, so where the offsets put them can be
+        # read straight off the scene.
+        with self._stage_timer("draw port lasers"):
+            drawn = self.show_port_lasers()
+        if drawn:
+            self._note(f"{drawn} port laser(s) drawn under {LASER_ROOT}")
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
     def _do_collide(self) -> dict:
@@ -725,8 +741,21 @@ class EbsSimulate:
     def compute_rail_point(self, stage: Usd.Stage, eqp_id: str):
         """Where the virtual port 0 sits, in the rail's own space.
 
-        Returns (point, axis, rail) with the point as a Gf.Vec3d and axis 0 or
-        1 for the axis the rail runs along. The addr sits at the rail's start point
+        Returns (point, axis, rail), the port-0 entry of compute_port_points.
+        """
+        found = self.compute_port_points(stage, eqp_id)
+        if found is None:
+            return None
+        points, axis, rail = found
+        return points[0], axis, rail
+
+    def compute_port_points(self, stage: Usd.Stage, eqp_id: str):
+        """Where every port sits, in the rail's own space.
+
+        Returns (points, axis, rail) with points a {index: Gf.Vec3d} carrying
+        the ports read from the XML plus the virtual port 0 the EBS is placed
+        on, and axis 0 or 1 for the axis the rail runs along. The addr sits at
+        the rail's start point
         and the rail prim at its midpoint, so the start is half a rail length
         back from it. Ports run from the addr along the rail at a constant
         spacing - on the line the order is 1, 2, (3), addr - and port 0 is one
@@ -764,9 +793,17 @@ class EbsSimulate:
         offset_zero = offsets[1] + spacing                   # one step past port 1
         shift = direction * offset_zero / OFFSET_PER_UNIT
 
-        coords = [rail_local[0], rail_local[1], rail_local[2]]
-        coords[axis] = start + shift                         # the other axes stay as-is
-        point = Gf.Vec3d(*coords)
+        # Every port sits on the rail the same way: its offset walks along the
+        # rail axis from the start point, and the other axes keep the rail's own
+        # value. Port 0 is the one the EBS goes on; 1..n are there to be checked.
+        all_offsets = dict(offsets)
+        all_offsets[0] = offset_zero
+        points = {}
+        for index, offset in all_offsets.items():
+            coords = [rail_local[0], rail_local[1], rail_local[2]]
+            coords[axis] = start + direction * offset / OFFSET_PER_UNIT
+            points[index] = Gf.Vec3d(*coords)
+        point = points[0]
 
         name = "XY"[axis]
         gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
@@ -784,7 +821,7 @@ class EbsSimulate:
               f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
         print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
               f" (rail's other axes kept)")
-        return point, axis, rail
+        return points, axis, rail
 
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:
@@ -847,18 +884,31 @@ class EbsSimulate:
         anchor and the EBS live under different parents, so everything meets in
         world space.
         """
-        found = self.compute_rail_point(stage, eqp_id)
+        self._port_world = {}
+        found = self.compute_port_points(stage, eqp_id)
         if found is None:
             return None
-        in_rail_space, _, rail = found
+        points, _, rail = found
 
-        world = self._parent_world(rail).Transform(in_rail_space)
+        to_world = self._parent_world(rail)
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
-        target = Gf.Vec3d(world[0], world[1], anchor_world[2])
+        # Every port goes through the same conversion, so the lasers drawn on
+        # ports 1..n sit in exactly the space the EBS is placed in.
+        for index, in_rail_space in points.items():
+            spot = to_world.Transform(in_rail_space)
+            self._port_world[index] = Gf.Vec3d(spot[0], spot[1], anchor_world[2])
+
+        in_rail_space = points[0]
+        world = to_world.Transform(in_rail_space)
+        target = self._port_world[0]
         print(f"[ebs]   rail space ({in_rail_space[0]:.4f}, {in_rail_space[1]:.4f}, "
               f"{in_rail_space[2]:.4f}) -> world ({world[0]:.4f}, {world[1]:.4f}, "
               f"{world[2]:.4f})")
+        for index in sorted(self._port_world):
+            spot = self._port_world[index]
+            self._note(f"port {index} world ({spot[0]:.4f}, {spot[1]:.4f}, "
+                       f"{spot[2]:.4f})")
         print(f"[ebs]   target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})"
               f"  [rail xy, anchor z from {anchor.GetName()}]")
         return target
@@ -1613,6 +1663,68 @@ class EbsSimulate:
                     drawn += 1
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
+
+    def show_port_lasers(self, points: dict = None) -> int:
+        """Stand a thin cylinder on each port position, pointing up.
+
+        The rail fixes one coordinate and the offset walks along the other, so
+        every port is a world point; a laser through it shows whether it lands
+        in the equipment's real port. Port 0, the virtual one the EBS sits on,
+        gets its own colour. Session layer, rebuilt on every run.
+        """
+        stage = self._get_stage()
+        if stage is None:
+            return 0
+        self.clear_port_lasers()
+
+        points = self._port_world if points is None else points
+        if not points:
+            return 0
+
+        # Sized off the equipment, so the laser reads the same at any scale.
+        box = self._world_range((self._target or {}).get("equipment"))
+        if box is None:
+            span = 1.0
+        else:
+            lo, hi = box.GetMin(), box.GetMax()
+            span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
+        height = max(span * LASER_HEIGHT, 1e-3)
+        radius = max(span * LASER_RADIUS, 1e-5)
+
+        drawn = 0
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            UsdGeom.Scope.Define(stage, LASER_ROOT)
+            for index in sorted(points):
+                colour = LASER_COLOR_0 if index == 0 else LASER_COLOR
+                self._laser_cylinder(stage, f"{LASER_ROOT}/port_{index}",
+                                     points[index], radius, height, colour)
+                drawn += 1
+        print(f"[ebs] drew {drawn} port lasers under {LASER_ROOT}, "
+              f"radius {radius:.4f}, height {height:.4f}")
+        return drawn
+
+    def clear_port_lasers(self) -> None:
+        """Remove the lasers drawn by the previous run."""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if stage.GetPrimAtPath(LASER_ROOT).IsValid():
+                stage.RemovePrim(LASER_ROOT)
+
+    @staticmethod
+    def _laser_cylinder(stage, path: str, centre, radius: float, height: float,
+                        colour) -> None:
+        """One upright cylinder, centred on a world point. Z is up."""
+        cylinder = UsdGeom.Cylinder.Define(stage, path)
+        cylinder.CreateAxisAttr(UsdGeom.Tokens.z)
+        cylinder.CreateHeightAttr(height)
+        cylinder.CreateRadiusAttr(radius)
+        cylinder.CreateExtentAttr(Vt.Vec3fArray([
+            Gf.Vec3f(-radius, -radius, -height / 2.0),
+            Gf.Vec3f(radius, radius, height / 2.0)]))
+        cylinder.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
     def clear_markers(self) -> None:
         """Remove the markers drawn by the previous run."""

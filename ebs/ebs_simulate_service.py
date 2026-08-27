@@ -95,6 +95,10 @@ class EbsSimulateService:
         return cls._simulate.clear_markers()
 
     @classmethod
+    def clear_port_lasers(cls):
+        return cls._simulate.clear_port_lasers()
+
+    @classmethod
     def get_result(cls):
         return cls._simulate.get_result()
 
