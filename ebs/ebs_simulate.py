@@ -15,7 +15,7 @@ OFFSET_KEY  = "offset"        # port distance from its addr, along the rail dire
 CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
 CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
-OFFSET_PER_UNIT = 100000.0        # offset units per stage unit, the starting assumption
+OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
 
 def _children(prim):
@@ -100,7 +100,6 @@ class EbsSimulate:
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._rail_root: str = ""           # parent path holding the rail prims
-        self._offset_per_unit: float = OFFSET_PER_UNIT   # offset units per stage unit
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -159,17 +158,6 @@ class EbsSimulate:
             self._precision = mode
         else:
             print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
-
-    def set_offset_per_unit(self, value: float) -> None:
-        """How many offset units make one stage unit. 0 restores the default.
-
-        The ports are a fixed distance apart on the real equipment, so the gap
-        between two of their offsets divided by that distance gives this number.
-        It is a setting rather than a constant because the value it started at
-        was an assumption.
-        """
-        value = float(value or 0.0)
-        self._offset_per_unit = value if value > 0 else OFFSET_PER_UNIT
 
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
@@ -797,13 +785,13 @@ class EbsSimulate:
         direction = 1.0 if length >= 0 else -1.0
 
         offsets = self._rebase_offsets(key, addr_a, axis, direction)
-        spacing = self._port_spacing(key, offsets, self._port_addr_of.get(key, {}))
+        spacing = self._port_spacing(key, offsets)
         if spacing is None:
             return None
         rail_local = self._local_translation(rail)
         start = rail_local[axis] - length / 2.0              # rail start = addr position
         offset_zero = offsets[1] + spacing                   # one step past port 1
-        shift = direction * offset_zero / self._offset_per_unit
+        shift = direction * offset_zero / OFFSET_PER_UNIT
 
         # Every port sits on the rail the same way: its offset walks along the
         # rail axis from the start point, and the other axes keep the rail's own
@@ -813,7 +801,7 @@ class EbsSimulate:
         points = {}
         for index, offset in all_offsets.items():
             coords = [rail_local[0], rail_local[1], rail_local[2]]
-            coords[axis] = start + direction * offset / self._offset_per_unit
+            coords[axis] = start + direction * offset / OFFSET_PER_UNIT
             points[index] = Gf.Vec3d(*coords)
         point = points[0]
 
@@ -829,11 +817,8 @@ class EbsSimulate:
         print(f"[ebs]   offsets " +
               ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
               f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
-        print(f"[ebs]   port pitch {spacing:.1f} offsets / {self._offset_per_unit:.0f}"
-              f" = {spacing / self._offset_per_unit:.4f} units apart")
         print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
-              f" / {self._offset_per_unit:.0f} = "
-              f"{offset_zero / self._offset_per_unit:.4f} units")
+              f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
         print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
               f" (rail's other axes kept)")
         return points, axis, rail
@@ -862,48 +847,31 @@ class EbsSimulate:
                 print(f"[ebs] {key}: port {index} sits in addr {addr}, which has no cad")
                 continue
             gap = (cad[axis] - base_cad[axis]) / CAD_PER_UNIT      # signed, in units
-            shift = direction * gap * self._offset_per_unit
+            shift = direction * gap * OFFSET_PER_UNIT
             offsets[index] = offset + shift
             print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
                   f"{offset:.1f} {shift:+.1f} = {offsets[index]:.1f} "
                   f"(addr gap {gap:+.4f} units)")
         return offsets
 
-    def _port_spacing(self, key: str, offsets: dict,
-                      addr_of: dict = None) -> "float | None":
+    def _port_spacing(self, key: str, offsets: dict) -> "float | None":
         """Distance between neighbouring ports, averaged over the pairs present.
 
         Two ports give one gap; a third gives a second one and the two are
         averaged. Ports sit at a constant spacing with the lower numbers
         further from the addr, so each gap is offset(n) - offset(n + 1).
-
-        A pair written in the same addr block is measured from the same origin,
-        so its gap is the raw one; a pair split over two blocks has been through
-        the rebase and carries whatever error the offset scale has. The split
-        pairs are only used when there is no whole one.
         """
-        addr_of = addr_of or {}
-        pairs = [(i, offsets[i] - offsets[i + 1])
-                 for i in sorted(offsets) if i + 1 in offsets]
-        if 1 not in offsets or not pairs:
+        gaps = [offsets[i] - offsets[i + 1]
+                for i in sorted(offsets) if i + 1 in offsets]
+        if 1 not in offsets or not gaps:
             print(f"[ebs] {key}: needs the offsets of ports 1 and 2, got {offsets}")
             return None
-
-        whole = [gap for i, gap in pairs
-                 if addr_of.get(i) is not None and addr_of.get(i) == addr_of.get(i + 1)]
-        gaps = whole or [gap for _, gap in pairs]
-        if whole and len(whole) < len(pairs):
-            print(f"[ebs] {key}: {len(pairs) - len(whole)} port pair(s) cross an addr, "
-                  f"taking the spacing from the {len(whole)} that do not")
 
         spacing = sum(gaps) / len(gaps)
         if spacing <= 0:
             print(f"[ebs] {key}: ports should get closer to the addr as the number "
                   f"rises, got {offsets}")
-        # The offsets are written to a coarse step, so neighbouring gaps differ
-        # by a little as a matter of course. Only a real disagreement is worth
-        # a line.
-        if len(gaps) > 1 and max(gaps) - min(gaps) > abs(spacing) * 0.01:
+        if len(gaps) > 1 and max(gaps) - min(gaps) > 1e-6:
             print(f"[ebs] {key}: port spacing is uneven {gaps}, using {spacing}")
         return spacing
 
