@@ -43,6 +43,7 @@ FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 GRID = 5                 # divisions given to the longest edge; the others get
                          # an integer count that keeps the cells near square
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
+PROBE_RATIO = 0.05       # probe depth, as a share of the EBS's longest edge
 PRECISION_BBOX = "bbox"      # one box per equipment
 PRECISION_MESH = "mesh"      # one box per mesh
 PRECISION_TRI  = "triangle"  # the mesh triangles themselves
@@ -68,7 +69,7 @@ class EbsSimulate:
         self._xml_path: str = ""
         self._ebs_path_2port: str = ""
         self._ebs_path_3port: str = ""
-        self._clearance: float = 1.0        # thickness probed outward from each face
+        self._clearance: float = 0.0        # 0 = derive the probe depth from the EBS
         self._search_root: str = ""         # limit the scan to this subtree when set
         self._eqp_index: dict = {}          # "EQP_########" -> prim path
         self._port_map: dict = {}           # "########" -> sorted port indices
@@ -108,7 +109,19 @@ class EbsSimulate:
         self._ebs_path_3port = (path_3port or "").strip()
 
     def set_clearance(self, value: float) -> None:
+        """Override the probe depth. 0 goes back to deriving it from the EBS.
+
+        There is nothing to tune here normally: the depth is a fraction of the
+        EBS, so it follows the stage's units instead of having to be told them.
+        """
         self._clearance = max(0.0, float(value))
+
+    def _probe_depth(self, box: Gf.Range3d) -> float:
+        """How far out from each face to look for something in the way."""
+        if self._clearance > 0.0:
+            return self._clearance
+        longest = max(box.GetMax()[i] - box.GetMin()[i] for i in range(3))
+        return max(longest * PROBE_RATIO, 1e-6)
 
     def set_precision(self, mode: str) -> None:
         """How closely collisions are tested: 'bbox', 'mesh' or 'triangle'."""
@@ -1042,7 +1055,8 @@ class EbsSimulate:
 
         with self._stage_timer("broad phase"):
             # Keep only equipment overlapping the EBS box grown by the clearance.
-            margin = Gf.Vec3d(self._clearance, self._clearance, self._clearance)
+            depth = self._probe_depth(local_box)
+            margin = Gf.Vec3d(depth, depth, depth)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
             overlapping = [(path, box) for path, box in self._bounds_cache.items()
@@ -1076,8 +1090,9 @@ class EbsSimulate:
                            and self._is_visible(stage, path)]
 
         size = local_box.GetMax() - local_box.GetMin()
-        self._note(f"precision {self._precision}, clearance {self._clearance}, "
-                   f"EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
+        self._note(f"precision {self._precision}, probe depth {depth:.4f}"
+                   f"{' (set by hand)' if self._clearance > 0 else ' (from the EBS size)'}"
+                   f", EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
         self._note(f"EBS local box {tuple(round(v, 3) for v in local_box.GetMin())} .. "
                    f"{tuple(round(v, 3) for v in local_box.GetMax())} "
                    f"(the cells tile exactly this)")
@@ -1368,8 +1383,7 @@ class EbsSimulate:
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis                        # front/back, not evaluated
         side_axis = 3 - up_axis - front_axis            # sides (X when Z-up)
-        t = self._clearance
-
+        t = self._probe_depth(box)
         lo, hi = box.GetMin(), box.GetMax()
         extent = [hi[i] - lo[i] for i in range(3)]
         unit = max(extent) / GRID if max(extent) > 0 else 1.0
