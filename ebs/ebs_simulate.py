@@ -18,7 +18,7 @@ NEXT_KEY    = "next-address"  # addr a NextAddr group points at
 SPAN_KEYS   = ("distance-puls", "distance-plus")   # that segment's length, in offset units
 MAX_HOPS    = 8               # how far along the chain a port may have been written
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
-OFFSET_PER_UNIT = 100000.0        # offset units per stage unit, until the file says otherwise
+OFFSET_PER_UNIT = 100000.0        # the scale that used to be assumed; only reported now
 RAIL_PREFIX = "rail_"
 
 def _children(prim):
@@ -98,7 +98,6 @@ class EbsSimulate:
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._addr_next: dict = {}          # addr number -> [(next addr, span)]
-        self._offset_scale: float = OFFSET_PER_UNIT   # offset units per stage unit
         self._rail_root: str = ""           # parent path holding the rail prims
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
@@ -523,7 +522,6 @@ class EbsSimulate:
         self._port_addr_of = {}
         self._addr_cad = {}
         self._addr_next = {}
-        self._offset_scale = OFFSET_PER_UNIT
         if not self._xml_path:
             return 0
 
@@ -587,7 +585,7 @@ class EbsSimulate:
                 _, addr_number = self._owning_addr(station, parents, addr_pattern)
                 found.setdefault(equipment, {})[index] = (station, offset, addr_number)
 
-            self._offset_scale = self._read_offset_scale() or OFFSET_PER_UNIT
+            self._report_segments()
 
             for key, by_index in found.items():
                 indices = sorted(by_index)
@@ -789,75 +787,109 @@ class EbsSimulate:
         length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
         direction = 1.0 if length >= 0 else -1.0
 
-        offsets = self._rebase_offsets(key, addr_a, axis, direction)
-        spacing = self._port_spacing(key, offsets)
+        # Everything past here is in stage units: each port's offset has already
+        # been turned into a distance by its own segment.
+        positions = self._port_positions(key, addr_a, axis, direction)
+        spacing = self._port_spacing(key, positions)
         if spacing is None:
             return None
+
         rail_local = self._local_translation(rail)
         start = rail_local[axis] - length / 2.0              # rail start = addr position
-        offset_zero = offsets[1] + spacing                   # one step past port 1
-        shift = direction * offset_zero / self._offset_scale
+        zero = positions[1] + spacing                        # one step past port 1
+        shift = direction * zero
 
         coords = [rail_local[0], rail_local[1], rail_local[2]]
         coords[axis] = start + shift                         # the other axes stay as-is
         point = Gf.Vec3d(*coords)
 
         name = "XY"[axis]
-        gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
-                for i in sorted(offsets) if i + 1 in offsets]
+        gaps = [f"{positions[i] - positions[i + 1]:.4f}"
+                for i in sorted(positions) if i + 1 in positions]
         print(f"[ebs] {key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
         print(f"[ebs]   cad {cad_a} -> {cad_b}, span ({span[0]:+.3f}, {span[1]:+.3f})"
               f" -> runs along {name}, direction {direction:+.0f}")
         print(f"[ebs]   length {span[axis]:+.3f} / {CAD_PER_UNIT:.4f} = {length:+.4f} units")
         print(f"[ebs]   rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
               f"= start {start:.4f}")
-        print(f"[ebs]   offsets " +
-              ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
-              f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
-        print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
-              f" / {self._offset_scale:.0f} = "
-              f"{offset_zero / self._offset_scale:.4f} units")
+        print(f"[ebs]   ports at " +
+              ", ".join(f"{i}:{positions[i]:.4f}" for i in sorted(positions)) +
+              f" units | gaps [{', '.join(gaps)}] -> spacing {spacing:.4f}")
+        print(f"[ebs]   port 0 = {positions[1]:.4f} + {spacing:.4f} = {zero:.4f} units")
         print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
               f" (rail's other axes kept)")
         return point, axis, rail
 
-    def _rebase_offsets(self, key: str, base_addr: int, axis: int,
+    def _port_positions(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:
-        """Offsets of every port measured from the same addr.
+        """Where each port sits, in stage units measured from the base addr.
 
-        A port's offset is measured from the addr block it is written in, and
-        the lower-numbered ones reach far enough to be written in a later block
-        along the rail. Such an offset is brought back by adding the segments
-        between the two addrs, one hop at a time - the spans are already in
-        offset units, so nothing is converted. Hops only follow straight
-        segments running the same way as the rail.
+        An offset is a share of the segment its own addr leads into: dividing
+        it by that segment's distance-puls gives how far along it the port is,
+        and the segment's cad length turns that into units. Segments differ, so
+        each one is read on its own rather than through a single scale. A port
+        written further along the chain adds the lengths of the hops in between.
         """
-        offsets = dict(self._port_offsets.get(key, {}))
-        addr_of = self._port_addr_of.get(key, {})
-
-        for index, offset in list(offsets.items()):
-            addr = addr_of.get(index)
-            if addr is None or addr == base_addr:
-                continue
-            span = self._chain_span(base_addr, addr, axis, direction)
-            if span is None:
+        positions = {}
+        for index, offset in self._port_offsets.get(key, {}).items():
+            addr = self._port_addr_of.get(key, {}).get(index, base_addr)
+            hop = self._chain_span(base_addr, addr, axis, direction)
+            if hop is None:
                 print(f"[ebs] {key}: port {index} is in addr {addr}, with no straight "
-                      f"chain from {base_addr} - left as written")
+                      f"chain from {base_addr} - skipped")
                 continue
-            offsets[index] = offset + span
-            print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
-                  f"{offset:.1f} + {span:.1f} = {offsets[index]:.1f}")
-        return offsets
+            along = self._along_segment(addr, offset, axis, direction)
+            if along is None:
+                print(f"[ebs] {key}: addr {addr} leads nowhere straight, so port "
+                      f"{index} cannot be placed")
+                continue
+            positions[index] = hop + along
+            if addr != base_addr:
+                print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
+                      f"{hop:.4f} + {along:.4f} = {positions[index]:.4f} units")
+        return positions
 
-    def _read_offset_scale(self) -> "float | None":
-        """The offset scale, taken from the file's own segment lengths.
+    def _along_segment(self, addr: int, offset: float, axis: int,
+                       direction: float) -> "float | None":
+        """How far along its own segment an offset places a port, in units."""
+        segment = self._forward_segment(addr, axis, direction)
+        if segment is None:
+            return None
+        neighbour, span = segment
+        if span <= 0:
+            return None
+        length = self._segment_length(addr, neighbour, axis)
+        return None if length is None else (offset / span) * length
 
-        Every straight segment is measured twice over: by cad, whose scale is
-        known, and by its span in offset units. If the two are simply
-        proportional then the ratio is the scale. Fitting a line through them
-        says whether that holds - a span that is a distance *plus* something
-        would show up as an intercept, and the ratio would then drift with the
-        length rather than being one number.
+    def _forward_segment(self, addr: int, axis: int, direction: float):
+        """The straight segment leaving an addr the way the rail runs.
+
+        Staying straight - one cad axis changing, the other not - and keeping
+        the rail's direction is what makes a segment the next one. Anything
+        else an addr points at is a branch turning off.
+        """
+        forward = [(neighbour, span)
+                   for neighbour, span in self._addr_next.get(addr, ())
+                   if self._is_forward(addr, neighbour, axis, direction)]
+        if len(forward) > 1:
+            print(f"[ebs] addr {addr} has {len(forward)} straight segments running the "
+                  f"same way {[n for n, _ in forward]}, taking the first")
+        return forward[0] if forward else None
+
+    def _segment_length(self, a: int, b: int, axis: int) -> "float | None":
+        cad_a, cad_b = self._addr_cad.get(a), self._addr_cad.get(b)
+        if cad_a is None or cad_b is None:
+            return None
+        return abs(cad_b[axis] - cad_a[axis]) / CAD_PER_UNIT
+
+    def _report_segments(self) -> "float | None":
+        """Report how the segments' spans relate to their cad lengths.
+
+        Nothing depends on this any more - each offset is divided by its own
+        segment's span - but the ratios say whether the file is consistent. One
+        number across every segment means a single scale would have done; ratios
+        that drift with length mean the spans carry something fixed on top,
+        and either way each segment is still read on its own terms.
         """
         pairs = []
         for addr, links in self._addr_next.items():
@@ -865,23 +897,22 @@ class EbsSimulate:
                 axis = self._rail_axis(addr, neighbour)
                 if axis is None or span <= 0:
                     continue
-                cad_a, cad_b = self._addr_cad[addr], self._addr_cad[neighbour]
-                length = abs(cad_b[axis] - cad_a[axis]) / CAD_PER_UNIT
-                if length > 1e-9:
+                length = self._segment_length(addr, neighbour, axis)
+                if length and length > 1e-9:
                     pairs.append((length, span))
         if not pairs:
+            self._note("no straight segments carry a span, so ports cannot be placed")
             return None
 
         ratios = sorted(span / length for length, span in pairs)
         middle = ratios[len(ratios) // 2]
         spread = (ratios[-1] - ratios[0]) / middle if middle else 0.0
 
-        note = f"offset scale {middle:,.0f} per unit, from {len(pairs)} segments"
-        if abs(middle - OFFSET_PER_UNIT) > OFFSET_PER_UNIT * 0.01:
-            note += f" (not the {OFFSET_PER_UNIT:,.0f} assumed)"
+        note = (f"{len(pairs)} segments: {middle:,.0f} offset per unit typically"
+                f" (the old assumption was {OFFSET_PER_UNIT:,.0f})")
         if spread > 0.01:
-            note += (f"; they range {ratios[0]:,.0f}..{ratios[-1]:,.0f}, "
-                     f"{spread:.1%} apart")
+            note += (f", ranging {ratios[0]:,.0f}..{ratios[-1]:,.0f} - {spread:.1%} "
+                     f"apart, which is why each segment is read on its own")
         self._note(note)
 
         slope, intercept = self._fit_line(pairs)
@@ -889,8 +920,7 @@ class EbsSimulate:
             typical = sorted(span for _, span in pairs)[len(pairs) // 2]
             note = f"fitted span = {slope:,.0f} x length {intercept:+,.0f}"
             if abs(intercept) > abs(typical) * 0.01:
-                note += (f" - the offset is not simply proportional, it carries a "
-                         f"fixed {intercept:+,.0f} on top")
+                note += f" - the spans carry a fixed {intercept:+,.0f} on top"
             self._note(note)
         return middle
 
@@ -912,24 +942,29 @@ class EbsSimulate:
 
     def _chain_span(self, start: int, target: int, axis: int,
                     direction: float) -> "float | None":
-        """Total length from one addr to another, following the rail forwards.
+        """Distance from one addr to another in units, following the rail forwards.
 
         Segments are taken one at a time and only where they stay straight and
         keep going the same way, so a branch turning off is never followed.
         """
+        if start == target:
+            return 0.0
         frontier = [(start, 0.0)]
         seen = {start}
         for _ in range(MAX_HOPS):
             nxt = []
             for addr, total in frontier:
-                for neighbour, span in self._addr_next.get(addr, ()):
+                for neighbour, _ in self._addr_next.get(addr, ()):
                     if neighbour in seen or not self._is_forward(addr, neighbour,
                                                                 axis, direction):
                         continue
+                    length = self._segment_length(addr, neighbour, axis)
+                    if length is None:
+                        continue
                     if neighbour == target:
-                        return total + span
+                        return total + length
                     seen.add(neighbour)
-                    nxt.append((neighbour, total + span))
+                    nxt.append((neighbour, total + length))
             if not nxt:
                 break
             frontier = nxt
@@ -944,23 +979,23 @@ class EbsSimulate:
             return False
         return (cad_b[axis] - cad_a[axis]) * direction > 0
 
-    def _port_spacing(self, key: str, offsets: dict) -> "float | None":
+    def _port_spacing(self, key: str, positions: dict) -> "float | None":
         """Distance between neighbouring ports, averaged over the pairs present.
 
         Two ports give one gap; a third gives a second one and the two are
         averaged. Ports sit at a constant spacing with the lower numbers
-        further from the addr, so each gap is offset(n) - offset(n + 1).
+        further from the addr, so each gap is position(n) - position(n + 1).
         """
-        gaps = [offsets[i] - offsets[i + 1]
-                for i in sorted(offsets) if i + 1 in offsets]
-        if 1 not in offsets or not gaps:
-            print(f"[ebs] {key}: needs the offsets of ports 1 and 2, got {offsets}")
+        gaps = [positions[i] - positions[i + 1]
+                for i in sorted(positions) if i + 1 in positions]
+        if 1 not in positions or not gaps:
+            print(f"[ebs] {key}: needs ports 1 and 2, got {sorted(positions)}")
             return None
 
         spacing = sum(gaps) / len(gaps)
         if spacing <= 0:
             print(f"[ebs] {key}: ports should get closer to the addr as the number "
-                  f"rises, got {offsets}")
+                  f"rises, got {positions}")
         if len(gaps) > 1 and max(gaps) - min(gaps) > 1e-6:
             print(f"[ebs] {key}: port spacing is uneven {gaps}, using {spacing}")
         return spacing
