@@ -18,6 +18,8 @@ CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
 
+SKIP_TYPES = frozenset({"Material", "Shader", "NodeGraph", "GeomSubset", "Camera"})
+
 GEOMETRY_TYPES = frozenset({
     "Mesh", "Points", "BasisCurves", "NurbsCurves",
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
@@ -80,7 +82,6 @@ class EbsSimulate:
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._rail_root: str = ""           # parent path holding the rail prims
-        self._bounds_cache: dict = {}       # prim path -> world aligned Gf.Range3d
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -147,7 +148,6 @@ class EbsSimulate:
         path = (path or "").strip()
         if path != self._search_root:
             self._eqp_index = {}
-            self._bounds_cache = {}
             self._ready = False          # the stage has to be scanned again
         self._search_root = path
 
@@ -164,7 +164,6 @@ class EbsSimulate:
         self._eqp_index = {}
         self._port_map = {}
         self._port_elements = {}
-        self._bounds_cache = {}
         self._mesh_bounds = {}
         self._triangles = {}
         self._visible = {}
@@ -344,18 +343,14 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
 
-        cells = self.check_collision(
-            self._target["ebs"],
-            exclude=[self._target["equipment"], self._target["ebs"]],
-            split=self._target["equipment"],
-        )
+        # Only the EBS is excluded: the equipment it sits on is found mesh by
+        # mesh like anything else, so a part of it sticking out still counts.
+        cells = self.check_collision(self._target["ebs"],
+                                     exclude=[self._target["ebs"]])
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         with self._stage_timer("measure clear faces"):
-            distances = self.measure_faces(
-                self._target["ebs"], cells,
-                exclude=[self._target["equipment"], self._target["ebs"]],
-                split=self._target["equipment"],
-            )
+            distances = self.measure_faces(self._target["ebs"], cells,
+                                           exclude=[self._target["ebs"]])
         for face, found in distances.items():
             if found.get("distance") is None:
                 self._note(f"{face}: clear, nothing within "
@@ -381,7 +376,6 @@ class EbsSimulate:
         """
         stage = self._get_stage()
         self._eqp_index = {}
-        self._bounds_cache = {}
         self._mesh_bounds = {}
         self._triangles = {}
         if stage is None:
@@ -1032,13 +1026,8 @@ class EbsSimulate:
 
     # -- collision -----------------------------------------------------------
 
-    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
-                        split: Usd.Prim = None) -> dict:
-        """Test the left, right and ceiling faces as 3x3 grids.
-
-        `split` is an equipment whose meshes are tested one by one instead of
-        as a single box: the EBS is mounted on it, so its overall bounds always
-        overlap, but individual parts of it can still catch on the faces.
+    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
+        """Test the left, right and ceiling faces as grids of cells.
 
         Faces and cells follow the EBS prim's local axes, named as the front
         camera sees them: right is +X, left is -X, ceiling is +up.
@@ -1071,44 +1060,15 @@ class EbsSimulate:
                 for face, boxes in self._build_cells(local_box).items()
             }
 
-        with self._stage_timer(f"equipment bounds ({len(self._eqp_index)})"):
-            missing = self._cache_bounds(stage, cache)
-
-        with self._stage_timer("broad phase"):
-            # Keep only equipment overlapping the EBS box grown by the clearance.
+        with self._stage_timer("gather nearby"):
+            # Everything within the probe depth of the EBS, found by walking the
+            # stage with the search box culling subtrees as it goes.
             depth = self._probe_depth(local_box)
             margin = Gf.Vec3d(depth, depth, depth)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-            overlapping = [(path, box) for path, box in self._bounds_cache.items()
-                           if not any(path == s or path.startswith(s + "/") for s in skip)
-                           and self._overlaps(box, search)]
-            near = [(path, box) for path, box in overlapping
-                    if self._is_visible(stage, path)]
-            hidden = len(overlapping) - len(near)
-
-        # Narrow down: one box per mesh, then the mesh triangles themselves.
-        # Each pass only sees what the previous one let through.
-        candidates = list(near)
-        if self._precision in (PRECISION_MESH, PRECISION_TRI):
-            with self._stage_timer("mesh bounds"):
-                refined = []
-                for path, _ in near:
-                    prim = stage.GetPrimAtPath(path)
-                    for mesh_path, box in self._geometry_bounds(prim, cache):
-                        if not self._overlaps(box, search):
-                            continue
-                        if not self._is_visible(stage, mesh_path):
-                            hidden += 1
-                            continue
-                        refined.append((mesh_path, box))
-                candidates = refined
+            candidates, visited = self._gather_nearby(stage, cache, search, skip)
         coarse = len(candidates)
-        if split is not None and split.IsValid():
-            candidates += [(path, box)
-                           for path, box in self._geometry_bounds(split, cache)
-                           if self._overlaps(box, search)
-                           and self._is_visible(stage, path)]
 
         size = local_box.GetMax() - local_box.GetMin()
         self._note(f"precision {self._precision}, probe depth {depth:.4f}"
@@ -1119,9 +1079,8 @@ class EbsSimulate:
                    f"(the cells tile exactly this)")
         self._note(f"EBS world box {tuple(round(v, 2) for v in world_box.GetMin())} .. "
                    f"{tuple(round(v, 2) for v in world_box.GetMax())}")
-        self._note(f"{len(self._bounds_cache)} equipment -> {len(near)} near -> "
-                   f"{coarse} candidates + {len(candidates) - coarse} own meshes"
-                   + (f", {hidden} hidden skipped" if hidden else ""))
+        self._note(f"visited {visited} prims, {coarse} meshes within the probe, "
+                   f"skipping {skip}")
 
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * len(boxes) for face, boxes in cells.items()}
@@ -1186,8 +1145,6 @@ class EbsSimulate:
         else:
             self._note("nothing within clearance - raise it if that looks wrong")
 
-        if missing:
-            print(f"[ebs] {missing} equipment prim(s) had no usable bound")
         return result
 
     def _mesh_triangles(self, stage, path: str) -> list:
@@ -1343,6 +1300,39 @@ class EbsSimulate:
                            f"using the measured bound")
         return exact
 
+    def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
+        """Every visible geometry prim whose bounds reach into `search`.
+
+        The stage is walked from the root with the search box culling as it
+        goes: a subtree whose bounds miss the box is skipped whole, which is
+        what keeps this affordable. Nothing here depends on prim names, so
+        walls, ceilings, piping and terrain are found the same way equipment is.
+        """
+        found, visited = [], 0
+        stack = list(stage.GetPseudoRoot().GetChildren())
+        while stack:
+            prim = stack.pop()
+            path = str(prim.GetPath())
+            if path == MARKER_ROOT or path.startswith(MARKER_ROOT + "/"):
+                continue                       # our own markers are not obstacles
+            if any(path == s or path.startswith(s + "/") for s in skip):
+                continue
+            type_name = prim.GetTypeName()
+            if type_name in SKIP_TYPES or type_name.endswith("Light"):
+                continue
+            if not self._is_visible(stage, path):
+                continue                       # hides the whole subtree with it
+
+            visited += 1
+            box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+            if box.IsEmpty() or not self._overlaps(box, search):
+                continue
+            if type_name in GEOMETRY_TYPES:
+                found.append((path, box))
+                continue
+            stack.extend(prim.GetChildren())
+        return found, visited
+
     def _geometry_bounds(self, prim: Usd.Prim, cache) -> list:
         """World bounds of each geometry prim under `prim`, cached per equipment.
 
@@ -1369,26 +1359,6 @@ class EbsSimulate:
             stack.extend(current.GetChildren())
         self._mesh_bounds[key] = bounds
         return bounds
-
-    def _cache_bounds(self, stage, cache) -> int:
-        """Compute and cache the world bound of every equipment prim.
-
-        Equipment does not move, so this is paid once and reused by later runs.
-        """
-        missing = 0
-        for path in self._eqp_index.values():
-            if path in self._bounds_cache:
-                continue
-            prim = stage.GetPrimAtPath(path)
-            if not prim.IsValid():
-                missing += 1
-                continue
-            box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-            if box.IsEmpty():
-                missing += 1
-                continue
-            self._bounds_cache[path] = box
-        return missing
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
         """Cells per face in the prim's local axes, left to right, top to bottom.
@@ -1464,8 +1434,8 @@ class EbsSimulate:
         """Rows and columns of each face's grid, as of the last run."""
         return dict(self._grid_shape)
 
-    def measure_faces(self, ebs_prim: Usd.Prim, cells: dict, exclude: list = None,
-                      split: Usd.Prim = None) -> dict:
+    def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
+                      exclude: list = None) -> dict:
         """For each face with nothing touching it, how far the nearest mesh is.
 
         The measurement runs straight out along the face normal: the face is
@@ -1499,7 +1469,7 @@ class EbsSimulate:
             prism = self._face_prism(local_box, axis, outward, coord, reach)
             world_prism = Gf.BBox3d(prism, to_world).ComputeAlignedRange()
             found = self._nearest_in_prism(stage, cache, prism, world_prism, to_world,
-                                           axis, outward, coord, skip, split)
+                                           axis, outward, coord, skip)
             results[face] = found or {"distance": None, "prim": "", "reach": reach}
         return results
 
@@ -1516,22 +1486,9 @@ class EbsSimulate:
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
     def _nearest_in_prism(self, stage, cache, prism, world_prism, to_world,
-                          axis, outward, coord, skip, split):
+                          axis, outward, coord, skip):
         """Nearest geometry inside the prism, measured along the face normal."""
-        candidates = []
-        sources = list(self._bounds_cache.items())
-        for path, box in sources:
-            if any(path == s or path.startswith(s + "/") for s in skip):
-                continue
-            if not self._overlaps(box, world_prism) or not self._is_visible(stage, path):
-                continue
-            prim = stage.GetPrimAtPath(path)
-            for mesh_path, mesh_box in self._geometry_bounds(prim, cache):
-                if self._overlaps(mesh_box, world_prism) and self._is_visible(stage, mesh_path):
-                    candidates.append((mesh_path, mesh_box))
-        if split is not None and split.IsValid():
-            candidates += [(p, b) for p, b in self._geometry_bounds(split, cache)
-                           if self._overlaps(b, world_prism) and self._is_visible(stage, p)]
+        candidates, _ = self._gather_nearby(stage, cache, world_prism, skip)
         if not candidates:
             return None
 
