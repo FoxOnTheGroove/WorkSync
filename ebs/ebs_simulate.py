@@ -52,8 +52,7 @@ CHECKER_SHADE  = 0.72     # every other cell is shaded, so the grid reads as a g
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
 LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
 LASER_COLOR_0  = (1.0, 0.75, 0.0)   # the virtual port 0 the EBS is placed on
-LASER_RADIUS   = 0.004    # laser radius, as a share of the equipment's bbox diagonal
-LASER_HEIGHT   = 3.0      # laser height, in equipment bbox diagonals
+LASER_RADIUS   = 0.0013   # laser radius, as a share of the equipment's bbox diagonal
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
@@ -106,6 +105,7 @@ class EbsSimulate:
         self._visible: dict = {}            # prim path -> visibility, for one run
         self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
         self._port_world: dict = {}         # port index -> world point, from the last align
+        self._port_rail_z: float = 0.0      # world Z of the rail the ports sit on
         self._face_planes: dict = {}        # face -> (axis, outward, coord, rows, cols)
         self._previous_camera = None        # viewport camera to restore on release
         self._precision: str = PRECISION_TRI
@@ -898,6 +898,7 @@ class EbsSimulate:
         for index, in_rail_space in points.items():
             spot = to_world.Transform(in_rail_space)
             self._port_world[index] = Gf.Vec3d(spot[0], spot[1], anchor_world[2])
+            self._port_rail_z = spot[2]      # the rail's own height, shared by all ports
 
         in_rail_space = points[0]
         world = to_world.Transform(in_rail_space)
@@ -1681,14 +1682,18 @@ class EbsSimulate:
         if not points:
             return 0
 
-        # Sized off the equipment, so the laser reads the same at any scale.
+        # The laser hangs from the rail down to the floor, so it reads against
+        # the equipment below it. Its thickness follows the equipment's size, so
+        # it looks the same whatever the stage's units are.
         box = self._world_range((self._target or {}).get("equipment"))
         if box is None:
             span = 1.0
         else:
             lo, hi = box.GetMin(), box.GetMax()
             span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
-        height = max(span * LASER_HEIGHT, 1e-3)
+        top = self._port_rail_z
+        height = max(abs(top), 1e-3)
+        centre_z = top / 2.0                 # rail at one end, world z 0 at the other
         radius = max(span * LASER_RADIUS, 1e-5)
 
         drawn = 0
@@ -1696,11 +1701,13 @@ class EbsSimulate:
             UsdGeom.Scope.Define(stage, LASER_ROOT)
             for index in sorted(points):
                 colour = LASER_COLOR_0 if index == 0 else LASER_COLOR
+                spot = points[index]
                 self._laser_cylinder(stage, f"{LASER_ROOT}/port_{index}",
-                                     points[index], radius, height, colour)
+                                     Gf.Vec3d(spot[0], spot[1], centre_z),
+                                     radius, height, colour)
                 drawn += 1
         print(f"[ebs] drew {drawn} port lasers under {LASER_ROOT}, "
-              f"radius {radius:.4f}, height {height:.4f}")
+              f"radius {radius:.4f}, rail z {top:.4f} down to 0")
         return drawn
 
     def clear_port_lasers(self) -> None:
