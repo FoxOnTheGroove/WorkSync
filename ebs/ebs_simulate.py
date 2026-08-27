@@ -43,7 +43,7 @@ FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 GRID = 5                 # divisions given to the longest edge; the others get
                          # an integer count that keeps the cells near square
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
-PROBE_RATIO = 0.05       # probe depth, as a share of the EBS's longest edge
+PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
 PRECISION_BBOX = "bbox"      # one box per equipment
 PRECISION_MESH = "mesh"      # one box per mesh
 PRECISION_TRI  = "triangle"  # the mesh triangles themselves
@@ -117,7 +117,13 @@ class EbsSimulate:
         self._clearance = max(0.0, float(value))
 
     def _probe_depth(self, box: Gf.Range3d) -> float:
-        """How far out from each face to look for something in the way."""
+        """How far out from each face still counts as touching it.
+
+        This is a contact tolerance, not a required clearance: it is only wide
+        enough to absorb the gaps and modelling error that come with CAD
+        geometry. Measuring how much room there actually is around the EBS is a
+        separate question, and wants its own, much wider, search.
+        """
         if self._clearance > 0.0:
             return self._clearance
         longest = max(box.GetMax()[i] - box.GetMin()[i] for i in range(3))
