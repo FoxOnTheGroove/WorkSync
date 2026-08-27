@@ -14,9 +14,6 @@ PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
 OFFSET_KEY  = "offset"        # port distance from its addr, along the rail direction
 CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
 CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
-NEXT_KEY    = "next-address"  # addr a NextAddr group points at
-SPAN_KEYS   = ("distance-puls", "distance-plus")   # that segment's length, in offset units
-MAX_HOPS    = 8               # how far along the chain a port may have been written
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
@@ -97,7 +94,6 @@ class EbsSimulate:
         self._port_addr: dict = {}          # "########" -> base addr number
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
-        self._addr_next: dict = {}          # addr number -> [(next addr, span)]
         self._rail_root: str = ""           # parent path holding the rail prims
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
@@ -521,7 +517,6 @@ class EbsSimulate:
         self._port_addr = {}
         self._port_addr_of = {}
         self._addr_cad = {}
-        self._addr_next = {}
         if not self._xml_path:
             return 0
 
@@ -546,31 +541,6 @@ class EbsSimulate:
                 cady = self._as_float(self._key_value(elem, CADY_KEY))
                 if cadx is not None or cady is not None:
                     self._addr_cad[int(m.group(1))] = (cadx or 0.0, cady or 0.0)
-
-            # Each addr lists where it leads and how long that segment is. The
-            # spans are in offset units, so a port written further along the
-            # chain is brought back simply by adding them up.
-            for elem in root.iter():
-                m = addr_pattern.match((elem.get("name", "")
-                                        or elem.tag.rsplit("}", 1)[-1]).strip())
-                if not m:
-                    continue
-                addr = int(m.group(1))
-                links = []
-                for child in list(elem):
-                    target = self._key_value(child, NEXT_KEY)
-                    if not target:
-                        continue
-                    span = None
-                    for key in SPAN_KEYS:
-                        span = self._as_float(self._key_value(child, key))
-                        if span is not None:
-                            break
-                    digits = re.sub(r"[^0-9]", "", str(target))
-                    if digits and span is not None:
-                        links.append((int(digits), span))
-                if links:
-                    self._addr_next[addr] = links
 
             found = {}                       # equipment -> {index: (station, offset, addr)}
             for elem in root.iter():
@@ -821,62 +791,31 @@ class EbsSimulate:
         """Offsets of every port measured from the same addr.
 
         A port's offset is measured from the addr block it is written in, and
-        the lower-numbered ones reach far enough to be written in a later block
-        along the rail. Such an offset is brought back by adding the segments
-        between the two addrs, one hop at a time - the spans are already in
-        offset units, so nothing is converted. Hops only follow straight
-        segments running the same way as the rail.
+        the lower-numbered ports reach far enough to fall into a neighbouring
+        block. Such an offset is shifted by the distance between that addr and
+        the base one, so all of them share an origin again.
         """
         offsets = dict(self._port_offsets.get(key, {}))
         addr_of = self._port_addr_of.get(key, {})
+        base_cad = self._addr_cad.get(base_addr)
+        if base_cad is None:
+            return offsets
 
         for index, offset in list(offsets.items()):
             addr = addr_of.get(index)
             if addr is None or addr == base_addr:
                 continue
-            span = self._chain_span(base_addr, addr, axis, direction)
-            if span is None:
-                print(f"[ebs] {key}: port {index} is in addr {addr}, with no straight "
-                      f"chain from {base_addr} - left as written")
+            cad = self._addr_cad.get(addr)
+            if cad is None:
+                print(f"[ebs] {key}: port {index} sits in addr {addr}, which has no cad")
                 continue
-            offsets[index] = offset + span
+            gap = (cad[axis] - base_cad[axis]) / CAD_PER_UNIT      # signed, in units
+            shift = direction * gap * OFFSET_PER_UNIT
+            offsets[index] = offset + shift
             print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
-                  f"{offset:.1f} + {span:.1f} = {offsets[index]:.1f}")
+                  f"{offset:.1f} {shift:+.1f} = {offsets[index]:.1f} "
+                  f"(addr gap {gap:+.4f} units)")
         return offsets
-
-    def _chain_span(self, start: int, target: int, axis: int,
-                    direction: float) -> "float | None":
-        """Total length from one addr to another, following the rail forwards.
-
-        Segments are taken one at a time and only where they stay straight and
-        keep going the same way, so a branch turning off is never followed.
-        """
-        frontier = [(start, 0.0)]
-        seen = {start}
-        for _ in range(MAX_HOPS):
-            nxt = []
-            for addr, total in frontier:
-                for neighbour, span in self._addr_next.get(addr, ()):
-                    if neighbour in seen or not self._is_forward(addr, neighbour,
-                                                                axis, direction):
-                        continue
-                    if neighbour == target:
-                        return total + span
-                    seen.add(neighbour)
-                    nxt.append((neighbour, total + span))
-            if not nxt:
-                break
-            frontier = nxt
-        return None
-
-    def _is_forward(self, a: int, b: int, axis: int, direction: float) -> bool:
-        """Whether the segment a -> b runs straight along the rail's own way."""
-        if self._rail_axis(a, b) != axis:
-            return False
-        cad_a, cad_b = self._addr_cad.get(a), self._addr_cad.get(b)
-        if cad_a is None or cad_b is None:
-            return False
-        return (cad_b[axis] - cad_a[axis]) * direction > 0
 
     def _port_spacing(self, key: str, offsets: dict) -> "float | None":
         """Distance between neighbouring ports, averaged over the pairs present.
