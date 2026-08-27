@@ -41,6 +41,7 @@ class EbsDummyUI:
         self._ebs2_field = None
         self._ebs3_field = None
         self._precision = None
+        self._scale = None
         self._root_field = None
         self._rail_field = None
         self._eqp_field = None
@@ -66,6 +67,11 @@ class EbsDummyUI:
                     ui.Label("Precision:", width=90)
                     self._precision = ui.ComboBox(2, "bbox", "mesh", "triangle",
                                                   width=90)
+                    ui.Label("Offset:", width=48)
+                    # How an offset becomes a distance: one scale everywhere, or
+                    # each segment's length over its own distance-puls.
+                    self._scale = ui.ComboBox(0, "fixed 100000", "length / puls",
+                                              width=110)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -188,6 +194,7 @@ class EbsDummyUI:
             self._eqp_field.model.get_value_as_string()))
 
     def _on_align(self):
+        self._apply_settings()
         self._render(EbsSimulateService.align())
 
     def _on_camera(self):
@@ -214,6 +221,9 @@ class EbsDummyUI:
         modes = ("bbox", "mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_precision(modes[max(0, min(index, 2))])
+        scales = ("fixed", "puls")
+        index = self._scale.model.get_item_value_model().get_value_as_int()
+        EbsSimulateService.set_offset_scale(scales[max(0, min(index, 1))])
 
     # -- display -------------------------------------------------------------
 

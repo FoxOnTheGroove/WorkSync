@@ -14,9 +14,17 @@ PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
 OFFSET_KEY  = "offset"        # port distance from its addr, along the rail direction
 CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
 CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
+NEXT_KEY    = "next-address"  # addr a NextAddr block leads to
+PULS_KEY    = "distance-puls"  # length of that segment, in offset units
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
+
+# The two ways of turning an offset into a distance, to be compared against
+# each other in the scene.
+SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
+SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
+SCALE_MODES = (SCALE_FIXED, SCALE_PULS)
 
 def _children(prim):
     """Children of a prim, instance proxies included.
@@ -99,6 +107,8 @@ class EbsSimulate:
         self._port_addr: dict = {}          # "########" -> base addr number
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
+        self._addr_next: dict = {}          # addr number -> [(next addr, distance-puls)]
+        self._offset_scale: str = SCALE_FIXED   # how an offset becomes a distance
         self._rail_root: str = ""           # parent path holding the rail prims
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
@@ -158,6 +168,17 @@ class EbsSimulate:
             self._precision = mode
         else:
             print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
+
+    def set_offset_scale(self, mode: str) -> None:
+        """Pick how an offset turns into a distance.
+
+        'fixed' divides by OFFSET_PER_UNIT everywhere. 'puls' takes the scale
+        from the segment the port is written in - its length over its
+        distance-puls - so a port that spilled into the next addr is measured
+        with that addr's own puls.
+        """
+        mode = (mode or "").strip().lower()
+        self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
@@ -533,6 +554,7 @@ class EbsSimulate:
         self._port_addr = {}
         self._port_addr_of = {}
         self._addr_cad = {}
+        self._addr_next = {}
         if not self._xml_path:
             return 0
 
@@ -555,8 +577,21 @@ class EbsSimulate:
                     continue
                 cadx = self._as_float(self._key_value(elem, CADX_KEY))
                 cady = self._as_float(self._key_value(elem, CADY_KEY))
+                number = int(m.group(1))
                 if cadx is not None or cady is not None:
-                    self._addr_cad[int(m.group(1))] = (cadx or 0.0, cady or 0.0)
+                    self._addr_cad[number] = (cadx or 0.0, cady or 0.0)
+                # An addr can lead to several others; each NextAddr block names
+                # the addr it reaches and how long the run to it is, in offsets.
+                steps = []
+                for child in elem.iter():
+                    if child is elem:
+                        continue
+                    target = self._as_float(self._key_value(child, NEXT_KEY))
+                    puls = self._as_float(self._key_value(child, PULS_KEY))
+                    if target is not None and puls is not None:
+                        steps.append((int(target), puls))
+                if steps:
+                    self._addr_next[number] = steps
 
             found = {}                       # equipment -> {index: (station, offset, addr)}
             for elem in root.iter():
@@ -738,6 +773,23 @@ class EbsSimulate:
         moves = [i for i in (0, 1) if abs(span[i]) > 1e-6]
         return moves[0] if len(moves) == 1 else None
 
+    def _addr_step(self, addr: int, axis: int):
+        """(length in units, distance-puls) of the straight run leaving an addr.
+
+        An addr can lead several ways; only the one that moves on a single cad
+        axis, the same one the rail runs along, is the run the ports sit on.
+        """
+        cad = self._addr_cad.get(addr)
+        if cad is None:
+            return None
+        for target, puls in self._addr_next.get(addr, []):
+            if not puls or puls <= 0 or self._rail_axis(addr, target) != axis:
+                continue
+            length = (self._addr_cad[target][axis] - cad[axis]) / CAD_PER_UNIT
+            if abs(length) > 1e-9:
+                return abs(length), puls
+        return None
+
     def compute_rail_point(self, stage: Usd.Stage, eqp_id: str):
         """Where the virtual port 0 sits, in the rail's own space.
 
@@ -784,44 +836,112 @@ class EbsSimulate:
         length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
         direction = 1.0 if length >= 0 else -1.0
 
-        offsets = self._rebase_offsets(key, addr_a, axis, direction)
-        spacing = self._port_spacing(key, offsets)
-        if spacing is None:
-            return None
         rail_local = self._local_translation(rail)
         start = rail_local[axis] - length / 2.0              # rail start = addr position
-        offset_zero = offsets[1] + spacing                   # one step past port 1
-        shift = direction * offset_zero / OFFSET_PER_UNIT
-
-        # Every port sits on the rail the same way: its offset walks along the
-        # rail axis from the start point, and the other axes keep the rail's own
-        # value. Port 0 is the one the EBS goes on; 1..n are there to be checked.
-        all_offsets = dict(offsets)
-        all_offsets[0] = offset_zero
-        points = {}
-        for index, offset in all_offsets.items():
-            coords = [rail_local[0], rail_local[1], rail_local[2]]
-            coords[axis] = start + direction * offset / OFFSET_PER_UNIT
-            points[index] = Gf.Vec3d(*coords)
-        point = points[0]
 
         name = "XY"[axis]
-        gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
-                for i in sorted(offsets) if i + 1 in offsets]
         print(f"[ebs] {key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
         print(f"[ebs]   cad {cad_a} -> {cad_b}, span ({span[0]:+.3f}, {span[1]:+.3f})"
               f" -> runs along {name}, direction {direction:+.0f}")
         print(f"[ebs]   length {span[axis]:+.3f} / {CAD_PER_UNIT:.4f} = {length:+.4f} units")
         print(f"[ebs]   rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
               f"= start {start:.4f}")
+        print(f"[ebs]   offset scale: {self._offset_scale}")
+
+        if self._offset_scale == SCALE_PULS:
+            along = self._coords_by_puls(key, axis, direction, start, addr_a)
+        else:
+            along = self._coords_by_offset(key, axis, direction, start, addr_a)
+        if along is None:
+            return None
+
+        # The rail axis carries the ports; the other two keep the rail's own
+        # value. Port 0 is the one the EBS goes on; 1..n are there to be checked.
+        points = {}
+        for index, coord in along.items():
+            coords = [rail_local[0], rail_local[1], rail_local[2]]
+            coords[axis] = coord
+            points[index] = Gf.Vec3d(*coords)
+        print(f"[ebs]   {name.lower()} = " +
+              ", ".join(f"{i}:{along[i]:.4f}" for i in sorted(along)) +
+              " (rail's other axes kept)")
+        return points, axis, rail
+
+    def _coords_by_offset(self, key: str, axis: int, direction: float,
+                          start: float, addr_a: int) -> "dict | None":
+        """Port positions with one scale for the whole plant.
+
+        Offsets written in a neighbouring addr are pulled back to this one, the
+        spacing is read off the offsets themselves, and port 0 is one spacing
+        past port 1. Everything divides by the same OFFSET_PER_UNIT.
+        """
+        offsets = self._rebase_offsets(key, addr_a, axis, direction)
+        spacing = self._port_spacing(key, offsets)
+        if spacing is None:
+            return None
+        offset_zero = offsets[1] + spacing                   # one step past port 1
+
+        gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
+                for i in sorted(offsets) if i + 1 in offsets]
         print(f"[ebs]   offsets " +
               ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
               f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
         print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
               f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
-        print(f"[ebs]   {name.lower()} = {start:.4f} {shift:+.4f} = {point[axis]:.4f}"
-              f" (rail's other axes kept)")
-        return points, axis, rail
+
+        all_offsets = dict(offsets)
+        all_offsets[0] = offset_zero
+        return {index: start + direction * offset / OFFSET_PER_UNIT
+                for index, offset in all_offsets.items()}
+
+    def _coords_by_puls(self, key: str, axis: int, direction: float,
+                        start: float, addr_a: int) -> "dict | None":
+        """Port positions with each segment's own scale.
+
+        A segment's distance-puls is its length in offset units, so its length
+        over its puls turns an offset into a distance. A port that spilled into
+        the next addr is measured from that addr, with that addr's own puls.
+        Port 0 is one step past port 1, taken in units rather than in offsets
+        because the two can sit on segments of different scales.
+        """
+        offsets = self._port_offsets.get(key, {})
+        addr_of = self._port_addr_of.get(key, {})
+        base_cad = self._addr_cad.get(addr_a)
+        if 1 not in offsets or base_cad is None:
+            print(f"[ebs] {key}: needs the offset of port 1, got {offsets}")
+            return None
+
+        along = {}
+        for index in sorted(offsets):
+            offset = offsets[index]
+            addr = addr_of.get(index, addr_a)
+            cad = self._addr_cad.get(addr)
+            if offset is None or cad is None:
+                print(f"[ebs] {key}: port {index} has no offset or no addr cad")
+                return None
+            step = self._addr_step(addr, axis)
+            if step is None:
+                print(f"[ebs] {key}: addr {addr} has no straight {PULS_KEY} run, "
+                      f"falling back to {OFFSET_PER_UNIT:.0f} per unit")
+                seg_length, puls = 1.0, OFFSET_PER_UNIT
+            else:
+                seg_length, puls = step
+            # The addr's own place on the rail, then the offset in its scale.
+            addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
+            along[index] = addr_start + direction * offset * seg_length / puls
+            print(f"[ebs]   port {index} @ addr {addr}: {offset:.1f} x "
+                  f"{seg_length:.4f}/{puls:.0f} = "
+                  f"{offset * seg_length / puls:+.4f} units from {addr_start:.4f}")
+
+        steps = [along[i] - along[i + 1] for i in sorted(along) if i + 1 in along]
+        if not steps:
+            print(f"[ebs] {key}: needs at least two ports to step past port 1")
+            return None
+        pitch = sum(steps) / len(steps)
+        along[0] = along[1] + pitch
+        print(f"[ebs]   pitch " + ", ".join(f"{s:.4f}" for s in steps) +
+              f" -> {pitch:.4f} units, port 0 at {along[0]:.4f}")
+        return along
 
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:

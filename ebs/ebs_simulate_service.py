@@ -39,6 +39,10 @@ class EbsSimulateService:
         return cls._simulate.set_precision(mode)
 
     @classmethod
+    def set_offset_scale(cls, mode):
+        return cls._simulate.set_offset_scale(mode)
+
+    @classmethod
     def set_rail_root(cls, path):
         return cls._simulate.set_rail_root(path)
 
