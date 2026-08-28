@@ -926,7 +926,8 @@ class EbsSimulate:
 
         With slide, a station's own slide comes off its offset before any of
         that, so the port is measured from where the station sits rather than
-        from where it was addressed.
+        from where it was addressed. The slide is written at the plain
+        OFFSET_PER_UNIT, so it is scaled into the segment's own puls first.
         """
         offsets = self._port_offsets.get(key, {})
         slides = self._port_slides.get(key, {}) if slide else {}
@@ -944,15 +945,6 @@ class EbsSimulate:
             if offset is None or cad is None:
                 print(f"[ebs] {key}: port {index} has no offset or no addr cad")
                 return None
-            if slide:
-                shift = slides.get(index)
-                if shift is None:
-                    self._blocked = f"{key}: port {index} has no {SLIDE_KEY} value"
-                    print(f"[ebs] {self._blocked}")
-                    return None
-                print(f"[ebs]   port {index} slide: {offset:.1f} - {shift:.1f} = "
-                      f"{offset - shift:.1f}")
-                offset -= shift
             step = self._addr_step(addr, axis)
             if step is None:
                 # Every addr a port is written in has a run leaving it. Standing
@@ -963,6 +955,20 @@ class EbsSimulate:
                 print(f"[ebs] {self._blocked}")
                 return None
             seg_length, puls = step
+            if slide:
+                shift = slides.get(index)
+                if shift is None:
+                    self._blocked = f"{key}: port {index} has no {SLIDE_KEY} value"
+                    print(f"[ebs] {self._blocked}")
+                    return None
+                # The slide is read at the plain 100000, so it is brought into
+                # the segment's own scale before it comes off the offset.
+                nominal = seg_length * OFFSET_PER_UNIT
+                scaled = shift * puls / nominal
+                print(f"[ebs]   port {index} slide: {shift:.1f} x {puls:.0f}/"
+                      f"{nominal:.0f} = {scaled:.1f}, {offset:.1f} - {scaled:.1f}"
+                      f" = {offset - scaled:.1f}")
+                offset -= scaled
             # The addr's own place on the rail, then the offset in its scale.
             addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             walk = offset * seg_length / puls
