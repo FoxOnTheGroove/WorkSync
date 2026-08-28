@@ -107,6 +107,14 @@ class EbsSimulateService:
         return cls._simulate.clear_port_lasers()
 
     @classmethod
+    def sweep_ports(cls, limit=0):
+        return cls._simulate.sweep_ports(limit)
+
+    @classmethod
+    def clear_sweep(cls):
+        return cls._simulate.clear_sweep()
+
+    @classmethod
     def get_result(cls):
         return cls._simulate.get_result()
 

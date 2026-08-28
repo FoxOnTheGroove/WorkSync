@@ -1,8 +1,9 @@
+import io
 import math
 import re
 import time
 import xml.etree.ElementTree as ET
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
@@ -62,6 +63,11 @@ LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
 LASER_COLOR_0  = (1.0, 0.75, 0.0)   # the virtual port 0 the EBS is placed on
 LASER_RADIUS   = 0.0013   # laser radius, as a share of the equipment's bbox diagonal
 
+SWEEP_ROOT     = "/EbsPortSweep"    # port-1 lasers for every equipment at once
+SWEEP_COLOR    = (0.2, 0.6, 1.0)
+SWEEP_RADIUS   = 0.012    # stage units: no geometry is read, so this is fixed
+SWEEP_DROP     = 2.0      # how far below the rail each one hangs
+
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -111,6 +117,7 @@ class EbsSimulate:
         self._offset_scale: str = SCALE_FIXED   # how an offset becomes a distance
         self._rail_nudge: float = 0.0       # units to slide every port along the rail
         self._rail_root: str = ""           # parent path holding the rail prims
+        self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -196,6 +203,7 @@ class EbsSimulate:
 
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
+        self._rail_index = None
         self._rail_root = (path or "").strip()
 
     def set_search_root(self, path: str) -> None:
@@ -217,6 +225,7 @@ class EbsSimulate:
         self.release_camera()
         self.clear_markers()
         self.clear_port_lasers()
+        self.clear_sweep()
         self._eqp_index = {}
         self._port_map = {}
         self._port_elements = {}
@@ -301,6 +310,67 @@ class EbsSimulate:
         """Step 3: run the collision check for the aligned EBS."""
         self._begin()
         return self._do_collide()
+
+    def sweep_ports(self, limit: int = 0) -> dict:
+        """Drop a laser on port 1 of every equipment under the search root.
+
+        A whole-plant look at whether the port positions land where the real
+        ports are, without walking the steps one equipment at a time. Only port
+        1 is drawn: one prim per equipment keeps the scene light.
+
+        Nothing is read off the geometry - no bounds, no anchor descent - so
+        the cost is the arithmetic and one prim each. The per-equipment
+        diagnostics are swallowed apart from the first, since a few thousand
+        lines is itself enough to lock the app up.
+        """
+        self._begin()
+        if not self._ready:
+            return self._payload(False, "Run Init first")
+        stage = self._get_stage()
+        if stage is None:
+            return self._payload(False, "No stage open")
+
+        names = sorted(self._eqp_index)
+        if limit and limit > 0:
+            names = names[:int(limit)]
+
+        spots, failed = {}, []
+        parents = {}                         # rail parent path -> its world matrix
+        with self._stage_timer(f"port 1 of {len(names)} equipment"):
+            for position, name in enumerate(names):
+                eqp_id = name[len(EQP_PREFIX):] if name.startswith(EQP_PREFIX) else name
+                quiet = io.StringIO()
+                try:
+                    # The first one keeps its log, so the numbers can be read.
+                    if position == 0:
+                        found = self.compute_port_points(stage, eqp_id)
+                    else:
+                        with redirect_stdout(quiet):
+                            found = self.compute_port_points(stage, eqp_id)
+                except Exception as e:
+                    found, _ = None, failed.append(f"{eqp_id}: {e}")
+                if found is None:
+                    failed.append(eqp_id)
+                    continue
+                points, _, rail = found
+                if 1 not in points:
+                    failed.append(f"{eqp_id}: no port 1")
+                    continue
+                parent = rail.GetParent()
+                key = str(parent.GetPath()) if parent else ""
+                if key not in parents:
+                    parents[key] = self._parent_world(rail)
+                spots[eqp_id] = parents[key].Transform(points[1])
+
+        self._blocked = ""                   # a bad equipment does not stop the sweep
+        with self._stage_timer("draw sweep"):
+            drawn = self.show_sweep(spots)
+        self._note(f"port 1 drawn for {drawn} of {len(names)} equipment")
+        if failed:
+            self._note(f"{len(failed)} skipped: {', '.join(failed[:8])}"
+                       + (" ..." if len(failed) > 8 else ""))
+        return self._payload(drawn > 0, f"{drawn} port-1 laser(s)"
+                             if drawn else "Nothing drawn")
 
     def simulate(self, equipment: str = "") -> dict:
         """Run every step in order. Init has to have run first."""
@@ -447,6 +517,7 @@ class EbsSimulate:
         """
         stage = self._get_stage()
         self._eqp_index = {}
+        self._rail_index = None
         self._mesh_bounds = {}
         self._triangles = {}
         if stage is None:
@@ -727,24 +798,7 @@ class EbsSimulate:
         blocks, the rail running towards those is the one to take.
         """
         prefix = f"{RAIL_PREFIX}{addr_number}_"
-
-        def neighbour_of(prim):
-            name = prim.GetName().lower()
-            if not name.startswith(prefix):
-                return None
-            parts = name.split("_")
-            return int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else None
-
-        found = []
-        root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
-        if root is not None and root.IsValid():
-            found = [(p, n) for p in _children(root)
-                     if (n := neighbour_of(p)) is not None]
-            if not found:
-                print(f"[ebs] no {prefix}* under {self._rail_root}, scanning the stage")
-        if not found:
-            found = [(p, n) for p, _ in self._walk(stage)
-                     if (n := neighbour_of(p)) is not None]
+        found = self._rails_from(stage, addr_number)
         if not found:
             return None, None, None
 
@@ -780,6 +834,33 @@ class EbsSimulate:
             print(f"[ebs] {prefix}*: several straight rails "
                   f"{[(p.GetName(), n) for p, n, _ in straight]}, taking the first")
         return straight[0]
+
+    def _rails_from(self, stage: Usd.Stage, addr_number: int) -> list:
+        """Rails leaving one addr, as [(prim, neighbour addr)].
+
+        The rails are read once into an index keyed by their starting addr.
+        Scanning them per equipment is what a sweep over the whole plant cannot
+        afford: the same few thousand prims would be walked hundreds of times.
+        """
+        if self._rail_index is None:
+            self._rail_index = {}
+            root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
+            if root is not None and root.IsValid():
+                source = _children(root)
+            else:
+                if self._rail_root:
+                    print(f"[ebs] no rails under {self._rail_root}, scanning the stage")
+                source = (p for p, _ in self._walk(stage))
+            for prim in source:
+                parts = prim.GetName().lower().split("_")
+                if len(parts) < 3 or parts[0] != RAIL_PREFIX[:-1]:
+                    continue
+                if not (parts[1].isdigit() and parts[2].isdigit()):
+                    continue
+                self._rail_index.setdefault(int(parts[1]), []).append(
+                    (prim, int(parts[2])))
+            print(f"[ebs] indexed rails leaving {len(self._rail_index)} addrs")
+        return self._rail_index.get(addr_number, [])
 
     def _rail_axis(self, addr_a: int, addr_b: int) -> "int | None":
         """Axis a rail runs along, or None when it is not straight.
@@ -1868,6 +1949,40 @@ class EbsSimulate:
         print(f"[ebs] drew {drawn} port lasers under {LASER_ROOT}, "
               f"radius {radius:.4f}, rail z {top:.4f} down to the EBS z")
         return drawn
+
+    def show_sweep(self, spots: dict) -> int:
+        """One cylinder per equipment, hanging below the rail at its port 1.
+
+        Authored in a single change block: a few hundred prims announced one at
+        a time is what makes the app crawl.
+        """
+        stage = self._get_stage()
+        if stage is None:
+            return 0
+        self.clear_sweep()
+        if not spots:
+            return 0
+
+        drawn = 0
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            with Sdf.ChangeBlock():
+                UsdGeom.Scope.Define(stage, SWEEP_ROOT)
+                for name, spot in spots.items():
+                    centre = Gf.Vec3d(spot[0], spot[1], spot[2] - SWEEP_DROP / 2.0)
+                    self._laser_cylinder(stage, f"{SWEEP_ROOT}/{name}", centre,
+                                         SWEEP_RADIUS, SWEEP_DROP, SWEEP_COLOR)
+                    drawn += 1
+        print(f"[ebs] drew {drawn} port-1 lasers under {SWEEP_ROOT}")
+        return drawn
+
+    def clear_sweep(self) -> None:
+        """Remove the lasers the previous sweep drew."""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if stage.GetPrimAtPath(SWEEP_ROOT).IsValid():
+                stage.RemovePrim(SWEEP_ROOT)
 
     def clear_port_lasers(self) -> None:
         """Remove the lasers drawn by the previous run."""
