@@ -24,7 +24,10 @@ RAIL_PREFIX = "rail_"
 # each other in the scene.
 SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
 SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
-SCALE_MODES = (SCALE_FIXED, SCALE_PULS)
+SCALE_TRIM  = "trim"    # the same, pulled back by the segment's shortfall:
+                        # how far its distance-puls falls short of the
+                        # OFFSET_PER_UNIT the segment's length calls for
+SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_TRIM)
 
 def _children(prim):
     """Children of a prim, instance proxies included.
@@ -176,7 +179,8 @@ class EbsSimulate:
         'fixed' divides by OFFSET_PER_UNIT everywhere. 'puls' takes the scale
         from the segment the port is written in - its length over its
         distance-puls - so a port that spilled into the next addr is measured
-        with that addr's own puls.
+        with that addr's own puls. 'trim' is 'puls' pulled back towards the
+        start by the segment's shortfall.
         """
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
@@ -856,8 +860,9 @@ class EbsSimulate:
               f"= start {start:.4f}")
         print(f"[ebs]   offset scale: {self._offset_scale}")
 
-        if self._offset_scale == SCALE_PULS:
-            along = self._coords_by_puls(key, axis, direction, start, addr_a)
+        if self._offset_scale in (SCALE_PULS, SCALE_TRIM):
+            along = self._coords_by_puls(key, axis, direction, start, addr_a,
+                                         trim=self._offset_scale == SCALE_TRIM)
         else:
             along = self._coords_by_offset(key, axis, direction, start, addr_a)
         if along is None:
@@ -903,7 +908,7 @@ class EbsSimulate:
                 for index, offset in all_offsets.items()}
 
     def _coords_by_puls(self, key: str, axis: int, direction: float,
-                        start: float, addr_a: int) -> "dict | None":
+                        start: float, addr_a: int, trim: bool = False) -> "dict | None":
         """Port positions with each segment's own scale.
 
         A segment's distance-puls is its length in offset units, so its length
@@ -911,6 +916,11 @@ class EbsSimulate:
         the next addr is measured from that addr, with that addr's own puls.
         Port 0 is one step past port 1, taken in units rather than in offsets
         because the two can sit on segments of different scales.
+
+        With trim, each port is then pulled back towards the start by its own
+        segment's shortfall: the OFFSET_PER_UNIT its length calls for, less the
+        distance-puls it actually carries. The shortfall is a property of the
+        segment, so ports sharing one move together.
         """
         offsets = self._port_offsets.get(key, {})
         addr_of = self._port_addr_of.get(key, {})
@@ -939,10 +949,18 @@ class EbsSimulate:
             seg_length, puls = step
             # The addr's own place on the rail, then the offset in its scale.
             addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
-            along[index] = addr_start + direction * offset * seg_length / puls
+            walk = offset * seg_length / puls
+            note = ""
+            if trim:
+                shortfall = (seg_length * OFFSET_PER_UNIT - puls) / OFFSET_PER_UNIT
+                walk -= shortfall
+                note = (f" - ({seg_length:.4f}x{OFFSET_PER_UNIT:.0f} - {puls:.0f})"
+                        f"/{OFFSET_PER_UNIT:.0f} = {-shortfall:+.4f}")
+            along[index] = addr_start + direction * walk
             print(f"[ebs]   port {index} @ addr {addr}: {offset:.1f} x "
                   f"{seg_length:.4f}/{puls:.0f} = "
-                  f"{offset * seg_length / puls:+.4f} units from {addr_start:.4f}")
+                  f"{offset * seg_length / puls:+.4f}{note} -> {walk:+.4f} units "
+                  f"from {addr_start:.4f}")
 
         steps = [along[i] - along[i + 1] for i in sorted(along) if i + 1 in along]
         if not steps:
