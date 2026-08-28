@@ -64,9 +64,8 @@ LASER_COLOR_0  = (1.0, 0.75, 0.0)   # the virtual port 0 the EBS is placed on
 LASER_RADIUS   = 0.0013   # laser radius, as a share of the equipment's bbox diagonal
 
 SWEEP_ROOT     = "/EbsPortSweep"    # port-1 lasers for every equipment at once
-SWEEP_COLOR    = (0.2, 0.6, 1.0)
-SWEEP_RADIUS   = 0.012    # stage units: no geometry is read, so this is fixed
-SWEEP_DROP     = 2.0      # how far below the rail each one hangs
+SWEEP_COLOR_PORT = LASER_COLOR      # where port 1 is worked out to be
+SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
@@ -322,17 +321,19 @@ class EbsSimulate:
         self._begin()
         return self._do_collide()
 
-    def sweep_ports(self, limit: int = 0) -> dict:
-        """Drop a laser on port 1 of every equipment under the search root.
+    def sweep_ports(self) -> dict:
+        """Draw every equipment's port 1 and its own position, side by side.
 
         A whole-plant look at whether the port positions land where the real
-        ports are, without walking the steps one equipment at a time. Only port
-        1 is drawn: one prim per equipment keeps the scene light.
+        ports are, without walking the steps one equipment at a time. Two
+        cylinders each, both running from the rail down to the equipment's own
+        z: a red one where port 1 is worked out to be, and a green one at the
+        equipment itself. The gap between the pair is the error, at a glance.
 
-        Nothing is read off the geometry - no bounds, no anchor descent - so
-        the cost is the arithmetic and one prim each. The per-equipment
-        diagnostics are swallowed apart from the first, since a few thousand
-        lines is itself enough to lock the app up.
+        No bounds are read per equipment - the thickness is taken from the
+        first one and used for the lot - and the diagnostics are swallowed
+        apart from the first equipment's, since a few thousand console lines is
+        itself enough to lock the app up.
         """
         self._begin()
         if not self._ready:
@@ -342,11 +343,9 @@ class EbsSimulate:
             return self._payload(False, "No stage open")
 
         names = sorted(self._eqp_index)
-        if limit and limit > 0:
-            names = names[:int(limit)]
-
         spots, failed = {}, []
         parents = {}                         # rail parent path -> its world matrix
+        tc = Usd.TimeCode.Default()
         with self._stage_timer(f"port 1 of {len(names)} equipment"):
             for position, name in enumerate(names):
                 eqp_id = name[len(EQP_PREFIX):] if name.startswith(EQP_PREFIX) else name
@@ -368,7 +367,18 @@ class EbsSimulate:
                     key = str(parent.GetPath()) if parent else ""
                     if key not in parents:
                         parents[key] = self._parent_world(rail)
-                    spots[eqp_id] = parents[key].Transform(points[1])
+                    port = parents[key].Transform(points[1])
+
+                    # Where the equipment itself is: the same child 6 the EBS
+                    # takes its z from, so both cylinders end on it.
+                    prim = stage.GetPrimAtPath(self._eqp_index[name])
+                    anchor = self._descend_first_child(prim, ANCHOR_DEPTH)
+                    if anchor is None or not anchor.IsValid():
+                        failed.append((eqp_id, f"no child {ANCHOR_DEPTH} to sit on"))
+                        continue
+                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+                        tc).ExtractTranslation()
+                    spots[eqp_id] = (port, here)
                 except Exception as e:
                     # One equipment must never take the sweep down with it.
                     failed.append((eqp_id, f"{type(e).__name__}: {e}"))
@@ -379,7 +389,8 @@ class EbsSimulate:
                 drawn = self.show_sweep(spots)
             except Exception as e:
                 return self._payload(False, f"Could not draw the sweep: {e}")
-        self._note(f"port 1 drawn for {drawn} of {len(names)} equipment")
+        self._note(f"port 1 and equipment drawn for {drawn} of "
+                   f"{len(names)} equipment")
         # Grouped by reason: hundreds of equipment failing the same way is one
         # thing to look at, not hundreds.
         grouped = {}
@@ -388,7 +399,7 @@ class EbsSimulate:
         for why, skipped in sorted(grouped.items(), key=lambda kv: -len(kv[1])):
             self._note(f"{len(skipped)} skipped, {why}: " + ", ".join(skipped[:6])
                        + (" ..." if len(skipped) > 6 else ""))
-        return self._payload(drawn > 0, f"{drawn} port-1 laser(s)"
+        return self._payload(drawn > 0, f"{drawn} equipment swept"
                              if drawn else "Nothing drawn")
 
     def simulate(self, equipment: str = "") -> dict:
@@ -1969,10 +1980,11 @@ class EbsSimulate:
         return drawn
 
     def show_sweep(self, spots: dict) -> int:
-        """One cylinder per equipment, hanging below the rail at its port 1.
+        """Two cylinders per equipment: its port 1, and the equipment itself.
 
-        Authored in a single change block: a few hundred prims announced one at
-        a time is what makes the app crawl.
+        Both run from the rail down to the equipment's own z, so they are the
+        same length and only their xy differs - which is exactly the error
+        being looked for.
         """
         stage = self._get_stage()
         if stage is None:
@@ -1981,20 +1993,39 @@ class EbsSimulate:
         if not spots:
             return 0
 
+        # One bound, for the whole sweep: the same thickness the single-
+        # equipment lasers get, without paying for it hundreds of times.
+        radius = 0.0
+        for name in spots:
+            box = self._world_range(stage.GetPrimAtPath(self._eqp_index.get(
+                EQP_PREFIX + name, "")))
+            if box is not None:
+                lo, hi = box.GetMin(), box.GetMax()
+                radius = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
+                radius *= LASER_RADIUS
+                break
+        radius = max(radius, 1e-5)
+
         drawn, refused = 0, []
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, SWEEP_ROOT)
-            for name, spot in spots.items():
-                centre = Gf.Vec3d(spot[0], spot[1], spot[2] - SWEEP_DROP / 2.0)
-                path = f"{SWEEP_ROOT}/{self._prim_name(name)}"
+            for name, (port, here) in spots.items():
+                top, bottom = port[2], here[2]      # rail down to the equipment
+                height = max(abs(top - bottom), 1e-3)
+                middle = (top + bottom) / 2.0
+                stem = self._prim_name(name)
                 try:
-                    self._laser_cylinder(stage, path, centre, SWEEP_RADIUS,
-                                         SWEEP_DROP, SWEEP_COLOR)
+                    self._laser_cylinder(stage, f"{SWEEP_ROOT}/{stem}_port",
+                                         Gf.Vec3d(port[0], port[1], middle),
+                                         radius, height, SWEEP_COLOR_PORT)
+                    self._laser_cylinder(stage, f"{SWEEP_ROOT}/{stem}_eqp",
+                                         Gf.Vec3d(here[0], here[1], middle),
+                                         radius, height, SWEEP_COLOR_EQP)
                 except Exception as e:
                     refused.append(f"{name}: {e}")
                     continue
                 drawn += 1
-        print(f"[ebs] drew {drawn} port-1 lasers under {SWEEP_ROOT}")
+        print(f"[ebs] drew {drawn} pairs under {SWEEP_ROOT}, radius {radius:.4f}")
         if refused:
             self._note(f"{len(refused)} could not be drawn: "
                        + ", ".join(refused[:4]))

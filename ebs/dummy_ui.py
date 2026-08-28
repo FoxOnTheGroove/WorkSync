@@ -43,7 +43,6 @@ class EbsDummyUI:
         self._precision = None
         self._scale = None
         self._nudge_field = None
-        self._sweep_limit = None
         self._root_field = None
         self._rail_field = None
         self._eqp_field = None
@@ -98,13 +97,9 @@ class EbsDummyUI:
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
 
                 with ui.HStack(height=26, spacing=4):
-                    ui.Button("Port 1 sweep", width=110, clicked_fn=self._on_sweep)
-                    ui.Label("Max:", width=32)
-                    # 0 is every equipment. Start small: one prim each, but the
-                    # search root can hold hundreds.
-                    self._sweep_limit = ui.IntField(width=60)
-                    self._sweep_limit.model.set_value(50)
-                    ui.Spacer()
+                    # Every equipment under the search root, in one go: red
+                    # where port 1 lands, green where the equipment sits.
+                    ui.Button("Port 1 sweep", clicked_fn=self._on_sweep)
 
                 self._status_label = ui.Label("Ready", height=20)
                 self._info_label = ui.Label("", height=20,
@@ -216,8 +211,7 @@ class EbsDummyUI:
 
     def _on_sweep(self):
         self._apply_settings()
-        self._render(EbsSimulateService.sweep_ports(
-            self._sweep_limit.model.get_value_as_int()))
+        self._render(EbsSimulateService.sweep_ports())
 
     def _on_clear_markers(self):
         EbsSimulateService.clear_markers()
