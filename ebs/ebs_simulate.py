@@ -887,12 +887,18 @@ class EbsSimulate:
         if along is None:
             return None
 
+        # What a constant shift on every port would have to match, if the
+        # origin is what is wrong: the rail prim not being the segment's
+        # midpoint, or the addr being its far end. Both vary with the rail.
+        print(f"[ebs]   a constant shift would match: half a rail "
+              f"{abs(length) / 2:.4f}, a whole rail {abs(length):.4f}"
+              f"  (port 1 is {abs(along[1] - start):.4f} from the base addr)")
+
         if self._rail_nudge:
             for index in along:
                 along[index] += direction * self._rail_nudge
             print(f"[ebs]   nudged every port {direction * self._rail_nudge:+.4f} "
-                  f"along {name} (half a rail is {abs(length) / 2:.4f}, "
-                  f"a whole one {abs(length):.4f})")
+                  f"along {name}")
 
         # The rail axis carries the ports; the other two keep the rail's own
         # value. Port 0 is the one the EBS goes on; 1..n are there to be checked.
