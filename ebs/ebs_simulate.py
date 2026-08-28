@@ -112,6 +112,7 @@ class EbsSimulate:
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._addr_next: dict = {}          # addr number -> [(next addr, distance-puls)]
         self._offset_scale: str = SCALE_FIXED   # how an offset becomes a distance
+        self._rail_nudge: float = 0.0       # units to slide every port along the rail
         self._rail_root: str = ""           # parent path holding the rail prims
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
@@ -184,6 +185,18 @@ class EbsSimulate:
         """
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
+
+    def set_rail_nudge(self, value: float) -> None:
+        """Slide every port along the rail by this many units.
+
+        The ports come out evenly spaced but land off the real ones, which is
+        an origin error rather than a scale one: it is the same amount on every
+        port. This is here to measure that amount. Whatever value lands the
+        lasers on the ports says what the origin is really at - half a rail
+        length would mean the rail prim sits at the segment's start rather than
+        its middle, a whole one that the addr is at the far end.
+        """
+        self._rail_nudge = float(value or 0.0)
 
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
@@ -873,6 +886,13 @@ class EbsSimulate:
             along = self._coords_by_offset(key, axis, direction, start, addr_a)
         if along is None:
             return None
+
+        if self._rail_nudge:
+            for index in along:
+                along[index] += direction * self._rail_nudge
+            print(f"[ebs]   nudged every port {direction * self._rail_nudge:+.4f} "
+                  f"along {name} (half a rail is {abs(length) / 2:.4f}, "
+                  f"a whole one {abs(length):.4f})")
 
         # The rail axis carries the ports; the other two keep the rail's own
         # value. Port 0 is the one the EBS goes on; 1..n are there to be checked.

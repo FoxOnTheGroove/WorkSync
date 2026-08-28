@@ -43,6 +43,10 @@ class EbsSimulateService:
         return cls._simulate.set_offset_scale(mode)
 
     @classmethod
+    def set_rail_nudge(cls, value):
+        return cls._simulate.set_rail_nudge(value)
+
+    @classmethod
     def set_rail_root(cls, path):
         return cls._simulate.set_rail_root(path)
 

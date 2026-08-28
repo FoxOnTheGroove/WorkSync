@@ -42,6 +42,7 @@ class EbsDummyUI:
         self._ebs3_field = None
         self._precision = None
         self._scale = None
+        self._nudge_field = None
         self._root_field = None
         self._rail_field = None
         self._eqp_field = None
@@ -73,6 +74,9 @@ class EbsDummyUI:
                     # with the station's slide taken off its offset.
                     self._scale = ui.ComboBox(0, "fixed 100000", "length / puls",
                                               "puls, offset - slide", width=140)
+                    ui.Label("Nudge:", width=44)
+                    # Slides every port along the rail, to measure the origin.
+                    self._nudge_field = ui.FloatField(width=70)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -225,6 +229,8 @@ class EbsDummyUI:
         scales = ("fixed", "puls", "slide")
         index = self._scale.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
+        EbsSimulateService.set_rail_nudge(
+            self._nudge_field.model.get_value_as_float())
 
     # -- display -------------------------------------------------------------
 
