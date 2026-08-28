@@ -130,6 +130,7 @@ class EbsSimulate:
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._notes: list = []              # diagnostics for the last run, shown in the UI
         self._blocked: str = ""             # why the run cannot go on, if it cannot
+        self._why: str = ""                 # why the last placement could not be worked out
         self._started: float = 0.0
         self._ready: bool = False           # set by init(), required before prepare()
         self._target: dict = None           # prepared equipment / EBS for the step buttons
@@ -247,6 +248,16 @@ class EbsSimulate:
         self._blocked = ""
         self._started = time.perf_counter()
 
+    def _fail(self, key: str, reason: str):
+        """Record why one equipment could not be placed, and print it.
+
+        The reason is kept without the equipment's name so a sweep can group
+        hundreds of them by what went wrong.
+        """
+        self._why = reason
+        print(f"[ebs] {key}: {reason}")
+        return None
+
     def _note(self, text: str) -> None:
         """Record a diagnostic line: printed, and carried back to the UI."""
         self._notes.append(text)
@@ -348,13 +359,14 @@ class EbsSimulate:
                         with redirect_stdout(quiet):
                             found = self.compute_port_points(stage, eqp_id)
                 except Exception as e:
-                    found, _ = None, failed.append(f"{eqp_id}: {e}")
+                    failed.append((eqp_id, str(e)))
+                    continue
                 if found is None:
-                    failed.append(eqp_id)
+                    failed.append((eqp_id, self._why or "could not be placed"))
                     continue
                 points, _, rail = found
                 if 1 not in points:
-                    failed.append(f"{eqp_id}: no port 1")
+                    failed.append((eqp_id, "no port 1"))
                     continue
                 parent = rail.GetParent()
                 key = str(parent.GetPath()) if parent else ""
@@ -366,9 +378,14 @@ class EbsSimulate:
         with self._stage_timer("draw sweep"):
             drawn = self.show_sweep(spots)
         self._note(f"port 1 drawn for {drawn} of {len(names)} equipment")
-        if failed:
-            self._note(f"{len(failed)} skipped: {', '.join(failed[:8])}"
-                       + (" ..." if len(failed) > 8 else ""))
+        # Grouped by reason: hundreds of equipment failing the same way is one
+        # thing to look at, not hundreds.
+        grouped = {}
+        for name, why in failed:
+            grouped.setdefault(why, []).append(name)
+        for why, skipped in sorted(grouped.items(), key=lambda kv: -len(kv[1])):
+            self._note(f"{len(skipped)} skipped, {why}: " + ", ".join(skipped[:6])
+                       + (" ..." if len(skipped) > 6 else ""))
         return self._payload(drawn > 0, f"{drawn} port-1 laser(s)"
                              if drawn else "Nothing drawn")
 
@@ -919,18 +936,18 @@ class EbsSimulate:
         two addrs, and that difference gives both the axis and the direction.
         """
         key = eqp_id.upper()
+        self._why = ""
         addr_a = self._port_addr.get(key)
         if addr_a is None:
-            print(f"[ebs] {key}: no addr block found for its ports")
-            return None
+            return self._fail(key, "no addr block found for its ports")
 
         # Ports that spilled into other blocks tell us which rail to follow.
         spilled = {a for i, a in self._port_addr_of.get(key, {}).items()
                    if a != addr_a}
         rail, addr_b, axis = self.find_rail(stage, addr_a, prefer=spilled)
         if rail is None:
-            print(f"[ebs] {key}: no straight {RAIL_PREFIX}{addr_a}_* rail found")
-            return None
+            return self._fail(key, f"no straight {RAIL_PREFIX}<addr>_* rail "
+                              f"leaving addr {addr_a}")
 
         cad_a, cad_b = self._addr_cad[addr_a], self._addr_cad[addr_b]
         span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
@@ -1023,8 +1040,7 @@ class EbsSimulate:
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(addr_a)
         if 1 not in offsets or base_cad is None:
-            print(f"[ebs] {key}: needs the offset of port 1, got {offsets}")
-            return None
+            return self._fail(key, "no offset for port 1")
 
         along = {}
         for index in sorted(offsets):
@@ -1032,8 +1048,7 @@ class EbsSimulate:
             addr = addr_of.get(index, addr_a)
             cad = self._addr_cad.get(addr)
             if offset is None or cad is None:
-                print(f"[ebs] {key}: port {index} has no offset or no addr cad")
-                return None
+                return self._fail(key, "a port has no offset, or its addr no cad")
             step = self._addr_step(addr, axis)
             if step is None:
                 # Every addr a port is written in has a run leaving it. Standing
@@ -1042,6 +1057,7 @@ class EbsSimulate:
                 self._blocked = (f"{key}: addr {addr} has no straight {PULS_KEY} "
                                  f"run for port {index}")
                 print(f"[ebs] {self._blocked}")
+                self._why = f"no straight {PULS_KEY} run leaving an addr"
                 return None
             seg_length, puls = step
             # The addr's own place on the rail, then the offset in its scale.
@@ -1054,8 +1070,7 @@ class EbsSimulate:
 
         steps = [along[i] - along[i + 1] for i in sorted(along) if i + 1 in along]
         if not steps:
-            print(f"[ebs] {key}: needs at least two ports to step past port 1")
-            return None
+            return self._fail(key, "fewer than two ports, nothing to step by")
         pitch = sum(steps) / len(steps)
         along[0] = along[1] + pitch
         print(f"[ebs]   pitch " + ", ".join(f"{s:.4f}" for s in steps) +
@@ -1104,7 +1119,8 @@ class EbsSimulate:
         gaps = [offsets[i] - offsets[i + 1]
                 for i in sorted(offsets) if i + 1 in offsets]
         if 1 not in offsets or not gaps:
-            print(f"[ebs] {key}: needs the offsets of ports 1 and 2, got {offsets}")
+            self._why = "no offsets for ports 1 and 2"
+            print(f"[ebs] {key}: {self._why}, got {offsets}")
             return None
 
         spacing = sum(gaps) / len(gaps)
