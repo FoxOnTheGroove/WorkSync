@@ -47,6 +47,10 @@ class EbsSimulateService:
         return cls._simulate.set_rail_nudge(value)
 
     @classmethod
+    def set_report_path(cls, path):
+        return cls._simulate.set_report_path(path)
+
+    @classmethod
     def set_rail_root(cls, path):
         return cls._simulate.set_rail_root(path)
 

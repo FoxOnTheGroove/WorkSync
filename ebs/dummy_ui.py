@@ -45,6 +45,7 @@ class EbsDummyUI:
         self._nudge_field = None
         self._root_field = None
         self._rail_field = None
+        self._report_field = None
         self._eqp_field = None
         self._status_label = None
         self._info_label = None
@@ -63,6 +64,7 @@ class EbsDummyUI:
                 self._ebs3_field = self._path_row("EBS 3port:")
                 self._root_field = self._path_row("Search root:")
                 self._rail_field = self._path_row("Rail root:")
+                self._report_field = self._path_row("Report CSV:")
 
                 with ui.HStack(height=24, spacing=4):
                     ui.Label("Precision:", width=90)
@@ -232,6 +234,8 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
         EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
+        EbsSimulateService.set_report_path(
+            self._report_field.model.get_value_as_string())
         modes = ("bbox", "mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_precision(modes[max(0, min(index, 2))])

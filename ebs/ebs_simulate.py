@@ -1,3 +1,4 @@
+import csv
 import io
 import math
 import re
@@ -117,6 +118,8 @@ class EbsSimulate:
         self._rail_nudge: float = 0.0       # units to slide every port along the rail
         self._rail_root: str = ""           # parent path holding the rail prims
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
+        self._rail_frame = None             # (addr point, one length on, axis) in rail space
+        self._report_path: str = ""         # where the sweep writes its csv
         self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -200,6 +203,10 @@ class EbsSimulate:
         its middle, a whole one that the addr is at the far end.
         """
         self._rail_nudge = float(value or 0.0)
+
+    def set_report_path(self, path: str) -> None:
+        """Where a sweep writes its table. Empty writes none."""
+        self._report_path = (path or "").strip()
 
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
@@ -322,13 +329,17 @@ class EbsSimulate:
         return self._do_collide()
 
     def sweep_ports(self) -> dict:
-        """Draw every equipment's port 1 and its own position, side by side.
+        """Draw every equipment's port 1 and its own position, and table them.
 
         A whole-plant look at whether the port positions land where the real
-        ports are, without walking the steps one equipment at a time. Two
-        cylinders each, both running from the rail down to the equipment's own
-        z: a red one where port 1 is worked out to be, and a green one at the
-        equipment itself. The gap between the pair is the error, at a glance.
+        ports are. Two cylinders each, both running from the rail down to the
+        equipment's own child 6, so they are the same length and only their xy
+        differs: red where port 1 is worked out to be, green where the
+        equipment sits. The gap between the pair is the error.
+
+        Every equipment gets a row in the report, including the ones that could
+        not be measured, so nothing goes missing between the scene and the
+        table.
 
         No bounds are read per equipment - the thickness is taken from the
         first one and used for the lot - and the diagnostics are swallowed
@@ -343,45 +354,56 @@ class EbsSimulate:
             return self._payload(False, "No stage open")
 
         names = sorted(self._eqp_index)
-        spots, failed = {}, []
+        spots, rows, failed = {}, [], []
         parents = {}                         # rail parent path -> its world matrix
         tc = Usd.TimeCode.Default()
         with self._stage_timer(f"port 1 of {len(names)} equipment"):
             for position, name in enumerate(names):
                 eqp_id = name[len(EQP_PREFIX):] if name.startswith(EQP_PREFIX) else name
+                row = {"equipment": eqp_id, "prim": self._eqp_index[name]}
+                rows.append(row)
                 try:
+                    # Where the equipment itself is: child 6, the prim the EBS
+                    # takes its z from. Without it there is nothing to compare.
+                    prim = stage.GetPrimAtPath(self._eqp_index[name])
+                    anchor, reached = self._descend_depth(prim, ANCHOR_DEPTH)
+                    row["pivot_ok"] = "TRUE" if reached else "FALSE"
+                    if not reached:
+                        row["note"] = f"no child {ANCHOR_DEPTH} to measure against"
+                        failed.append((eqp_id, row["note"]))
+                        continue
+                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+                        tc).ExtractTranslation()
+
                     # The first one keeps its log, so the numbers can be read.
+                    self._rail_frame = None
                     if position == 0:
                         found = self.compute_port_points(stage, eqp_id)
                     else:
                         with redirect_stdout(io.StringIO()):
                             found = self.compute_port_points(stage, eqp_id)
                     if found is None:
-                        failed.append((eqp_id, self._why or "could not be placed"))
+                        row["note"] = self._why or "could not be placed"
+                        failed.append((eqp_id, row["note"]))
                         continue
-                    points, _, rail = found
-                    if 1 not in points:
-                        failed.append((eqp_id, "no port 1"))
+                    points, axis, rail = found
+                    if 1 not in points or self._rail_frame is None:
+                        row["note"] = "no port 1"
+                        failed.append((eqp_id, row["note"]))
                         continue
+
                     parent = rail.GetParent()
                     key = str(parent.GetPath()) if parent else ""
                     if key not in parents:
                         parents[key] = self._parent_world(rail)
-                    port = parents[key].Transform(points[1])
-
-                    # Where the equipment itself is: the same child 6 the EBS
-                    # takes its z from, so both cylinders end on it.
-                    prim = stage.GetPrimAtPath(self._eqp_index[name])
-                    anchor = self._descend_first_child(prim, ANCHOR_DEPTH)
-                    if anchor is None or not anchor.IsValid():
-                        failed.append((eqp_id, f"no child {ANCHOR_DEPTH} to sit on"))
-                        continue
-                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
-                        tc).ExtractTranslation()
+                    to_world = parents[key]
+                    port = to_world.Transform(points[1])
                     spots[eqp_id] = (port, here)
+                    row.update(self._measure(to_world, axis, rail, port, here))
                 except Exception as e:
                     # One equipment must never take the sweep down with it.
-                    failed.append((eqp_id, f"{type(e).__name__}: {e}"))
+                    row["note"] = f"{type(e).__name__}: {e}"
+                    failed.append((eqp_id, row["note"]))
 
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
@@ -391,6 +413,12 @@ class EbsSimulate:
                 return self._payload(False, f"Could not draw the sweep: {e}")
         self._note(f"port 1 and equipment drawn for {drawn} of "
                    f"{len(names)} equipment")
+        self._report_spread(rows)
+        with self._stage_timer("write report"):
+            written = self.write_report(rows)
+        if written:
+            self._note(f"report written to {written}")
+
         # Grouped by reason: hundreds of equipment failing the same way is one
         # thing to look at, not hundreds.
         grouped = {}
@@ -401,6 +429,86 @@ class EbsSimulate:
                        + (" ..." if len(skipped) > 6 else ""))
         return self._payload(drawn > 0, f"{drawn} equipment swept"
                              if drawn else "Nothing drawn")
+
+    def _measure(self, to_world, axis: int, rail, port, here) -> dict:
+        """One equipment's row: where the pair stands, and how far apart.
+
+        Distances are taken along the rail rather than along world X or Y, so a
+        rail whose parent is rotated still reads correctly; with no rotation the
+        two are the same number. The offsets are the plain OFFSET_PER_UNIT
+        yardstick, the one thing comparable between equipment whose segments
+        carry different puls.
+        """
+        origin_local, onward_local, _ = self._rail_frame
+        origin = to_world.Transform(origin_local)
+        onward = to_world.Transform(onward_local)
+        run = (onward[0] - origin[0], onward[1] - origin[1])
+        length = math.sqrt(run[0] ** 2 + run[1] ** 2) or 1.0
+        along = (run[0] / length, run[1] / length)
+        across = (-along[1], along[0])                   # the axis we do not care about
+
+        def project(point, unit):
+            return ((point[0] - origin[0]) * unit[0]
+                    + (point[1] - origin[1]) * unit[1])
+
+        pivot_run = project(here, along)
+        port_run = project(port, along)
+        return {
+            "axis": "XY"[axis],
+            "rail": rail.GetName(),
+            "pivot_coord": here[axis],
+            "pivot_offset": pivot_run * OFFSET_PER_UNIT,
+            "port_coord": port[axis],
+            "port_offset": port_run * OFFSET_PER_UNIT,
+            "coord_diff": port_run - pivot_run,
+            "offset_diff": (port_run - pivot_run) * OFFSET_PER_UNIT,
+            "off_axis_diff": project(port, across) - project(here, across),
+            "z_diff": port[2] - here[2],
+        }
+
+    REPORT_COLUMNS = ("equipment", "pivot_ok", "axis", "pivot_coord", "pivot_offset",
+                      "port_coord", "port_offset", "coord_diff", "offset_diff",
+                      "off_axis_diff", "z_diff", "rail", "prim", "note")
+
+    def write_report(self, rows: list) -> str:
+        """Write the sweep's table where the report path points.
+
+        Comma separated and BOM'd, so Excel opens it on a double click with the
+        equipment names intact.
+        """
+        if not self._report_path or not rows:
+            return ""
+        try:
+            with open(self._report_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.DictWriter(f, fieldnames=self.REPORT_COLUMNS,
+                                        extrasaction="ignore")
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({k: self._cell(row.get(k, ""))
+                                     for k in self.REPORT_COLUMNS})
+        except Exception as e:
+            self._note(f"could not write {self._report_path}: {e}")
+            return ""
+        return self._report_path
+
+    @staticmethod
+    def _cell(value):
+        """Numbers rounded enough to read, everything else as it stands."""
+        return f"{value:.4f}" if isinstance(value, float) else value
+
+    def _report_spread(self, rows: list) -> None:
+        """How the offset differences sit: one constant, or all over the place.
+
+        All the same sign and size is an origin error; growing along the rail is
+        a scale one; splitting by area points at the rails themselves.
+        """
+        gaps = [r["offset_diff"] for r in rows if "offset_diff" in r]
+        if not gaps:
+            return
+        middle = sorted(gaps)[len(gaps) // 2]
+        self._note(f"offset_diff over {len(gaps)}: min {min(gaps):.0f}, "
+                   f"median {middle:.0f}, max {max(gaps):.0f}, "
+                   f"mean {sum(gaps) / len(gaps):.0f}")
 
     def simulate(self, equipment: str = "") -> dict:
         """Run every step in order. Init has to have run first."""
@@ -647,6 +755,22 @@ class EbsSimulate:
     def _equipment_id(prim: Usd.Prim) -> str:
         name = prim.GetName()
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
+
+    @staticmethod
+    def _descend_depth(prim: Usd.Prim, depth: int):
+        """Follow child(0) down, and say whether it got the whole way.
+
+        A prim that runs out of children before the depth is not the anchor the
+        EBS sits on, so a sweep has nothing to measure against for it.
+        """
+        current, reached = prim, True
+        for _ in range(depth):
+            children = _children(current) if current and current.IsValid() else []
+            if not children:
+                reached = False
+                break
+            current = children[0]
+        return current, reached
 
     @staticmethod
     def _descend_first_child(prim: Usd.Prim, depth: int) -> Usd.Prim:
@@ -970,6 +1094,13 @@ class EbsSimulate:
 
         rail_local = self._local_translation(rail)
         start = rail_local[axis] - length / 2.0              # rail start = addr position
+        # Where the addr sits and which way the rail runs, in the rail's own
+        # space. A world point projected onto this reads back as an offset.
+        origin = [rail_local[0], rail_local[1], rail_local[2]]
+        origin[axis] = start
+        onward = list(origin)
+        onward[axis] = start + length
+        self._rail_frame = (Gf.Vec3d(*origin), Gf.Vec3d(*onward), axis)
 
         name = "XY"[axis]
         print(f"[ebs] {key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
