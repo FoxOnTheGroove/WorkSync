@@ -878,6 +878,12 @@ class EbsSimulate:
         print(f"[ebs]   rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
               f"= start {start:.4f}")
         print(f"[ebs]   offset scale: {self._offset_scale}")
+        written = self._port_slides.get(key, {})
+        if written:
+            spread = max(written.values()) - min(written.values())
+            print(f"[ebs]   slides " +
+                  ", ".join(f"{i}:{written[i]:.1f}" for i in sorted(written)) +
+                  f" | spread {spread:.1f}")
 
         if self._offset_scale in (SCALE_PULS, SCALE_SLIDE):
             along = self._coords_by_puls(key, axis, direction, start, addr_a,
@@ -950,9 +956,9 @@ class EbsSimulate:
         Port 0 is one step past port 1, taken in units rather than in offsets
         because the two can sit on segments of different scales.
 
-        With slide, the ports themselves stay on their offsets and only port 0
-        moves: port 1's slide comes off the step onto it, in port 1's own
-        segment scale.
+        With slide, each station's own slide comes off its offset first, as
+        written, so ports 1..n move too - they are the ones sitting off the
+        real ports. Port 0 then steps past a port 1 that has already moved.
         """
         offsets = self._port_offsets.get(key, {})
         slides = self._port_slides.get(key, {}) if slide else {}
@@ -981,6 +987,13 @@ class EbsSimulate:
                 return None
             seg_length, puls = step
             segments[index] = step
+            if slide:
+                shift = slides.get(index)
+                if shift is None:
+                    self._blocked = f"{key}: port {index} has no {SLIDE_KEY} value"
+                    print(f"[ebs] {self._blocked}")
+                    return None
+                offset -= shift
             # The addr's own place on the rail, then the offset in its scale.
             addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             walk = offset * seg_length / puls
@@ -998,19 +1011,6 @@ class EbsSimulate:
         print(f"[ebs]   pitch " + ", ".join(f"{s:.4f}" for s in steps) +
               f" -> {pitch:.4f} units, port 0 at {along[0]:.4f}")
 
-        if slide:
-            # Only port 0 moves. It is one step past port 1, so it is port 1's
-            # slide that comes off, read in port 1's own segment.
-            shift = slides.get(1)
-            if shift is None:
-                self._blocked = f"{key}: port 1 has no {SLIDE_KEY} value"
-                print(f"[ebs] {self._blocked}")
-                return None
-            seg_length, puls = segments[1]
-            back = shift * seg_length / puls
-            along[0] -= direction * back
-            print(f"[ebs]   port 1 slide {shift:.1f} x {seg_length:.4f}/{puls:.0f}"
-                  f" = {back:.4f} units off port 0 -> {along[0]:.4f}")
         return along
 
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
