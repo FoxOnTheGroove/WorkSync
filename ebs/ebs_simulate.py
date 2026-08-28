@@ -121,6 +121,7 @@ class EbsSimulate:
         self._precision: str = PRECISION_TRI
         self._timings: list = []            # [label, elapsed_ms] for the last run
         self._notes: list = []              # diagnostics for the last run, shown in the UI
+        self._blocked: str = ""             # why the run cannot go on, if it cannot
         self._started: float = 0.0
         self._ready: bool = False           # set by init(), required before prepare()
         self._target: dict = None           # prepared equipment / EBS for the step buttons
@@ -221,6 +222,7 @@ class EbsSimulate:
         """Start a fresh timing and diagnostics record for one button press."""
         self._timings = []
         self._notes = []
+        self._blocked = ""
         self._started = time.perf_counter()
 
     def _note(self, text: str) -> None:
@@ -372,6 +374,12 @@ class EbsSimulate:
                 self._aligned = self._place_ebs(self._target["ebs"], target, anchor)
                 note = ("EBS placed at port 0, world "
                         f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f})")
+            elif self._blocked:
+                # The port data is there but cannot be read the way it was
+                # asked for. Placing the EBS anyway would hide that.
+                self._port_world = {}
+                self.clear_port_lasers()
+                return self._payload(False, self._blocked)
             else:
                 # No usable rail/port data: keep working off the anchor prim.
                 print("[ebs] port geometry unavailable, falling back to the anchor prim")
@@ -921,11 +929,14 @@ class EbsSimulate:
                 return None
             step = self._addr_step(addr, axis)
             if step is None:
-                print(f"[ebs] {key}: addr {addr} has no straight {PULS_KEY} run, "
-                      f"falling back to {OFFSET_PER_UNIT:.0f} per unit")
-                seg_length, puls = 1.0, OFFSET_PER_UNIT
-            else:
-                seg_length, puls = step
+                # Every addr a port is written in has a run leaving it. Standing
+                # in for a missing one would place the port somewhere plausible
+                # and wrong, so the run stops here instead.
+                self._blocked = (f"{key}: addr {addr} has no straight {PULS_KEY} "
+                                 f"run for port {index}")
+                print(f"[ebs] {self._blocked}")
+                return None
+            seg_length, puls = step
             # The addr's own place on the rail, then the offset in its scale.
             addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             along[index] = addr_start + direction * offset * seg_length / puls
