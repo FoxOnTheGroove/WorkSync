@@ -91,6 +91,8 @@ PRUNE_TYPES = frozenset({
     "Material", "Shader", "NodeGraph", "Camera",
 })
 ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
+PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
+                         # pivot, whatever the placement is out by
 
 
 class EbsSimulate:
@@ -400,6 +402,14 @@ class EbsSimulate:
                     port = to_world.Transform(points[1])
                     spots[eqp_id] = (port, here)
                     row.update(self._measure(to_world, axis, rail, port, here))
+                    # Child 6 is the pivot on nearly every equipment, but not
+                    # all: one sitting a long way off port 1 is some other prim,
+                    # and its numbers say nothing about the placement.
+                    if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
+                        row["pivot_ok"] = "invalid"
+                        row["note"] = (f"child {ANCHOR_DEPTH} is "
+                                       f"{row['coord_diff']:+.3f} off port 1, "
+                                       f"further than {PIVOT_TOLERANCE:g}")
                 except Exception as e:
                     # One equipment must never take the sweep down with it.
                     row["note"] = f"{type(e).__name__}: {e}"
@@ -502,13 +512,20 @@ class EbsSimulate:
         All the same sign and size is an origin error; growing along the rail is
         a scale one; splitting by area points at the rails themselves.
         """
-        gaps = [r["offset_diff"] for r in rows if "offset_diff" in r]
+        # Only the equipment whose pivot is believable: one that is not the
+        # pivot at all would drag the numbers wherever it happens to sit.
+        gaps = [r["offset_diff"] for r in rows
+                if "offset_diff" in r and r.get("pivot_ok") == "TRUE"]
+        doubted = sum(1 for r in rows if r.get("pivot_ok") == "invalid")
         if not gaps:
             return
         middle = sorted(gaps)[len(gaps) // 2]
         self._note(f"offset_diff over {len(gaps)}: min {min(gaps):.0f}, "
                    f"median {middle:.0f}, max {max(gaps):.0f}, "
                    f"mean {sum(gaps) / len(gaps):.0f}")
+        if doubted:
+            self._note(f"{doubted} left out, their child {ANCHOR_DEPTH} sits too "
+                       f"far from port 1 to be the pivot")
 
     def simulate(self, equipment: str = "") -> dict:
         """Run every step in order. Init has to have run first."""
