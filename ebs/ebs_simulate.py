@@ -350,33 +350,35 @@ class EbsSimulate:
         with self._stage_timer(f"port 1 of {len(names)} equipment"):
             for position, name in enumerate(names):
                 eqp_id = name[len(EQP_PREFIX):] if name.startswith(EQP_PREFIX) else name
-                quiet = io.StringIO()
                 try:
                     # The first one keeps its log, so the numbers can be read.
                     if position == 0:
                         found = self.compute_port_points(stage, eqp_id)
                     else:
-                        with redirect_stdout(quiet):
+                        with redirect_stdout(io.StringIO()):
                             found = self.compute_port_points(stage, eqp_id)
+                    if found is None:
+                        failed.append((eqp_id, self._why or "could not be placed"))
+                        continue
+                    points, _, rail = found
+                    if 1 not in points:
+                        failed.append((eqp_id, "no port 1"))
+                        continue
+                    parent = rail.GetParent()
+                    key = str(parent.GetPath()) if parent else ""
+                    if key not in parents:
+                        parents[key] = self._parent_world(rail)
+                    spots[eqp_id] = parents[key].Transform(points[1])
                 except Exception as e:
-                    failed.append((eqp_id, str(e)))
-                    continue
-                if found is None:
-                    failed.append((eqp_id, self._why or "could not be placed"))
-                    continue
-                points, _, rail = found
-                if 1 not in points:
-                    failed.append((eqp_id, "no port 1"))
-                    continue
-                parent = rail.GetParent()
-                key = str(parent.GetPath()) if parent else ""
-                if key not in parents:
-                    parents[key] = self._parent_world(rail)
-                spots[eqp_id] = parents[key].Transform(points[1])
+                    # One equipment must never take the sweep down with it.
+                    failed.append((eqp_id, f"{type(e).__name__}: {e}"))
 
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
-            drawn = self.show_sweep(spots)
+            try:
+                drawn = self.show_sweep(spots)
+            except Exception as e:
+                return self._payload(False, f"Could not draw the sweep: {e}")
         self._note(f"port 1 drawn for {drawn} of {len(names)} equipment")
         # Grouped by reason: hundreds of equipment failing the same way is one
         # thing to look at, not hundreds.
@@ -1979,17 +1981,34 @@ class EbsSimulate:
         if not spots:
             return 0
 
-        drawn = 0
+        drawn, refused = 0, []
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                UsdGeom.Scope.Define(stage, SWEEP_ROOT)
-                for name, spot in spots.items():
-                    centre = Gf.Vec3d(spot[0], spot[1], spot[2] - SWEEP_DROP / 2.0)
-                    self._laser_cylinder(stage, f"{SWEEP_ROOT}/{name}", centre,
-                                         SWEEP_RADIUS, SWEEP_DROP, SWEEP_COLOR)
-                    drawn += 1
+            UsdGeom.Scope.Define(stage, SWEEP_ROOT)
+            for name, spot in spots.items():
+                centre = Gf.Vec3d(spot[0], spot[1], spot[2] - SWEEP_DROP / 2.0)
+                path = f"{SWEEP_ROOT}/{self._prim_name(name)}"
+                try:
+                    self._laser_cylinder(stage, path, centre, SWEEP_RADIUS,
+                                         SWEEP_DROP, SWEEP_COLOR)
+                except Exception as e:
+                    refused.append(f"{name}: {e}")
+                    continue
+                drawn += 1
         print(f"[ebs] drew {drawn} port-1 lasers under {SWEEP_ROOT}")
+        if refused:
+            self._note(f"{len(refused)} could not be drawn: "
+                       + ", ".join(refused[:4]))
         return drawn
+
+    @staticmethod
+    def _prim_name(text: str) -> str:
+        """A USD-legal prim name for an equipment.
+
+        Equipment are named things like 6EAS1201, and a prim name cannot start
+        with a digit or hold anything but letters, digits and underscores.
+        """
+        cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in text)
+        return cleaned if cleaned[:1].isalpha() or cleaned[:1] == "_" else "_" + cleaned
 
     def clear_sweep(self) -> None:
         """Remove the lasers the previous sweep drew."""
