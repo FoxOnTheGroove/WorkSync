@@ -26,7 +26,8 @@ SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
 SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
 SCALE_TRIM  = "trim"    # the same, pulled back by the segment's shortfall:
                         # how far its distance-puls falls short of the
-                        # OFFSET_PER_UNIT the segment's length calls for
+                        # OFFSET_PER_UNIT its length calls for, itself scaled
+                        # by puls / (OFFSET_PER_UNIT x length)
 SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_TRIM)
 
 def _children(prim):
@@ -919,8 +920,9 @@ class EbsSimulate:
 
         With trim, each port is then pulled back towards the start by its own
         segment's shortfall: the OFFSET_PER_UNIT its length calls for, less the
-        distance-puls it actually carries. The shortfall is a property of the
-        segment, so ports sharing one move together.
+        distance-puls it actually carries, scaled by the share of the nominal
+        length the puls comes to. The shortfall is a property of the segment,
+        so ports sharing one move together.
         """
         offsets = self._port_offsets.get(key, {})
         addr_of = self._port_addr_of.get(key, {})
@@ -952,10 +954,13 @@ class EbsSimulate:
             walk = offset * seg_length / puls
             note = ""
             if trim:
-                shortfall = (seg_length * OFFSET_PER_UNIT - puls) / OFFSET_PER_UNIT
+                nominal = seg_length * OFFSET_PER_UNIT
+                # The gap is not taken whole: it is scaled by how much of the
+                # nominal length the puls actually comes to.
+                shortfall = (nominal - puls) / OFFSET_PER_UNIT * (puls / nominal)
                 walk -= shortfall
-                note = (f" - ({seg_length:.4f}x{OFFSET_PER_UNIT:.0f} - {puls:.0f})"
-                        f"/{OFFSET_PER_UNIT:.0f} = {-shortfall:+.4f}")
+                note = (f" - ({nominal:.0f} - {puls:.0f})/{OFFSET_PER_UNIT:.0f}"
+                        f" x {puls:.0f}/{nominal:.0f} = {-shortfall:+.4f}")
             along[index] = addr_start + direction * walk
             print(f"[ebs]   port {index} @ addr {addr}: {offset:.1f} x "
                   f"{seg_length:.4f}/{puls:.0f} = "
