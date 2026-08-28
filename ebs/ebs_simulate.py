@@ -12,7 +12,6 @@ __all__ = ["EbsSimulate"]
 EQP_PREFIX = "EQP_"
 PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
 OFFSET_KEY  = "offset"        # port distance from its addr, along the rail direction
-SLIDE_KEY   = "slide"         # a station's own shift, in offset units
 CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
 CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 NEXT_KEY    = "next-address"  # addr a NextAddr block leads to
@@ -25,8 +24,7 @@ RAIL_PREFIX = "rail_"
 # each other in the scene.
 SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
 SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
-SCALE_SLIDE = "slide"   # the same, with the station's slide taken off its offset
-SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_SLIDE)
+SCALE_MODES = (SCALE_FIXED, SCALE_PULS)
 
 def _children(prim):
     """Children of a prim, instance proxies included.
@@ -106,7 +104,6 @@ class EbsSimulate:
         self._port_map: dict = {}           # "########" -> sorted port indices
         self._port_elements: dict = {}      # "########" -> port elements in port order
         self._port_offsets: dict = {}       # "########" -> {index: offset}
-        self._port_slides: dict = {}        # "########" -> {index: slide}
         self._port_addr: dict = {}          # "########" -> base addr number
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
@@ -180,8 +177,7 @@ class EbsSimulate:
         'fixed' divides by OFFSET_PER_UNIT everywhere. 'puls' takes the scale
         from the segment the port is written in - its length over its
         distance-puls - so a port that spilled into the next addr is measured
-        with that addr's own puls. 'slide' is 'puls' with each station's slide
-        taken off its offset first.
+        with that addr's own puls.
         """
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
@@ -224,7 +220,6 @@ class EbsSimulate:
         self._eqp_index = {}
         self._port_map = {}
         self._port_elements = {}
-        self._port_slides = {}
         self._mesh_bounds = {}
         self._triangles = {}
         self._visible = {}
@@ -577,7 +572,6 @@ class EbsSimulate:
         self._port_map = {}
         self._port_elements = {}
         self._port_offsets = {}
-        self._port_slides = {}
         self._port_addr = {}
         self._port_addr_of = {}
         self._addr_cad = {}
@@ -630,18 +624,14 @@ class EbsSimulate:
                     continue
                 equipment, index = m.group(1).upper(), int(m.group(2))
                 offset = self._as_float(self._key_value(station, OFFSET_KEY))
-                shift = self._as_float(self._key_value(station, SLIDE_KEY))
                 _, addr_number = self._owning_addr(station, parents, addr_pattern)
-                found.setdefault(equipment, {})[index] = (station, offset,
-                                                          addr_number, shift)
+                found.setdefault(equipment, {})[index] = (station, offset, addr_number)
 
             for key, by_index in found.items():
                 indices = sorted(by_index)
                 self._port_map[key] = indices
                 self._port_elements[key] = [by_index[i][0] for i in indices]
                 self._port_offsets[key] = {i: by_index[i][1] for i in indices}
-                self._port_slides[key] = {i: by_index[i][3] for i in indices
-                                          if by_index[i][3] is not None}
                 by_port = {i: by_index[i][2] for i in indices
                            if by_index[i][2] is not None}
                 self._port_addr_of[key] = by_port
@@ -878,16 +868,9 @@ class EbsSimulate:
         print(f"[ebs]   rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
               f"= start {start:.4f}")
         print(f"[ebs]   offset scale: {self._offset_scale}")
-        written = self._port_slides.get(key, {})
-        if written:
-            spread = max(written.values()) - min(written.values())
-            print(f"[ebs]   slides " +
-                  ", ".join(f"{i}:{written[i]:.1f}" for i in sorted(written)) +
-                  f" | spread {spread:.1f}")
 
-        if self._offset_scale in (SCALE_PULS, SCALE_SLIDE):
-            along = self._coords_by_puls(key, axis, direction, start, addr_a,
-                                         slide=self._offset_scale == SCALE_SLIDE)
+        if self._offset_scale == SCALE_PULS:
+            along = self._coords_by_puls(key, axis, direction, start, addr_a)
         else:
             along = self._coords_by_offset(key, axis, direction, start, addr_a)
         if along is None:
@@ -946,8 +929,7 @@ class EbsSimulate:
                 for index, offset in all_offsets.items()}
 
     def _coords_by_puls(self, key: str, axis: int, direction: float,
-                        start: float, addr_a: int,
-                        slide: bool = False) -> "dict | None":
+                        start: float, addr_a: int) -> "dict | None":
         """Port positions with each segment's own scale.
 
         A segment's distance-puls is its length in offset units, so its length
@@ -955,20 +937,15 @@ class EbsSimulate:
         the next addr is measured from that addr, with that addr's own puls.
         Port 0 is one step past port 1, taken in units rather than in offsets
         because the two can sit on segments of different scales.
-
-        With slide, each station's own slide comes off its offset first, as
-        written, so ports 1..n move too - they are the ones sitting off the
-        real ports. Port 0 then steps past a port 1 that has already moved.
         """
         offsets = self._port_offsets.get(key, {})
-        slides = self._port_slides.get(key, {}) if slide else {}
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(addr_a)
         if 1 not in offsets or base_cad is None:
             print(f"[ebs] {key}: needs the offset of port 1, got {offsets}")
             return None
 
-        along, segments = {}, {}
+        along = {}
         for index in sorted(offsets):
             offset = offsets[index]
             addr = addr_of.get(index, addr_a)
@@ -986,14 +963,6 @@ class EbsSimulate:
                 print(f"[ebs] {self._blocked}")
                 return None
             seg_length, puls = step
-            segments[index] = step
-            if slide:
-                shift = slides.get(index)
-                if shift is None:
-                    self._blocked = f"{key}: port {index} has no {SLIDE_KEY} value"
-                    print(f"[ebs] {self._blocked}")
-                    return None
-                offset -= shift
             # The addr's own place on the rail, then the offset in its scale.
             addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             walk = offset * seg_length / puls

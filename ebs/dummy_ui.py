@@ -69,11 +69,10 @@ class EbsDummyUI:
                     self._precision = ui.ComboBox(2, "bbox", "mesh", "triangle",
                                                   width=90)
                     ui.Label("Offset:", width=48)
-                    # How an offset becomes a distance: one scale everywhere,
-                    # each segment's length over its own distance-puls, or that
-                    # with the station's slide taken off its offset.
+                    # How an offset becomes a distance: one scale everywhere, or
+                    # each segment's length over its own distance-puls.
                     self._scale = ui.ComboBox(0, "fixed 100000", "length / puls",
-                                              "puls, offset - slide", width=140)
+                                              width=110)
                     ui.Label("Nudge:", width=44)
                     # Slides every port along the rail, to measure the origin.
                     self._nudge_field = ui.FloatField(width=70)
@@ -226,9 +225,9 @@ class EbsDummyUI:
         modes = ("bbox", "mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_precision(modes[max(0, min(index, 2))])
-        scales = ("fixed", "puls", "slide")
+        scales = ("fixed", "puls")
         index = self._scale.model.get_item_value_model().get_value_as_int()
-        EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
+        EbsSimulateService.set_offset_scale(scales[max(0, min(index, 1))])
         EbsSimulateService.set_rail_nudge(
             self._nudge_field.model.get_value_as_float())
 
