@@ -68,6 +68,10 @@ SWEEP_ROOT     = "/EbsPortSweep"    # port-1 lasers for every equipment at once
 SWEEP_COLOR_PORT = LASER_COLOR      # where port 1 is worked out to be
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 
+# Everything this extension draws into the session layer. None of it is scenery,
+# so the collision check has to walk past it.
+OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
+
 # Faces evaluated by the simulation. Front, back and floor are ignored.
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -91,6 +95,7 @@ PRUNE_TYPES = frozenset({
     "Material", "Shader", "NodeGraph", "Camera",
 })
 ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
+MAIN_BODY = "MAINBODY"   # the child to take when a level holds more than one
 PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 
@@ -831,8 +836,22 @@ class EbsSimulate:
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
 
     @staticmethod
-    def _descend_depth(prim: Usd.Prim, depth: int):
-        """Follow child(0) down, and say whether it got the whole way.
+    def _pick_child(children: list) -> Usd.Prim:
+        """Which child to follow down.
+
+        Nearly always there is only one. Where a level holds several, the first
+        one is not always the prim the ports are measured from, and on those the
+        main body is named for it.
+        """
+        if len(children) > 1:
+            for child in children:
+                if MAIN_BODY in child.GetName().upper():
+                    return child
+        return children[0]
+
+    @classmethod
+    def _descend_depth(cls, prim: Usd.Prim, depth: int):
+        """Follow the children down, and say whether it got the whole way.
 
         A prim that runs out of children before the depth is not the anchor the
         EBS sits on, so a sweep has nothing to measure against for it.
@@ -843,18 +862,18 @@ class EbsSimulate:
             if not children:
                 reached = False
                 break
-            current = children[0]
+            current = cls._pick_child(children)
         return current, reached
 
-    @staticmethod
-    def _descend_first_child(prim: Usd.Prim, depth: int) -> Usd.Prim:
-        """Follow child(0) down `depth` levels; stop early at the deepest prim."""
+    @classmethod
+    def _descend_first_child(cls, prim: Usd.Prim, depth: int) -> Usd.Prim:
+        """Follow the children down `depth` levels; stop early at the deepest."""
         current = prim
         for _ in range(depth):
             children = _children(current)
             if not children:
                 break
-            current = children[0]
+            current = cls._pick_child(children)
         return current
 
     # -- port count (XML) ----------------------------------------------------
@@ -1851,8 +1870,8 @@ class EbsSimulate:
         while stack:
             prim = stack.pop()
             path = str(prim.GetPath())
-            if path == MARKER_ROOT or path.startswith(MARKER_ROOT + "/"):
-                continue                       # our own markers are not obstacles
+            if any(path == ours or path.startswith(ours + "/") for ours in OURS):
+                continue                       # what we drew is not an obstacle
             if any(path == s or path.startswith(s + "/") for s in skip):
                 continue
             type_name = prim.GetTypeName()
