@@ -54,15 +54,15 @@ CAMERA_SLAB    = 0.2                      # clip this much in front of the targe
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
 
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
-MARKER_OPACITY = 0.35
+MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the alpha
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
 GRID_OPACITY   = MARKER_OPACITY   # the lines are as see-through as the cells
 GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
 GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
-MARKER_EMISSION = 300.0   # how hard the markers emit; raise it if the scene washes
-                          # them out, drop it if they glow
+MARKER_EMISSION = 10000.0  # how hard the markers emit; raise it if the scene washes
+                           # them out, drop it if they glow
 SHEET_GAP      = 0.001    # how far the back of a sheet stands off the front, as a
                           # share of the quad's own diagonal
 
@@ -2448,7 +2448,7 @@ class EbsSimulate:
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(*color))
+            Gf.Vec3f(0.0, 0.0, 0.0))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*color))
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
@@ -2479,7 +2479,10 @@ class EbsSimulate:
         def put(name, type_name, value):
             shader.CreateInput(name, type_name).Set(value)
 
-        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
+        # Nothing diffuse: the emission carries the colour, and a diffuse term
+        # is the only part that would ask which way a face points.
+        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
+            Gf.Vec3f(0.0, 0.0, 0.0))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
         put("emissive_intensity", Sdf.ValueTypeNames.Float, MARKER_EMISSION)
         put("enable_emission", Sdf.ValueTypeNames.Bool, True)
