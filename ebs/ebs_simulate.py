@@ -2371,18 +2371,6 @@ class EbsSimulate:
                 stage.RemovePrim(MARKER_ROOT)
 
     @staticmethod
-    def _face_normal(points: list) -> tuple:
-        """Unit normal of a flat face, from its first three corners."""
-        a, b, c = points[0], points[1], points[2]
-        u = [b[i] - a[i] for i in range(3)]
-        v = [c[i] - a[i] for i in range(3)]
-        n = (u[1] * v[2] - u[2] * v[1],
-             u[2] * v[0] - u[0] * v[2],
-             u[0] * v[1] - u[1] * v[0])
-        length = math.sqrt(sum(value * value for value in n))
-        return tuple(value / length for value in n) if length else (0.0, 0.0, 1.0)
-
-    @staticmethod
     def _marker_quad(stage, path: str, points: list, material, color,
                      opacity: float = MARKER_OPACITY) -> None:
         mesh = UsdGeom.Mesh.Define(stage, path)
@@ -2394,17 +2382,6 @@ class EbsSimulate:
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3, 3, 2, 1, 0]))
         mesh.CreateDoubleSidedAttr(True)
-        # A mesh subdivides by default, which pulls a four point face in on
-        # itself - and with a face wound each way it gets pulled both ways at
-        # once, which is where the crease across the corners comes from.
-        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
-        # One flat normal a face, rather than normals averaged at the corners:
-        # a quad is drawn as two triangles, and interpolating across them shows
-        # the seam between the pair as a diagonal.
-        facing = EbsSimulate._face_normal(points)
-        mesh.CreateNormalsAttr(Vt.Vec3fArray([
-            Gf.Vec3f(*facing), Gf.Vec3f(-facing[0], -facing[1], -facing[2])]))
-        mesh.SetNormalsInterpolation(UsdGeom.Tokens.uniform)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
         mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
         # An overlay that shadowed the plant would darken the very thing it is
