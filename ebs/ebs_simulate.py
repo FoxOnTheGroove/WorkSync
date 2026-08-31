@@ -508,12 +508,14 @@ class EbsSimulate:
             row["port_offset_puls"] = port_run * per_unit
         return row
 
-    # offset_diff is coord_diff at 100000 and z_diff says nothing, so neither
-    # is written: both are a column of arithmetic the reader can do.
-    REPORT_COLUMNS = ("equipment", "pivot_ok", "axis", "pivot_coord", "pivot_offset",
-                      "pivot_offset_puls", "port_coord", "port_offset",
-                      "port_offset_puls", "puls_per_unit", "coord_diff",
-                      "off_axis_diff", "rail", "prim", "note")
+    # A blank column between what the equipment says and what the ports say,
+    # so the two halves read apart. offset_diff is coord_diff at 100000 and the
+    # other two dropped columns are not what anyone reads the table for.
+    REPORT_COLUMNS = ("equipment", "pivot_ok", "axis",
+                      "pivot_coord", "pivot_offset", "pivot_offset_puls",
+                      "",
+                      "port_coord", "port_offset", "port_offset_puls",
+                      "puls_per_unit", "coord_diff", "rail", "note")
 
     def write_report(self, rows: list) -> str:
         """Write the sweep's table where the report path points.
