@@ -110,14 +110,14 @@ MAX_PORTS = 3            # ports the EBS spans; an equipment with more is anothe
 # version; the sheet only needs to say which bucket a row fell into.
 PIVOT_NOTES = {
     "TRUE": "",
-    "FALSE": "child 6 없음",
+    "FALSE": "depth 미달",
     "no-xml": "xml에 없음",
     "xml-invalid": "xml 값 사용 불가",
     "origin": "피봇이 원점",
     "shared": "다른 장비와 좌표 겹침",
 }
 PIVOT_WAYS = {"axis": "수평", "across": "수직"}   # which way a pivot is out by
-PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
+PIVOT_TOLERANCE = 1.0    # units: a pivot further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
 
@@ -370,7 +370,7 @@ class EbsSimulate:
 
         A whole-plant look at whether the port positions land where the real
         ports are. Two cylinders each, both running from the rail down to the
-        equipment's own child 6, so they are the same length and only their xy
+        equipment's own pivot, so they are the same length and only their xy
         differs: red where port 1 is worked out to be, green where the
         equipment sits. The gap between the pair is the error.
 
@@ -400,13 +400,15 @@ class EbsSimulate:
                 row = {"equipment": eqp_id, "prim": self._eqp_index[name]}
                 rows.append(row)
                 try:
-                    # Where the equipment itself is: child 6, the prim the EBS
-                    # takes its z from. Without one there is nothing to compare.
+                    # Where the equipment itself is: the pivot, the prim the
+                    # EBS takes its z from. Without one there is nothing to
+                    # compare against.
                     prim = stage.GetPrimAtPath(self._eqp_index[name])
                     anchor, reached = self.resolve_anchor(prim)
                     row["pivot_ok"] = "TRUE" if reached else "FALSE"
                     if not reached:
-                        row["note"] = f"no child {ANCHOR_DEPTH} to measure against"
+                        row["note"] = (f"nothing {ANCHOR_DEPTH} levels down to "
+                                       f"measure against")
                         failed.append((eqp_id, row["note"]))
                         continue
                     here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
@@ -606,7 +608,7 @@ class EbsSimulate:
         return ", ".join(said)
 
     def _mark_shared(self, rows: list) -> None:
-        """Flag a child 6 that several equipment landed on.
+        """Flag a pivot that several equipment landed on.
 
         One prim cannot be the pivot of two machines standing in different
         places, so all of them are suspect and none of them should weigh on the
