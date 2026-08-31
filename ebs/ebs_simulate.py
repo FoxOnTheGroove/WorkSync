@@ -61,6 +61,8 @@ GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
 GRID_OPACITY   = MARKER_OPACITY   # the lines are as see-through as the cells
 GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
 GRID_LIFT      = 0.002    # how far off the surface they sit, so they do not fight it
+MARKER_EMISSION = 300.0   # how hard the markers emit; raise it if the scene washes
+                          # them out, drop it if they glow
 
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
 LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
@@ -2378,26 +2380,41 @@ class EbsSimulate:
         mesh.CreateDoubleSidedAttr(True)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
         mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
+        # An overlay that shadowed the plant would darken the very thing it is
+        # drawn over, and RTX takes this off the prim rather than the material.
+        try:
+            mesh.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
         if material:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
 
-    @staticmethod
-    def _marker_material(stage, name: str, color, opacity: float = MARKER_OPACITY):
-        """Flat unlit colour, one per state, reused by every quad.
+    @classmethod
+    def _marker_material(cls, stage, name: str, color, opacity: float = MARKER_OPACITY):
+        """Flat colour that neither takes the light nor turns its back.
 
-        The colour sits on diffuse with nothing emitted: the emissive route
-        did not come through on the far side of a quad. Everything that reads
-        the light is flattened instead - roughness all the way up, no specular,
-        no metal - so the same state still looks the same on every face.
+        The material carries two shaders. RTX reads the MDL one, which is what
+        the viewport actually renders; anything else falls back to the preview
+        surface. Written on its own, the preview surface came out lit on one
+        side and missing on the other, because RTX translates it into a solid
+        piece of glass rather than a sheet of colour.
         """
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
+        cls._preview_shader(stage, material, path, color, opacity)
+        cls._mdl_shader(stage, material, path, color, opacity)
+        return material
+
+    @staticmethod
+    def _preview_shader(stage, material, path: str, color, opacity: float) -> None:
+        """The universal fallback, for anything that is not RTX."""
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*color))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(0.0, 0.0, 0.0))
+            Gf.Vec3f(*color))
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
@@ -2406,8 +2423,38 @@ class EbsSimulate:
         # Nothing bends going through: at 1.0 what is behind a cell stays where
         # it is, rather than the cell reading as a lens over the machinery.
         shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)
-        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-        return material
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(),
+                                                       "surface")
+
+    @staticmethod
+    def _mdl_shader(stage, material, path: str, color, opacity: float) -> None:
+        """The one RTX renders.
+
+        thin_walled is the piece that matters: without it a transparent surface
+        is the boundary of a solid, so the far side of a quad is the inside of
+        a lump of glass. With it the quad is a sheet, lit the same from either
+        side. The colour is emitted rather than lit, so a cell reads the same
+        whatever the lights over that part of the plant happen to be doing.
+        """
+        shader = UsdShade.Shader.Define(stage, path + "/mdl")
+        shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
+        shader.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
+
+        def put(name, type_name, value):
+            shader.CreateInput(name, type_name).Set(value)
+
+        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
+        put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
+        put("emissive_intensity", Sdf.ValueTypeNames.Float, MARKER_EMISSION)
+        put("enable_emission", Sdf.ValueTypeNames.Bool, True)
+        put("thin_walled", Sdf.ValueTypeNames.Bool, True)
+        put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
+        put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
+        put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
+        put("metallic_constant", Sdf.ValueTypeNames.Float, 0.0)
+        put("specular_level", Sdf.ValueTypeNames.Float, 0.0)
+        material.CreateSurfaceOutput("mdl").ConnectToSource(
+            shader.ConnectableAPI(), "out")
 
     def _grid_bands(self, box: Gf.Range3d, plane, shape) -> list:
         """The lines between the cells, as thin quads lying on the face.
