@@ -95,7 +95,7 @@ PRUNE_TYPES = frozenset({
     "Material", "Shader", "NodeGraph", "Camera",
 })
 ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
-MAIN_BODY = "MAINBODY"   # the anchor to take when the level above holds several
+MAIN_BODY = "MAINBODY"   # names the child 5 to descend through, when there are several
 PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 
@@ -836,15 +836,15 @@ class EbsSimulate:
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
 
     @staticmethod
-    def _pick_child(children: list, last: bool = False) -> Usd.Prim:
+    def _pick_child(children: list, by_name: bool = False) -> Usd.Prim:
         """Which child to follow down.
 
-        Nearly always there is only one. Where the last level holds several -
-        the step onto the anchor itself - the first is not always the prim the
-        ports are measured from, and on those equipment the main body is named
-        for it. Higher up, the first child is the only rule.
+        Nearly always there is only one. Where child 5 comes in several, the
+        first of them does not always lead to the prim the ports are measured
+        from, and the one that does is named for the main body - anywhere in
+        the name, in any case. Every other level takes the first child.
         """
-        if last and len(children) > 1:
+        if by_name and len(children) > 1:
             for child in children:
                 if MAIN_BODY in child.GetName().upper():
                     return child
@@ -863,7 +863,7 @@ class EbsSimulate:
             if not children:
                 reached = False
                 break
-            current = cls._pick_child(children, last=step == depth - 1)
+            current = cls._pick_child(children, by_name=step == depth - 2)
         return current, reached
 
     @classmethod
@@ -874,7 +874,7 @@ class EbsSimulate:
             children = _children(current)
             if not children:
                 break
-            current = cls._pick_child(children, last=step == depth - 1)
+            current = cls._pick_child(children, by_name=step == depth - 2)
         return current
 
     # -- port count (XML) ----------------------------------------------------
