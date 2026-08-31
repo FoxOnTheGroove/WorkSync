@@ -60,7 +60,7 @@ COLOR_CLEAR    = (1.0, 1.0, 1.0)
 GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
 GRID_OPACITY   = MARKER_OPACITY   # the lines are as see-through as the cells
 GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
-GRID_LIFT      = 0.002    # how far off the surface they sit, so they do not fight it
+GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
 MARKER_EMISSION = 300.0   # how hard the markers emit; raise it if the scene washes
                           # them out, drop it if they glow
 
@@ -2416,7 +2416,7 @@ class EbsSimulate:
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(*color))
+            Gf.Vec3f(0.0, 0.0, 0.0))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*color))
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
@@ -2447,7 +2447,13 @@ class EbsSimulate:
         def put(name, type_name, value):
             shader.CreateInput(name, type_name).Set(value)
 
-        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
+        # Nothing diffuse at all. Diffuse shading goes by the angle between the
+        # normal and the light, and the two faces of a quad point opposite ways,
+        # so one of them catches a light the other cannot - which is the whole
+        # of what is left of the two sides looking different. Emission does not
+        # ask which way the surface is facing.
+        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
+            Gf.Vec3f(0.0, 0.0, 0.0))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
         put("emissive_intensity", Sdf.ValueTypeNames.Float, MARKER_EMISSION)
         put("enable_emission", Sdf.ValueTypeNames.Bool, True)
