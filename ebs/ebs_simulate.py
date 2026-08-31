@@ -94,6 +94,7 @@ PRUNE_TYPES = frozenset({
     "Cylinder", "Sphere", "Plane", "GeomSubset",
     "Material", "Shader", "NodeGraph", "Camera",
 })
+MAX_PORTS = 3            # ports the placement is worked out from; a fourth is ignored
 ANCHOR_DEPTH = 6         # how many transform levels down from the equipment the anchor is
 LEVEL_TYPES = ("Xform", "")   # prim types that count as a level on the way down
 PASS_TYPES  = ("Scope",)      # prim types descended through without counting
@@ -432,6 +433,12 @@ class EbsSimulate:
                                        f"{row['coord_diff']:+.3f} along the rail "
                                        f"from port 1, further than "
                                        f"{PIVOT_TOLERANCE:g}")
+                    # An equipment with more ports than the EBS spans is not a
+                    # doubtful pivot, it is a different kind of machine.
+                    count = len(self._port_map.get(eqp_id.upper(), ()))
+                    if count > MAX_PORTS:
+                        row["pivot_ok"] = f"port{count}"
+                        row["note"] = (f"{count} ports, placed off 1-{MAX_PORTS}")
                     spots[eqp_id] = (row["_draw"], here)
                 except Exception as e:
                     # One equipment must never take the sweep down with it.
@@ -591,7 +598,7 @@ class EbsSimulate:
         gaps = [r["offset_diff"] for r in rows
                 if "offset_diff" in r and r.get("pivot_ok") == "TRUE"]
         doubted = sum(1 for r in rows
-                      if str(r.get("pivot_ok", "")).startswith("invalid"))
+                      if "offset_diff" in r and r.get("pivot_ok") != "TRUE")
         if not gaps:
             return
         middle = sorted(gaps)[len(gaps) // 2]
@@ -599,8 +606,8 @@ class EbsSimulate:
                    f"median {middle:.0f}, max {max(gaps):.0f}, "
                    f"mean {sum(gaps) / len(gaps):.0f}")
         if doubted:
-            self._note(f"{doubted} left out, their child {ANCHOR_DEPTH} sits too "
-                       f"far from port 1 to be the pivot")
+            self._note(f"{doubted} left out: a pivot that cannot be one, or more "
+                       f"ports than the EBS spans")
 
     def simulate(self, equipment: str = "") -> dict:
         """Run every step in order. Init has to have run first."""
@@ -1012,7 +1019,10 @@ class EbsSimulate:
                 # The port with the highest number sits next to the addr, so its
                 # block is the one this equipment belongs to. Lower-numbered ports
                 # reach further and can fall into a neighbouring addr's block.
-                self._port_addr[key] = by_port[max(by_port)] if by_port else None
+                # A fourth port is written for some equipment and is not one of
+                # the three the EBS spans, so it does not set the base addr.
+                counted = [i for i in by_port if i <= MAX_PORTS]
+                self._port_addr[key] = by_port[max(counted)] if counted else None
                 if len(set(by_port.values())) > 1:
                     print(f"[ebs] {key}: ports span several addr blocks {by_port}, "
                           f"base addr {self._port_addr[key]}")
@@ -1329,7 +1339,7 @@ class EbsSimulate:
         Port 0 is one step past port 1, taken in units rather than in offsets
         because the two can sit on segments of different scales.
         """
-        offsets = self._port_offsets.get(key, {})
+        offsets = self._ports_used(key)
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(addr_a)
         if 1 not in offsets or base_cad is None:
@@ -1371,6 +1381,16 @@ class EbsSimulate:
 
         return along
 
+    def _ports_used(self, key: str) -> dict:
+        """The offsets the placement is worked out from.
+
+        Ports 1 to 3. A fourth is written for some equipment; it is not one the
+        EBS spans, and letting it into the spacing would move every port.
+        """
+        return {index: offset
+                for index, offset in self._port_offsets.get(key, {}).items()
+                if 1 <= index <= MAX_PORTS}
+
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:
         """Offsets of every port measured from the same addr.
@@ -1380,7 +1400,7 @@ class EbsSimulate:
         block. Such an offset is shifted by the distance between that addr and
         the base one, so all of them share an origin again.
         """
-        offsets = dict(self._port_offsets.get(key, {}))
+        offsets = self._ports_used(key)
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(base_addr)
         if base_cad is None:
