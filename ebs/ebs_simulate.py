@@ -58,7 +58,8 @@ MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the a
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
-GRID_OPACITY   = MARKER_OPACITY   # the lines are as see-through as the cells
+GRID_OPACITY   = 0.5      # the lines read as lines, so they are not as faint
+GRID_EMISSION  = 300.0    # and they are not trying to glow through the plant either
 GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
 GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
 MARKER_EMISSION = 10000.0  # how hard the markers emit; raise it if the scene washes
@@ -2202,7 +2203,8 @@ class EbsSimulate:
                 False: (self._marker_material(stage, "clear", COLOR_CLEAR),
                         COLOR_CLEAR),
             }
-            lines = self._marker_material(stage, "grid", GRID_COLOR, GRID_OPACITY)
+            lines = self._marker_material(stage, "grid", GRID_COLOR, GRID_OPACITY,
+                                          GRID_EMISSION)
 
             for face, boxes in built.items():
                 flags = cells.get(face, [])
@@ -2427,7 +2429,8 @@ class EbsSimulate:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
 
     @classmethod
-    def _marker_material(cls, stage, name: str, color, opacity: float = MARKER_OPACITY):
+    def _marker_material(cls, stage, name: str, color, opacity: float = MARKER_OPACITY,
+                         emission: float = MARKER_EMISSION):
         """Flat colour that neither takes the light nor turns its back.
 
         The material carries two shaders. RTX reads the MDL one, which is what
@@ -2439,7 +2442,7 @@ class EbsSimulate:
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
         cls._preview_shader(stage, material, path, color, opacity)
-        cls._mdl_shader(stage, material, path, color, opacity)
+        cls._mdl_shader(stage, material, path, color, opacity, emission)
         return material
 
     @staticmethod
@@ -2463,7 +2466,8 @@ class EbsSimulate:
                                                        "surface")
 
     @staticmethod
-    def _mdl_shader(stage, material, path: str, color, opacity: float) -> None:
+    def _mdl_shader(stage, material, path: str, color, opacity: float,
+                    emission: float) -> None:
         """The one RTX renders.
 
         The colour is emitted rather than lit, so a cell reads the same whatever
@@ -2484,7 +2488,7 @@ class EbsSimulate:
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
             Gf.Vec3f(0.0, 0.0, 0.0))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
-        put("emissive_intensity", Sdf.ValueTypeNames.Float, MARKER_EMISSION)
+        put("emissive_intensity", Sdf.ValueTypeNames.Float, emission)
         put("enable_emission", Sdf.ValueTypeNames.Bool, True)
         put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
