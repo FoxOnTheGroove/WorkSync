@@ -95,7 +95,7 @@ PRUNE_TYPES = frozenset({
     "Material", "Shader", "NodeGraph", "Camera",
 })
 ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
-MAIN_BODY = "MAINBODY"   # the child to take when a level holds more than one
+MAIN_BODY = "MAINBODY"   # the anchor to take when the level above holds several
 PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 
@@ -836,14 +836,15 @@ class EbsSimulate:
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
 
     @staticmethod
-    def _pick_child(children: list) -> Usd.Prim:
+    def _pick_child(children: list, last: bool = False) -> Usd.Prim:
         """Which child to follow down.
 
-        Nearly always there is only one. Where a level holds several, the first
-        one is not always the prim the ports are measured from, and on those the
-        main body is named for it.
+        Nearly always there is only one. Where the last level holds several -
+        the step onto the anchor itself - the first is not always the prim the
+        ports are measured from, and on those equipment the main body is named
+        for it. Higher up, the first child is the only rule.
         """
-        if len(children) > 1:
+        if last and len(children) > 1:
             for child in children:
                 if MAIN_BODY in child.GetName().upper():
                     return child
@@ -857,23 +858,23 @@ class EbsSimulate:
         EBS sits on, so a sweep has nothing to measure against for it.
         """
         current, reached = prim, True
-        for _ in range(depth):
+        for step in range(depth):
             children = _children(current) if current and current.IsValid() else []
             if not children:
                 reached = False
                 break
-            current = cls._pick_child(children)
+            current = cls._pick_child(children, last=step == depth - 1)
         return current, reached
 
     @classmethod
     def _descend_first_child(cls, prim: Usd.Prim, depth: int) -> Usd.Prim:
         """Follow the children down `depth` levels; stop early at the deepest."""
         current = prim
-        for _ in range(depth):
+        for step in range(depth):
             children = _children(current)
             if not children:
                 break
-            current = cls._pick_child(children)
+            current = cls._pick_child(children, last=step == depth - 1)
         return current
 
     # -- port count (XML) ----------------------------------------------------
