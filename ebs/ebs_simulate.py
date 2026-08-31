@@ -2416,7 +2416,7 @@ class EbsSimulate:
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(0.0, 0.0, 0.0))
+            Gf.Vec3f(*color))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*color))
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
@@ -2447,13 +2447,7 @@ class EbsSimulate:
         def put(name, type_name, value):
             shader.CreateInput(name, type_name).Set(value)
 
-        # Nothing diffuse at all. Diffuse shading goes by the angle between the
-        # normal and the light, and the two faces of a quad point opposite ways,
-        # so one of them catches a light the other cannot - which is the whole
-        # of what is left of the two sides looking different. Emission does not
-        # ask which way the surface is facing.
-        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
-            Gf.Vec3f(0.0, 0.0, 0.0))
+        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
         put("emissive_intensity", Sdf.ValueTypeNames.Float, MARKER_EMISSION)
         put("enable_emission", Sdf.ValueTypeNames.Bool, True)
