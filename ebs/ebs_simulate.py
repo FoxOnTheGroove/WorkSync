@@ -63,6 +63,8 @@ GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
 GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
 MARKER_EMISSION = 300.0   # how hard the markers emit; raise it if the scene washes
                           # them out, drop it if they glow
+SHEET_GAP      = 0.001    # how far the back of a sheet stands off the front, as a
+                          # share of the quad's own diagonal
 
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
 LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
@@ -2207,8 +2209,8 @@ class EbsSimulate:
                 for i, (_, quad) in enumerate(boxes):
                     material, colour = materials[bool(i < len(flags) and flags[i])]
                     points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
-                    self._marker_quad(stage, f"{MARKER_ROOT}/{face}_{i}", points,
-                                      material, colour)
+                    self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_{i}", points,
+                                       material, colour)
                     drawn += 1
 
                 plane = self._face_planes.get(face)
@@ -2217,8 +2219,8 @@ class EbsSimulate:
                     continue
                 for i, quad in enumerate(self._grid_bands(local_box, plane, shape)):
                     points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
-                    self._marker_quad(stage, f"{MARKER_ROOT}/{face}_line_{i}",
-                                      points, lines, GRID_COLOR, GRID_OPACITY)
+                    self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_line_{i}",
+                                       points, lines, GRID_COLOR, GRID_OPACITY)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
 
@@ -2371,16 +2373,46 @@ class EbsSimulate:
                 stage.RemovePrim(MARKER_ROOT)
 
     @staticmethod
+    def _face_normal(points: list) -> tuple:
+        """Unit normal of a flat face, from its first three corners."""
+        a, b, c = points[0], points[1], points[2]
+        u = [b[i] - a[i] for i in range(3)]
+        v = [c[i] - a[i] for i in range(3)]
+        n = (u[1] * v[2] - u[2] * v[1],
+             u[2] * v[0] - u[0] * v[2],
+             u[0] * v[1] - u[1] * v[0])
+        length = math.sqrt(sum(value * value for value in n))
+        return tuple(value / length for value in n) if length else (0.0, 0.0, 1.0)
+
+    @classmethod
+    def _marker_sheet(cls, stage, path: str, points: list, material, color,
+                      opacity: float = MARKER_OPACITY) -> None:
+        """A quad drawn as two prims, one facing each way.
+
+        Both faces in one mesh come out on the same triangles, and a ray tracer
+        will take one of an exactly coincident pair and drop the other - so
+        whichever it keeps is the only side that gets shaded, and the other
+        reads differently. Two prims are two pieces of geometry, and the back
+        one stands off by a hair so nothing lands in the same place twice.
+        """
+        normal = cls._face_normal(points)
+        diagonal = math.sqrt(sum((points[2][i] - points[0][i]) ** 2
+                                 for i in range(3)))
+        gap = max(diagonal * SHEET_GAP, 1e-9)
+        behind = [tuple(corner[i] - normal[i] * gap for i in range(3))
+                  for corner in points]
+        cls._marker_quad(stage, path, points, material, color, opacity)
+        cls._marker_quad(stage, path + "_back", behind, material, color, opacity,
+                         flip=True)
+
+    @staticmethod
     def _marker_quad(stage, path: str, points: list, material, color,
-                     opacity: float = MARKER_OPACITY) -> None:
+                     opacity: float = MARKER_OPACITY, flip: bool = False) -> None:
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
-        # Two faces on the same four points, wound opposite ways. A thin walled
-        # MDL material shades its back side from a backface slot OmniPBR does
-        # not fill, so one side of a single face comes out unlit whatever the
-        # mesh says. Give it a front face each way and neither side is the back.
-        mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
-        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3, 3, 2, 1, 0]))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
+        mesh.CreateFaceVertexIndicesAttr(
+            Vt.IntArray([3, 2, 1, 0] if flip else [0, 1, 2, 3]))
         mesh.CreateDoubleSidedAttr(True)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
         mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
