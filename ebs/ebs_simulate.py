@@ -2385,19 +2385,19 @@ class EbsSimulate:
     def _marker_material(stage, name: str, color, opacity: float = MARKER_OPACITY):
         """Flat unlit colour, one per state, reused by every quad.
 
-        The surface emits its colour and reflects nothing: lit, the same state
-        read differently on each face depending on where the lights were, which
-        is the one thing these must not do. The quads are double sided, so the
-        emitted colour is what both sides show.
+        The colour sits on diffuse with nothing emitted: the emissive route
+        did not come through on the far side of a quad. Everything that reads
+        the light is flattened instead - roughness all the way up, no specular,
+        no metal - so the same state still looks the same on every face.
         """
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(0.0, 0.0, 0.0))
-        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*color))
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(0.0, 0.0, 0.0))
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
