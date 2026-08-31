@@ -400,21 +400,29 @@ class EbsSimulate:
                         parents[key] = self._parent_world(rail)
                     to_world = parents[key]
                     port = to_world.Transform(points[1])
-                    spots[eqp_id] = (port, here)
-                    row.update(self._measure(to_world, axis, rail, port, here))
+                    row.update(self._measure(to_world, axis, rail, port, here,
+                                             self._port_addr.get(eqp_id.upper())))
                     # Child 6 is the pivot on nearly every equipment, but not
-                    # all: one sitting a long way off port 1 is some other prim,
-                    # and its numbers say nothing about the placement.
-                    if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
-                        row["pivot_ok"] = "invalid"
+                    # all, and where it is says which kind of not. Distance
+                    # across the rail is no signal at all: equipment stand
+                    # beside the rail as a matter of course.
+                    if abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
+                        # A prim carrying no transform of its own.
+                        row["pivot_ok"] = "invalid:origin"
+                        row["note"] = f"child {ANCHOR_DEPTH} sits on the world origin"
+                    elif abs(row["coord_diff"]) > PIVOT_TOLERANCE:
+                        row["pivot_ok"] = "invalid:axis"
                         row["note"] = (f"child {ANCHOR_DEPTH} is "
-                                       f"{row['coord_diff']:+.3f} off port 1, "
-                                       f"further than {PIVOT_TOLERANCE:g}")
+                                       f"{row['coord_diff']:+.3f} along the rail "
+                                       f"from port 1, further than "
+                                       f"{PIVOT_TOLERANCE:g}")
+                    spots[eqp_id] = (row["_draw"], here)
                 except Exception as e:
                     # One equipment must never take the sweep down with it.
                     row["note"] = f"{type(e).__name__}: {e}"
                     failed.append((eqp_id, row["note"]))
 
+        self._mark_shared(rows)
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
             try:
@@ -440,14 +448,18 @@ class EbsSimulate:
         return self._payload(drawn > 0, f"{drawn} equipment swept"
                              if drawn else "Nothing drawn")
 
-    def _measure(self, to_world, axis: int, rail, port, here) -> dict:
+    def _measure(self, to_world, axis: int, rail, port, here, addr: int) -> dict:
         """One equipment's row: where the pair stands, and how far apart.
 
         Distances are taken along the rail rather than along world X or Y, so a
         rail whose parent is rotated still reads correctly; with no rotation the
-        two are the same number. The offsets are the plain OFFSET_PER_UNIT
-        yardstick, the one thing comparable between equipment whose segments
-        carry different puls.
+        two are the same number. Offsets come twice: on the plain
+        OFFSET_PER_UNIT, the one yardstick comparable between equipment, and on
+        the segment's own puls, which is what its own offsets are written in.
+
+        The row also carries the point to draw the port pillar at - the
+        equipment's own place across the rail, so the pair differ only along
+        the axis being measured.
         """
         origin_local, onward_local, _ = self._rail_frame
         origin = to_world.Transform(origin_local)
@@ -463,7 +475,17 @@ class EbsSimulate:
 
         pivot_run = project(here, along)
         port_run = project(port, along)
-        return {
+        here_across = project(here, across)
+
+        # The port pillar is drawn on the equipment's own line across the rail,
+        # so the pair separate only along the axis the measurement is about.
+        drawn = Gf.Vec3d(origin[0] + along[0] * port_run + across[0] * here_across,
+                         origin[1] + along[1] * port_run + across[1] * here_across,
+                         port[2])
+
+        step = self._addr_step(addr, axis)
+        per_unit = (step[1] / step[0]) if step and step[0] else None
+        row = {
             "axis": "XY"[axis],
             "rail": rail.GetName(),
             "pivot_coord": here[axis],
@@ -471,14 +493,22 @@ class EbsSimulate:
             "port_coord": port[axis],
             "port_offset": port_run * OFFSET_PER_UNIT,
             "coord_diff": port_run - pivot_run,
+            "off_axis_diff": project(port, across) - here_across,
             "offset_diff": (port_run - pivot_run) * OFFSET_PER_UNIT,
-            "off_axis_diff": project(port, across) - project(here, across),
-            "z_diff": port[2] - here[2],
+            "_draw": drawn,
         }
+        if per_unit:
+            row["puls_per_unit"] = per_unit
+            row["pivot_offset_puls"] = pivot_run * per_unit
+            row["port_offset_puls"] = port_run * per_unit
+        return row
 
+    # offset_diff is coord_diff at 100000 and z_diff says nothing, so neither
+    # is written: both are a column of arithmetic the reader can do.
     REPORT_COLUMNS = ("equipment", "pivot_ok", "axis", "pivot_coord", "pivot_offset",
-                      "port_coord", "port_offset", "coord_diff", "offset_diff",
-                      "off_axis_diff", "z_diff", "rail", "prim", "note")
+                      "pivot_offset_puls", "port_coord", "port_offset",
+                      "port_offset_puls", "puls_per_unit", "coord_diff",
+                      "off_axis_diff", "rail", "prim", "note")
 
     def write_report(self, rows: list) -> str:
         """Write the sweep's table where the report path points.
@@ -506,6 +536,32 @@ class EbsSimulate:
         """Numbers rounded enough to read, everything else as it stands."""
         return f"{value:.4f}" if isinstance(value, float) else value
 
+    def _mark_shared(self, rows: list) -> None:
+        """Flag a child 6 that several equipment landed on.
+
+        One prim cannot be the pivot of two machines standing in different
+        places, so all of them are suspect and none of them should weigh on the
+        numbers.
+        """
+        seen = {}
+        for row in rows:
+            if "pivot_coord" not in row:
+                continue
+            spot = (round(row["pivot_coord"], 4), round(row.get("off_axis_diff", 0.0), 4))
+            seen.setdefault(spot, []).append(row)
+        for spot, sharing in seen.items():
+            if len(sharing) < 2:
+                continue
+            others = [r["equipment"] for r in sharing]
+            for row in sharing:
+                mine = [n for n in others if n != row["equipment"]]
+                state = str(row.get("pivot_ok", "TRUE"))
+                row["pivot_ok"] = ("invalid:shared" if state == "TRUE"
+                                   else state + "+shared")
+                row["note"] = ((row.get("note", "") + "; ") if row.get("note") else "") \
+                    + (f"child {ANCHOR_DEPTH} shared with "
+                       + ", ".join(mine[:3]) + (" ..." if len(mine) > 3 else ""))
+
     def _report_spread(self, rows: list) -> None:
         """How the offset differences sit: one constant, or all over the place.
 
@@ -516,7 +572,8 @@ class EbsSimulate:
         # pivot at all would drag the numbers wherever it happens to sit.
         gaps = [r["offset_diff"] for r in rows
                 if "offset_diff" in r and r.get("pivot_ok") == "TRUE"]
-        doubted = sum(1 for r in rows if r.get("pivot_ok") == "invalid")
+        doubted = sum(1 for r in rows
+                      if str(r.get("pivot_ok", "")).startswith("invalid"))
         if not gaps:
             return
         middle = sorted(gaps)[len(gaps) // 2]
