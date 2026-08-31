@@ -56,8 +56,11 @@ CAMERA_FAR     = 1.0e6                    # the far plane stays open
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
 MARKER_OPACITY = 0.35
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
-COLOR_CLEAR    = (0.35, 0.75, 0.4)
-CHECKER_SHADE  = 0.72     # every other cell is shaded, so the grid reads as a grid
+COLOR_CLEAR    = (1.0, 1.0, 1.0)
+GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
+GRID_OPACITY   = 0.8
+GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
+GRID_LIFT      = 0.002    # how far off the surface they sit, so they do not fight it
 
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
 LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
@@ -2189,28 +2192,31 @@ class EbsSimulate:
         built = self._build_cells(local_box)
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, MARKER_ROOT)
-            # Four materials rather than two: neighbouring cells alternate
-            # between the plain colour and a shaded one, so the grid lines read
-            # without drawing any.
-            materials = {}
-            for blocked, base in ((True, COLOR_BLOCKED), (False, COLOR_CLEAR)):
-                for dark in (False, True):
-                    colour = self.shade(base, dark)
-                    name = f"{'blocked' if blocked else 'clear'}{'_dark' if dark else ''}"
-                    materials[(blocked, dark)] = (
-                        self._marker_material(stage, name, colour), colour)
+            materials = {
+                True: (self._marker_material(stage, "blocked", COLOR_BLOCKED),
+                       COLOR_BLOCKED),
+                False: (self._marker_material(stage, "clear", COLOR_CLEAR),
+                        COLOR_CLEAR),
+            }
+            lines = self._marker_material(stage, "grid", GRID_COLOR, GRID_OPACITY)
 
             for face, boxes in built.items():
                 flags = cells.get(face, [])
-                cols = self._grid_shape.get(face, (1, 1))[1]
                 for i, (_, quad) in enumerate(boxes):
-                    blocked = bool(i < len(flags) and flags[i])
-                    dark = ((i // cols) + (i % cols)) % 2 == 1
-                    material, colour = materials[(blocked, dark)]
+                    material, colour = materials[bool(i < len(flags) and flags[i])]
                     points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
                     self._marker_quad(stage, f"{MARKER_ROOT}/{face}_{i}", points,
                                       material, colour)
                     drawn += 1
+
+                plane = self._face_planes.get(face)
+                shape = self._grid_shape.get(face)
+                if not plane or not shape:
+                    continue
+                for i, quad in enumerate(self._grid_bands(local_box, plane, shape)):
+                    points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
+                    self._marker_quad(stage, f"{MARKER_ROOT}/{face}_line_{i}",
+                                      points, lines, GRID_COLOR, GRID_OPACITY)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
 
@@ -2363,37 +2369,73 @@ class EbsSimulate:
                 stage.RemovePrim(MARKER_ROOT)
 
     @staticmethod
-    def shade(colour, dark: bool):
-        """The same colour, dimmed a little, for the checkerboard's other square."""
-        return tuple(c * CHECKER_SHADE for c in colour) if dark else tuple(colour)
-
-    @staticmethod
-    def _marker_quad(stage, path: str, points: list, material, color) -> None:
+    def _marker_quad(stage, path: str, points: list, material, color,
+                     opacity: float = MARKER_OPACITY) -> None:
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3]))
         mesh.CreateDoubleSidedAttr(True)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
-        mesh.CreateDisplayOpacityAttr(Vt.FloatArray([MARKER_OPACITY]))
+        mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
         if material:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
 
     @staticmethod
-    def _marker_material(stage, name: str, color):
-        """Translucent preview surface, one per state, reused by every quad."""
+    def _marker_material(stage, name: str, color, opacity: float = MARKER_OPACITY):
+        """Flat unlit colour, one per state, reused by every quad.
+
+        The surface emits its colour and reflects nothing: lit, the same state
+        read differently on each face depending on where the lights were, which
+        is the one thing these must not do.
+        """
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
-        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(0.0, 0.0, 0.0))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(color[0] * 0.6, color[1] * 0.6, color[2] * 0.6))
-        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(MARKER_OPACITY)
-        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.9)
+            Gf.Vec3f(*color))
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        shader.CreateInput("specularColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(0.0, 0.0, 0.0))
         material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
         return material
+
+    def _grid_bands(self, box: Gf.Range3d, plane, shape) -> list:
+        """The lines between the cells, as thin quads lying on the face.
+
+        One flat colour per state reads better than a checkerboard, but then
+        nothing says where one cell ends. These do, and they sit a hair off the
+        surface so they are not fighting the cells for the same pixels.
+        """
+        fixed_axis, outward, coord, row_axis, col_axis = plane
+        rows, cols = shape
+        lo, hi = box.GetMin(), box.GetMax()
+        longest = max(hi[i] - lo[i] for i in range(3)) or 1.0
+        half = max(longest * GRID_LINE, 1e-6) / 2.0
+        surface = coord + outward * max(longest * GRID_LIFT, 1e-6)
+
+        def band(thin_axis, at, long_axis):
+            quad = []
+            for near, far in ((0, 0), (0, 1), (1, 1), (1, 0)):
+                corner = [0.0, 0.0, 0.0]
+                corner[fixed_axis] = surface
+                corner[thin_axis] = at + (half if near else -half)
+                corner[long_axis] = hi[long_axis] if far else lo[long_axis]
+                quad.append(tuple(corner))
+            return quad
+
+        bands = []
+        for count, along, across in ((rows, row_axis, col_axis),
+                                     (cols, col_axis, row_axis)):
+            first, last = lo[along], hi[along]
+            for step in range(count + 1):
+                bands.append(band(along, first + (last - first) * step / count, across))
+        return bands
 
     # -- camera --------------------------------------------------------------
 
