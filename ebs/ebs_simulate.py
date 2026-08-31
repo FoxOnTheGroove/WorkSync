@@ -2375,8 +2375,12 @@ class EbsSimulate:
                      opacity: float = MARKER_OPACITY) -> None:
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
-        mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
-        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3]))
+        # Two faces on the same four points, wound opposite ways. A thin walled
+        # MDL material shades its back side from a backface slot OmniPBR does
+        # not fill, so one side of a single face comes out unlit whatever the
+        # mesh says. Give it a front face each way and neither side is the back.
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
+        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3, 3, 2, 1, 0]))
         mesh.CreateDoubleSidedAttr(True)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
         mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
