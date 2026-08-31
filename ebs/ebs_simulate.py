@@ -58,7 +58,7 @@ MARKER_OPACITY = 0.35
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
-GRID_OPACITY   = 0.8
+GRID_OPACITY   = MARKER_OPACITY   # the lines are as see-through as the cells
 GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
 GRID_LIFT      = 0.002    # how far off the surface they sit, so they do not fight it
 
@@ -2387,7 +2387,8 @@ class EbsSimulate:
 
         The surface emits its colour and reflects nothing: lit, the same state
         read differently on each face depending on where the lights were, which
-        is the one thing these must not do.
+        is the one thing these must not do. The quads are double sided, so the
+        emitted colour is what both sides show.
         """
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
@@ -2402,6 +2403,9 @@ class EbsSimulate:
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
         shader.CreateInput("specularColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(0.0, 0.0, 0.0))
+        # Nothing bends going through: at 1.0 what is behind a cell stays where
+        # it is, rather than the cell reading as a lens over the machinery.
+        shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)
         material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
         return material
 
