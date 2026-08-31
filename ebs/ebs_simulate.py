@@ -107,6 +107,7 @@ PASS_TYPES  = ("Scope",)      # prim types descended through without counting
 MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
 PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
                          # pivot, whatever the placement is out by
+PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
 
 
 class EbsSimulate:
@@ -433,19 +434,25 @@ class EbsSimulate:
                         row["pivot_ok"] = f"port{count}"
                         row["note"] = f"{count} ports, more than the EBS spans"
                     # Child 6 is the pivot on nearly every equipment, but not
-                    # all, and where it is says which kind of not. Distance
-                    # across the rail is no signal at all: equipment stand
-                    # beside the rail as a matter of course.
+                    # all, and where it is says which kind of not.
                     elif abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
                         # A prim carrying no transform of its own.
                         row["pivot_ok"] = "invalid:origin"
                         row["note"] = f"child {ANCHOR_DEPTH} sits on the world origin"
-                    elif abs(row["coord_diff"]) > PIVOT_TOLERANCE:
-                        row["pivot_ok"] = "invalid:axis"
-                        row["note"] = (f"child {ANCHOR_DEPTH} is "
-                                       f"{row['coord_diff']:+.3f} along the rail "
-                                       f"from port 1, further than "
-                                       f"{PIVOT_TOLERANCE:g}")
+                    else:
+                        across = PIVOT_TOLERANCE * PIVOT_ACROSS
+                        off = []
+                        if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
+                            off.append("axis")
+                        if abs(row["off_axis_diff"]) > across:
+                            off.append("across")
+                        if off:
+                            row["pivot_ok"] = "invalid:" + "+".join(off)
+                            row["note"] = (
+                                f"child {ANCHOR_DEPTH} is "
+                                f"{row['coord_diff']:+.3f} along the rail and "
+                                f"{row['off_axis_diff']:+.3f} across it from port 1, "
+                                f"further than {PIVOT_TOLERANCE:g} / {across:g}")
                     spots[eqp_id] = (row["_draw"], here)
                 except Exception as e:
                     # One equipment must never take the sweep down with it.
@@ -540,7 +547,8 @@ class EbsSimulate:
                       "pivot_coord", "pivot_offset", "pivot_offset_puls",
                       "",
                       "port_coord", "port_offset", "port_offset_puls",
-                      "puls_per_unit", "coord_diff", "rail", "note")
+                      "puls_per_unit", "coord_diff", "off_axis_diff",
+                      "rail", "note")
 
     def write_report(self, rows: list) -> str:
         """Write the sweep's table where the report path points.
