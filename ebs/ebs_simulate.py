@@ -2434,11 +2434,11 @@ class EbsSimulate:
     def _mdl_shader(stage, material, path: str, color, opacity: float) -> None:
         """The one RTX renders.
 
-        thin_walled is the piece that matters: without it a transparent surface
-        is the boundary of a solid, so the far side of a quad is the inside of
-        a lump of glass. With it the quad is a sheet, lit the same from either
-        side. The colour is emitted rather than lit, so a cell reads the same
-        whatever the lights over that part of the plant happen to be doing.
+        The colour is emitted rather than lit, so a cell reads the same whatever
+        the lights over that part of the plant happen to be doing. Which side is
+        looked at is settled by the geometry - each quad carries a face wound
+        each way - rather than by the material: thin_walled belongs to OmniGlass
+        and OmniSurface, and setting it here only earns a warning per marker.
         """
         shader = UsdShade.Shader.Define(stage, path + "/mdl")
         shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
@@ -2451,7 +2451,6 @@ class EbsSimulate:
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
         put("emissive_intensity", Sdf.ValueTypeNames.Float, MARKER_EMISSION)
         put("enable_emission", Sdf.ValueTypeNames.Bool, True)
-        put("thin_walled", Sdf.ValueTypeNames.Bool, True)
         put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
