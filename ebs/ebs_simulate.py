@@ -4,7 +4,7 @@ import math
 import re
 import time
 import xml.etree.ElementTree as ET
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
@@ -94,8 +94,9 @@ PRUNE_TYPES = frozenset({
     "Cylinder", "Sphere", "Plane", "GeomSubset",
     "Material", "Shader", "NodeGraph", "Camera",
 })
-ANCHOR_DEPTH = 6         # how many times to follow child(0) down from the equipment prim
-MAIN_BODY = "MAINBODY"   # names the child 5 to descend through, when there are several
+ANCHOR_DEPTH = 6         # how many transform levels down from the equipment the anchor is
+LEVEL_TYPES = ("Xform", "")   # prim types that count as a level on the way down
+PASS_TYPES  = ("Scope",)      # prim types descended through without counting
 PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 
@@ -279,6 +280,14 @@ class EbsSimulate:
     def get_notes(self) -> list:
         return list(self._notes)
 
+    def _hush(self, loud: bool):
+        """Swallow the diagnostics unless this is the one being kept.
+
+        A sweep runs the whole plant through the same code, and a few thousand
+        console lines will lock the app up on their own.
+        """
+        return nullcontext() if loud else redirect_stdout(io.StringIO())
+
     @contextmanager
     def _stage_timer(self, label: str):
         """Record how long one step of the run took."""
@@ -371,24 +380,19 @@ class EbsSimulate:
                 rows.append(row)
                 try:
                     # Where the equipment itself is: child 6, the prim the EBS
-                    # takes its z from. Without it there is nothing to compare.
+                    # takes its z from. Without one there is nothing to compare.
                     prim = stage.GetPrimAtPath(self._eqp_index[name])
-                    anchor, reached = self._descend_depth(prim, ANCHOR_DEPTH)
-                    row["pivot_ok"] = "TRUE" if reached else "FALSE"
-                    if not reached:
+                    candidates = self._anchor_candidates(prim, ANCHOR_DEPTH)
+                    row["pivot_ok"] = "TRUE" if candidates else "FALSE"
+                    if not candidates:
                         row["note"] = f"no child {ANCHOR_DEPTH} to measure against"
                         failed.append((eqp_id, row["note"]))
                         continue
-                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
-                        tc).ExtractTranslation()
 
                     # The first one keeps its log, so the numbers can be read.
                     self._rail_frame = None
-                    if position == 0:
+                    with self._hush(position == 0):
                         found = self.compute_port_points(stage, eqp_id)
-                    else:
-                        with redirect_stdout(io.StringIO()):
-                            found = self.compute_port_points(stage, eqp_id)
                     if found is None:
                         row["note"] = self._why or "could not be placed"
                         failed.append((eqp_id, row["note"]))
@@ -398,6 +402,13 @@ class EbsSimulate:
                         row["note"] = "no port 1"
                         failed.append((eqp_id, row["note"]))
                         continue
+
+                    # Which of them the ports belong to is the rail's to say.
+                    with self._hush(position == 0):
+                        anchor, _ = self.resolve_anchor(stage, eqp_id, prim,
+                                                        axis, rail)
+                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+                        tc).ExtractTranslation()
 
                     parent = rail.GetParent()
                     key = str(parent.GetPath()) if parent else ""
@@ -641,7 +652,11 @@ class EbsSimulate:
             return self._payload(False, f"Invalid {port_count}-port EBS prim path: {ebs_path}",
                                  equipment=eqp_prim, eqp_id=eqp_id, port_count=port_count)
 
-        anchor = self._descend_first_child(eqp_prim, ANCHOR_DEPTH)
+        with self._stage_timer("resolve anchor"):
+            anchor, reached = self.resolve_anchor(stage, eqp_id, eqp_prim)
+        if not reached:
+            print(f"[ebs] {eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
+                  f"working off the equipment prim")
         self._target = {
             "equipment": eqp_prim,
             "eqp_id": eqp_id,
@@ -838,46 +853,84 @@ class EbsSimulate:
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
 
     @staticmethod
-    def _pick_child(children: list, by_name: bool = False) -> Usd.Prim:
-        """Which child to follow down.
+    def _anchor_candidates(prim: Usd.Prim, depth: int) -> list:
+        """Every prim sitting `depth` transform levels under this one.
 
-        Nearly always there is only one. Where child 5 comes in several, the
-        first of them does not always lead to the prim the ports are measured
-        from, and the one that does is named for the main body - anywhere in
-        the name, in any case. Every other level takes the first child.
+        Only transforms count as a level: a Scope is grouping and is descended
+        through without being counted, and geometry is not on the way to
+        anything. The tree branches, so this is a list rather than one prim.
         """
-        if by_name and len(children) > 1:
-            for child in children:
-                if MAIN_BODY in child.GetName().upper():
-                    return child
-        return children[0]
+        found, stack = [], [(prim, 0)]
+        while stack:
+            current, level = stack.pop()
+            if not current or not current.IsValid():
+                continue
+            for child in _children(current):
+                type_name = child.GetTypeName()
+                if type_name in PASS_TYPES:
+                    stack.append((child, level))          # grouping, not a level
+                    continue
+                if type_name not in LEVEL_TYPES:
+                    continue                              # geometry ends the line
+                if level + 1 >= depth:
+                    found.append(child)
+                else:
+                    stack.append((child, level + 1))
+        return found
 
-    @classmethod
-    def _descend_depth(cls, prim: Usd.Prim, depth: int):
-        """Follow the children down, and say whether it got the whole way.
+    @staticmethod
+    def _descend_first_child(prim: Usd.Prim, depth: int) -> Usd.Prim:
+        """Follow child(0) down `depth` levels; stop early at the deepest prim.
 
-        A prim that runs out of children before the depth is not the anchor the
-        EBS sits on, so a sweep has nothing to measure against for it.
+        What is left when nothing sits the full depth down: better to work off
+        the deepest prim there is than off the equipment's own root.
         """
-        current, reached = prim, True
-        for step in range(depth):
+        current = prim
+        for _ in range(depth):
             children = _children(current) if current and current.IsValid() else []
             if not children:
-                reached = False
                 break
-            current = cls._pick_child(children, by_name=step == depth - 2)
-        return current, reached
-
-    @classmethod
-    def _descend_first_child(cls, prim: Usd.Prim, depth: int) -> Usd.Prim:
-        """Follow the children down `depth` levels; stop early at the deepest."""
-        current = prim
-        for step in range(depth):
-            children = _children(current)
-            if not children:
-                break
-            current = cls._pick_child(children, by_name=step == depth - 2)
+            current = children[0]
         return current
+
+    def resolve_anchor(self, stage, eqp_id: str, prim: Usd.Prim,
+                       axis: int = None, rail=None):
+        """The child 6 the ports are measured from, picked by the rail.
+
+        An equipment can hold several prims that deep. The one the ports belong
+        to is the one lined up with the rail: on a rail running along X they
+        share a Y, on one running along Y they share an X. So the candidate
+        whose off-axis coordinate is nearest the rail's is the anchor.
+
+        Returns (anchor, reached); reached is False when nothing is that deep.
+        """
+        candidates = self._anchor_candidates(prim, ANCHOR_DEPTH)
+        if not candidates:
+            return self._descend_first_child(prim, ANCHOR_DEPTH), False
+        if len(candidates) == 1:
+            return candidates[0], True
+
+        if axis is None or rail is None:
+            found = self.compute_port_points(stage, eqp_id)
+            if found is None:
+                return candidates[0], True
+            _, axis, rail = found
+
+        tc = Usd.TimeCode.Default()
+        other = 1 - axis                       # the axis the rail does not run on
+        here = UsdGeom.Xformable(rail).ComputeLocalToWorldTransform(
+            tc).ExtractTranslation()[other]
+
+        best, best_gap = candidates[0], None
+        for candidate in candidates:
+            spot = UsdGeom.Xformable(candidate).ComputeLocalToWorldTransform(
+                tc).ExtractTranslation()
+            gap = abs(spot[other] - here)
+            if best_gap is None or gap < best_gap:
+                best, best_gap = candidate, gap
+        print(f"[ebs]   {len(candidates)} prims {ANCHOR_DEPTH} levels down, took "
+              f"{best.GetName()}: {best_gap:.4f} off the rail on {'XY'[other]}")
+        return best, True
 
     # -- port count (XML) ----------------------------------------------------
 
