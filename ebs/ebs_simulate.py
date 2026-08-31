@@ -105,6 +105,18 @@ PRUNE_TYPES = frozenset({
 ANCHOR_DEPTH = 6         # how many transform levels down from the equipment the anchor is
 PASS_TYPES  = ("Scope",)      # prim types descended through without counting
 MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
+
+# What each pivot_ok says, for the report's note column. The log keeps the long
+# version; the sheet only needs to say which bucket a row fell into.
+PIVOT_NOTES = {
+    "TRUE": "",
+    "FALSE": "child 6 없음",
+    "no-xml": "xml에 없음",
+    "xml-invalid": "xml 값 사용 불가",
+    "origin": "피봇이 원점",
+    "shared": "다른 장비와 좌표 겹침",
+}
+PIVOT_WAYS = {"axis": "수평", "across": "수직"}   # which way a pivot is out by
 PIVOT_TOLERANCE = 1.0    # units: child 6 further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
@@ -432,34 +444,32 @@ class EbsSimulate:
                     count = len(self._port_map.get(eqp_id.upper(), ()))
                     if count > MAX_PORTS:
                         row["pivot_ok"] = f"port{count}"
-                        row["note"] = f"{count} ports, more than the EBS spans"
                     # Child 6 is the pivot on nearly every equipment, but not
                     # all, and where it is says which kind of not.
                     elif abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
                         # A prim carrying no transform of its own.
                         row["pivot_ok"] = "invalid:origin"
-                        row["note"] = f"child {ANCHOR_DEPTH} sits on the world origin"
                     else:
-                        across = PIVOT_TOLERANCE * PIVOT_ACROSS
                         off = []
                         if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
                             off.append("axis")
-                        if abs(row["off_axis_diff"]) > across:
+                        if abs(row["off_axis_diff"]) > PIVOT_TOLERANCE * PIVOT_ACROSS:
                             off.append("across")
                         if off:
                             row["pivot_ok"] = "invalid:" + "+".join(off)
-                            row["note"] = (
-                                f"child {ANCHOR_DEPTH} is "
-                                f"{row['coord_diff']:+.3f} along the rail and "
-                                f"{row['off_axis_diff']:+.3f} across it from port 1, "
-                                f"further than {PIVOT_TOLERANCE:g} / {across:g}")
                     spots[eqp_id] = (row["_draw"], here)
                 except Exception as e:
-                    # One equipment must never take the sweep down with it.
+                    # One equipment must never take the sweep down with it. The
+                    # message is the only record of what went wrong, so unlike
+                    # the rest of the rows this one keeps its own note.
+                    row["pivot_ok"] = "error"
                     row["note"] = f"{type(e).__name__}: {e}"
                     failed.append((eqp_id, row["note"]))
 
         self._mark_shared(rows)
+        for row in rows:
+            if row.get("pivot_ok") != "error":
+                row["note"] = self._pivot_note(row.get("pivot_ok", ""))
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
             try:
@@ -576,6 +586,25 @@ class EbsSimulate:
         """Numbers rounded enough to read, everything else as it stands."""
         return f"{value:.4f}" if isinstance(value, float) else value
 
+    @staticmethod
+    def _pivot_note(state: str) -> str:
+        """The short of what a pivot_ok says, for the note column."""
+        if state.startswith("port"):
+            return f"포트 {state[4:]}개"
+        if not state.startswith("invalid:"):
+            return PIVOT_NOTES.get(state, state)
+
+        parts = state[len("invalid:"):].split("+")
+        said = []
+        # Being out along the rail and across it is the one thing said twice
+        # over, so the two go in one phrase rather than two.
+        ways = [PIVOT_WAYS[way] for way in ("axis", "across") if way in parts]
+        if ways:
+            said.append(f"좌표 벗어남({' && '.join(ways)})")
+        said += [PIVOT_NOTES.get(part, part) for part in parts
+                 if part not in PIVOT_WAYS]
+        return ", ".join(said)
+
     def _mark_shared(self, rows: list) -> None:
         """Flag a child 6 that several equipment landed on.
 
@@ -592,15 +621,10 @@ class EbsSimulate:
         for spot, sharing in seen.items():
             if len(sharing) < 2:
                 continue
-            others = [r["equipment"] for r in sharing]
             for row in sharing:
-                mine = [n for n in others if n != row["equipment"]]
                 state = str(row.get("pivot_ok", "TRUE"))
                 row["pivot_ok"] = ("invalid:shared" if state == "TRUE"
                                    else state + "+shared")
-                row["note"] = ((row.get("note", "") + "; ") if row.get("note") else "") \
-                    + (f"child {ANCHOR_DEPTH} shared with "
-                       + ", ".join(mine[:3]) + (" ..." if len(mine) > 3 else ""))
 
     def _report_spread(self, rows: list) -> None:
         """How the offset differences sit: one constant, or all over the place.
