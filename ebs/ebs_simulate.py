@@ -454,7 +454,7 @@ class EbsSimulate:
                     port = to_world.Transform(points[1])
                     row.update(self._measure(to_world, axis, rail, port, here,
                                              self._port_addr.get(eqp_id.upper())))
-                    spots[eqp_id] = (row["_draw"], here)
+                    row["_port"], row["_here"] = port, here
 
                     # The pivot is what it is whatever the row says, so this
                     # only decides what the row says. A prim carrying no
@@ -482,6 +482,18 @@ class EbsSimulate:
                     failed.append((eqp_id, row["note"]))
 
         self._mark_shared(rows)
+
+        # The port pillar normally shares the equipment's line across the rail,
+        # so the pair part only along the axis being measured. On a row that
+        # came out invalid that alignment would be a claim the row does not
+        # make, so those are drawn where they were actually worked out to be.
+        for row in rows:
+            if "_draw" not in row:
+                continue
+            doubted = str(row.get("pivot_ok", "")).startswith("invalid")
+            spots[row["equipment"]] = (row["_port"] if doubted else row["_draw"],
+                                       row["_here"])
+
         for row in rows:
             if row.get("pivot_ok") == "error":
                 continue                      # its own message is all there is
