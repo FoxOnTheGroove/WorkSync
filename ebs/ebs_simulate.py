@@ -1,4 +1,3 @@
-import csv
 import io
 import math
 import re
@@ -96,8 +95,10 @@ GRID = 1                 # divisions given to the longest edge; the others get
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
 REACH_RATIO = 1.5        # how far out to look for the nearest mesh, same share
-PRECISION_BBOX = "bbox"      # one box per equipment
-PRECISION_MESH = "mesh"      # one box per mesh
+# Only 'triangle' reads geometry; 'bbox' and 'mesh' both stop at one box per
+# geometry prim and are the same test today.
+PRECISION_BBOX = "bbox"
+PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"  # the mesh triangles themselves
 
 # Prim types that can never contain equipment. Descending into them is what made
@@ -112,17 +113,6 @@ PASS_TYPES  = ("Scope",)      # prim types descended through without counting
 MIN_PORTS = 2            # ports a placement needs: one gap to step by, at least
 MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
 
-# What each pivot_ok says, for the report's note column. The log keeps the long
-# version; the sheet only needs to say which bucket a row fell into.
-PIVOT_NOTES = {
-    "TRUE": "",
-    "FALSE": "depth 미달",
-    "no-xml": "xml에 없음",
-    "xml-invalid": "xml 값 사용 불가",
-    "origin": "피봇이 원점",
-    "shared": "다른 장비와 좌표 겹침",
-}
-PIVOT_WAYS = {"axis": "수평", "across": "수직"}   # which way a pivot is out by
 PIVOT_TOLERANCE = 1.0    # units: a pivot further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
@@ -143,7 +133,6 @@ class EbsSimulate:
         self._search_root: str = ""         # limit the scan to this subtree when set
         self._eqp_index: dict = {}          # "EQP_########" -> prim path
         self._port_map: dict = {}           # "########" -> sorted port indices
-        self._port_elements: dict = {}      # "########" -> port elements in port order
         self._port_offsets: dict = {}       # "########" -> {index: offset}
         self._port_addr: dict = {}          # "########" -> base addr number
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
@@ -154,8 +143,6 @@ class EbsSimulate:
         self._rail_root: str = ""           # parent path holding the rail prims
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._rail_frame = None             # (addr point, one length on, axis) in rail space
-        self._report_path: str = ""         # where the sweep writes its csv
-        self._mesh_bounds: dict = {}        # equipment path -> [(mesh path, box)]
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._visible: dict = {}            # prim path -> visibility, for one run
         self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
@@ -180,7 +167,6 @@ class EbsSimulate:
         path = (path or "").strip()
         if path != self._xml_path:
             self._port_map = {}
-            self._port_elements = {}
             self._ready = False          # the port table has to be read again
         self._xml_path = path
 
@@ -239,10 +225,6 @@ class EbsSimulate:
         """
         self._rail_nudge = float(value or 0.0)
 
-    def set_report_path(self, path: str) -> None:
-        """Where a sweep writes its table. Empty writes none."""
-        self._report_path = (path or "").strip()
-
     def set_rail_root(self, path: str) -> None:
         """Parent prim holding the rail_<a>_<b> prims."""
         self._rail_index = None
@@ -270,8 +252,6 @@ class EbsSimulate:
         self.clear_sweep()
         self._eqp_index = {}
         self._port_map = {}
-        self._port_elements = {}
-        self._mesh_bounds = {}
         self._triangles = {}
         self._visible = {}
         self._timings = []
@@ -414,9 +394,9 @@ class EbsSimulate:
                     anchor, reached = self.resolve_anchor(prim)
                     row["pivot_ok"] = "TRUE" if reached else "FALSE"
                     if not reached:
-                        row["note"] = (f"nothing {ANCHOR_DEPTH} levels down to "
-                                       f"measure against")
-                        failed.append((eqp_id, row["note"]))
+                        row["why"] = (f"nothing {ANCHOR_DEPTH} levels down to "
+                                      f"measure against")
+                        failed.append((eqp_id, row["why"]))
                         continue
                     here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
                         tc).ExtractTranslation()
@@ -474,12 +454,11 @@ class EbsSimulate:
                         # matter: a machine with more ports than the EBS spans.
                         row["pivot_ok"] = f"port{count}"
                 except Exception as e:
-                    # One equipment must never take the sweep down with it. The
-                    # message is the only record of what went wrong, so unlike
-                    # the rest of the rows this one keeps its own note.
+                    # One equipment must never take the sweep down with it,
+                    # and the message is the only record of what went wrong.
                     row["pivot_ok"] = "error"
-                    row["note"] = f"{type(e).__name__}: {e}"
-                    failed.append((eqp_id, row["note"]))
+                    row["why"] = f"{type(e).__name__}: {e}"
+                    failed.append((eqp_id, row["why"]))
 
         self._mark_shared(rows)
 
@@ -494,15 +473,6 @@ class EbsSimulate:
             spots[row["equipment"]] = (row["_port"] if doubted else row["_draw"],
                                        row["_here"])
 
-        for row in rows:
-            if row.get("pivot_ok") == "error":
-                continue                      # its own message is all there is
-            # An unreadable XML row says which way it was unreadable; the rest
-            # say which bucket they fell into.
-            if row.get("pivot_ok") == "xml-invalid" and row.get("why"):
-                row["note"] = row["why"]
-            else:
-                row["note"] = self._pivot_note(row.get("pivot_ok", ""))
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
             try:
@@ -512,10 +482,6 @@ class EbsSimulate:
         self._note(f"port 1 and equipment drawn for {drawn} of "
                    f"{len(names)} equipment")
         self._report_spread(rows)
-        with self._stage_timer("write report"):
-            written = self.write_report(rows)
-        if written:
-            self._note(f"report written to {written}")
 
         # Grouped by reason: hundreds of equipment failing the same way is one
         # thing to look at, not hundreds.
@@ -526,7 +492,9 @@ class EbsSimulate:
             self._note(f"{len(skipped)} skipped, {why}: " + ", ".join(skipped[:6])
                        + (" ..." if len(skipped) > 6 else ""))
         return self._payload(drawn > 0, f"{drawn} equipment swept"
-                             if drawn else "Nothing drawn")
+                             if drawn else "Nothing drawn",
+                             rows=[{k: v for k, v in row.items()
+                                    if not k.startswith("_")} for row in rows])
 
     def _measure(self, to_world, axis: int, rail, port, here, addr: int) -> dict:
         """One equipment's row: where the pair stands, and how far apart.
@@ -582,61 +550,6 @@ class EbsSimulate:
             row["pivot_offset_puls"] = pivot_run * per_unit
             row["port_offset_puls"] = port_run * per_unit
         return row
-
-    # A blank column between what the equipment says and what the ports say,
-    # so the two halves read apart. offset_diff is coord_diff at 100000 and the
-    # other two dropped columns are not what anyone reads the table for.
-    REPORT_COLUMNS = ("equipment", "pivot_ok", "axis",
-                      "pivot_coord", "pivot_offset", "pivot_offset_puls",
-                      "",
-                      "port_coord", "port_offset", "port_offset_puls",
-                      "puls_per_unit", "coord_diff", "off_axis_diff",
-                      "rail", "note")
-
-    def write_report(self, rows: list) -> str:
-        """Write the sweep's table where the report path points.
-
-        Comma separated and BOM'd, so Excel opens it on a double click with the
-        equipment names intact.
-        """
-        if not self._report_path or not rows:
-            return ""
-        try:
-            with open(self._report_path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=self.REPORT_COLUMNS,
-                                        extrasaction="ignore")
-                writer.writeheader()
-                for row in rows:
-                    writer.writerow({k: self._cell(row.get(k, ""))
-                                     for k in self.REPORT_COLUMNS})
-        except Exception as e:
-            self._note(f"could not write {self._report_path}: {e}")
-            return ""
-        return self._report_path
-
-    @staticmethod
-    def _cell(value):
-        """Numbers rounded enough to read, everything else as it stands."""
-        return f"{value:.4f}" if isinstance(value, float) else value
-
-    @staticmethod
-    def _pivot_note(state: str) -> str:
-        """The short of what a pivot_ok says, for the note column."""
-        if state.startswith("port"):
-            return f"포트 {state[4:]}개"
-        if not state.startswith("invalid:"):
-            return PIVOT_NOTES.get(state, state)
-
-        parts = state[len("invalid:"):].split("+")
-        said = []
-        # Being out along the rail and across it is the one thing said twice
-        # over, so the two go in one phrase rather than two.
-        ways = [PIVOT_WAYS[way] for way in ("axis", "across") if way in parts]
-        if ways:
-            said.append(f"좌표 벗어남({' && '.join(ways)})")
-        said += [PIVOT_NOTES.get(part, part) for part in parts
-                 if part not in PIVOT_WAYS]
-        return ", ".join(said)
 
     def _mark_shared(self, rows: list) -> None:
         """Flag a pivot that several equipment landed on.
@@ -834,7 +747,6 @@ class EbsSimulate:
         stage = self._get_stage()
         self._eqp_index = {}
         self._rail_index = None
-        self._mesh_bounds = {}
         self._triangles = {}
         if stage is None:
             return 0
@@ -935,11 +847,6 @@ class EbsSimulate:
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
 
     @staticmethod
-    def _descend_first_child(prim: Usd.Prim, depth: int) -> Usd.Prim:
-        """Follow child(0) down `depth` levels; stop early at the deepest prim."""
-        return EbsSimulate.resolve_anchor(prim, depth)[0]
-
-    @staticmethod
     def resolve_anchor(prim: Usd.Prim, depth: int = ANCHOR_DEPTH):
         """The first child `depth` levels down, and whether it got that far.
 
@@ -973,7 +880,6 @@ class EbsSimulate:
         found by their port-id and sorted by n.
         """
         self._port_map = {}
-        self._port_elements = {}
         self._port_offsets = {}
         self._port_addr = {}
         self._port_addr_of = {}
@@ -1033,7 +939,6 @@ class EbsSimulate:
             for key, by_index in found.items():
                 indices = sorted(by_index)
                 self._port_map[key] = indices
-                self._port_elements[key] = [by_index[i][0] for i in indices]
                 self._port_offsets[key] = {i: by_index[i][1] for i in indices}
                 by_port = {i: by_index[i][2] for i in indices
                            if by_index[i][2] is not None}
@@ -1235,17 +1140,6 @@ class EbsSimulate:
             if abs(length) > 1e-9:
                 return abs(length), puls
         return None
-
-    def compute_rail_point(self, stage: Usd.Stage, eqp_id: str):
-        """Where the virtual port 0 sits, in the rail's own space.
-
-        Returns (point, axis, rail), the port-0 entry of compute_port_points.
-        """
-        found = self.compute_port_points(stage, eqp_id)
-        if found is None:
-            return None
-        points, axis, rail = found
-        return points[0], axis, rail
 
     def compute_port_points(self, stage: Usd.Stage, eqp_id: str):
         """Where every port sits, in the rail's own space.
@@ -1992,33 +1886,6 @@ class EbsSimulate:
             stack.extend(_children(prim))
         return found, visited
 
-    def _geometry_bounds(self, prim: Usd.Prim, cache) -> list:
-        """World bounds of each geometry prim under `prim`, cached per equipment.
-
-        The equipment does not move, so this is paid once. Descent stops at each
-        geometry prim, so nested meshes are counted once and materials are not
-        walked at all.
-        """
-        key = str(prim.GetPath())
-        if key in self._mesh_bounds:
-            return self._mesh_bounds[key]
-
-        bounds = []
-        stack = [prim]
-        while stack:
-            current = stack.pop()
-            type_name = current.GetTypeName()
-            if type_name in GEOMETRY_TYPES:
-                box = cache.ComputeWorldBound(current).ComputeAlignedRange()
-                if not box.IsEmpty():
-                    bounds.append((str(current.GetPath()), box))
-                continue
-            if type_name in PRUNE_TYPES or type_name.endswith("Light"):
-                continue
-            stack.extend(_children(current))
-        self._mesh_bounds[key] = bounds
-        return bounds
-
     def _build_cells(self, box: Gf.Range3d) -> dict:
         """Cells per face in the prim's local axes, left to right, top to bottom.
 
@@ -2028,7 +1895,8 @@ class EbsSimulate:
 
         The longest edge of the EBS is cut into GRID divisions and every other
         edge takes the whole number of those that fits it best, so the cells come
-        out as square as the box allows: 5x5 on a cube, 5x3 on a flatter one.
+        out as square as the box allows. GRID is 1, so that is one cell a face;
+        raising it brings the grid back.
         """
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis                        # front/back, not evaluated
@@ -2760,7 +2628,7 @@ class EbsSimulate:
 
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
                  equipment=None, eqp_id: str = "", port_count=None,
-                 distances: dict = None) -> dict:
+                 distances: dict = None, rows: list = None) -> dict:
         """Build the result dict. Target fields come from the prepared target
         unless explicitly passed (prepare reports them before the target is set)."""
         target = self._target or {}
@@ -2779,6 +2647,7 @@ class EbsSimulate:
             "hit_count": hit_count,
             "grid": dict(self._grid_shape),
             "distances": distances or {},
+            "rows": rows or [],              # a sweep's table, for whoever writes it out
             "timings": list(self._timings),
             "notes": list(self._notes),
             "total_ms": (time.perf_counter() - self._started) * 1000.0,

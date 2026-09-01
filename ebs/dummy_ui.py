@@ -1,8 +1,10 @@
+import csv
+
 import omni.ui as ui
 
 from .ebs_simulate_service import EbsSimulateService, FACES
 
-__all__ = ["EbsDummyUI"]
+__all__ = ["EbsDummyUI", "SweepLog"]
 
 COLOR_HIT      = 0xFF3333DD      # collision (ABGR: red)
 COLOR_CLEAR    = 0xFF4C7C4C      # clear
@@ -18,6 +20,8 @@ def shade(colour: int, dark: bool) -> int:
     for shift in (0, 8, 16):
         out |= int(((colour >> shift) & 0xFF) * CHECKER_SHADE) << shift
     return out
+
+
 CELL_SIZE      = 26
 CELL_GAP       = 2
 
@@ -30,6 +34,89 @@ LOG_STYLE = {
 }
 
 FACE_LABEL = {"left": "Left", "ceiling": "Ceiling", "right": "Right"}
+
+
+class SweepLog:
+    """The sweep's rows as a spreadsheet.
+
+    Nothing here touches USD or the simulation: a sweep hands back a row per
+    equipment, and this decides what a reader is shown - which columns, in what
+    order, and what each verdict is called in the note. That is a question
+    about the sheet, so it lives with the rest of the presentation rather than
+    in the implementation.
+    """
+
+    # A blank column between what the equipment says and what the ports say, so
+    # the two halves read apart. offset_diff is coord_diff at 100000 and the
+    # other dropped columns are not what anyone reads the table for.
+    COLUMNS = ("equipment", "pivot_ok", "axis",
+               "pivot_coord", "pivot_offset", "pivot_offset_puls",
+               "",
+               "port_coord", "port_offset", "port_offset_puls",
+               "puls_per_unit", "coord_diff", "off_axis_diff",
+               "rail", "note")
+
+    # What each pivot_ok says, in the note column. The run log keeps the long
+    # version; the sheet only needs to say which bucket a row fell into.
+    NOTES = {
+        "TRUE": "",
+        "FALSE": "depth 미달",
+        "no-xml": "xml에 없음",
+        "xml-invalid": "xml 값 사용 불가",
+        "origin": "피봇이 원점",
+        "shared": "다른 장비와 좌표 겹침",
+    }
+    WAYS = {"axis": "수평", "across": "수직"}   # which way a pivot is out by
+
+    @classmethod
+    def write(cls, path: str, rows: list) -> str:
+        """Write the table where `path` points, and say where it went.
+
+        Comma separated and BOM'd, so Excel opens it on a double click with the
+        equipment names intact. No path or no rows writes nothing.
+        """
+        path = (path or "").strip()
+        if not path or not rows:
+            return ""
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=cls.COLUMNS,
+                                    extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                out = {k: cls._cell(row.get(k, "")) for k in cls.COLUMNS}
+                out["note"] = cls.note(row)
+                writer.writerow(out)
+        return path
+
+    @classmethod
+    def note(cls, row: dict) -> str:
+        """One row's note: why it could not be read, or which bucket it is in."""
+        state = str(row.get("pivot_ok", ""))
+        why = row.get("why", "")
+        # A row that fell over, and an unreadable XML row, each say what was
+        # actually wrong; the rest say which bucket they fell into.
+        if why and state in ("error", "xml-invalid"):
+            return why
+        if state.startswith("port"):
+            return f"포트 {state[4:]}개"
+        if not state.startswith("invalid:"):
+            return cls.NOTES.get(state, state)
+
+        parts = state[len("invalid:"):].split("+")
+        said = []
+        # Being out along the rail and across it is the one thing said twice
+        # over, so the two go in one phrase rather than two.
+        ways = [cls.WAYS[way] for way in ("axis", "across") if way in parts]
+        if ways:
+            said.append(f"좌표 벗어남({' && '.join(ways)})")
+        said += [cls.NOTES.get(part, part) for part in parts
+                 if part not in cls.WAYS]
+        return ", ".join(said)
+
+    @staticmethod
+    def _cell(value):
+        """Numbers rounded enough to read, everything else as it stands."""
+        return f"{value:.4f}" if isinstance(value, float) else value
 
 
 class EbsDummyUI:
@@ -213,7 +300,20 @@ class EbsDummyUI:
 
     def _on_sweep(self):
         self._apply_settings()
-        self._render(EbsSimulateService.sweep_ports())
+        result = EbsSimulateService.sweep_ports()
+        self._render(result)
+        self._write_report(result.get("rows", []))
+
+    def _write_report(self, rows: list):
+        """Put the sweep's rows on disk, and say so under the status line."""
+        path = self._report_field.model.get_value_as_string()
+        try:
+            written = SweepLog.write(path, rows)
+        except Exception as e:
+            self._set_status(f"Could not write {path}: {e}")
+            return
+        if written:
+            self._set_status(f"{len(rows)} rows written to {written}")
 
     def _on_clear_markers(self):
         EbsSimulateService.clear_markers()
@@ -234,8 +334,6 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
         EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
-        EbsSimulateService.set_report_path(
-            self._report_field.model.get_value_as_string())
         modes = ("bbox", "mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_precision(modes[max(0, min(index, 2))])
