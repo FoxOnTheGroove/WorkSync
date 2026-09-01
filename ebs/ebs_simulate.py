@@ -57,11 +57,6 @@ MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell
 MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the alpha
 COLOR_BLOCKED  = (0.9, 0.1, 0.1)
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
-GRID_COLOR     = (0.05, 0.05, 0.05)   # the lines between the cells
-GRID_OPACITY   = 0.5      # the lines read as lines, so they are not as faint
-GRID_EMISSION  = 300.0    # and they are not trying to glow through the plant either
-GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
-GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
 MARKER_EMISSION = 10000.0  # how hard the markers emit; raise it if the scene washes
                            # them out, drop it if they glow
 SHEET_GAP      = 0.001    # how far the back of a sheet stands off the front, as a
@@ -86,8 +81,9 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-GRID = 5                 # divisions given to the longest edge; the others get
-                         # an integer count that keeps the cells near square
+GRID = 1                 # divisions given to the longest edge; the others get
+                         # an integer count that keeps the cells near square. At
+                         # 1 a face is one cell, which is the whole face
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
 REACH_RATIO = 1.5        # how far out to look for the nearest mesh, same share
@@ -2190,9 +2186,6 @@ class EbsSimulate:
                 False: (self._marker_material(stage, "clear", COLOR_CLEAR),
                         COLOR_CLEAR),
             }
-            lines = self._marker_material(stage, "grid", GRID_COLOR, GRID_OPACITY,
-                                          GRID_EMISSION)
-
             for face, boxes in built.items():
                 flags = cells.get(face, [])
                 for i, (_, quad) in enumerate(boxes):
@@ -2201,15 +2194,6 @@ class EbsSimulate:
                     self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_{i}", points,
                                        material, colour)
                     drawn += 1
-
-                plane = self._face_planes.get(face)
-                shape = self._grid_shape.get(face)
-                if not plane or not shape:
-                    continue
-                for i, quad in enumerate(self._grid_bands(local_box, plane, shape)):
-                    points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
-                    self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_line_{i}",
-                                       points, lines, GRID_COLOR, GRID_OPACITY)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
 
@@ -2484,38 +2468,6 @@ class EbsSimulate:
         put("specular_level", Sdf.ValueTypeNames.Float, 0.0)
         material.CreateSurfaceOutput("mdl").ConnectToSource(
             shader.ConnectableAPI(), "out")
-
-    def _grid_bands(self, box: Gf.Range3d, plane, shape) -> list:
-        """The lines between the cells, as thin quads lying on the face.
-
-        One flat colour per state reads better than a checkerboard, but then
-        nothing says where one cell ends. These do, and they sit a hair off the
-        surface so they are not fighting the cells for the same pixels.
-        """
-        fixed_axis, outward, coord, row_axis, col_axis = plane
-        rows, cols = shape
-        lo, hi = box.GetMin(), box.GetMax()
-        longest = max(hi[i] - lo[i] for i in range(3)) or 1.0
-        half = max(longest * GRID_LINE, 1e-6) / 2.0
-        surface = coord + outward * max(longest * GRID_LIFT, 1e-6)
-
-        def band(thin_axis, at, long_axis):
-            quad = []
-            for near, far in ((0, 0), (0, 1), (1, 1), (1, 0)):
-                corner = [0.0, 0.0, 0.0]
-                corner[fixed_axis] = surface
-                corner[thin_axis] = at + (half if near else -half)
-                corner[long_axis] = hi[long_axis] if far else lo[long_axis]
-                quad.append(tuple(corner))
-            return quad
-
-        bands = []
-        for count, along, across in ((rows, row_axis, col_axis),
-                                     (cols, col_axis, row_axis)):
-            first, last = lo[along], hi[along]
-            for step in range(count + 1):
-                bands.append(band(along, first + (last - first) * step / count, across))
-        return bands
 
     # -- camera --------------------------------------------------------------
 
