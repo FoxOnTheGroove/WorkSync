@@ -109,6 +109,7 @@ PRUNE_TYPES = frozenset({
 })
 ANCHOR_DEPTH = 6         # how many transform levels down from the equipment the anchor is
 PASS_TYPES  = ("Scope",)      # prim types descended through without counting
+MIN_PORTS = 2            # ports a placement needs: one gap to step by, at least
 MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
 
 # What each pivot_ok says, for the report's note column. The log keeps the long
@@ -426,9 +427,15 @@ class EbsSimulate:
                         found = self.compute_port_points(stage, eqp_id)
                     if found is None:
                         # Told apart: an equipment the XML has never heard of,
-                        # and one it carries but cannot be read for.
-                        row["pivot_ok"] = ("no-xml" if eqp_id.upper() not in
-                                           self._port_map else "xml-invalid")
+                        # one with too few ports to place anything off, and one
+                        # it carries but cannot otherwise be read for.
+                        listed = self._port_map.get(eqp_id.upper())
+                        if listed is None:
+                            row["pivot_ok"] = "no-xml"
+                        elif len(listed) < MIN_PORTS:
+                            row["pivot_ok"] = f"port{len(listed)}"
+                        else:
+                            row["pivot_ok"] = "xml-invalid"
                         row["why"] = self._why or "배치 계산 실패"
                         failed.append((eqp_id, row["why"]))
                         continue
