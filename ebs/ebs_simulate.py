@@ -108,7 +108,6 @@ PRUNE_TYPES = frozenset({
     "Material", "Shader", "NodeGraph", "Camera",
 })
 ANCHOR_DEPTH = 6         # how many transform levels down from the equipment the anchor is
-LEVEL_TYPES = ("Xform", "")   # prim types that count as a level on the way down
 PASS_TYPES  = ("Scope",)      # prim types descended through without counting
 MIN_PORTS = 2            # ports a placement needs: one gap to step by, at least
 MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
@@ -124,7 +123,6 @@ PIVOT_NOTES = {
     "shared": "다른 장비와 좌표 겹침",
 }
 PIVOT_WAYS = {"axis": "수평", "across": "수직"}   # which way a pivot is out by
-PIVOT_CHECKED = "invalid에서 pivot 검증완료"   # another prim that deep does fit
 PIVOT_TOLERANCE = 1.0    # units: a pivot further than this from port 1 is not the
                          # pivot, whatever the placement is out by
 PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
@@ -471,12 +469,6 @@ class EbsSimulate:
                         row["pivot_ok"] = "invalid:origin"
                     elif off:
                         row["pivot_ok"] = "invalid:" + "+".join(off)
-                        # The first child is out, but is any of them right? If
-                        # one of the others lands on the rail where the port
-                        # says, the equipment has a pivot after all.
-                        with self._hush(position == 0):
-                            if self._pivot_on_the_rail(prim, to_world, port):
-                                row["checked"] = PIVOT_CHECKED
                     elif count > MAX_PORTS:
                         # Last of all, and only when nothing else was the
                         # matter: a machine with more ports than the EBS spans.
@@ -511,9 +503,6 @@ class EbsSimulate:
                 row["note"] = row["why"]
             else:
                 row["note"] = self._pivot_note(row.get("pivot_ok", ""))
-            if row.get("checked"):
-                row["note"] = ((row["note"] + ", ") if row["note"] else "") \
-                    + row["checked"]
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
             try:
@@ -539,79 +528,6 @@ class EbsSimulate:
         return self._payload(drawn > 0, f"{drawn} equipment swept"
                              if drawn else "Nothing drawn")
 
-    def _rail_basis(self, to_world):
-        """Where the addr sits in world, and the two directions off it.
-
-        along runs the way the rail does; across is at right angles to it in
-        the ground plane. Everything either of them is measured against comes
-        off this, so the measurement and the search agree by construction.
-        """
-        origin_local, onward_local, _ = self._rail_frame
-        origin = to_world.Transform(origin_local)
-        onward = to_world.Transform(onward_local)
-        run = (onward[0] - origin[0], onward[1] - origin[1])
-        length = math.sqrt(run[0] ** 2 + run[1] ** 2) or 1.0
-        along = (run[0] / length, run[1] / length)
-        return origin, along, (-along[1], along[0])
-
-    @staticmethod
-    def _anchor_candidates(prim: Usd.Prim, depth: int) -> list:
-        """Every prim sitting `depth` transform levels under this one.
-
-        The descent to the pivot takes the first child at each level, but the
-        tree branches, and one of the others may be the prim the ports really
-        belong to. This is that list.
-        """
-        found, stack = [], [(prim, 0)]
-        while stack:
-            current, level = stack.pop()
-            if not current or not current.IsValid():
-                continue
-            for child in _children(current):
-                type_name = child.GetTypeName()
-                if type_name in PASS_TYPES:
-                    stack.append((child, level))          # grouping, not a level
-                    continue
-                if type_name not in LEVEL_TYPES:
-                    continue                              # geometry ends the line
-                if level + 1 >= depth:
-                    found.append(child)
-                else:
-                    stack.append((child, level + 1))
-        return found
-
-    def _pivot_on_the_rail(self, prim, to_world, port) -> bool:
-        """Does any prim that deep sit where the port says it should?
-
-        The first child is the pivot, and when that one is out this asks
-        whether the equipment has a usable pivot at all: of everything six
-        levels down, the one nearest the port in xy, and whether it is on the
-        rail and beside the port to the same tolerances the verdict uses.
-        """
-        candidates = self._anchor_candidates(prim, ANCHOR_DEPTH)
-        if not candidates:
-            return False
-        origin, along, across = self._rail_basis(to_world)
-        tc = Usd.TimeCode.Default()
-
-        def project(point, unit):
-            return ((point[0] - origin[0]) * unit[0]
-                    + (point[1] - origin[1]) * unit[1])
-
-        best, best_gap = None, None
-        for candidate in candidates:
-            spot = UsdGeom.Xformable(candidate).ComputeLocalToWorldTransform(
-                tc).ExtractTranslation()
-            gap = math.sqrt((spot[0] - port[0]) ** 2 + (spot[1] - port[1]) ** 2)
-            if best_gap is None or gap < best_gap:
-                best, best_gap = spot, gap
-        on_rail = abs(project(best, across) - project(port, across))
-        beside = abs(project(best, along) - project(port, along))
-        print(f"[ebs]   nearest of {len(candidates)} prims {ANCHOR_DEPTH} levels "
-              f"down: {beside:.4f} along, {on_rail:.4f} off the rail")
-        return (beside <= PIVOT_TOLERANCE
-                and on_rail <= PIVOT_TOLERANCE * PIVOT_ACROSS)
-
     def _measure(self, to_world, axis: int, rail, port, here, addr: int) -> dict:
         """One equipment's row: where the pair stands, and how far apart.
 
@@ -625,7 +541,13 @@ class EbsSimulate:
         equipment's own place across the rail, so the pair differ only along
         the axis being measured.
         """
-        origin, along, across = self._rail_basis(to_world)
+        origin_local, onward_local, _ = self._rail_frame
+        origin = to_world.Transform(origin_local)
+        onward = to_world.Transform(onward_local)
+        run = (onward[0] - origin[0], onward[1] - origin[1])
+        length = math.sqrt(run[0] ** 2 + run[1] ** 2) or 1.0
+        along = (run[0] / length, run[1] / length)
+        across = (-along[1], along[0])                   # the axis we do not care about
 
         def project(point, unit):
             return ((point[0] - origin[0]) * unit[0]
