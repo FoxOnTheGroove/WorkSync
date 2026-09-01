@@ -18,26 +18,16 @@ CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 NEXT_KEY    = "next-address"  # addr a NextAddr block leads to
 PULS_KEY    = "distance-puls"  # length of that segment, in offset units
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
-CAD_SLACK       = 0.1             # cad the axis a rail does not run on may still
-                                  # wander by; 100/3 to the unit does not divide
-                                  # evenly, so a straight rail rarely reads as
-                                  # straight to the last decimal
+CAD_SLACK       = 0.1             # 비유효축 허용 유격 (100/3이 안 나눠떨어짐)
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
 
-# The two ways of turning an offset into a distance, to be compared against
-# each other in the scene.
 SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
 SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
 SCALE_MODES = (SCALE_FIXED, SCALE_PULS)
 
 def _children(prim):
-    """Children of a prim, instance proxies included.
-
-    Plain GetChildren stops dead at an instanceable prim, so anything brought
-    in by an instanced reference - which is how a factory carries hundreds of
-    identical machines - would never be reached at all.
-    """
+    """Children of a prim, instance proxies included."""
     try:
         return prim.GetFilteredChildren(Usd.TraverseInstanceProxies())
     except Exception:
@@ -65,9 +55,9 @@ GRID_OPACITY   = 0.5      # the lines read as lines, so they are not as faint
 GRID_EMISSION  = 300.0    # and they are not trying to glow through the plant either
 GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
 GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
-MARKER_EMISSION = 10000.0  # how hard the markers emit; raise it if the scene washes
+MARKER_EMISSION = 10000.0  # 마커 발광 세기
                            # them out, drop it if they glow
-SHEET_GAP      = 0.001    # how far the back of a sheet stands off the front, as a
+SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
                           # share of the quad's own diagonal
 
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
@@ -79,8 +69,6 @@ SWEEP_ROOT     = "/EbsPortSweep"    # port-1 lasers for every equipment at once
 SWEEP_COLOR_PORT = LASER_COLOR      # where port 1 is worked out to be
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 
-# Everything this extension draws into the session layer. None of it is scenery,
-# so the collision check has to walk past it.
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 
 # Faces evaluated by the simulation. Front, back and floor are ignored.
@@ -89,20 +77,14 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-GRID = 1                 # divisions given to the longest edge; the others get
-                         # an integer count that keeps the cells near square. At
-                         # 1 a face is one cell, which is the whole face
+GRID = 1                 # 면당 셀 분할 수. 1이면 면 하나가 셀 하나
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
-REACH_RATIO = 1.5        # how far out to look for the nearest mesh, same share
-# Only 'triangle' reads geometry; 'bbox' and 'mesh' both stop at one box per
-# geometry prim and are the same test today.
+REACH_RATIO = 1.5        # 가장 가까운 메시를 찾는 거리 (최장변 대비)
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"  # the mesh triangles themselves
 
-# Prim types that can never contain equipment. Descending into them is what made
-# the first scan expensive: geometry subtrees are where nearly all prims live.
 PRUNE_TYPES = frozenset({
     "Mesh", "Points", "BasisCurves", "NurbsCurves", "Capsule", "Cone", "Cube",
     "Cylinder", "Sphere", "Plane", "GeomSubset",
@@ -113,17 +95,13 @@ PASS_TYPES  = ("Scope",)      # prim types descended through without counting
 MIN_PORTS = 2            # ports a placement needs: one gap to step by, at least
 MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
 
-PIVOT_TOLERANCE = 1.0    # units: a pivot further than this from port 1 is not the
+PIVOT_TOLERANCE = 1.0    # 포트 1에서 이만큼 넘게 떨어지면 피봇이 아님
                          # pivot, whatever the placement is out by
 PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
 
 
 class EbsSimulate:
-    """EBS simulation implementation.
-
-    All computation and USD access lives here.
-    Only EbsSimulateService is exposed to the outside.
-    """
+    """EBS simulation implementation."""
 
     def __init__(self):
         self._xml_path: str = ""
@@ -175,21 +153,11 @@ class EbsSimulate:
         self._ebs_path_3port = (path_3port or "").strip()
 
     def set_clearance(self, value: float) -> None:
-        """Override the probe depth. 0 goes back to deriving it from the EBS.
-
-        There is nothing to tune here normally: the depth is a fraction of the
-        EBS, so it follows the stage's units instead of having to be told them.
-        """
+        """Override the probe depth. 0 goes back to deriving it from the EBS."""
         self._clearance = max(0.0, float(value))
 
     def _probe_depth(self, box: Gf.Range3d) -> float:
-        """How far out from each face still counts as touching it.
-
-        This is a contact tolerance, not a required clearance: it is only wide
-        enough to absorb the gaps and modelling error that come with CAD
-        geometry. Measuring how much room there actually is around the EBS is a
-        separate question, and wants its own, much wider, search.
-        """
+        """How far out from each face still counts as touching it."""
         if self._clearance > 0.0:
             return self._clearance
         longest = max(box.GetMax()[i] - box.GetMin()[i] for i in range(3))
@@ -203,26 +171,12 @@ class EbsSimulate:
             print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
 
     def set_offset_scale(self, mode: str) -> None:
-        """Pick how an offset turns into a distance.
-
-        'fixed' divides by OFFSET_PER_UNIT everywhere. 'puls' takes the scale
-        from the segment the port is written in - its length over its
-        distance-puls - so a port that spilled into the next addr is measured
-        with that addr's own puls.
-        """
+        """Pick how an offset turns into a distance."""
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
     def set_rail_nudge(self, value: float) -> None:
-        """Slide every port along the rail by this many units.
-
-        The ports come out evenly spaced but land off the real ones, which is
-        an origin error rather than a scale one: it is the same amount on every
-        port. This is here to measure that amount. Whatever value lands the
-        lasers on the ports says what the origin is really at - half a rail
-        length would mean the rail prim sits at the segment's start rather than
-        its middle, a whole one that the addr is at the far end.
-        """
+        """Slide every port along the rail by this many units."""
         self._rail_nudge = float(value or 0.0)
 
     def set_rail_root(self, path: str) -> None:
@@ -270,12 +224,7 @@ class EbsSimulate:
         self._started = time.perf_counter()
 
     def _fail(self, key: str, reason: str, short: str = ""):
-        """Record why one equipment could not be placed, and print it.
-
-        The console gets the long of it; `short` is what the report says, and
-        carries the numbers that matter - which addr, which port. Kept without
-        the equipment's name so a sweep can group hundreds of them by cause.
-        """
+        """Record why one equipment could not be placed, and print it."""
         self._why = short or reason
         print(f"[ebs] {key}: {reason}")
         return None
@@ -289,11 +238,7 @@ class EbsSimulate:
         return list(self._notes)
 
     def _hush(self, loud: bool):
-        """Swallow the diagnostics unless this is the one being kept.
-
-        A sweep runs the whole plant through the same code, and a few thousand
-        console lines will lock the app up on their own.
-        """
+        """Swallow the diagnostics unless this is the one being kept."""
         return nullcontext() if loud else redirect_stdout(io.StringIO())
 
     @contextmanager
@@ -308,11 +253,7 @@ class EbsSimulate:
     # -- steps ---------------------------------------------------------------
 
     def init(self) -> dict:
-        """Step 0: scan the stage and the XML once, so the steps can be cheap.
-
-        Everything cached here - the equipment index, their bounds, the port
-        table - survives until this runs again, and nothing else builds it.
-        """
+        """Step 0: scan the stage and the XML once, so the steps can be cheap."""
         self._begin()
         self._ready = False
         self._target = None
@@ -353,23 +294,7 @@ class EbsSimulate:
         return self._do_collide()
 
     def sweep_ports(self) -> dict:
-        """Draw every equipment's port 1 and its own position, and table them.
-
-        A whole-plant look at whether the port positions land where the real
-        ports are. Two cylinders each, both running from the rail down to the
-        equipment's own pivot, so they are the same length and only their xy
-        differs: red where port 1 is worked out to be, green where the
-        equipment sits. The gap between the pair is the error.
-
-        Every equipment gets a row in the report, including the ones that could
-        not be measured, so nothing goes missing between the scene and the
-        table.
-
-        No bounds are read per equipment - the thickness is taken from the
-        first one and used for the lot - and the diagnostics are swallowed
-        apart from the first equipment's, since a few thousand console lines is
-        itself enough to lock the app up.
-        """
+        """Draw every equipment's port 1 and its own position, and table them."""
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -387,9 +312,6 @@ class EbsSimulate:
                 row = {"equipment": eqp_id, "prim": self._eqp_index[name]}
                 rows.append(row)
                 try:
-                    # Where the equipment itself is: the pivot, the prim the
-                    # EBS takes its z from. Without one there is nothing to
-                    # compare against.
                     prim = stage.GetPrimAtPath(self._eqp_index[name])
                     anchor, reached = self.resolve_anchor(prim)
                     row["pivot_ok"] = "TRUE" if reached else "FALSE"
@@ -406,9 +328,6 @@ class EbsSimulate:
                     with self._hush(position == 0):
                         found = self.compute_port_points(stage, eqp_id)
                     if found is None:
-                        # Told apart: an equipment the XML has never heard of,
-                        # one with too few ports to place anything off, and one
-                        # it carries but cannot otherwise be read for.
                         listed = self._port_map.get(eqp_id.upper())
                         if listed is None:
                             row["pivot_ok"] = "no-xml"
@@ -436,9 +355,6 @@ class EbsSimulate:
                                              self._port_addr.get(eqp_id.upper())))
                     row["_port"], row["_here"] = port, here
 
-                    # The pivot is what it is whatever the row says, so this
-                    # only decides what the row says. A prim carrying no
-                    # transform of its own first, then how far off it sits.
                     off = []
                     if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
                         off.append("axis")
@@ -450,22 +366,14 @@ class EbsSimulate:
                     elif off:
                         row["pivot_ok"] = "invalid:" + "+".join(off)
                     elif count > MAX_PORTS:
-                        # Last of all, and only when nothing else was the
-                        # matter: a machine with more ports than the EBS spans.
                         row["pivot_ok"] = f"port{count}"
                 except Exception as e:
-                    # One equipment must never take the sweep down with it,
-                    # and the message is the only record of what went wrong.
                     row["pivot_ok"] = "error"
                     row["why"] = f"{type(e).__name__}: {e}"
                     failed.append((eqp_id, row["why"]))
 
         self._mark_shared(rows)
 
-        # The port pillar normally shares the equipment's line across the rail,
-        # so the pair part only along the axis being measured. On a row that
-        # came out invalid that alignment would be a claim the row does not
-        # make, so those are drawn where they were actually worked out to be.
         for row in rows:
             if "_draw" not in row:
                 continue
@@ -483,8 +391,6 @@ class EbsSimulate:
                    f"{len(names)} equipment")
         self._report_spread(rows)
 
-        # Grouped by reason: hundreds of equipment failing the same way is one
-        # thing to look at, not hundreds.
         grouped = {}
         for name, why in failed:
             grouped.setdefault(why, []).append(name)
@@ -497,18 +403,7 @@ class EbsSimulate:
                                     if not k.startswith("_")} for row in rows])
 
     def _measure(self, to_world, axis: int, rail, port, here, addr: int) -> dict:
-        """One equipment's row: where the pair stands, and how far apart.
-
-        Distances are taken along the rail rather than along world X or Y, so a
-        rail whose parent is rotated still reads correctly; with no rotation the
-        two are the same number. Offsets come twice: on the plain
-        OFFSET_PER_UNIT, the one yardstick comparable between equipment, and on
-        the segment's own puls, which is what its own offsets are written in.
-
-        The row also carries the point to draw the port pillar at - the
-        equipment's own place across the rail, so the pair differ only along
-        the axis being measured.
-        """
+        """One equipment's row: where the pair stands, and how far apart."""
         origin_local, onward_local, _ = self._rail_frame
         origin = to_world.Transform(origin_local)
         onward = to_world.Transform(onward_local)
@@ -525,8 +420,6 @@ class EbsSimulate:
         port_run = project(port, along)
         here_across = project(here, across)
 
-        # The port pillar is drawn on the equipment's own line across the rail,
-        # so the pair separate only along the axis the measurement is about.
         drawn = Gf.Vec3d(origin[0] + along[0] * port_run + across[0] * here_across,
                          origin[1] + along[1] * port_run + across[1] * here_across,
                          port[2])
@@ -552,12 +445,7 @@ class EbsSimulate:
         return row
 
     def _mark_shared(self, rows: list) -> None:
-        """Flag a pivot that several equipment landed on.
-
-        One prim cannot be the pivot of two machines standing in different
-        places, so all of them are suspect and none of them should weigh on the
-        numbers.
-        """
+        """Flag a pivot that several equipment landed on."""
         seen = {}
         for row in rows:
             if "pivot_coord" not in row:
@@ -569,20 +457,11 @@ class EbsSimulate:
                 continue
             for row in sharing:
                 state = str(row.get("pivot_ok", "TRUE"))
-                # Sharing a pivot is only worth saying about a row that was
-                # already doubted. On its own it is not enough to doubt one:
-                # a row with nothing else the matter stays as it was.
                 if state.startswith("invalid"):
                     row["pivot_ok"] = state + "+shared"
 
     def _report_spread(self, rows: list) -> None:
-        """How the offset differences sit: one constant, or all over the place.
-
-        All the same sign and size is an origin error; growing along the rail is
-        a scale one; splitting by area points at the rails themselves.
-        """
-        # Only the equipment whose pivot is believable: one that is not the
-        # pivot at all would drag the numbers wherever it happens to sit.
+        """How the offset differences sit: one constant, or all over the place."""
         gaps = [r["offset_diff"] for r in rows
                 if "offset_diff" in r and r.get("pivot_ok") == "TRUE"]
         doubted = sum(1 for r in rows
@@ -667,8 +546,6 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
         with self._stage_timer("camera focus"):
-            # Frame the EBS where it now sits, the way F frames a selection.
-            # The anchor still decides which way is the front.
             moved = self._move_camera(str(self._target["ebs"].GetPath()),
                                       self._target["anchor"])
         return self._payload(moved, "Camera on the EBS" if moved
@@ -687,8 +564,6 @@ class EbsSimulate:
                 note = ("EBS placed at port 0, world "
                         f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f})")
             elif self._blocked:
-                # The port data is there but cannot be read the way it was
-                # asked for. Placing the EBS anyway would hide that.
                 self._port_world = {}
                 self.clear_port_lasers()
                 return self._payload(False, self._blocked)
@@ -699,8 +574,6 @@ class EbsSimulate:
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
 
-        # A laser on every port position, so where the offsets put them can be
-        # read straight off the scene.
         with self._stage_timer("draw port lasers"):
             drawn = self.show_port_lasers()
         if drawn:
@@ -713,8 +586,6 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
 
-        # Only the EBS is excluded: the equipment it sits on is found mesh by
-        # mesh like anything else, so a part of it sticking out still counts.
         cells = self.check_collision(self._target["ebs"],
                                      exclude=[self._target["ebs"]])
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
@@ -739,11 +610,7 @@ class EbsSimulate:
     # -- equipment lookup ----------------------------------------------------
 
     def build_index(self) -> int:
-        """Rebuild the EQP_ prim index.
-
-        Descent stops at each equipment and at any geometry or material prim, so
-        the scan never enters the subtrees that hold nearly all of the prims.
-        """
+        """Rebuild the EQP_ prim index."""
         stage = self._get_stage()
         self._eqp_index = {}
         self._rail_index = None
@@ -761,11 +628,7 @@ class EbsSimulate:
         return len(self._eqp_index)
 
     def _walk(self, stage: Usd.Stage):
-        """Yield (prim, upper-case name) for every prim that could be equipment.
-
-        Equipment prims are yielded without descending into them; geometry and
-        material subtrees are skipped entirely.
-        """
+        """Yield (prim, upper-case name) for every prim that could be equipment."""
         root = None
         if self._search_root:
             root = stage.GetPrimAtPath(self._search_root)
@@ -816,8 +679,6 @@ class EbsSimulate:
             prim = stage.GetPrimAtPath(path)
             return prim if prim.IsValid() else None
 
-        # Try the obvious path first: equipment usually sits directly under the
-        # search root, and one GetPrimAtPath beats any amount of walking.
         started = time.perf_counter()
         direct = f"{self._search_root.rstrip('/')}/{key}" if self._search_root else f"/{key}"
         prim = stage.GetPrimAtPath(direct)
@@ -848,14 +709,7 @@ class EbsSimulate:
 
     @staticmethod
     def resolve_anchor(prim: Usd.Prim, depth: int = ANCHOR_DEPTH):
-        """The first child `depth` levels down, and whether it got that far.
-
-        Always the first child. A Scope is grouping rather than a level of its
-        own, so it is passed through without being counted; everything else
-        counts. Returns (anchor, reached), and when the tree runs out early the
-        deepest prim reached stands in - better to work off that than off the
-        equipment's own root.
-        """
+        """The first child `depth` levels down, and whether it got that far."""
         current, level = prim, 0
         while level < depth:
             children = _children(current) if current and current.IsValid() else []
@@ -871,14 +725,7 @@ class EbsSimulate:
     # -- port count (XML) ----------------------------------------------------
 
     def load_ports(self) -> int:
-        """Read the XML into port indices, port offsets, addr numbers and cad-x.
-
-        The file is a tree of <group name="..."> blocks holding key/value entries:
-        an Addr group carries 'cad-x' and contains one Station group per port,
-        each carrying 'port-id' ('<equipment>_<n>') and 'offset'. Document order
-        is not port order and unrelated stations sit in between, so ports are
-        found by their port-id and sorted by n.
-        """
+        """Read the XML into port indices, port offsets, addr numbers and cad-x."""
         self._port_map = {}
         self._port_offsets = {}
         self._port_addr = {}
@@ -910,8 +757,6 @@ class EbsSimulate:
                 number = int(m.group(1))
                 if cadx is not None or cady is not None:
                     self._addr_cad[number] = (cadx or 0.0, cady or 0.0)
-                # An addr can lead to several others; each NextAddr block names
-                # the addr it reaches and how long the run to it is, in offsets.
                 steps = []
                 for child in elem.iter():
                     if child is elem:
@@ -943,9 +788,6 @@ class EbsSimulate:
                 by_port = {i: by_index[i][2] for i in indices
                            if by_index[i][2] is not None}
                 self._port_addr_of[key] = by_port
-                # The port with the highest number sits next to the addr, so its
-                # block is the one this equipment belongs to. Lower-numbered ports
-                # reach further and can fall into a neighbouring addr's block.
                 self._port_addr[key] = by_port[max(by_port)] if by_port else None
                 if len(set(by_port.values())) > 1:
                     print(f"[ebs] {key}: ports span several addr blocks {by_port}, "
@@ -957,11 +799,7 @@ class EbsSimulate:
     # -- XML helpers ---------------------------------------------------------
 
     def _provider_of(self, elem, key: str, parents: dict):
-        """Return (owning group, value) for a key carried by this element.
-
-        A key is either an attribute on a group, or a child entry written as
-        key="..." value="...". Both shapes appear in these files.
-        """
+        """Return (owning group, value) for a key carried by this element."""
         value = self._attr(elem, key)
         if value:
             return elem, value
@@ -1027,13 +865,7 @@ class EbsSimulate:
     # -- rail and port geometry ----------------------------------------------
 
     def find_rail(self, stage: Usd.Stage, addr_number: int, prefer=()):
-        """Pick the rail leaving this addr. Returns (prim, neighbour, axis).
-
-        Several rails can start at the same addr, so the candidates are filtered
-        down: only a straight one counts, meaning exactly one of cad-x / cad-y
-        differs between the two addrs. When ports spilled into neighbouring
-        blocks, the rail running towards those is the one to take.
-        """
+        """Pick the rail leaving this addr. Returns (prim, neighbour, axis)."""
         prefix = f"{RAIL_PREFIX}{addr_number}_"
         found = self._rails_from(stage, addr_number)
         if not found:
@@ -1073,12 +905,7 @@ class EbsSimulate:
         return straight[0]
 
     def _rails_from(self, stage: Usd.Stage, addr_number: int) -> list:
-        """Rails leaving one addr, as [(prim, neighbour addr)].
-
-        The rails are read once into an index keyed by their starting addr.
-        Scanning them per equipment is what a sweep over the whole plant cannot
-        afford: the same few thousand prims would be walked hundreds of times.
-        """
+        """Rails leaving one addr, as [(prim, neighbour addr)]."""
         if self._rail_index is None:
             self._rail_index = {}
             root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
@@ -1100,17 +927,7 @@ class EbsSimulate:
         return self._rail_index.get(addr_number, [])
 
     def _rail_axis(self, addr_a: int, addr_b: int) -> "int | None":
-        """Axis a rail runs along, or None when it is not straight.
-
-        Only one of cad-x / cad-y may differ between the two addrs; a rail that
-        moves on both is a corner, and not one of the rails we place along.
-
-        The axis it does not run on is allowed CAD_SLACK of wander. Held to the
-        last decimal a straight rail often is not one, and the equipment on it
-        would be thrown out for a hundredth of a cad on an axis nothing is
-        measured along - the fixed coordinate comes off the start addr either
-        way, so the wander is dropped rather than followed.
-        """
+        """Axis a rail runs along, or None when it is not straight."""
         cad_a, cad_b = self._addr_cad.get(addr_a), self._addr_cad.get(addr_b)
         if cad_a is None or cad_b is None:
             return None
@@ -1125,11 +942,7 @@ class EbsSimulate:
         return moves[0]
 
     def _addr_step(self, addr: int, axis: int):
-        """(length in units, distance-puls) of the straight run leaving an addr.
-
-        An addr can lead several ways; only the one that moves on a single cad
-        axis, the same one the rail runs along, is the run the ports sit on.
-        """
+        """(length in units, distance-puls) of the straight run leaving an addr."""
         cad = self._addr_cad.get(addr)
         if cad is None:
             return None
@@ -1142,20 +955,7 @@ class EbsSimulate:
         return None
 
     def compute_port_points(self, stage: Usd.Stage, eqp_id: str):
-        """Where every port sits, in the rail's own space.
-
-        Returns (points, axis, rail) with points a {index: Gf.Vec3d} carrying
-        the ports read from the XML plus the virtual port 0 the EBS is placed
-        on, and axis 0 or 1 for the axis the rail runs along. The addr sits at
-        the rail's start point
-        and the rail prim at its midpoint, so the start is half a rail length
-        back from it. Ports run from the addr along the rail at a constant
-        spacing - on the line the order is 1, 2, (3), addr - and port 0 is one
-        more step past port 1.
-
-        A rail runs along X or Y: only one of cad-x / cad-y differs between the
-        two addrs, and that difference gives both the axis and the direction.
-        """
+        """Where every port sits, in the rail's own space."""
         key = eqp_id.upper()
         self._why = ""
         addr_a = self._port_addr.get(key)
@@ -1179,9 +979,7 @@ class EbsSimulate:
         direction = 1.0 if length >= 0 else -1.0
 
         rail_local = self._local_translation(rail)
-        start = rail_local[axis] - length / 2.0              # rail start = addr position
-        # Where the addr sits and which way the rail runs, in the rail's own
-        # space. A world point projected onto this reads back as an offset.
+        start = rail_local[axis] - length / 2.0     # 레일 시작 = addr 위치
         origin = [rail_local[0], rail_local[1], rail_local[2]]
         origin[axis] = start
         onward = list(origin)
@@ -1204,9 +1002,6 @@ class EbsSimulate:
         if along is None:
             return None
 
-        # What a constant shift on every port would have to match, if the
-        # origin is what is wrong: the rail prim not being the segment's
-        # midpoint, or the addr being its far end. Both vary with the rail.
         print(f"[ebs]   a constant shift would match: half a rail "
               f"{abs(length) / 2:.4f}, a whole rail {abs(length):.4f}"
               f"  (port 1 is {abs(along[1] - start):.4f} from the base addr)")
@@ -1217,8 +1012,6 @@ class EbsSimulate:
             print(f"[ebs]   nudged every port {direction * self._rail_nudge:+.4f} "
                   f"along {name}")
 
-        # The rail axis carries the ports; the other two keep the rail's own
-        # value. Port 0 is the one the EBS goes on; 1..n are there to be checked.
         points = {}
         for index, coord in along.items():
             coords = [rail_local[0], rail_local[1], rail_local[2]]
@@ -1231,12 +1024,7 @@ class EbsSimulate:
 
     def _coords_by_offset(self, key: str, axis: int, direction: float,
                           start: float, addr_a: int) -> "dict | None":
-        """Port positions with one scale for the whole plant.
-
-        Offsets written in a neighbouring addr are pulled back to this one, the
-        spacing is read off the offsets themselves, and port 0 is one spacing
-        past port 1. Everything divides by the same OFFSET_PER_UNIT.
-        """
+        """Port positions with one scale for the whole plant."""
         offsets = self._rebase_offsets(key, addr_a, axis, direction)
         spacing = self._port_spacing(key, offsets)
         if spacing is None:
@@ -1258,14 +1046,7 @@ class EbsSimulate:
 
     def _coords_by_puls(self, key: str, axis: int, direction: float,
                         start: float, addr_a: int) -> "dict | None":
-        """Port positions with each segment's own scale.
-
-        A segment's distance-puls is its length in offset units, so its length
-        over its puls turns an offset into a distance. A port that spilled into
-        the next addr is measured from that addr, with that addr's own puls.
-        Port 0 is one step past port 1, taken in units rather than in offsets
-        because the two can sit on segments of different scales.
-        """
+        """Port positions with each segment's own scale."""
         offsets = self._port_offsets.get(key, {})
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(addr_a)
@@ -1283,9 +1064,6 @@ class EbsSimulate:
                                   f"포트 {index} offset 또는 addr {addr} cad 없음")
             step = self._addr_step(addr, axis)
             if step is None:
-                # Every addr a port is written in has a run leaving it. Standing
-                # in for a missing one would place the port somewhere plausible
-                # and wrong, so the run stops here instead.
                 self._blocked = (f"{key}: addr {addr} has no straight {PULS_KEY} "
                                  f"run for port {index}")
                 print(f"[ebs] {self._blocked}")
@@ -1313,13 +1091,7 @@ class EbsSimulate:
 
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:
-        """Offsets of every port measured from the same addr.
-
-        A port's offset is measured from the addr block it is written in, and
-        the lower-numbered ports reach far enough to fall into a neighbouring
-        block. Such an offset is shifted by the distance between that addr and
-        the base one, so all of them share an origin again.
-        """
+        """Offsets of every port measured from the same addr."""
         offsets = dict(self._port_offsets.get(key, {}))
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(base_addr)
@@ -1343,12 +1115,7 @@ class EbsSimulate:
         return offsets
 
     def _port_spacing(self, key: str, offsets: dict) -> "float | None":
-        """Distance between neighbouring ports, averaged over the pairs present.
-
-        Two ports give one gap; a third gives a second one and the two are
-        averaged. Ports sit at a constant spacing with the lower numbers
-        further from the addr, so each gap is offset(n) - offset(n + 1).
-        """
+        """Distance between neighbouring ports, averaged over the pairs present."""
         gaps = [offsets[i] - offsets[i + 1]
                 for i in sorted(offsets) if i + 1 in offsets]
         if 1 not in offsets or not gaps:
@@ -1365,14 +1132,7 @@ class EbsSimulate:
         return spacing
 
     def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
-        """World point the EBS has to sit on.
-
-        X and Y come from the rail: the axis it runs along carries the virtual
-        port 0, the other axis keeps the rail's own value. That point is lifted
-        into world space. Z stays the anchor prim's world Z. The rail, the
-        anchor and the EBS live under different parents, so everything meets in
-        world space.
-        """
+        """World point the EBS has to sit on."""
         self._port_world = {}
         found = self.compute_port_points(stage, eqp_id)
         if found is None:
@@ -1382,8 +1142,6 @@ class EbsSimulate:
         to_world = self._parent_world(rail)
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
-        # Every port goes through the same conversion, so the lasers drawn on
-        # ports 1..n sit in exactly the space the EBS is placed in.
         for index, in_rail_space in points.items():
             spot = to_world.Transform(in_rail_space)
             self._port_world[index] = Gf.Vec3d(spot[0], spot[1], anchor_world[2])
@@ -1413,8 +1171,7 @@ class EbsSimulate:
 
     @staticmethod
     def _parent_world(prim: Usd.Prim) -> Gf.Matrix4d:
-        """Local-to-world transform of a prim's parent, i.e. the space its
-        local translation is expressed in."""
+        """Local-to-world transform of a prim's parent, i.e. the space its"""
         parent = prim.GetParent() if prim else None
         if parent and parent.IsValid() and UsdGeom.Xformable(parent):
             return UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(
@@ -1425,12 +1182,7 @@ class EbsSimulate:
 
     def _place_ebs(self, ebs_prim: Usd.Prim, world_position: Gf.Vec3d,
                    anchor: Usd.Prim) -> bool:
-        """Put the EBS on a world point, rotated like the anchor prim.
-
-        The point and the anchor's orientation are both brought into the EBS
-        parent's space before they are written, so the EBS lands on that exact
-        world point whatever its own parent does.
-        """
+        """Put the EBS on a world point, rotated like the anchor prim."""
         stage = self._get_stage()
         xformable = UsdGeom.Xformable(ebs_prim)
         if stage is None or not xformable:
@@ -1461,21 +1213,13 @@ class EbsSimulate:
         # Row-vector convention: M_local * M_parent = M_world
         target_local = anchor_world * self._parent_world(ebs_prim).GetInverse()
 
-        # The anchor sits deep inside the equipment and carries its own scale.
-        # Take only its orientation and position; the EBS keeps the scale it had.
         rotation = self._normalized_rows(target_local)
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
         return self._write_transform(stage, xformable, rotation, scale,
                                      target_local.ExtractTranslation())
 
     def _write_transform(self, stage, xformable, rotation, scale, translation) -> bool:
-        """Write position and orientation into the prim's existing xform ops.
-
-        Prims here usually carry translate / orient / scale ops, so those are
-        set in place: the scale op is left alone (the EBS keeps its own size)
-        and nothing about the op stack changes. Only when there is no usable
-        op does this fall back to authoring a single transform op.
-        """
+        """Write position and orientation into the prim's existing xform ops."""
         ops = {op.GetOpName(): op for op in xformable.GetOrderedXformOps()}
 
         # Author into the session layer so the source layers stay untouched.
@@ -1536,11 +1280,7 @@ class EbsSimulate:
 
     @staticmethod
     def _euler(rotation, order: str = "XYZ") -> tuple:
-        """Euler angles in degrees for a rotation given as three unit rows.
-
-        USD applies rotate<ABC> as Ra * Rb * Rc on row vectors. The angles are
-        recovered for XYZ and the other orders follow by permuting the axes.
-        """
+        """Euler angles in degrees for a rotation given as three unit rows."""
         axes = {"X": 0, "Y": 1, "Z": 2}
         a, b, c = (axes[ch] for ch in order)          # first, second, third axis
         m = [[rotation[i][j] for j in range(3)] for i in range(3)]
@@ -1580,11 +1320,7 @@ class EbsSimulate:
     # -- collision -----------------------------------------------------------
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
-        """Test the left, right and ceiling faces as grids of cells.
-
-        Faces and cells follow the EBS prim's local axes, named as the front
-        camera sees them: right is +X, left is -X, ceiling is +up.
-        """
+        """Test the left, right and ceiling faces as grids of cells."""
         stage = self._get_stage()
         if stage is None:
             return {face: [] for face in FACES}
@@ -1614,8 +1350,6 @@ class EbsSimulate:
             }
 
         with self._stage_timer("gather nearby"):
-            # Everything within the probe depth of the EBS, found by walking the
-            # stage with the search box culling subtrees as it goes.
             depth = self._probe_depth(local_box)
             margin = Gf.Vec3d(depth, depth, depth)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
@@ -1643,8 +1377,6 @@ class EbsSimulate:
             flat = [(face, i, cell)
                     for face, boxes in cells.items() for i, cell in enumerate(boxes)]
 
-            # Walk the candidates, not the cells: a mesh's triangles are then
-            # read and tested once each, against only the cells its box reaches.
             for path, box in candidates:
                 targets = [entry for entry in flat
                            if not result[entry[0]][entry[1]]
@@ -1664,8 +1396,6 @@ class EbsSimulate:
                         hi = [max(v[i] for v in triangle) for i in range(3)]
                         tri_box = Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
                         for face, i, cell in remaining:
-                            # A flat triangle has a flat box, so this pre-filter
-                            # only asks for contact; the exact test decides.
                             if (not Gf.Range3d.GetIntersection(tri_box, cell).IsEmpty()
                                     and self._triangle_hits_box(triangle, cell)):
                                 result[face][i] = True
@@ -1674,8 +1404,6 @@ class EbsSimulate:
                     continue
 
                 if self._precision == PRECISION_TRI:
-                    # Nothing to test: keep the box result, but say so rather
-                    # than let it pass as a triangle hit.
                     boxed_only.add(path)
                 for face, i, _ in targets:
                     result[face][i] = True
@@ -1701,13 +1429,7 @@ class EbsSimulate:
         return result
 
     def _mesh_triangles(self, stage, path: str) -> list:
-        """World-space triangles of one mesh, cached by prim path.
-
-        Only meshes that survived the box passes ever get here, so the point
-        arrays of the whole stage are never read. Returns an empty list when the
-        prim carries no triangles to test - a Cube or a Sphere, or a mesh whose
-        points cannot be read - and the caller has to decide what that means.
-        """
+        """World-space triangles of one mesh, cached by prim path."""
         if path in self._triangles:
             return self._triangles[path]
 
@@ -1793,11 +1515,7 @@ class EbsSimulate:
         return True
 
     def _is_visible(self, stage, path: str) -> bool:
-        """Whether a prim renders, inherited visibility included.
-
-        Answers are memoised for the run: ComputeVisibility walks the ancestors
-        every time, and the same branches come up again and again.
-        """
+        """Whether a prim renders, inherited visibility included."""
         if path in self._visible:
             return self._visible[path]
         prim = stage.GetPrimAtPath(path)
@@ -1812,11 +1530,7 @@ class EbsSimulate:
 
     @staticmethod
     def _overlaps(a: Gf.Range3d, b: Gf.Range3d) -> bool:
-        """True when two boxes share volume, not just a face.
-
-        The EBS is mounted on its equipment, so surfaces line up exactly all the
-        time; requiring a real overlap keeps those from reading as blocked.
-        """
+        """True when two boxes share volume, not just a face."""
         overlap = Gf.Range3d.GetIntersection(a, b)
         if overlap.IsEmpty():
             return False
@@ -1824,13 +1538,7 @@ class EbsSimulate:
         return all(extent[i] > OVERLAP_EPS for i in range(3))
 
     def _ebs_bound(self, prim: Usd.Prim):
-        """Bound of the EBS itself, computed from its geometry.
-
-        The scene scan reads extentsHint because it has hundreds of prims to
-        get through, but a hint can be stale or padded and this one box decides
-        where every cell and marker goes, so it is measured directly. When the
-        two disagree the run says so.
-        """
+        """Bound of the EBS itself, computed from its geometry."""
         exact = UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
@@ -1854,13 +1562,7 @@ class EbsSimulate:
         return exact
 
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
-        """Every visible geometry prim whose bounds reach into `search`.
-
-        The stage is walked from the root with the search box culling as it
-        goes: a subtree whose bounds miss the box is skipped whole, which is
-        what keeps this affordable. Nothing here depends on prim names, so
-        walls, ceilings, piping and terrain are found the same way equipment is.
-        """
+        """Every visible geometry prim whose bounds reach into `search`."""
         found, visited = [], 0
         stack = list(_children(stage.GetPseudoRoot()))
         while stack:
@@ -1887,17 +1589,7 @@ class EbsSimulate:
         return found, visited
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
-        """Cells per face in the prim's local axes, left to right, top to bottom.
-
-        +/-Y is the front/back (not evaluated), +/-X the sides, +up the ceiling.
-        The camera stands on local -Y and looks toward +Y, so screen-right is
-        +X and the grids read the same way round as the view does.
-
-        The longest edge of the EBS is cut into GRID divisions and every other
-        edge takes the whole number of those that fits it best, so the cells come
-        out as square as the box allows. GRID is 1, so that is one cell a face;
-        raising it brings the grid back.
-        """
+        """Cells per face in the prim's local axes, left to right, top to bottom."""
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis                        # front/back, not evaluated
         side_axis = 3 - up_axis - front_axis            # sides (X when Z-up)
@@ -1963,15 +1655,7 @@ class EbsSimulate:
 
     def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
                       exclude: list = None) -> dict:
-        """For each face with nothing touching it, how far the nearest mesh is.
-
-        The measurement runs straight out along the face normal: the face is
-        extruded outward and only what lies inside that prism counts, so a
-        machine off to one side is not reported as being above. Distances are
-        cheap to bound and expensive to confirm, so candidates are ordered by
-        the bound their box gives and only the ones that could still win have
-        their triangles read.
-        """
+        """For each face with nothing touching it, how far the nearest mesh is."""
         stage = self._get_stage()
         if stage is None:
             return {}
@@ -2019,9 +1703,6 @@ class EbsSimulate:
         if not candidates:
             return None
 
-        # A box can only ever be as close as its nearest corner, so that bound
-        # orders the search and ends it: once the best real distance is shorter
-        # than the next bound, nothing left can beat it.
         inverse = to_world.GetInverse()
         bounded = []
         for path, box in candidates:
@@ -2063,12 +1744,7 @@ class EbsSimulate:
     @staticmethod
     def _triangle_gap(triangle, prism, axis: int, outward: int,
                       coord: float) -> "float | None":
-        """Nearest point of a triangle inside the prism, along the face normal.
-
-        Only vertices that sit within the prism's cross-section count, so
-        geometry that merely passes by the side of the face is not measured as
-        being in front of it.
-        """
+        """Nearest point of a triangle inside the prism, along the face normal."""
         lo, hi = prism.GetMin(), prism.GetMax()
         best = None
         for vertex in triangle:
@@ -2084,11 +1760,7 @@ class EbsSimulate:
     # -- collision markers ---------------------------------------------------
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict) -> int:
-        """Draw the 3x3 grids as translucent quads on the EBS surfaces.
-
-        Everything is rebuilt from scratch on each run and lives in the session
-        layer, so the markers never reach the source layers.
-        """
+        """Draw the 3x3 grids as translucent quads on the EBS surfaces."""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -2132,13 +1804,7 @@ class EbsSimulate:
         return drawn
 
     def show_port_lasers(self, points: dict = None) -> int:
-        """Stand a thin cylinder on each port position, pointing up.
-
-        The rail fixes one coordinate and the offset walks along the other, so
-        every port is a world point; a laser through it shows whether it lands
-        in the equipment's real port. Port 0, the virtual one the EBS sits on,
-        gets its own colour. Session layer, rebuilt on every run.
-        """
+        """Stand a thin cylinder on each port position, pointing up."""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -2148,9 +1814,6 @@ class EbsSimulate:
         if not points:
             return 0
 
-        # The laser hangs from the rail down to the EBS's own z, so it spans
-        # exactly the drop the port has to bridge. Its thickness follows the
-        # equipment's size, so it looks the same whatever the stage's units are.
         box = self._world_range((self._target or {}).get("equipment"))
         if box is None:
             span = 1.0
@@ -2177,12 +1840,7 @@ class EbsSimulate:
         return drawn
 
     def show_sweep(self, spots: dict) -> int:
-        """Two cylinders per equipment: its port 1, and the equipment itself.
-
-        Both run from the rail down to the equipment's own z, so they are the
-        same length and only their xy differs - which is exactly the error
-        being looked for.
-        """
+        """Two cylinders per equipment: its port 1, and the equipment itself."""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -2190,8 +1848,6 @@ class EbsSimulate:
         if not spots:
             return 0
 
-        # One bound, for the whole sweep: the same thickness the single-
-        # equipment lasers get, without paying for it hundreds of times.
         radius = 0.0
         for name in spots:
             box = self._world_range(stage.GetPrimAtPath(self._eqp_index.get(
@@ -2230,11 +1886,7 @@ class EbsSimulate:
 
     @staticmethod
     def _prim_name(text: str) -> str:
-        """A USD-legal prim name for an equipment.
-
-        Equipment are named things like 6EAS1201, and a prim name cannot start
-        with a digit or hold anything but letters, digits and underscores.
-        """
+        """A USD-legal prim name for an equipment."""
         cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in text)
         return cleaned if cleaned[:1].isalpha() or cleaned[:1] == "_" else "_" + cleaned
 
@@ -2294,14 +1946,7 @@ class EbsSimulate:
     @classmethod
     def _marker_sheet(cls, stage, path: str, points: list, material, color,
                       opacity: float = MARKER_OPACITY) -> None:
-        """A quad drawn as two prims, one facing each way.
-
-        Both faces in one mesh come out on the same triangles, and a ray tracer
-        will take one of an exactly coincident pair and drop the other - so
-        whichever it keeps is the only side that gets shaded, and the other
-        reads differently. Two prims are two pieces of geometry, and the back
-        one stands off by a hair so nothing lands in the same place twice.
-        """
+        """A quad drawn as two prims, one facing each way."""
         normal = cls._face_normal(points)
         diagonal = math.sqrt(sum((points[2][i] - points[0][i]) ** 2
                                  for i in range(3)))
@@ -2323,8 +1968,6 @@ class EbsSimulate:
         mesh.CreateDoubleSidedAttr(True)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
         mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
-        # An overlay that shadowed the plant would darken the very thing it is
-        # drawn over, and RTX takes this off the prim rather than the material.
         try:
             mesh.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
@@ -2336,14 +1979,7 @@ class EbsSimulate:
     @classmethod
     def _marker_material(cls, stage, name: str, color, opacity: float = MARKER_OPACITY,
                          emission: float = MARKER_EMISSION):
-        """Flat colour that neither takes the light nor turns its back.
-
-        The material carries two shaders. RTX reads the MDL one, which is what
-        the viewport actually renders; anything else falls back to the preview
-        surface. Written on its own, the preview surface came out lit on one
-        side and missing on the other, because RTX translates it into a solid
-        piece of glass rather than a sheet of colour.
-        """
+        """Flat colour that neither takes the light nor turns its back."""
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
         cls._preview_shader(stage, material, path, color, opacity)
@@ -2364,8 +2000,6 @@ class EbsSimulate:
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
         shader.CreateInput("specularColor", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(0.0, 0.0, 0.0))
-        # Nothing bends going through: at 1.0 what is behind a cell stays where
-        # it is, rather than the cell reading as a lens over the machinery.
         shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)
         material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(),
                                                        "surface")
@@ -2373,14 +2007,7 @@ class EbsSimulate:
     @staticmethod
     def _mdl_shader(stage, material, path: str, color, opacity: float,
                     emission: float) -> None:
-        """The one RTX renders.
-
-        The colour is emitted rather than lit, so a cell reads the same whatever
-        the lights over that part of the plant happen to be doing. Which side is
-        looked at is settled by the geometry - each quad carries a face wound
-        each way - rather than by the material: thin_walled belongs to OmniGlass
-        and OmniSurface, and setting it here only earns a warning per marker.
-        """
+        """The one RTX renders."""
         shader = UsdShade.Shader.Define(stage, path + "/mdl")
         shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
         shader.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
@@ -2388,8 +2015,6 @@ class EbsSimulate:
         def put(name, type_name, value):
             shader.CreateInput(name, type_name).Set(value)
 
-        # Nothing diffuse: the emission carries the colour, and a diffuse term
-        # is the only part that would ask which way a face points.
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
             Gf.Vec3f(0.0, 0.0, 0.0))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
@@ -2404,12 +2029,7 @@ class EbsSimulate:
             shader.ConnectableAPI(), "out")
 
     def _grid_bands(self, box: Gf.Range3d, plane, shape) -> list:
-        """The lines around and between the cells, as thin quads on the face.
-
-        With one cell a face this comes out as the outline of the face itself,
-        which is what says where the EBS ends when the colour alone is a wash.
-        They sit a hair off the surface so they are not fighting it for pixels.
-        """
+        """The lines around and between the cells, as thin quads on the face."""
         fixed_axis, outward, coord, row_axis, col_axis = plane
         rows, cols = shape
         lo, hi = box.GetMin(), box.GetMax()
@@ -2438,12 +2058,7 @@ class EbsSimulate:
     # -- camera --------------------------------------------------------------
 
     def make_camera(self) -> bool:
-        """Create the camera this extension drives, replacing any earlier one.
-
-        It lives in the session layer, so it never reaches the saved scene. The
-        viewport is left alone here: it only switches over when the camera step
-        actually runs, so the perspective camera stays usable in between.
-        """
+        """Create the camera this extension drives, replacing any earlier one."""
         stage = self._get_stage()
         if stage is None:
             return False
@@ -2490,14 +2105,7 @@ class EbsSimulate:
             return None
 
     def _move_camera(self, prim_path: str, facing: Usd.Prim = None) -> bool:
-        """Fill the view with the prim, seen from the facing prim's local -Y.
-
-        The camera stands on the facing prim's local -Y side and looks toward
-        +Y, centred on the framed prim's bounds, at the distance that just fits
-        them - the way F frames a selection. The near plane is then brought up
-        to just in front of the target, so whatever stands between the camera
-        and it is culled; the sides and everything behind stay visible.
-        """
+        """Fill the view with the prim, seen from the facing prim's local -Y."""
         stage = self._get_stage()
         viewport = self._viewport()
         if stage is None or viewport is None:
@@ -2522,8 +2130,6 @@ class EbsSimulate:
         rot = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
             tc).ExtractRotationMatrix()
         up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
-        # Row 1 is the prim's local +Y in world terms; the view runs along it,
-        # so the camera stands on the -Y side.
         view = Gf.Vec3d(rot[1][0], rot[1][1], rot[1][2]).GetNormalized()
         up = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
 
@@ -2550,9 +2156,6 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        # Depth of the target along the view, measured from the eye. Only the
-        # near plane closes in, so whatever stands in front of the target is
-        # culled while everything behind it stays visible.
         slab = corners + self._box_corners(
             self._world_range(self._target["equipment"]) if self._target else None)
         depths = [Gf.Dot(Gf.Vec3d(*c) - eye, -z_cam) for c in slab]
@@ -2629,8 +2232,7 @@ class EbsSimulate:
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
                  equipment=None, eqp_id: str = "", port_count=None,
                  distances: dict = None, rows: list = None) -> dict:
-        """Build the result dict. Target fields come from the prepared target
-        unless explicitly passed (prepare reports them before the target is set)."""
+        """Build the result dict. Target fields come from the prepared target"""
         target = self._target or {}
         equipment = equipment or target.get("equipment")
         ebs = target.get("ebs")
