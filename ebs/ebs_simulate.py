@@ -288,13 +288,14 @@ class EbsSimulate:
         self._blocked = ""
         self._started = time.perf_counter()
 
-    def _fail(self, key: str, reason: str):
+    def _fail(self, key: str, reason: str, short: str = ""):
         """Record why one equipment could not be placed, and print it.
 
-        The reason is kept without the equipment's name so a sweep can group
-        hundreds of them by what went wrong.
+        The console gets the long of it; `short` is what the report says, and
+        carries the numbers that matter - which addr, which port. Kept without
+        the equipment's name so a sweep can group hundreds of them by cause.
         """
-        self._why = reason
+        self._why = short or reason
         print(f"[ebs] {key}: {reason}")
         return None
 
@@ -428,14 +429,14 @@ class EbsSimulate:
                         # and one it carries but cannot be read for.
                         row["pivot_ok"] = ("no-xml" if eqp_id.upper() not in
                                            self._port_map else "xml-invalid")
-                        row["note"] = self._why or "could not be placed"
-                        failed.append((eqp_id, row["note"]))
+                        row["why"] = self._why or "배치 계산 실패"
+                        failed.append((eqp_id, row["why"]))
                         continue
                     points, axis, rail = found
                     if 1 not in points or self._rail_frame is None:
                         row["pivot_ok"] = "xml-invalid"
-                        row["note"] = "no port 1"
-                        failed.append((eqp_id, row["note"]))
+                        row["why"] = "포트 1 위치 없음"
+                        failed.append((eqp_id, row["why"]))
                         continue
 
                     parent = rail.GetParent()
@@ -446,25 +447,25 @@ class EbsSimulate:
                     port = to_world.Transform(points[1])
                     row.update(self._measure(to_world, axis, rail, port, here,
                                              self._port_addr.get(eqp_id.upper())))
-                    # An equipment with more ports than the EBS spans is not a
-                    # doubtful pivot, it is a different kind of machine.
-                    count = len(self._port_map.get(eqp_id.upper(), ()))
-                    if count > MAX_PORTS:
-                        row["pivot_ok"] = f"port{count}"
-                    # Child 6 is the pivot on nearly every equipment, but not
-                    # all, and where it is says which kind of not.
-                    elif abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
-                        # A prim carrying no transform of its own.
-                        row["pivot_ok"] = "invalid:origin"
-                    else:
-                        off = []
-                        if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
-                            off.append("axis")
-                        if abs(row["off_axis_diff"]) > PIVOT_TOLERANCE * PIVOT_ACROSS:
-                            off.append("across")
-                        if off:
-                            row["pivot_ok"] = "invalid:" + "+".join(off)
                     spots[eqp_id] = (row["_draw"], here)
+
+                    # The pivot is what it is whatever the row says, so this
+                    # only decides what the row says. A prim carrying no
+                    # transform of its own first, then how far off it sits.
+                    off = []
+                    if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
+                        off.append("axis")
+                    if abs(row["off_axis_diff"]) > PIVOT_TOLERANCE * PIVOT_ACROSS:
+                        off.append("across")
+                    count = len(self._port_map.get(eqp_id.upper(), ()))
+                    if abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
+                        row["pivot_ok"] = "invalid:origin"
+                    elif off:
+                        row["pivot_ok"] = "invalid:" + "+".join(off)
+                    elif count > MAX_PORTS:
+                        # Last of all, and only when nothing else was the
+                        # matter: a machine with more ports than the EBS spans.
+                        row["pivot_ok"] = f"port{count}"
                 except Exception as e:
                     # One equipment must never take the sweep down with it. The
                     # message is the only record of what went wrong, so unlike
@@ -475,7 +476,13 @@ class EbsSimulate:
 
         self._mark_shared(rows)
         for row in rows:
-            if row.get("pivot_ok") != "error":
+            if row.get("pivot_ok") == "error":
+                continue                      # its own message is all there is
+            # An unreadable XML row says which way it was unreadable; the rest
+            # say which bucket they fell into.
+            if row.get("pivot_ok") == "xml-invalid" and row.get("why"):
+                row["note"] = row["why"]
+            else:
                 row["note"] = self._pivot_note(row.get("pivot_ok", ""))
         self._blocked = ""                   # a bad equipment does not stop the sweep
         with self._stage_timer("draw sweep"):
@@ -630,7 +637,10 @@ class EbsSimulate:
                 continue
             for row in sharing:
                 state = str(row.get("pivot_ok", "TRUE"))
-                row["pivot_ok"] = ("invalid:shared" if state == "TRUE"
+                # portN only ever means "nothing else was the matter", so a
+                # shared pivot replaces it rather than joining it.
+                row["pivot_ok"] = ("invalid:shared"
+                                   if state == "TRUE" or state.startswith("port")
                                    else state + "+shared")
 
     def _report_spread(self, rows: list) -> None:
@@ -1237,7 +1247,8 @@ class EbsSimulate:
         self._why = ""
         addr_a = self._port_addr.get(key)
         if addr_a is None:
-            return self._fail(key, "no addr block found for its ports")
+            return self._fail(key, "no addr block found for its ports",
+                              "XML에 포트 없음")
 
         # Ports that spilled into other blocks tell us which rail to follow.
         spilled = {a for i, a in self._port_addr_of.get(key, {}).items()
@@ -1245,7 +1256,8 @@ class EbsSimulate:
         rail, addr_b, axis = self.find_rail(stage, addr_a, prefer=spilled)
         if rail is None:
             return self._fail(key, f"no straight {RAIL_PREFIX}<addr>_* rail "
-                              f"leaving addr {addr_a}")
+                              f"leaving addr {addr_a}",
+                              f"직선 레일 없음 (addr {addr_a})")
 
         cad_a, cad_b = self._addr_cad[addr_a], self._addr_cad[addr_b]
         span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
@@ -1345,7 +1357,8 @@ class EbsSimulate:
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(addr_a)
         if 1 not in offsets or base_cad is None:
-            return self._fail(key, "no offset for port 1")
+            return self._fail(key, "no offset for port 1",
+                              f"포트 1 offset 없음 (있는 포트 {sorted(offsets)})")
 
         along = {}
         for index in sorted(offsets):
@@ -1353,7 +1366,8 @@ class EbsSimulate:
             addr = addr_of.get(index, addr_a)
             cad = self._addr_cad.get(addr)
             if offset is None or cad is None:
-                return self._fail(key, "a port has no offset, or its addr no cad")
+                return self._fail(key, "a port has no offset, or its addr no cad",
+                                  f"포트 {index} offset 또는 addr {addr} cad 없음")
             step = self._addr_step(addr, axis)
             if step is None:
                 # Every addr a port is written in has a run leaving it. Standing
@@ -1362,7 +1376,7 @@ class EbsSimulate:
                 self._blocked = (f"{key}: addr {addr} has no straight {PULS_KEY} "
                                  f"run for port {index}")
                 print(f"[ebs] {self._blocked}")
-                self._why = f"no straight {PULS_KEY} run leaving an addr"
+                self._why = f"직선 {PULS_KEY} 구간 없음 (addr {addr})"
                 return None
             seg_length, puls = step
             # The addr's own place on the rail, then the offset in its scale.
@@ -1375,7 +1389,8 @@ class EbsSimulate:
 
         steps = [along[i] - along[i + 1] for i in sorted(along) if i + 1 in along]
         if not steps:
-            return self._fail(key, "fewer than two ports, nothing to step by")
+            return self._fail(key, "fewer than two ports, nothing to step by",
+                              f"포트 {len(along)}개, 최소 2개 필요")
         pitch = sum(steps) / len(steps)
         along[0] = along[1] + pitch
         print(f"[ebs]   pitch " + ", ".join(f"{s:.4f}" for s in steps) +
@@ -1424,8 +1439,8 @@ class EbsSimulate:
         gaps = [offsets[i] - offsets[i + 1]
                 for i in sorted(offsets) if i + 1 in offsets]
         if 1 not in offsets or not gaps:
-            self._why = "no offsets for ports 1 and 2"
-            print(f"[ebs] {key}: {self._why}, got {offsets}")
+            print(f"[ebs] {key}: no offsets for ports 1 and 2, got {offsets}")
+            self._why = f"포트 1·2 offset 없음 (있는 포트 {sorted(offsets)})"
             return None
 
         spacing = sum(gaps) / len(gaps)
