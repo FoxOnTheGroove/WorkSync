@@ -19,6 +19,10 @@ CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 NEXT_KEY    = "next-address"  # addr a NextAddr block leads to
 PULS_KEY    = "distance-puls"  # length of that segment, in offset units
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
+CAD_SLACK       = 0.1             # cad the axis a rail does not run on may still
+                                  # wander by; 100/3 to the unit does not divide
+                                  # evenly, so a straight rail rarely reads as
+                                  # straight to the last decimal
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
 RAIL_PREFIX = "rail_"
 
@@ -1166,13 +1170,25 @@ class EbsSimulate:
 
         Only one of cad-x / cad-y may differ between the two addrs; a rail that
         moves on both is a corner, and not one of the rails we place along.
+
+        The axis it does not run on is allowed CAD_SLACK of wander. Held to the
+        last decimal a straight rail often is not one, and the equipment on it
+        would be thrown out for a hundredth of a cad on an axis nothing is
+        measured along - the fixed coordinate comes off the start addr either
+        way, so the wander is dropped rather than followed.
         """
         cad_a, cad_b = self._addr_cad.get(addr_a), self._addr_cad.get(addr_b)
         if cad_a is None or cad_b is None:
             return None
         span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
-        moves = [i for i in (0, 1) if abs(span[i]) > 1e-6]
-        return moves[0] if len(moves) == 1 else None
+        moves = [i for i in (0, 1) if abs(span[i]) > CAD_SLACK]
+        if len(moves) != 1:
+            return None
+        held = 1 - moves[0]
+        if abs(span[held]) > 1e-6:
+            print(f"[ebs]   addr {addr_a} -> {addr_b} wanders {span[held]:+.4f} cad "
+                  f"on {'XY'[held]}, within {CAD_SLACK:g}: held at addr {addr_a}")
+        return moves[0]
 
     def _addr_step(self, addr: int, axis: int):
         """(length in units, distance-puls) of the straight run leaving an addr.
