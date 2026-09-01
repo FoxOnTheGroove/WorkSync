@@ -656,11 +656,11 @@ class EbsSimulate:
                 continue
             for row in sharing:
                 state = str(row.get("pivot_ok", "TRUE"))
-                # portN only ever means "nothing else was the matter", so a
-                # shared pivot replaces it rather than joining it.
-                row["pivot_ok"] = ("invalid:shared"
-                                   if state == "TRUE" or state.startswith("port")
-                                   else state + "+shared")
+                # Sharing a pivot is only worth saying about a row that was
+                # already doubted. On its own it is not enough to doubt one:
+                # a row with nothing else the matter stays as it was.
+                if state.startswith("invalid"):
+                    row["pivot_ok"] = state + "+shared"
 
     def _report_spread(self, rows: list) -> None:
         """How the offset differences sit: one constant, or all over the place.
