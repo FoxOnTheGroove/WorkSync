@@ -695,17 +695,21 @@ class EbsSimulate:
         if not self._xml_path:
             return 0
 
-        with self._stage_timer("parse XML"):
+        with self._stage_timer("XML: read"):
             try:
                 root = ET.parse(self._xml_path).getroot()
             except Exception as e:
                 print(f"[ebs] XML parse failed: {e}")
                 return 0
 
-            parents = {child: parent for parent in root.iter() for child in parent}
-            port_pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
-            addr_pattern = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
+        port_pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
+        addr_pattern = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
 
+        with self._stage_timer("XML: parents"):
+            parents = {child: parent for parent in root.iter() for child in parent}
+        self._xml_shape(root, addr_pattern)
+
+        with self._stage_timer("XML: addr pass"):
             for elem in root.iter():
                 m = addr_pattern.match((elem.get("name", "")
                                         or elem.tag.rsplit("}", 1)[-1]).strip())
@@ -727,7 +731,8 @@ class EbsSimulate:
                 if steps:
                     self._addr_next[number] = steps
 
-            found = {}                       # equipment -> {index: (station, offset, addr)}
+        found = {}                       # equipment -> {index: (station, offset, addr)}
+        with self._stage_timer("XML: port pass"):
             for elem in root.iter():
                 station, port_id = self._provider_of(elem, PORT_ID_KEY, parents)
                 if not port_id:
@@ -740,6 +745,7 @@ class EbsSimulate:
                 _, addr_number = self._owning_addr(station, parents, addr_pattern)
                 found.setdefault(equipment, {})[index] = (station, offset, addr_number)
 
+        with self._stage_timer("XML: collect"):
             for key, by_index in found.items():
                 indices = sorted(by_index)
                 self._port_map[key] = indices
@@ -756,6 +762,25 @@ class EbsSimulate:
         return len(self._port_map)
 
     # -- XML helpers ---------------------------------------------------------
+
+    def _xml_shape(self, root, addr_pattern) -> None:
+        total = depth = addrs = nested = work = 0
+        stack = [(root, 0, 0)]
+        while stack:
+            elem, level, above = stack.pop()
+            total += 1
+            depth = max(depth, level)
+            here = above
+            if addr_pattern.match((elem.get("name", "")
+                                   or elem.tag.rsplit("}", 1)[-1]).strip()):
+                addrs += 1
+                nested += 1 if above else 0
+                here = above + 1
+            work += here                 # addr pass walks this element once per addr above it
+            for child in elem:
+                stack.append((child, level + 1, here))
+        self._note(f"xml shape: {total} elements, depth {depth}, {addrs} addr blocks, "
+                   f"{nested} nested, addr pass walks {work}")
 
     def _provider_of(self, elem, key: str, parents: dict):
         value = self._attr(elem, key)

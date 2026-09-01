@@ -127,7 +127,10 @@ class EbsSimulateService:
     def load_ports(cls):
         """XML -> 포트 index/offset/addr, addr별 cad와 구간 puls. init이 호출.
 
-        현재 ET.parse 로 트리 만든 뒤 다회 순회.
+        현재 ET.parse 로 트리 만든 뒤 다회 순회. 구간별 타이밍은
+        'XML: read / parents / addr pass / port pass / collect' 로 분리돼 있고,
+        파일 형태는 _xml_shape 가 note 로 찍는다 (원소 수, 깊이, addr 수,
+        중첩 여부, addr pass 가 실제로 도는 횟수).
         키 읽는 방식 변경시 _provider_of, _key_value, _owning_addr, _attr 참조.
         키 이름 변경시 PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY, PULS_KEY.
         """
