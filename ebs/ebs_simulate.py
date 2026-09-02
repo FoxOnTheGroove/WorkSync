@@ -31,7 +31,8 @@ RAIL_PREFIX = "rail_"
 
 SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
 SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
-SCALE_MODES = (SCALE_FIXED, SCALE_PULS)
+SCALE_SNAP  = "snap"    # puls, then slid so port 1 sits on the pivot. align only
+SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_SNAP)
 
 def _plain(name: str) -> str:
     """A tag or attribute name without its namespace, however it is written."""
@@ -191,7 +192,7 @@ class EbsSimulate:
         self._port_addr_of: dict = {}       # "########" -> {index: addr number}
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._addr_next: dict = {}          # addr number -> [(next addr, distance-puls)]
-        self._offset_scale: str = SCALE_FIXED   # how an offset becomes a distance
+        self._offset_scale: str = SCALE_SNAP    # how an offset becomes a distance
         self._rail_root: str = ""           # parent path holding the rail prims
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._rail_frame = None             # (addr point, one length on, axis) in rail space
@@ -406,18 +407,7 @@ class EbsSimulate:
                                              self._port_addr.get(eqp_id.upper())))
                     row["_port"], row["_here"] = port, here
 
-                    off = []
-                    if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
-                        off.append("axis")
-                    if abs(row["off_axis_diff"]) > PIVOT_TOLERANCE * PIVOT_ACROSS:
-                        off.append("across")
-                    count = len(self._port_map.get(eqp_id.upper(), ()))
-                    if abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
-                        row["pivot_ok"] = "invalid:origin"
-                    elif off:
-                        row["pivot_ok"] = "invalid:" + "+".join(off)
-                    elif count > MAX_PORTS:
-                        row["pivot_ok"] = f"port{count}"
+                    row["pivot_ok"] = self._pivot_state(row, here, eqp_id)
                 except Exception as e:
                     row["pivot_ok"] = "error"
                     row["why"] = f"{type(e).__name__}: {e}"
@@ -487,12 +477,36 @@ class EbsSimulate:
             "off_axis_diff": project(port, across) - here_across,
             "offset_diff": (port_run - pivot_run) * OFFSET_PER_UNIT,
             "_draw": drawn,
+            "_along": along,
         }
         if per_unit:
             row["puls_per_unit"] = per_unit
             row["pivot_offset_puls"] = pivot_run * per_unit
             row["port_offset_puls"] = port_run * per_unit
         return row
+
+    def _pivot_state(self, row: dict, here, eqp_id: str) -> str:
+        """What a measured row says about its pivot. The sweep's verdict.
+
+        A pivot carrying no transform of its own first, then how far off it
+        sits, and last of all -- only when nothing else was the matter -- a
+        machine with more ports than the EBS spans. Sharing a pivot is not
+        decided here: _mark_shared only ever adds to a row already doubted, so
+        a TRUE from this is a TRUE in the report too.
+        """
+        off = []
+        if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
+            off.append("axis")
+        if abs(row["off_axis_diff"]) > PIVOT_TOLERANCE * PIVOT_ACROSS:
+            off.append("across")
+        count = len(self._port_map.get(eqp_id.upper(), ()))
+        if abs(here[0]) < 1e-6 and abs(here[1]) < 1e-6:
+            return "invalid:origin"
+        if off:
+            return "invalid:" + "+".join(off)
+        if count > MAX_PORTS:
+            return f"port{count}"
+        return "TRUE"
 
     def _mark_shared(self, rows: list) -> None:
         seen = {}
@@ -1047,7 +1061,7 @@ class EbsSimulate:
               f"= start {start:.4f}")
         print(f"[ebs]   offset scale: {self._offset_scale}")
 
-        if self._offset_scale == SCALE_PULS:
+        if self._offset_scale in (SCALE_PULS, SCALE_SNAP):
             along = self._coords_by_puls(key, axis, direction, start, addr_a)
         else:
             along = self._coords_by_offset(key, axis, direction, start, addr_a)
@@ -1177,18 +1191,21 @@ class EbsSimulate:
         found = self.compute_port_points(stage, eqp_id)
         if found is None:
             return None
-        points, _, rail = found
+        points, axis, rail = found
 
         to_world = self._parent_world(rail)
         anchor_world = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
-        for index, in_rail_space in points.items():
-            spot = to_world.Transform(in_rail_space)
-            self._port_world[index] = Gf.Vec3d(spot[0], spot[1], anchor_world[2])
+        spots = {index: to_world.Transform(spot) for index, spot in points.items()}
+        slide = self._snap_shift(to_world, axis, rail, spots, anchor_world, eqp_id)
+
+        for index, spot in spots.items():
             self._port_rail_z = spot[2]      # the rail's own height, shared by all ports
+            self._port_world[index] = Gf.Vec3d(spot[0] + slide[0], spot[1] + slide[1],
+                                               anchor_world[2])
 
         in_rail_space = points[0]
-        world = to_world.Transform(in_rail_space)
+        world = spots[0]
         target = self._port_world[0]
         print(f"[ebs]   rail space ({in_rail_space[0]:.4f}, {in_rail_space[1]:.4f}, "
               f"{in_rail_space[2]:.4f}) -> world ({world[0]:.4f}, {world[1]:.4f}, "
@@ -1200,6 +1217,36 @@ class EbsSimulate:
         print(f"[ebs]   target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})"
               f"  [rail xy, anchor z from {anchor.GetName()}]")
         return target
+
+    def _snap_shift(self, to_world, axis: int, rail, spots: dict, here,
+                    eqp_id: str) -> tuple:
+        """How far to slide every port so port 1 lands on the pivot.
+
+        Only in snap mode, and only when the placement is otherwise sound. The
+        amount is the residual the report calls coord_diff, taken off every
+        port at once, so the spacing between them is untouched -- it is the
+        origin that moves, not the pitch. Off the rail and in z nothing moves.
+
+        This is align's alone: the sweep works off compute_port_points, so its
+        coord_diff still says what the residual was.
+        """
+        if self._offset_scale != SCALE_SNAP:
+            return (0.0, 0.0)
+        if 1 not in spots or self._rail_frame is None:
+            self._note("no snap: port 1 has no place to be")
+            return (0.0, 0.0)
+
+        row = self._measure(to_world, axis, rail, spots[1], here,
+                            self._port_addr.get(eqp_id.upper()))
+        state = self._pivot_state(row, here, eqp_id)
+        if state != "TRUE":
+            self._note(f"no snap: pivot reads {state}")
+            return (0.0, 0.0)
+
+        along, gap = row["_along"], row["coord_diff"]
+        self._note(f"snapped every port {-gap:+.4f} along the rail, "
+                   f"port 1 onto the pivot")
+        return (-along[0] * gap, -along[1] * gap)
 
     @staticmethod
     def _local_translation(prim: Usd.Prim) -> Gf.Vec3d:

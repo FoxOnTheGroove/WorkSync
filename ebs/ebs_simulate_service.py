@@ -79,10 +79,18 @@ class EbsSimulateService:
     @classmethod
     def set_offset_scale(cls, mode):
         """'fixed' = offset / 100000. 'puls' = offset x (구간길이 / distance-puls).
+        'snap' = puls 로 걷고, 판정이 TRUE 면 포트 1 을 장비 피봇의 유효축에 얹음. 기본값.
 
         fixed 계산 변경시 _coords_by_offset + OFFSET_PER_UNIT 참조.
         puls 계산 변경시 _coords_by_puls + _addr_step 참조.
         addr 넘어가는 처리는 _coords_by_puls 안.
+        snap 보정 변경시 _snap_shift 참조. 걷는 건 puls 와 완전히 동일하고,
+          보정은 compute_target 안에서만 일어난다 = align 전용.
+          전 포트를 같은 값만큼 민다. 간격은 안 변하고 원점만 움직인다.
+          미는 양은 CSV 의 coord_diff. 비유효축과 z 는 안 건드린다.
+          TRUE 가 아니면 안 민다 — 판정은 _pivot_state (스윕과 공용).
+          sweep 은 compute_port_points 를 직접 부르므로 영향 없음.
+          따라서 CSV 의 coord_diff 는 계속 보정 전 잔차를 말한다.
         모드 추가시 SCALE_MODES + dummy_ui 콤보 같이.
         """
         return cls._simulate.set_offset_scale(mode)
@@ -186,6 +194,7 @@ class EbsSimulateService:
           xform op 쓰는 방식은 _write_transform, _set_rotation, _compose, _euler.
         레이저 굵기/색/길이 변경시 show_port_lasers + LASER_RADIUS, LASER_COLOR,
           LASER_COLOR_0, LASER_ROOT 참조.
+        레이저는 _port_world 를 쓰므로 snap 모드에서는 보정된 자리에 뜬다.
         """
         return cls._simulate.align()
 

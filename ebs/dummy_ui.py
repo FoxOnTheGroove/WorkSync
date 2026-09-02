@@ -157,10 +157,11 @@ class EbsDummyUI:
                     # 'bbox' and 'mesh' are the same test, so only one is offered.
                     self._precision = ui.ComboBox(1, "box", "triangle", width=90)
                     ui.Label("Offset:", width=48)
-                    # How an offset becomes a distance: one scale everywhere, or
-                    # each segment's length over its own distance-puls.
-                    self._scale = ui.ComboBox(0, "fixed 100000", "length / puls",
-                                              width=110)
+                    # How an offset becomes a distance: one scale everywhere,
+                    # each segment's length over its own distance-puls, or that
+                    # again with port 1 slid onto the equipment's pivot.
+                    self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
+                                              "length / puls", width=126)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -333,9 +334,9 @@ class EbsDummyUI:
         modes = ("mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_precision(modes[max(0, min(index, 1))])
-        scales = ("fixed", "puls")
+        scales = ("snap", "fixed", "puls")
         index = self._scale.model.get_item_value_model().get_value_as_int()
-        EbsSimulateService.set_offset_scale(scales[max(0, min(index, 1))])
+        EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
 
     # -- display -------------------------------------------------------------
 
