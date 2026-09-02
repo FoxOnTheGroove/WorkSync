@@ -238,6 +238,13 @@ class EbsSimulateService:
           1500개면 그것만으로 멈춘다. Sdf 는 ChangeBlock 안에서 안전하지만
           스키마 헬퍼는 아니다 (스테이지를 되읽으므로). 쉐이더 수집을 블록 밖에서
           먼저 끝내는 것도 같은 이유다.
+          쓰는 곳은 세션 레이어가 아니라 그 위에 얹은 전용 레이어 (_gone_layer).
+          되돌리기가 Clear() 한 번이 된다. 스펙 제거는 ChangeBlock 이 안전하지
+          않은 유일한 동작이라, 하나씩 지우던 예전 방식은 안 지워지곤 했다.
+          인스턴스 장비는 Looks 가 프로토타입 안이라 못 쓴다. _looks_shaders 가
+          빼고 _eqp_shared 에 담아 개수만 알린다.
+          쓴 뒤 _check_gone 이 쉐이더 하나를 스테이지에서 되읽어 한 줄 남긴다 —
+          마테리얼이 어느 철자를 읽는지는 이름만으로 알 수 없다.
           set_lone_view(False) 로 이 동작 전체를 끌 수 있다 (UI 의 Lone 체크박스).
           되돌릴 때 값을 되돌리지 않고 우리 의견만 지운다 — 사용자가 투명하게
           해둔 것은 그대로. release_camera 가 show_equipment 를 부르므로
@@ -247,6 +254,10 @@ class EbsSimulateService:
           빼고 도니 결과는 같지만, 숨긴 만큼 빨라지지는 않는다.
 
         초점거리/센서/클리핑 변경시 make_camera 참조.
+          make_camera 는 Define 만 한다. release_camera 를 부르지 않는다 —
+          숨긴 직후에 불리므로 부르면 장비가 도로 살아난다.
+          _move_camera 가 카메라 없으면 스스로 만든다. Clear 가 카메라 프림을
+          지우므로, 안 그러면 Clear 뒤에 Camera 가 죽는다.
         위치·방향 변경시 _move_camera 참조.
           대상 앞을 잘라내던 슬랩은 없앴다 — 플랜트를 치우는 건 이제 장비를
           끄는 쪽이 하고, 자르면 궤도 회전할 때 화면이 갈라졌다.

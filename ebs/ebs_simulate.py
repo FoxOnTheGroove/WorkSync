@@ -168,6 +168,7 @@ NOW = Usd.TimeCode.Default()      # asked for per prim; make it once
 LOOKS = "Looks"                   # the material folder right under a machine
 SHADER_TYPE = "Shader"
 GONE_THRESHOLD = 0.5     # anything under this is cut, and nothing is over it
+GONE_LAYER = "ebs_hidden.usda"   # our own layer, holding only those opinions
 # What a shader is told to make its machine disappear. UsdPreviewSurface reads
 # the camelCase names, an MDL surface the underscored ones, and each ignores
 # the spelling it does not know. The threshold is what makes this a cutout
@@ -233,6 +234,8 @@ class EbsSimulate:
         self._eqp_spots: dict = None        # "EQP_########" -> where its pivot stands
         self._hidden: list = []             # equipment we turned off, to turn back on
         self._eqp_looks: dict = {}          # equipment path -> its shader paths
+        self._eqp_shared: set = set()       # equipment whose Looks we cannot write
+        self._gone = None                   # the layer holding the see-through opinions
         self._lone: bool = True             # camera shows the target and its two only
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
@@ -360,6 +363,10 @@ class EbsSimulate:
         self._begin()
         self._eqp_spots = None       # the plant may not be the one we last looked at
         self._eqp_looks = {}
+        self._eqp_shared = set()
+        if self._gone is not None:
+            self._gone.Clear()               # nothing stays hidden across an init
+        self._hidden = []
         self._ready = False
         self._target = None
         self._aligned = False
@@ -915,10 +922,13 @@ class EbsSimulate:
         self._hidden = []
 
     def _looks_shaders(self, stage, path: str) -> list:
-        """The shaders under one machine's Looks folder. Found once, kept.
+        """The shaders under one machine's Looks folder, the ones we can write.
 
         Materials do not move any more than the machines do, so the walk is
-        paid on the first camera and not again until init.
+        paid on the first camera and not again until init. A machine that is
+        an instance carries its Looks inside the prototype, where an opinion
+        of ours would land on a path that composes to nothing; those are left
+        out here and counted, rather than written and silently ignored.
         """
         found = self._eqp_looks.get(path)
         if found is not None:
@@ -929,58 +939,113 @@ class EbsSimulate:
             stack = list(_children(looks))
             while stack:
                 prim = stack.pop()
-                if prim.GetTypeName() == SHADER_TYPE:
-                    found.append(str(prim.GetPath()))
-                else:
+                if prim.GetTypeName() != SHADER_TYPE:
                     stack.extend(_children(prim))    # network under a NodeGraph
+                    continue
+                try:
+                    shared = prim.IsInstanceProxy()
+                except Exception:
+                    shared = False
+                if shared:
+                    self._eqp_shared.add(path)
+                else:
+                    found.append(str(prim.GetPath()))
         self._eqp_looks[path] = found
         return found
+
+    def _gone_layer(self, stage):
+        """Our own layer over the session, holding the see-through opinions and
+        nothing else.
+
+        Putting the machines back is then one call on the layer instead of
+        fifteen hundred spec removals -- and removing specs is the one thing a
+        change block is not safe for, so the removals were going in one notice
+        at a time, or not at all.
+        """
+        session = stage.GetSessionLayer()
+        if self._gone is None:
+            self._gone = Sdf.Layer.CreateAnonymous(GONE_LAYER)
+        if self._gone.identifier not in session.subLayerPaths:
+            session.subLayerPaths.insert(0, self._gone.identifier)
+        return self._gone
 
     def _author_opacity(self, stage, paths: list, hide: bool) -> bool:
         """Make a whole list see-through, or put it back, in one go.
 
         One prim at a time is one change notice each, and Kit answers every one
         of them -- fifteen hundred of those is a panel that stops responding.
-        The session layer is written through Sdf inside a change block, which
-        is the shape of the API that is safe to batch; the schema helpers read
-        the stage back as they go and are not. The shaders are gathered first
-        for the same reason: nothing reads the stage once the block is open.
+        The layer is written through Sdf inside a change block, which is the
+        shape of the API that is safe to batch; the schema helpers read the
+        stage back as they go and are not. The shaders are gathered first for
+        the same reason: nothing reads the stage once the block is open.
         """
         if not paths:
             return True
+        if not hide:
+            if self._gone is not None:
+                with self._stage_timer(f"show {len(paths)} equipment"):
+                    self._gone.Clear()
+            return True
+
         shaders, bare = [], 0
-        with self._stage_timer(
-                f"{'hide' if hide else 'show'} {len(paths)} equipment"):
+        with self._stage_timer(f"hide {len(paths)} equipment"):
             for path in paths:
                 found = self._looks_shaders(stage, path)
                 if found:
                     shaders.extend(found)
                 else:
                     bare += 1
-            if bare and hide:      # putting them back has nothing to say
-                self._note(f"{bare} of {len(paths)} machines have no shader "
-                           f"under {LOOKS}; those are left alone")
+            if bare:
+                self._note(f"{bare} of {len(paths)} machines have no shader we "
+                           f"can write under {LOOKS}; those are left alone"
+                           + (f" ({len(self._eqp_shared)} of them are instances)"
+                              if self._eqp_shared else ""))
             if not shaders:
                 return False
-            session = stage.GetSessionLayer()
+            layer = self._gone_layer(stage)
             try:
                 with Sdf.ChangeBlock():
                     for shader in shaders:
-                        spec = Sdf.CreatePrimInLayer(session, Sdf.Path(shader))
+                        spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
                         for name, kind, value in GONE:
                             attribute = spec.attributes.get(name)
-                            if hide:
-                                if attribute is None:
-                                    attribute = Sdf.AttributeSpec(
-                                        spec, name,
-                                        getattr(Sdf.ValueTypeNames, kind))
-                                attribute.default = value
-                            elif attribute is not None:
-                                del spec.attributes[name]
+                            if attribute is None:
+                                attribute = Sdf.AttributeSpec(
+                                    spec, name, getattr(Sdf.ValueTypeNames, kind))
+                            attribute.default = value
             except Exception as e:
                 self._note(f"could not set opacity on {len(shaders)} shaders ({e})")
                 return False
+        self._check_gone(stage, shaders[0])
         return True
+
+    def _check_gone(self, stage, shader: str) -> None:
+        """Read one of them back off the stage.
+
+        Whether the input we wrote is the one the material actually reads is
+        not something the name can tell us -- a surface knows one spelling of
+        opacity or the other, and an MDL module that was never given the
+        parameter knows neither. One line saying what it composed to answers
+        that from the log instead of from guesswork.
+        """
+        try:
+            prim = stage.GetPrimAtPath(shader)
+            if not prim or not prim.IsValid():
+                self._note(f"wrote the opinion but {shader} is not on the "
+                           f"stage -- nothing will look any different")
+                return
+            missed = []
+            for name, _, want in GONE:
+                attribute = prim.GetAttribute(name)
+                got = attribute.Get() if attribute else None
+                if got != want:
+                    missed.append(f"{name}={got}")
+            if missed:
+                self._note(f"{shader} did not take " + ", ".join(missed))
+            else:
+                self._note(f"see-through reads back on {shader}")
+        except Exception as e:
+            self._note(f"could not read {shader} back ({e})")
 
     def get_selected_equipment(self) -> str:
         stage = self._get_stage()
@@ -2737,8 +2802,8 @@ class EbsSimulate:
         stage = self._get_stage()
         if stage is None:
             return False
-        self.release_camera()
-
+        # Not release_camera: that also puts the hidden machines back, and the
+        # camera step turns them off just before asking for the camera.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
             camera.CreateFocalLengthAttr(50.0)
@@ -2789,8 +2854,13 @@ class EbsSimulate:
         if not prim.IsValid():
             return False
         if not cam_prim.IsValid():
-            print("[ebs] no camera - run Init first")
-            return False
+            # Clear takes the camera away with it. Pressing Camera again is a
+            # perfectly ordinary thing to do, so build another one.
+            self.make_camera()
+            cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
+            if not cam_prim.IsValid():
+                print("[ebs] could not create the camera")
+                return False
         if str(viewport.camera_path) != CAMERA_PATH:
             self._previous_camera = str(viewport.camera_path)
             try:
