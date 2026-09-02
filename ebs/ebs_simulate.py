@@ -159,6 +159,7 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)   # startswith takes a tuple
+NOW = Usd.TimeCode.Default()      # asked for per prim; make it once
 
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -1814,13 +1815,14 @@ class EbsSimulate:
         if known is not None:
             return known
         visible = True
-        try:
-            attribute = UsdGeom.Imageable(prim).GetVisibilityAttr()
+        # Asked of every prim, so nothing here may raise on the ordinary case:
+        # a prim that is not imageable at all is common, and letting that come
+        # back as an exception costs more than the question does.
+        imageable = UsdGeom.Imageable(prim)
+        if imageable:
+            attribute = imageable.GetVisibilityAttr()
             if attribute:
-                visible = attribute.Get(Usd.TimeCode.Default()) != \
-                    UsdGeom.Tokens.invisible
-        except Exception:
-            pass
+                visible = attribute.Get(NOW) != UsdGeom.Tokens.invisible
         self._visible[path] = visible
         return visible
 
