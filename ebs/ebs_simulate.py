@@ -1608,11 +1608,11 @@ class EbsSimulate:
         are sifted where they live. Only what survives is worth converting, and
         where the EBS meets a corner of a machine that is nearly none of it.
         """
+        lo_box, hi_box = box.GetMin(), box.GetMax()
         cached = self._triangles.get(path)
         if cached is not None:
             # The face check has already converted this one. Re-reading it to
             # save a filter would be the more expensive way round.
-            lo_box, hi_box = box.GetMin(), box.GetMax()
             kept = []
             for a, b, c in cached:
                 lo = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
@@ -1632,27 +1632,59 @@ class EbsSimulate:
             return []
         (lx, ly, lz), (hx, hy, hz) = near
 
-        kept, cursor = [], 0
+        # A million faces go through this on a real machine and almost none of
+        # them survive, so it is written to give up early: one axis at a time,
+        # and nothing built that is thrown away.
+        kept, cursor, total = [], 0, len(indices)
         for count in counts:
-            if count < 3 or cursor + count > len(indices):
-                cursor += count
+            end = cursor + count
+            if count < 3 or end > total:
+                cursor = end
                 continue
-            corners = [points[indices[cursor + k]] for k in range(count)]
-            xs = [c[0] for c in corners]
-            ys = [c[1] for c in corners]
-            zs = [c[2] for c in corners]
-            if (min(xs) <= hx and max(xs) >= lx and min(ys) <= hy
-                    and max(ys) >= ly and min(zs) <= hz and max(zs) >= lz):
-                fan = [to_world.Transform(Gf.Vec3d(c[0], c[1], c[2]))
-                       for c in corners]
+            lo = hi = points[indices[cursor]][0]
+            for k in range(cursor + 1, end):
+                v = points[indices[k]][0]
+                if v < lo:
+                    lo = v
+                elif v > hi:
+                    hi = v
+            if lo > hx or hi < lx:
+                cursor = end
+                continue
+            lo = hi = points[indices[cursor]][1]
+            for k in range(cursor + 1, end):
+                v = points[indices[k]][1]
+                if v < lo:
+                    lo = v
+                elif v > hi:
+                    hi = v
+            if lo > hy or hi < ly:
+                cursor = end
+                continue
+            lo = hi = points[indices[cursor]][2]
+            for k in range(cursor + 1, end):
+                v = points[indices[k]][2]
+                if v < lo:
+                    lo = v
+                elif v > hi:
+                    hi = v
+            if lo <= hz and hi >= lz:
+                fan = [to_world.Transform(Gf.Vec3d(points[indices[k]][0],
+                                                   points[indices[k]][1],
+                                                   points[indices[k]][2]))
+                       for k in range(cursor, end)]
                 for k in range(1, count - 1):
                     a, b, c = fan[0], fan[k], fan[k + 1]
-                    kept.append((path, (a, b, c),
-                                 (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
-                                  min(a[2], b[2], c[2])),
-                                 (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
-                                  max(a[2], b[2], c[2]))))
-            cursor += count
+                    low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
+                           min(a[2], b[2], c[2]))
+                    high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
+                            max(a[2], b[2], c[2]))
+                    # The face got through on its own corners; a triangle of it
+                    # still need not reach the box. Same rule as the cached path.
+                    if all(low[i] <= hi_box[i] and high[i] >= lo_box[i]
+                           for i in range(3)):
+                        kept.append((path, (a, b, c), low, high))
+            cursor = end
         return kept
 
     @staticmethod
