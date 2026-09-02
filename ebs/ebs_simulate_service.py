@@ -222,24 +222,29 @@ class EbsSimulateService:
           (_sideways, 3면 검사의 좌/우와 같은 축) 기준 양쪽 가장 가까운 하나씩.
           위치는 equipment_spots 가 장비당 한 번 구해 캐시한다. init 이 비운다.
         끄기/되돌리기는 hide_other_equipment / show_equipment.
-          실제 저작은 _author_visibility 가 Sdf 로 세션 레이어에 한 번에 쓴다.
+          visibility 를 끄지 않는다. 장비 프림 바로 아래 Looks 폴더의 쉐이더에
+          opacity 0 을 먹인다 (_looks_shaders 가 쉐이더 경로 수집, 장비당 한 번
+          캐시. init 이 비운다 / _author_opacity 가 저작). visibility 는 하위
+          트리 전체를 다시 풀어야 해서 훨씬 비싸다.
+          쉐이더 입력 이름은 GONE 상수. UsdPreviewSurface 는 inputs:opacity,
+          MDL 은 enable_opacity + opacity_constant. 서로 모르는 건 무시한다.
           프림당 하나씩 쓰면 변경 알림이 하나씩 가고 Kit 이 매번 응답한다 —
           1500개면 그것만으로 멈춘다. Sdf 는 ChangeBlock 안에서 안전하지만
-          스키마 헬퍼는 아니다 (스테이지를 되읽으므로).
+          스키마 헬퍼는 아니다 (스테이지를 되읽으므로). 쉐이더 수집을 블록 밖에서
+          먼저 끝내는 것도 같은 이유다.
           set_lone_view(False) 로 이 동작 전체를 끌 수 있다 (UI 의 Lone 체크박스).
-          되돌릴 때 '보이게' 하지 않고 우리 의견만 지운다 — 사용자가 끈 것은 그대로.
-          release_camera 가 show_equipment 를 부르므로 Clear 버튼이 되돌린다.
-        주의: _gather_nearby 는 안 보이는 프림을 장애물로 안 본다. 지금은 그게
-          맞다 — 장비끼리 부딪힐 수 있는 건 양옆뿐이고, 장비 아닌 것은 안 끄니까.
+          되돌릴 때 값을 되돌리지 않고 우리 의견만 지운다 — 사용자가 투명하게
+          해둔 것은 그대로. release_camera 가 show_equipment 를 부르므로
+          Clear 버튼이 되돌린다.
+        주의: opacity 0 은 충돌 검사에서 안 빠진다. _gather_nearby 는 visibility
+          만 보므로 숨긴 장비도 여전히 장애물이다. 지금 3면 검사는 대상 장비를
+          빼고 도니 결과는 같지만, 숨긴 만큼 빨라지지는 않는다.
 
         초점거리/센서/클리핑 변경시 make_camera 참조.
         위치·방향 변경시 _move_camera 참조.
           대상 앞을 잘라내던 슬랩은 없앴다 — 플랜트를 치우는 건 이제 장비를
           끄는 쪽이 하고, 자르면 궤도 회전할 때 화면이 갈라졌다.
-          남은 근평면은 CAMERA_NEAR 로, 대상까지 거리의 비율이다. 보는 것은
-          안 자르되 렌즈에 닿은 것은 자른다. 0 으로 두면 카메라가 파묻힌
-          지오메트리가 화면 전체에 그려지고, near/far 비가 10^8 이 되어
-          깊이 버퍼가 감당하지 못한다.
+          근평면은 CAMERA_NEAR 고정. 거리에 비례시키지 않는다 — 컬링 없음.
         화면 채움 비율 변경시 _fit_distance + CAMERA_FILL 참조.
         대상 바운드 변경시 _world_range, _box_corners 참조.
         뷰포트 전환 안 될 때 _viewport 참조 (omni.kit 없으면 조용히 실패).

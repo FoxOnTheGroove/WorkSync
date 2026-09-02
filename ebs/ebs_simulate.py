@@ -131,10 +131,8 @@ GEOMETRY_TYPES = frozenset({
 
 CAMERA_PATH    = "/EbsCamera"             # session-layer camera owned by this extension
 CAMERA_FILL    = 0.9                      # how much of the view the target fills
-CAMERA_NEAR    = 0.01                     # near plane, as a share of the distance
-                                          # to the target: nothing between the
-                                          # camera and the EBS is clipped, but
-                                          # what is right against the lens is
+CAMERA_NEAR    = 0.01                     # fixed, right against the lens: no
+                                          # culling, nothing in front is cut
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
 NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a share
                          # of the target's own width
@@ -165,7 +163,15 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)   # startswith takes a tuple
 NOW = Usd.TimeCode.Default()      # asked for per prim; make it once
-VISIBILITY = "visibility"         # the attribute hiding a prim writes
+LOOKS = "Looks"                   # the material folder right under a machine
+SHADER_TYPE = "Shader"
+# What a shader is told to make its machine disappear. UsdPreviewSurface
+# reads the first, an MDL surface the other two, and each ignores the name
+# it does not know. Turning the prim off instead is the same picture and a
+# far dearer one: visibility is resolved down the whole tree beneath it.
+GONE = (("inputs:opacity", "Float", 0.0),
+        ("inputs:enable_opacity", "Bool", True),
+        ("inputs:opacity_constant", "Float", 0.0))
 
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -217,6 +223,7 @@ class EbsSimulate:
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._eqp_spots: dict = None        # "EQP_########" -> where its pivot stands
         self._hidden: list = []             # equipment we turned off, to turn back on
+        self._eqp_looks: dict = {}          # equipment path -> its shader paths
         self._lone: bool = True             # camera shows the target and its two only
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
@@ -343,6 +350,7 @@ class EbsSimulate:
     def init(self) -> dict:
         self._begin()
         self._eqp_spots = None       # the plant may not be the one we last looked at
+        self._eqp_looks = {}
         self._ready = False
         self._target = None
         self._aligned = False
@@ -876,65 +884,87 @@ class EbsSimulate:
         self.show_equipment()
         spared = set(keep)
         turn_off = [path for path in self._eqp_index.values() if path not in spared]
-        if self._author_visibility(stage, turn_off, True):
+        if self._author_opacity(stage, turn_off, True):
             self._hidden = turn_off
         return len(self._hidden)
 
     def show_equipment(self) -> None:
         """Put back what we turned off. The opinion is dropped, not set back to
-        visible: a machine the user had hidden themselves stays hidden."""
+        solid: a machine the user had made see-through themselves stays so."""
         if not self._hidden:
             return
         stage = self._get_stage()
         if stage is not None:
-            self._author_visibility(stage, self._hidden, False)
+            self._author_opacity(stage, self._hidden, False)
         self._hidden = []
 
-    def _author_visibility(self, stage, paths: list, hide: bool) -> bool:
-        """Turn a whole list off, or put it back, in one go.
+    def _looks_shaders(self, stage, path: str) -> list:
+        """The shaders under one machine's Looks folder. Found once, kept.
+
+        Materials do not move any more than the machines do, so the walk is
+        paid on the first camera and not again until init.
+        """
+        found = self._eqp_looks.get(path)
+        if found is not None:
+            return found
+        found = []
+        looks = stage.GetPrimAtPath(path + "/" + LOOKS)
+        if looks and looks.IsValid():
+            stack = list(_children(looks))
+            while stack:
+                prim = stack.pop()
+                if prim.GetTypeName() == SHADER_TYPE:
+                    found.append(str(prim.GetPath()))
+                else:
+                    stack.extend(_children(prim))    # network under a NodeGraph
+        self._eqp_looks[path] = found
+        return found
+
+    def _author_opacity(self, stage, paths: list, hide: bool) -> bool:
+        """Make a whole list see-through, or put it back, in one go.
 
         One prim at a time is one change notice each, and Kit answers every one
         of them -- fifteen hundred of those is a panel that stops responding.
         The session layer is written through Sdf inside a change block, which
         is the shape of the API that is safe to batch; the schema helpers read
-        the stage back as they go and are not.
+        the stage back as they go and are not. The shaders are gathered first
+        for the same reason: nothing reads the stage once the block is open.
         """
         if not paths:
             return True
-        session = stage.GetSessionLayer()
-        try:
-            with Sdf.ChangeBlock():
-                for path in paths:
-                    spec = Sdf.CreatePrimInLayer(session, Sdf.Path(path))
-                    attribute = spec.attributes.get(VISIBILITY)
-                    if hide:
-                        if attribute is None:
-                            attribute = Sdf.AttributeSpec(
-                                spec, VISIBILITY, Sdf.ValueTypeNames.Token)
-                        attribute.default = UsdGeom.Tokens.invisible
-                    elif attribute is not None:
-                        del spec.attributes[VISIBILITY]
-            return True
-        except Exception as e:
-            self._note(f"could not set visibility in one go ({e}), "
-                       f"falling back to one at a time")
-        try:
-            with Usd.EditContext(stage, session):
-                for path in paths:
-                    prim = stage.GetPrimAtPath(path)
-                    if not prim or not prim.IsValid():
-                        continue
-                    imageable = UsdGeom.Imageable(prim)
-                    if hide:
-                        imageable.MakeInvisible()
-                    else:
-                        attribute = imageable.GetVisibilityAttr()
-                        if attribute:
-                            attribute.Clear()
-            return True
-        except Exception as e:
-            self._note(f"visibility could not be set: {e}")
-            return False
+        shaders, bare = [], 0
+        with self._stage_timer(
+                f"{'hide' if hide else 'show'} {len(paths)} equipment"):
+            for path in paths:
+                found = self._looks_shaders(stage, path)
+                if found:
+                    shaders.extend(found)
+                else:
+                    bare += 1
+            if bare and hide:      # putting them back has nothing to say
+                self._note(f"{bare} of {len(paths)} machines have no shader "
+                           f"under {LOOKS}; those are left alone")
+            if not shaders:
+                return False
+            session = stage.GetSessionLayer()
+            try:
+                with Sdf.ChangeBlock():
+                    for shader in shaders:
+                        spec = Sdf.CreatePrimInLayer(session, Sdf.Path(shader))
+                        for name, kind, value in GONE:
+                            attribute = spec.attributes.get(name)
+                            if hide:
+                                if attribute is None:
+                                    attribute = Sdf.AttributeSpec(
+                                        spec, name,
+                                        getattr(Sdf.ValueTypeNames, kind))
+                                attribute.default = value
+                            elif attribute is not None:
+                                del spec.attributes[name]
+            except Exception as e:
+                self._note(f"could not set opacity on {len(shaders)} shaders ({e})")
+                return False
+        return True
 
     def get_selected_equipment(self) -> str:
         stage = self._get_stage()
@@ -2781,15 +2811,10 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        # The slab that used to be cut out in front is gone -- turning the other
-        # machines off is what gets the plant out of the way now, and cutting
-        # took the view apart when you orbited. What is left is a near plane
-        # right against the lens: at a hundredth of the way to the target it
-        # clips nothing you are looking at, but it keeps whatever the camera is
-        # sitting inside from being drawn across the whole screen. Flat zero is
-        # not free -- near to far would be one part in a hundred million, which
-        # is more than the depth buffer has to give.
-        near, far = max(distance * CAMERA_NEAR, 1e-3), CAMERA_FAR
+        # Nothing is cut out of the view. The slab that used to be carved in
+        # front of the camera took the plant apart when you orbited, and the
+        # machines being turned off is what clears the way now.
+        near, far = CAMERA_NEAR, CAMERA_FAR
 
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             xformable = UsdGeom.Xformable(cam_prim)
