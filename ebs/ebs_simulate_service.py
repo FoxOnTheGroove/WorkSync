@@ -258,6 +258,10 @@ class EbsSimulateService:
           숨긴 직후에 불리므로 부르면 장비가 도로 살아난다.
           _move_camera 가 카메라 없으면 스스로 만든다. Clear 가 카메라 프림을
           지우므로, 안 그러면 Clear 뒤에 Camera 가 죽는다.
+          단 프림 IsValid 로 묻지 말 것. 뷰포트가 아직 그 경로를 보는 동안 Kit 이
+          제 카메라 상태를 써서 타입 없는 over 가 남는다 — IsValid 는 참이고
+          카메라는 아니다. UsdGeom.Camera(prim) 로 물어야 한다 (안 그러면
+          clippingRange 에서 empty typename). Define 이 그 over 에 타입을 얹는다.
         위치·방향 변경시 _move_camera 참조.
           대상 앞을 잘라내던 슬랩은 없앴다 — 플랜트를 치우는 건 이제 장비를
           끄는 쪽이 하고, 자르면 궤도 회전할 때 화면이 갈라졌다.

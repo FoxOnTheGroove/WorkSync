@@ -2850,15 +2850,22 @@ class EbsSimulate:
         if stage is None or viewport is None:
             return False
         prim = stage.GetPrimAtPath(prim_path)
-        cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
         if not prim.IsValid():
             return False
-        if not cam_prim.IsValid():
-            # Clear takes the camera away with it. Pressing Camera again is a
-            # perfectly ordinary thing to do, so build another one.
-            self.make_camera()
+        # Clear takes the camera away with it, and pressing Camera again is a
+        # perfectly ordinary thing to do, so build another one. Asking whether
+        # the prim is valid is not the question: Kit writes its own camera
+        # state at that path while the viewport is still pointed at it, so what
+        # is left behind is a prim with nothing but an over on it. That is
+        # valid, and it is not a camera -- which is the empty typename the
+        # clipping range came back with. Ask for the camera itself instead.
+        cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
+        camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
+        if not camera:
+            self.make_camera()      # Define types the leftover over back up
             cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
-            if not cam_prim.IsValid():
+            camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
+            if not camera:
                 print("[ebs] could not create the camera")
                 return False
         if str(viewport.camera_path) != CAMERA_PATH:
@@ -2912,13 +2919,13 @@ class EbsSimulate:
             else:
                 xformable.ClearXformOpOrder()
                 xformable.AddTransformOp().Set(matrix)
-            UsdGeom.Camera(cam_prim).GetClippingRangeAttr().Set(
+            camera.CreateClippingRangeAttr().Set(
                 Gf.Vec2f(float(near), float(far)))
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))   # orbit around the target
-        self._note(f"camera at {distance:.2f} from the target, near plane "
-                   f"{near:.2f} (anything in front of that is culled)")
+        self._note(f"camera at {distance:.2f} from the target, "
+                   f"near plane {near:.2f}, nothing culled")
         return True
 
     def _world_range(self, prim) -> "Gf.Range3d | None":
