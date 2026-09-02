@@ -1641,58 +1641,58 @@ class EbsSimulate:
             return []
         (lx, ly, lz), (hx, hy, hz) = near
 
-        # A million faces go through this on a real machine and almost none of
-        # them survive, so it is written to give up early: one axis at a time,
-        # and nothing built that is thrown away.
+        # A million faces go through this and most are nowhere near the box,
+        # so what it costs per face is what it costs. One pass, each point read
+        # once, nothing built that gets thrown away.
         kept, cursor, total = [], 0, len(indices)
         for count in counts:
             end = cursor + count
             if count < 3 or end > total:
                 cursor = end
                 continue
-            lo = hi = points[indices[cursor]][0]
+            corner = points[indices[cursor]]
+            x0 = x1 = corner[0]
+            y0 = y1 = corner[1]
+            z0 = z1 = corner[2]
             for k in range(cursor + 1, end):
-                v = points[indices[k]][0]
-                if v < lo:
-                    lo = v
-                elif v > hi:
-                    hi = v
-            if lo > hx or hi < lx:
+                corner = points[indices[k]]
+                v = corner[0]
+                if v < x0:
+                    x0 = v
+                elif v > x1:
+                    x1 = v
+                v = corner[1]
+                if v < y0:
+                    y0 = v
+                elif v > y1:
+                    y1 = v
+                v = corner[2]
+                if v < z0:
+                    z0 = v
+                elif v > z1:
+                    z1 = v
+            if (x0 > hx or x1 < lx or y0 > hy or y1 < ly
+                    or z0 > hz or z1 < lz):
                 cursor = end
                 continue
-            lo = hi = points[indices[cursor]][1]
-            for k in range(cursor + 1, end):
-                v = points[indices[k]][1]
-                if v < lo:
-                    lo = v
-                elif v > hi:
-                    hi = v
-            if lo > hy or hi < ly:
-                cursor = end
-                continue
-            lo = hi = points[indices[cursor]][2]
-            for k in range(cursor + 1, end):
-                v = points[indices[k]][2]
-                if v < lo:
-                    lo = v
-                elif v > hi:
-                    hi = v
-            if lo <= hz and hi >= lz:
-                fan = [to_world.Transform(Gf.Vec3d(points[indices[k]][0],
-                                                   points[indices[k]][1],
-                                                   points[indices[k]][2]))
-                       for k in range(cursor, end)]
-                for k in range(1, count - 1):
-                    a, b, c = fan[0], fan[k], fan[k + 1]
-                    low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
-                           min(a[2], b[2], c[2]))
-                    high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
-                            max(a[2], b[2], c[2]))
-                    # The face got through on its own corners; a triangle of it
-                    # still need not reach the box. Same rule as the cached path.
-                    if all(low[i] <= hi_box[i] and high[i] >= lo_box[i]
-                           for i in range(3)):
-                        kept.append((path, (a, b, c), low, high))
+
+            fan = []
+            for k in range(cursor, end):
+                corner = points[indices[k]]
+                fan.append(to_world.Transform(
+                    Gf.Vec3d(corner[0], corner[1], corner[2])))
+            for k in range(1, count - 1):
+                a, b, c = fan[0], fan[k], fan[k + 1]
+                low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
+                       min(a[2], b[2], c[2]))
+                high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
+                        max(a[2], b[2], c[2]))
+                # The face got through on its own corners; a triangle of it
+                # still need not reach the box. Same rule as the cached path.
+                if (low[0] <= hi_box[0] and high[0] >= lo_box[0]
+                        and low[1] <= hi_box[1] and high[1] >= lo_box[1]
+                        and low[2] <= hi_box[2] and high[2] >= lo_box[2]):
+                    kept.append((path, (a, b, c), low, high))
             cursor = end
         return kept
 
