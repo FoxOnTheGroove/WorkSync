@@ -133,11 +133,14 @@ class EbsSimulateService:
         캐시 정책 변경시 _load_cache, _save_cache, _source_stamp 참조.
         저장 형태 바꾸면 CACHE_VERSION 올릴 것. 파일명은 CACHE_SUFFIX.
 
-        파서는 lxml 우선, 없으면 expat. 트리는 어느 쪽도 안 만든다.
+        파서는 expat. 트리는 안 만든다. (lxml 도 써봤으나 Kit 에 없고,
+        있어도 병목이 파서가 아니라서 의미 없었음 — 아래 참고.)
         파일은 READ_BLOCK(8 MB)씩 읽어 파서에 밀어넣는다 — 파서에 맡기면
-        2~4 kB 씩 읽어서, 공유 드라이브에서는 그 한 조각이 왕복 한 번이 된다.
-        읽기 루프는 _feed_parser 하나뿐이고 두 파서가 같이 쓴다.
-        읽는 규칙 변경시 _PortScan 참조 (모듈 최상단, 두 파서가 같이 쓴다).
+        2 kB 씩 읽어서, 공유 드라이브에서는 그 한 조각이 왕복 한 번이 된다.
+        읽기 루프는 _feed_parser.
+        읽는 규칙 변경시 _PortScan 참조 (모듈 최상단).
+        320 MB 기준 실측: I/O 0.1s, expat 3.4s, _PortScan 핸들러가 나머지 전부.
+        더 빠르게 하려면 손댈 곳은 _PortScan 이지, 파서나 읽기가 아니다.
           그룹의 키 = 자기 속성 + 직속 <value key=.. value=..> 자식.
           addr 문맥은 감싸는 addr 그룹에서 내려온다.
         키 이름 변경시 PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY, PULS_KEY.
@@ -145,7 +148,7 @@ class EbsSimulateService:
         네임스페이스 접두어 처리는 _plain.
 
         타이밍: 'XML: cache read' 만 있으면 캐시 히트,
-                'XML: parse (lxml|expat)' + 'XML: cache write' 면 파싱한 것.
+                'XML: parse' + 'XML: cache write' 면 파싱한 것.
         """
         return cls._simulate.load_ports()
 

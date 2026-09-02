@@ -10,11 +10,6 @@ from contextlib import contextmanager, nullcontext, redirect_stdout
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
 
-try:                                  # faster where Kit ships it, optional
-    from lxml import etree as _lxml
-except Exception:
-    _lxml = None
-
 __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
@@ -54,9 +49,7 @@ class _PortScan:
     """One streaming pass over the port xml. No tree is built.
 
     A group's keys are its own attributes plus its <value key=.. value=..>
-    children, and the addr in force is whatever addr group encloses it. lxml
-    drives this as a parser target and expat as its handlers; both call the
-    same three methods, so the two paths cannot read the file differently.
+    children, and the addr in force is whatever addr group encloses it.
     """
 
     def __init__(self):
@@ -793,39 +786,29 @@ class EbsSimulate:
         return len(self._port_map)
 
     def _scan_xml(self) -> "dict | None":
-        name = "lxml" if _lxml is not None else "expat"
         scan = _PortScan()
         try:
-            with self._stage_timer(f"XML: parse ({name})"):
+            with self._stage_timer("XML: parse"):
                 reads = self._feed_parser(scan)
         except Exception as e:
-            self._note(f"xml parse failed ({name}): {e}")
+            self._note(f"xml parse failed: {e}")
             return None
-        self._note(f"xml parsed with {name}"
-                   + ("" if _lxml is not None else " (lxml unavailable)")
-                   + f", {reads} reads of {READ_BLOCK >> 20} MB")
+        self._note(f"xml parsed, {reads} reads of {READ_BLOCK >> 20} MB")
         self._addr_cad = scan.addr_cad
         self._addr_next = scan.addr_next
         return scan.found
 
     def _feed_parser(self, scan: "_PortScan") -> int:
-        """Read the file in big blocks and push them at whichever parser is here.
+        """Read the file in big blocks and push them at the parser.
 
-        Left to themselves both parsers pull the file 2-4 kB at a time, which is
-        a round trip each over a share and was the whole of the 76 seconds. The
-        blocks are what matters, not the parser, so both take the same ones.
+        Left to itself expat pulls the file 2 kB at a time, which is a round
+        trip each over a share. The blocks are ours so that cannot happen.
         """
-        if _lxml is not None:
-            parser = _lxml.XMLParser(target=scan)
-            push, done = parser.feed, parser.close
-        else:
-            native = expat.ParserCreate()
-            native.buffer_text = True
-            native.StartElementHandler = scan.start
-            native.EndElementHandler = scan.end
-            native.CharacterDataHandler = scan.data
-            push = lambda block: native.Parse(block, False)
-            done = lambda: native.Parse(b"", True)
+        parser = expat.ParserCreate()
+        parser.buffer_text = True
+        parser.StartElementHandler = scan.start
+        parser.EndElementHandler = scan.end
+        parser.CharacterDataHandler = scan.data
 
         reads = 0
         with open(self._xml_path, "rb") as handle:
@@ -834,8 +817,8 @@ class EbsSimulate:
                 reads += 1
                 if not block:
                     break
-                push(block)
-        done()
+                parser.Parse(block, False)
+        parser.Parse(b"", True)
         return reads
 
     def _collect_ports(self, found: dict) -> None:
