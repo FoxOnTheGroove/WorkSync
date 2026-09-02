@@ -131,7 +131,10 @@ GEOMETRY_TYPES = frozenset({
 
 CAMERA_PATH    = "/EbsCamera"             # session-layer camera owned by this extension
 CAMERA_FILL    = 0.9                      # how much of the view the target fills
-CAMERA_NEAR    = 0.01                     # nothing is clipped away in front
+CAMERA_NEAR    = 0.01                     # near plane, as a share of the distance
+                                          # to the target: nothing between the
+                                          # camera and the EBS is clipped, but
+                                          # what is right against the lens is
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
 NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a share
                          # of the target's own width
@@ -2778,10 +2781,15 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        # Nothing is clipped away in front any more. It was there to get the
-        # plant out of the way of the target, and turning the other machines
-        # off does that without also cutting the view apart when you orbit.
-        near, far = CAMERA_NEAR, CAMERA_FAR
+        # The slab that used to be cut out in front is gone -- turning the other
+        # machines off is what gets the plant out of the way now, and cutting
+        # took the view apart when you orbited. What is left is a near plane
+        # right against the lens: at a hundredth of the way to the target it
+        # clips nothing you are looking at, but it keeps whatever the camera is
+        # sitting inside from being drawn across the whole screen. Flat zero is
+        # not free -- near to far would be one part in a hundred million, which
+        # is more than the depth buffer has to give.
+        near, far = max(distance * CAMERA_NEAR, 1e-3), CAMERA_FAR
 
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             xformable = UsdGeom.Xformable(cam_prim)
