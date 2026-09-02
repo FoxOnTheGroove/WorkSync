@@ -231,8 +231,8 @@ class EbsSimulateService:
         EBS 박스 변경시 _ebs_bound 참조.
         빈 면 거리 변경시 measure_faces -> _face_prism, _nearest_in_prism,
           _gap_along, _triangle_gap 참조.
-        마커 색/투명도 변경시 COLOR_BLOCKED, COLOR_CLEAR, MARKER_OPACITY,
-          MARKER_EMISSION 참조.
+        막힌 면 색/투명도 변경시 COLOR_BLOCKED, BLOCKED_OPACITY, BLOCKED_EMISSION.
+        빈 면은 COLOR_CLEAR, MARKER_OPACITY, MARKER_EMISSION. 둘은 따로 논다.
         격자선 변경시 _grid_bands + GRID_COLOR, GRID_OPACITY, GRID_EMISSION,
           GRID_LINE, GRID_LIFT 참조.
         면이 한쪽만 보일 때 _marker_sheet, _marker_quad + SHEET_GAP 참조.

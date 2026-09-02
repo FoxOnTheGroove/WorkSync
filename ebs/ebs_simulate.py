@@ -127,7 +127,9 @@ CAMERA_FAR     = 1.0e6                    # the far plane stays open
 
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
 MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the alpha
-COLOR_BLOCKED  = (0.9, 0.1, 0.1)
+COLOR_BLOCKED  = (0.9, 0.2, 0.2)
+BLOCKED_OPACITY = 0.6      # the blocked face is the answer, so it reads solid
+BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 GRID_COLOR     = (0.05, 0.05, 0.05)   # the outline around each face
 GRID_OPACITY   = 0.5      # the lines read as lines, so they are not as faint
@@ -1778,18 +1780,20 @@ class EbsSimulate:
             lines = self._marker_material(stage, "grid", GRID_COLOR, GRID_OPACITY,
                                           GRID_EMISSION)
             materials = {
-                True: (self._marker_material(stage, "blocked", COLOR_BLOCKED),
-                       COLOR_BLOCKED),
+                True: (self._marker_material(stage, "blocked", COLOR_BLOCKED,
+                                             BLOCKED_OPACITY, BLOCKED_EMISSION),
+                       COLOR_BLOCKED, BLOCKED_OPACITY),
                 False: (self._marker_material(stage, "clear", COLOR_CLEAR),
-                        COLOR_CLEAR),
+                        COLOR_CLEAR, MARKER_OPACITY),
             }
             for face, boxes in built.items():
                 flags = cells.get(face, [])
                 for i, (_, quad) in enumerate(boxes):
-                    material, colour = materials[bool(i < len(flags) and flags[i])]
+                    material, colour, alpha = materials[
+                        bool(i < len(flags) and flags[i])]
                     points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
                     self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_{i}", points,
-                                       material, colour)
+                                       material, colour, alpha)
                     drawn += 1
 
                 plane = self._face_planes.get(face)
