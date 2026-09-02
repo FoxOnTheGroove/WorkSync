@@ -217,17 +217,23 @@ class EbsSimulateService:
 
         양옆 장비만 남기고 나머지 장비를 끈다. 기둥·벽·천장은 안 끈다 —
         빈 면까지의 거리를 재는 상대가 그것들이다.
-        이웃 찾기 변경시 side_neighbours + NEIGHBOUR_REACH 참조.
+        이웃 찾기 변경시 side_neighbours + NEIGHBOUR_REACH / NEIGHBOUR_BAND 참조.
           대상 장비 폭 x NEIGHBOUR_REACH 반경 원 안에서, EBS 의 좌우 축
           (_sideways, 3면 검사의 좌/우와 같은 축) 기준 양쪽 가장 가까운 하나씩.
+          원만 보면 대각선 장비가 이긴다 — 거리만 묻고 어느 쪽으로 기울었는지는
+          안 물으므로. 그래서 줄에서 벗어난 정도(좌우축의 수직 성분)가
+          폭 x NEIGHBOUR_BAND 를 넘으면 뺀다.
           위치는 equipment_spots 가 장비당 한 번 구해 캐시한다. init 이 비운다.
         끄기/되돌리기는 hide_other_equipment / show_equipment.
           visibility 를 끄지 않는다. 장비 프림 바로 아래 Looks 폴더의 쉐이더에
           opacity 0 을 먹인다 (_looks_shaders 가 쉐이더 경로 수집, 장비당 한 번
           캐시. init 이 비운다 / _author_opacity 가 저작). visibility 는 하위
           트리 전체를 다시 풀어야 해서 훨씬 비싸다.
-          쉐이더 입력 이름은 GONE 상수. UsdPreviewSurface 는 inputs:opacity,
-          MDL 은 enable_opacity + opacity_constant. 서로 모르는 건 무시한다.
+          쉐이더 입력 이름은 GONE 상수. UsdPreviewSurface 는 camelCase,
+          MDL 은 underscore. 서로 모르는 철자는 무시한다.
+          문턱값(GONE_THRESHOLD)이 핵심. 0 이면 blend 라 면이 그려지긴 하고
+          뒤엣것과 정렬이 어긋나 이상하게 보인다. 0 보다 크면 컷아웃이라
+          투명도 0 인 프래그먼트를 아예 버린다.
           프림당 하나씩 쓰면 변경 알림이 하나씩 가고 Kit 이 매번 응답한다 —
           1500개면 그것만으로 멈춘다. Sdf 는 ChangeBlock 안에서 안전하지만
           스키마 헬퍼는 아니다 (스테이지를 되읽으므로). 쉐이더 수집을 블록 밖에서

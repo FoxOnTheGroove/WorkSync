@@ -136,6 +136,8 @@ CAMERA_NEAR    = 0.01                     # fixed, right against the lens: no
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
 NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a share
                          # of the target's own width
+NEIGHBOUR_BAND = 0.5     # and how far out of the target's own row it may sit,
+                         # same share: beside it, not across the aisle from it
 
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
 MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the alpha
@@ -165,13 +167,20 @@ OURS_UNDER = tuple(p + "/" for p in OURS)   # startswith takes a tuple
 NOW = Usd.TimeCode.Default()      # asked for per prim; make it once
 LOOKS = "Looks"                   # the material folder right under a machine
 SHADER_TYPE = "Shader"
-# What a shader is told to make its machine disappear. UsdPreviewSurface
-# reads the first, an MDL surface the other two, and each ignores the name
-# it does not know. Turning the prim off instead is the same picture and a
-# far dearer one: visibility is resolved down the whole tree beneath it.
+GONE_THRESHOLD = 0.5     # anything under this is cut, and nothing is over it
+# What a shader is told to make its machine disappear. UsdPreviewSurface reads
+# the camelCase names, an MDL surface the underscored ones, and each ignores
+# the spelling it does not know. The threshold is what makes this a cutout
+# rather than a blend: at zero the surface is still drawn, just fully
+# see-through, which sorts against everything behind it and reads wrong. Above
+# zero the fragment is thrown away instead. Turning the prim off would be the
+# same picture and a far dearer one: visibility is resolved down the whole
+# tree beneath it.
 GONE = (("inputs:opacity", "Float", 0.0),
+        ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
         ("inputs:enable_opacity", "Bool", True),
-        ("inputs:opacity_constant", "Float", 0.0))
+        ("inputs:opacity_constant", "Float", 0.0),
+        ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -843,6 +852,7 @@ class EbsSimulate:
             return []
 
         sideways = self._sideways(ebs_prim)
+        band = width * NEIGHBOUR_BAND
         left = right = None
         for name, spot in spots.items():
             if name == key:
@@ -852,6 +862,12 @@ class EbsSimulate:
             if across * across + along * along > reach * reach:
                 continue                       # outside the circle
             side = across * sideways[0] + along * sideways[1]
+            # How far out of the row it stands. Without this the machine on the
+            # diagonal wins, because the circle only asks how far away it is
+            # and it still leans to one side or the other.
+            depth = along * sideways[0] - across * sideways[1]
+            if abs(depth) > band:
+                continue
             if side >= 0:
                 if right is None or side < right[0]:
                     right = (side, name)
