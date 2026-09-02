@@ -266,6 +266,9 @@ class EbsSimulateService:
           _triangles_reaching 상자를 로컬로 끌어와(_pulled_back) 거른 뒤
                             살아남은 면만 월드로. 간섭 검사용.
                             변환이 비용의 전부라, 버릴 것을 변환하면 안 된다.
+                            변환도 Gf 를 안 거치고 행렬 성분으로 직접 곱한다.
+                            규약이 맞는지 메시마다 첫 점으로 확인하고, 어긋나면
+                            Gf 로 물러난다 (노트에 'an unexpected transform').
                             _triangles 에 이미 있으면 그걸 걸러 쓴다.
           _triangles / _local 은 캐시. _triangles 는 월드 좌표라 EBS 가 움직이면
           거짓이 되므로 _do_align 이 _forget_triangles 로 그 하위만 버린다.

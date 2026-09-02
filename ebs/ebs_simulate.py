@@ -1640,6 +1640,36 @@ class EbsSimulate:
         if near is None:
             return []
         (lx, ly, lz), (hx, hy, hz) = near
+        # Converting a point through Gf allocates one and crosses the binding,
+        # and so does reading each of its three numbers back. Sixty thousand
+        # triangles of that is most of what this costs, so the matrix is taken
+        # apart once and the arithmetic done here, in plain floats. Whether
+        # that is the same arithmetic is not assumed: the first point is done
+        # both ways, and the fast path is only used where they agree.
+        a00 = a01 = a02 = a10 = a11 = a12 = a20 = a21 = a22 = 0.0
+        a30 = a31 = a32 = 0.0
+        plain = False
+        try:
+            r0, r1, r2, r3 = (to_world.GetRow(0), to_world.GetRow(1),
+                              to_world.GetRow(2), to_world.GetRow(3))
+            a00, a01, a02 = r0[0], r0[1], r0[2]
+            a10, a11, a12 = r1[0], r1[1], r1[2]
+            a20, a21, a22 = r2[0], r2[1], r2[2]
+            a30, a31, a32 = r3[0], r3[1], r3[2]
+            if points:
+                first = points[0]
+                x, y, z = first[0], first[1], first[2]
+                mine = (x * a00 + y * a10 + z * a20 + a30,
+                        x * a01 + y * a11 + z * a21 + a31,
+                        x * a02 + y * a12 + z * a22 + a32)
+                theirs = to_world.Transform(Gf.Vec3d(x, y, z))
+                span = max(abs(theirs[i]) for i in range(3)) or 1.0
+                plain = all(abs(mine[i] - theirs[i]) <= span * 1e-9
+                            for i in range(3))
+                if not plain:
+                    self._boxed.setdefault("an unexpected transform", []).append(path)
+        except Exception:
+            plain = False
 
         # A million faces go through this and most are nowhere near the box,
         # so what it costs per face is what it costs. One pass, each point read
@@ -1679,8 +1709,12 @@ class EbsSimulate:
             fan = []
             for k in range(cursor, end):
                 corner = points[indices[k]]
-                fan.append(to_world.Transform(
-                    Gf.Vec3d(corner[0], corner[1], corner[2])))
+                x, y, z = corner[0], corner[1], corner[2]
+                fan.append((x * a00 + y * a10 + z * a20 + a30,
+                            x * a01 + y * a11 + z * a21 + a31,
+                            x * a02 + y * a12 + z * a22 + a32)
+                           if plain else
+                           to_world.Transform(Gf.Vec3d(x, y, z)))
             for k in range(1, count - 1):
                 a, b, c = fan[0], fan[k], fan[k + 1]
                 low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
