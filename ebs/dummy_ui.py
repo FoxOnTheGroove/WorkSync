@@ -129,7 +129,6 @@ class EbsDummyUI:
         self._ebs3_field = None
         self._precision = None
         self._scale = None
-        self._nudge_field = None
         self._root_field = None
         self._rail_field = None
         self._report_field = None
@@ -155,16 +154,13 @@ class EbsDummyUI:
 
                 with ui.HStack(height=24, spacing=4):
                     ui.Label("Precision:", width=90)
-                    self._precision = ui.ComboBox(2, "bbox", "mesh", "triangle",
-                                                  width=90)
+                    # 'bbox' and 'mesh' are the same test, so only one is offered.
+                    self._precision = ui.ComboBox(1, "box", "triangle", width=90)
                     ui.Label("Offset:", width=48)
                     # How an offset becomes a distance: one scale everywhere, or
                     # each segment's length over its own distance-puls.
                     self._scale = ui.ComboBox(0, "fixed 100000", "length / puls",
                                               width=110)
-                    ui.Label("Nudge:", width=44)
-                    # Slides every port along the rail, to measure the origin.
-                    self._nudge_field = ui.FloatField(width=70)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -334,14 +330,12 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
         EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
-        modes = ("bbox", "mesh", "triangle")
+        modes = ("mesh", "triangle")
         index = self._precision.model.get_item_value_model().get_value_as_int()
-        EbsSimulateService.set_precision(modes[max(0, min(index, 2))])
+        EbsSimulateService.set_precision(modes[max(0, min(index, 1))])
         scales = ("fixed", "puls")
         index = self._scale.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_offset_scale(scales[max(0, min(index, 1))])
-        EbsSimulateService.set_rail_nudge(
-            self._nudge_field.model.get_value_as_float())
 
     # -- display -------------------------------------------------------------
 

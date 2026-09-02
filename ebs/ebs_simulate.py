@@ -190,7 +190,6 @@ class EbsSimulate:
         self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
         self._addr_next: dict = {}          # addr number -> [(next addr, distance-puls)]
         self._offset_scale: str = SCALE_FIXED   # how an offset becomes a distance
-        self._rail_nudge: float = 0.0       # units to slide every port along the rail
         self._rail_root: str = ""           # parent path holding the rail prims
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._rail_frame = None             # (addr point, one length on, axis) in rail space
@@ -243,9 +242,6 @@ class EbsSimulate:
     def set_offset_scale(self, mode: str) -> None:
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
-
-    def set_rail_nudge(self, value: float) -> None:
-        self._rail_nudge = float(value or 0.0)
 
     def set_rail_root(self, path: str) -> None:
         self._rail_index = None
@@ -1059,12 +1055,6 @@ class EbsSimulate:
         print(f"[ebs]   a constant shift would match: half a rail "
               f"{abs(length) / 2:.4f}, a whole rail {abs(length):.4f}"
               f"  (port 1 is {abs(along[1] - start):.4f} from the base addr)")
-
-        if self._rail_nudge:
-            for index in along:
-                along[index] += direction * self._rail_nudge
-            print(f"[ebs]   nudged every port {direction * self._rail_nudge:+.4f} "
-                  f"along {name}")
 
         points = {}
         for index, coord in along.items():

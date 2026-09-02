@@ -69,7 +69,8 @@ class EbsSimulateService:
     def set_precision(cls, mode):
         """'bbox' / 'mesh' / 'triangle'.
 
-        bbox <-> mesh 는 현재 동작 동일. 지오메트리 프림당 박스 1개.
+        UI 는 'box'(= mesh) 와 'triangle' 둘만 노출한다. bbox 와 mesh 가
+        같은 테스트라서, 셋을 보여줄 이유가 없다. API 는 셋 다 받는다.
         판정 분기 변경시 check_collision 내 PRECISION_TRI 비교, _nearest_in_prism 참조.
         삼각형 판정 자체는 _triangle_hits_box.
         """
@@ -85,14 +86,6 @@ class EbsSimulateService:
         모드 추가시 SCALE_MODES + dummy_ui 콤보 같이.
         """
         return cls._simulate.set_offset_scale(mode)
-
-    @classmethod
-    def set_rail_nudge(cls, value):
-        """전 포트를 레일 방향으로 이동. 원점 오차 측정용 실험값.
-
-        적용 지점은 compute_port_points 끝.
-        """
-        return cls._simulate.set_rail_nudge(value)
 
     @classmethod
     def set_rail_root(cls, path):
