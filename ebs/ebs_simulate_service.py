@@ -372,7 +372,14 @@ class EbsSimulateService:
 
         {"centre": 월드 좌표, "span": EBS 최장변, "inside": 내부 간섭 여부,
          "faces": [{"face": 면, "name": 막은 것의 이름}], "blocked": 막힌 셀 수,
-         "placeable": 세울 수 있나}
+         "placeable": 세울 수 있나,
+         "marks": [{"face": 면, "state": clash|clear, "distance": m 또는 None,
+                    "at": 패널을 매달 월드 좌표}]}
+        marks 는 _face_marks. 막힌 면은 면 중앙에, 빈 면은 EBS 면과 가장 가까운
+          메시 사이의 중점에 매단다. 가까운 점은 measure_faces 가 넘겨준다
+          (_nearest_in_prism 의 "at" — 삼각형 정점, 또는 _box_point).
+          거리는 두 월드 점 사이로 잰다. 프리즘이 쓰는 수는 EBS 로컬이라
+          EBS 에 스케일이 걸려 있으면 틀린다. m 환산은 GetStageMetersPerUnit.
         이름은 owner_name 이 정한다. 막은 메시 경로를 위로 타면서,
           GROUP_NAMES 중 하나면 그것, search root 바로 아래면 그 장비 이름.
           먼저 만나는 쪽이 이긴다. 둘 다 아니면 메시 이름 그대로.
@@ -383,7 +390,10 @@ class EbsSimulateService:
         색·글자 크기·문구는 여기 없다 — ebs_simulate_overlay 의 몫.
         문구는 영문이다 — 뷰포트 폰트에 한글이 없어 빈칸으로 나온다.
           윗줄 CAN / CANNOT, 아랫줄부터 사유가 한 줄에 하나 (INNER, FACE_ORDER).
-          줄마다 라벨 하나라 _detail 은 매번 비우고 다시 채운다 (_say).
+          매번 통째로 다시 짓는다 — 패널 수와 모양이 결과마다 다르다.
+        면 패널은 _face_panel. 막혔으면 CLASH 한 줄(빨강), 비었으면
+          GAP / 선 / 거리 (짙은 황색). 좌우는 세로로 쌓고 천장만 눕는다
+          (LIE_DOWN) — 화면에서 벌어지는 방향이 다르기 때문.
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
           _place 는 오프셋을 프레임 안으로 가둔다. 밖으로 내보내면 프레임이

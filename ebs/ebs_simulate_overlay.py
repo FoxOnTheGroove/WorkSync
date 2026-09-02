@@ -1,12 +1,12 @@
-"""Viewport overlay: the one line that says whether the EBS can stand here.
+"""Viewport overlay: the verdict over the EBS, and a gap on each of its faces.
 
 Everything it draws comes from the public API, and everything about how it
-looks is decided here -- the simulation side hands over a point and a yes or
-no and does not know what a viewport is.
+looks is decided here -- the simulation side hands over points and numbers and
+does not know what a viewport is.
 
 Text in a viewport is not scene description: a USD prim cannot hold a line of
-letters. So this is an ordinary omni.ui panel sitting in the viewport window's
-own frame, and the world point is projected to where it lands on screen every
+letters. So these are ordinary omni.ui panels sitting in the viewport window's
+own frame, and each world point is projected to where it lands on screen every
 frame. That is more code than asking omni.ui.scene for a billboard, and it is
 plain omni.ui the whole way down, which is the part that can be relied on.
 """
@@ -19,22 +19,32 @@ __all__ = ["EbsSimulateOverlay"]
 
 FRAME_ID = "ebs_simulate_overlay"
 
-# 한글은 뷰포트 폰트에 없어서 빈칸으로 나온다. 영문만 쓴다.
+# 뷰포트 폰트에 한글이 없어 빈칸으로 나온다. 영문만 쓴다.
 CAN    = "EBS INSTALL AVAILABLE"
 CANNOT = "EBS INSTALL BLOCKED"
 CLEAR  = "no collision"
 
-# 무엇에 막혔는지. 한 줄에 하나. 없으면 위의 CLEAR.
-INNER = "internal clash"
+INNER = "internal clash"          # 무엇에 막혔는지, 한 줄에 하나
 FACE_ORDER = ("left", "right", "ceiling")
 NAMELESS = "-"
 
+CLASH = "clash"                   # 면 패널: 막혔을 때
+GAP   = "clearance"               # 비었을 때, 선 위(천장은 선 왼쪽)
+NO_GAP = "-"                      # 잰 것이 없을 때 거리 자리
+
+# 좌우 면은 화면에서 가로로 벌어지니 글자가 선 위아래로, 천장은 세로로 벌어지니
+# 글자가 선 양옆으로 간다. 그래서 천장만 눕는다.
+LIE_DOWN = ("ceiling",)
+
 COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
 COLOR_CANNOT = 0xFF2626E6      # 빨강
-COLOR_DETAIL = 0xFFC8C8C8      # 두 번째 줄. 판정이 아니라 사유라 눈에 덜 띈다
+COLOR_DETAIL = 0xFFC8C8C8      # 판정 아래 사유. 판정이 아니라 사유라 덜 띈다
 COLOR_PANEL  = 0xC0141414      # 뒤에 깔리는 판. 글자가 씬에 묻히지 않게
 TEXT_SIZE    = 22
 DETAIL_SIZE  = 15
+FACE_SIZE    = 15
+LINE_LENGTH  = 44              # 여유를 나타내는 선의 길이
+LINE_THICK   = 2
 PAD_X, PAD_Y = 10, 5
 
 
@@ -137,36 +147,17 @@ class EbsSimulateOverlay:
         self._window = None
         self._api = None         # the viewport, for turning world into screen
         self._frame = None
-        self._placer = None
-        self._panel = None
-        self._label = None
-        self._detail = None
+        self._stack = None       # everything floats in here
+        self._marks = []         # (placer, panel, world point) for each panel
         self._follow = None      # the update subscription, only while showing
-        self._at = None          # the world point being followed
 
     def _build(self, window) -> bool:
         try:
             self._frame = window.get_frame(FRAME_ID)
             with self._frame:
-                # The placer is what moves; everything inside it is laid out
-                # once and then just carried about.
-                self._placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
-                with self._placer:
-                    self._panel = ui.ZStack(width=0, height=0)
-                    with self._panel:
-                        ui.Rectangle(style={"background_color": COLOR_PANEL,
-                                            "border_radius": 4})
-                        with ui.VStack(spacing=1,
-                                       style={"margin_width": PAD_X,
-                                              "margin_height": PAD_Y}):
-                            self._label = ui.Label(
-                                "", height=0, alignment=ui.Alignment.CENTER,
-                                style={"font_size": TEXT_SIZE,
-                                       "color": COLOR_CAN})
-                            # Refilled every run: one line per thing in the
-                            # way, and a label holds one line.
-                            self._detail = ui.VStack(spacing=0, height=0)
-            self._panel.visible = False
+                # A frame holds one child, and the panels overlap, so they all
+                # go in a stack and each carries its own placer.
+                self._stack = ui.ZStack()
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
             return False
@@ -184,18 +175,90 @@ class EbsSimulateOverlay:
     def refresh(self) -> bool:
         said = EbsSimulateService.get_verdict()
         self.clear()
-        if not said or self._label is None:
+        if not said or self._stack is None:
             return False
-        ok = bool(said.get("placeable"))
-        self._label.text = CAN if ok else CANNOT
-        self._label.style = {"font_size": TEXT_SIZE,
-                             "color": COLOR_CAN if ok else COLOR_CANNOT}
-        self._say(self._why(said))
-        self._at = said.get("centre")
-        if self._at is None:
+        try:
+            with self._stack:
+                self._verdict_panel(said)
+                for mark in said.get("marks") or ():
+                    self._face_panel(mark)
+        except Exception as e:
+            print(f"[ebs] could not build the overlay: {e}")
+            self.clear()
             return False
         self._place()                    # so it is there before the next frame
         return self._start()
+
+    # -- the panels -----------------------------------------------------------
+
+    def _floating(self, at, fill):
+        """One panel, hung on a world point. Nothing is laid out until it is
+        placed, and nothing shows until it has been."""
+        if at is None:
+            return
+        placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+        with placer:
+            panel = ui.ZStack(width=0, height=0)
+            with panel:
+                ui.Rectangle(style={"background_color": COLOR_PANEL,
+                                    "border_radius": 4})
+                fill()
+        panel.visible = False
+        self._marks.append((placer, panel, tuple(at)))
+
+    def _verdict_panel(self, said: dict) -> None:
+        ok = bool(said.get("placeable"))
+
+        def fill():
+            with ui.VStack(spacing=1, style={"margin_width": PAD_X,
+                                             "margin_height": PAD_Y}):
+                ui.Label(CAN if ok else CANNOT, height=0,
+                         alignment=ui.Alignment.CENTER,
+                         style={"font_size": TEXT_SIZE,
+                                "color": COLOR_CAN if ok else COLOR_CANNOT})
+                for line in self._why(said):
+                    ui.Label(line, height=0, alignment=ui.Alignment.CENTER,
+                             style={"font_size": DETAIL_SIZE,
+                                    "color": COLOR_DETAIL})
+
+        self._floating(said.get("centre"), fill)
+
+    def _face_panel(self, mark: dict) -> None:
+        clash = mark.get("state") == "clash"
+        colour = COLOR_CANNOT if clash else COLOR_CAN
+        gap = mark.get("distance")
+        told = NO_GAP if gap is None else f"{gap:.3f} m"
+        # The line stands for the gap, so it runs the way the gap does: across
+        # the screen on the sides, up and down on the ceiling.
+        flat = mark.get("face") not in LIE_DOWN
+
+        def word(text):
+            ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
+                     style={"font_size": FACE_SIZE, "color": colour})
+
+        def rule():
+            if flat:
+                ui.Line(width=LINE_LENGTH, height=LINE_THICK * 3,
+                        alignment=ui.Alignment.V_CENTER,
+                        style={"color": colour, "border_width": LINE_THICK})
+            else:
+                ui.Line(width=LINE_THICK * 3, height=LINE_LENGTH,
+                        alignment=ui.Alignment.H_CENTER,
+                        style={"color": colour, "border_width": LINE_THICK})
+
+        def fill():
+            style = {"margin_width": PAD_X, "margin_height": PAD_Y}
+            if clash:
+                with ui.VStack(spacing=1, style=style):
+                    word(CLASH)
+                return
+            stack = ui.VStack if flat else ui.HStack
+            with stack(spacing=3, style=style):
+                word(GAP)
+                rule()
+                word(told)
+
+        self._floating(mark.get("at"), fill)
 
     @staticmethod
     def _why(said: dict) -> list:
@@ -208,13 +271,6 @@ class EbsSimulateOverlay:
         told += [f"{face} : {blocked[face]}"
                  for face in FACE_ORDER if face in blocked]
         return told or [CLEAR]
-
-    def _say(self, lines: list) -> None:
-        self._detail.clear()
-        with self._detail:
-            for line in lines:
-                ui.Label(line, height=0, alignment=ui.Alignment.CENTER,
-                         style={"font_size": DETAIL_SIZE, "color": COLOR_DETAIL})
 
     # -- following the camera -------------------------------------------------
 
@@ -232,29 +288,29 @@ class EbsSimulateOverlay:
         return True
 
     def _place(self) -> None:
-        if self._at is None or self._panel is None:
+        if not self._marks:
             return
         try:
-            spot = self._to_screen(self._at)
+            width = self._frame.computed_width
+            height = self._frame.computed_height
+            for placer, panel, at in self._marks:
+                spot = self._to_screen(at)
+                if spot is None:
+                    panel.visible = False   # behind the camera, or off screen
+                    continue
+                # Laid out around the point, not from its corner -- and then
+                # held inside the frame. A placer that puts its content past
+                # the edge makes the frame bigger than the viewport, and the
+                # viewport resizes itself around it.
+                panel_w, panel_h = panel.computed_width, panel.computed_height
+                placer.offset_x = min(max(spot[0] - panel_w * 0.5, 0.0),
+                                      max(width - panel_w, 0.0))
+                placer.offset_y = min(max(spot[1] - panel_h * 0.5, 0.0),
+                                      max(height - panel_h, 0.0))
+                panel.visible = True
         except Exception as e:
             print(f"[ebs] could not place the overlay: {e}")
             self.clear()
-            return
-        if spot is None:
-            self._panel.visible = False        # behind the camera, or off screen
-            return
-        x, y = spot
-        # The panel is laid out around the point, not from its corner -- and
-        # then held inside the frame. A placer that puts its content past the
-        # edge makes the frame bigger than the viewport, and the viewport
-        # resizes itself around it. Near an edge the panel stops there instead.
-        width, height = self._frame.computed_width, self._frame.computed_height
-        panel_w, panel_h = self._panel.computed_width, self._panel.computed_height
-        self._placer.offset_x = min(max(x - panel_w * 0.5, 0.0),
-                                    max(width - panel_w, 0.0))
-        self._placer.offset_y = min(max(y - panel_h * 0.5, 0.0),
-                                    max(height - panel_h, 0.0))
-        self._panel.visible = True
 
     def _to_screen(self, point):
         """Where a world point lands in the frame, in UI units. None if it is
@@ -285,16 +341,16 @@ class EbsSimulateOverlay:
 
     def clear(self) -> None:
         self._follow = None       # dropping the handle ends the subscription
-        self._at = None
-        if self._panel is not None:
-            self._panel.visible = False
+        self._marks = []
+        if self._stack is not None:
+            try:
+                self._stack.clear()
+            except Exception:
+                pass
 
     def _destroy(self) -> None:
         self.clear()
-        self._label = None
-        self._detail = None
-        self._panel = None
-        self._placer = None
+        self._stack = None
         self._frame = None
         self._api = None
         self._window = None

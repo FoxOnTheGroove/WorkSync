@@ -141,6 +141,10 @@ NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a sha
 # prim just inside the root. Whichever is met first going up wins.
 GROUP_NAMES = ("AMH", "Construction")
 
+STATE_CLASH = "clash"     # 면이 막혔다. 거리는 없다
+STATE_CLEAR = "clear"     # 비었다. distance 가 있으면 그 거리, None 이면
+                          # reach 안에 아무것도 없었다는 뜻
+
 NEIGHBOUR_BAND = 0.5     # and how far out of the target's own row it may sit,
                          # same share: beside it, not across the aisle from it
 
@@ -820,8 +824,8 @@ class EbsSimulate:
         # cleared along with the markers it belongs to. It is a line of text
         # over the EBS, so it never takes the answer down with it.
         try:
-            self._verdict = self.build_verdict(self._target["ebs"],
-                                               cells, meeting["hit"])
+            self._verdict = self.build_verdict(self._target["ebs"], cells,
+                                               distances, meeting["hit"])
         except Exception as e:
             self._verdict = {}
             self._note(f"no overlay verdict: {type(e).__name__}: {e}")
@@ -858,7 +862,8 @@ class EbsSimulate:
                 return parts[i]
         return parts[-1]
 
-    def build_verdict(self, ebs_prim, cells: dict, inside: bool) -> dict:
+    def build_verdict(self, ebs_prim, cells: dict, distances: dict,
+                      inside: bool) -> dict:
         """Can the EBS stand here, and where to say so.
 
         A point and a yes or no. What it is coloured and how big the letters
@@ -876,6 +881,7 @@ class EbsSimulate:
                     "name": self.owner_name(self._blockers.get(face, ""))}
                    for face in FACES if any(cells.get(face, []))]
         return {
+            "marks": self._face_marks(local_box, to_world, cells, distances),
             "centre": (middle[0], middle[1], middle[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
             "inside": bool(inside),
@@ -884,6 +890,56 @@ class EbsSimulate:
                            for face in FACES),
             "placeable": not inside and not blocked,
         }
+
+    def _face_marks(self, local_box, to_world, cells: dict,
+                    distances: dict) -> list:
+        """One panel a face: where it hangs, and the gap it is reporting.
+
+        The gap is measured between the two world points rather than taken
+        from the number the prism worked in, because that number is in the
+        EBS's own space and the EBS may be scaled.
+        """
+        stage = self._get_stage()
+        try:
+            per_unit = UsdGeom.GetStageMetersPerUnit(stage)
+        except Exception:
+            per_unit = 1.0
+        lo, hi = local_box.GetMin(), local_box.GetMax()
+        middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+
+        def world(point):
+            got = to_world.Transform(Gf.Vec3d(*point))
+            return (got[0], got[1], got[2])
+
+        marks = []
+        for face in FACES:
+            plane = self._face_planes.get(face)
+            if plane is None:
+                continue
+            axis, outward, coord, _, _ = plane
+            surface = list(middle)
+            surface[axis] = coord
+
+            if any(cells.get(face, [])):
+                marks.append({"face": face, "state": STATE_CLASH,
+                              "distance": None, "at": world(surface)})
+                continue
+
+            at = (distances.get(face) or {}).get("at")
+            if at is None:                     # nothing came within the reach
+                marks.append({"face": face, "state": STATE_CLEAR,
+                              "distance": None, "at": world(surface)})
+                continue
+            start = list(at)
+            start[axis] = coord                # straight back onto the face
+            near, far = world(start), world(at)
+            gap = sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5
+            marks.append({
+                "face": face, "state": STATE_CLEAR,
+                "distance": gap * per_unit,
+                "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
+            })
+        return marks
 
     def get_verdict(self) -> dict:
         return dict(self._verdict)
@@ -2585,25 +2641,42 @@ class EbsSimulate:
                 bounded.append((gap, path, local))
         bounded.sort(key=lambda item: item[0])
 
-        best, best_path = None, ""
+        best, best_path, best_at = None, "", None
         for gap, path, local in bounded:
             if best is not None and gap >= best:
                 break
             if self._precision != PRECISION_TRI:
                 best, best_path = gap, path
+                best_at = self._box_point(local, prism, axis, outward, coord, gap)
                 continue
             triangles = self._mesh_triangles(stage, path)
             if not triangles:
                 best, best_path = gap, path          # nothing to refine with
+                best_at = self._box_point(local, prism, axis, outward, coord, gap)
                 continue
             for triangle in triangles:
                 local_tri = [inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
-                distance = self._triangle_gap(local_tri, prism, axis, outward, coord)
-                if distance is not None and (best is None or distance < best):
-                    best, best_path = distance, path
+                found = self._triangle_gap(local_tri, prism, axis, outward, coord)
+                if found is not None and (best is None or found[0] < best):
+                    best, best_path, best_at = found[0], path, found[1]
         if best is None:
             return None
-        return {"distance": max(best, 0.0), "prim": best_path}
+        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
+
+    @staticmethod
+    def _box_point(local, prism, axis: int, outward: int, coord: float, gap: float):
+        """Where a prim judged by its box is taken to be: its near side along
+        the axis, its middle across, pulled inside the prism so the line the
+        overlay draws starts on the face it belongs to."""
+        lo, hi = prism.GetMin(), prism.GetMax()
+        point = [0.0, 0.0, 0.0]
+        point[axis] = coord + (gap if outward > 0 else -gap)
+        for i in range(3):
+            if i == axis:
+                continue
+            middle = (local.GetMin()[i] + local.GetMax()[i]) * 0.5
+            point[i] = min(max(middle, lo[i]), hi[i])
+        return tuple(point)
 
     @staticmethod
     def _gap_along(box, axis: int, outward: int, coord: float) -> "float | None":
@@ -2614,10 +2687,14 @@ class EbsSimulate:
         return None if gap < 0 else gap
 
     @staticmethod
-    def _triangle_gap(triangle, prism, axis: int, outward: int,
-                      coord: float) -> "float | None":
+    def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float):
+        """How far the nearest vertex sits off the face, and which one it is.
+
+        The overlay draws a line to that vertex, so the answer is the pair
+        rather than the number.
+        """
         lo, hi = prism.GetMin(), prism.GetMax()
-        best = None
+        best, at = None, None
         for vertex in triangle:
             inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
                          for i in range(3) if i != axis)
@@ -2625,8 +2702,8 @@ class EbsSimulate:
                 continue
             gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
             if gap >= 0 and (best is None or gap < best):
-                best = gap
-        return best
+                best, at = gap, vertex
+        return None if best is None else (best, at)
 
     # -- collision markers ---------------------------------------------------
 
