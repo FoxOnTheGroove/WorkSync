@@ -24,7 +24,8 @@ class EbsSimulateService:
 
     @classmethod
     def finalize(cls):
-        """teardown -> clear_markers, clear_port_lasers, clear_sweep, release_camera."""
+        """teardown -> clear_markers, clear_port_lasers, clear_sweep,
+        release_camera, hide_ebs."""
         if cls._simulate:
             cls._simulate.teardown()
         cls._simulate = None
@@ -96,12 +97,26 @@ class EbsSimulateService:
         return cls._simulate.set_offset_scale(mode)
 
     @classmethod
-    def set_lone_view(cls, on):
-        """카메라가 다른 장비를 끌지 여부. 기본 켜짐.
+    def set_show_lasers(cls, on):
+        """align 이 포트 레이저를 그릴지 여부. 기본 꺼짐.
 
-        끄면 3 Camera 가 예전처럼 카메라만 옮긴다.
+        포트 계산을 도면과 대조할 때만 쓴다. 그리는 쪽은 show_port_lasers,
+        끌 때는 _do_align 이 clear_port_lasers 를 부른다.
+        UI 의 Laser 체크박스가 이걸 넘긴다.
         """
-        return cls._simulate.set_lone_view(on)
+        return cls._simulate.set_show_lasers(on)
+
+    @classmethod
+    def hide_ebs(cls):
+        """EBS 프림 두 개를 안 보이게.
+
+        hide_ebs / show_ebs -> _show_ebs (세션 레이어에 visibility 직접).
+        init 과 Clear 가 끄고, align 이 쓴 것 하나만 다시 켠다.
+        align 전 EBS 가 아무데나 서 있는 것은 결과가 아닌데 결과로 읽힌다.
+        장비 쪽 숨기기(opacity)와 다른 방식인 이유는 프림이 둘뿐이라서다 —
+        일괄 처리가 필요했던 이유가 1500개였다.
+        """
+        return cls._simulate.hide_ebs()
 
     @classmethod
     def set_rail_root(cls, path):
@@ -117,7 +132,7 @@ class EbsSimulateService:
     def init(cls):
         """스테이지 색인 + XML 포트 테이블. 캐시는 다음 init까지 유지.
 
-        init -> make_camera, build_index, load_ports.
+        init -> make_camera, hide_ebs, build_index, load_ports.
         지오메트리 안 읽음. 레일 인덱스 여기서 안 만듦.
         느릴 때: 로그의 'build index' / 'parse XML' 두 값 비교 후
                  build_index 또는 load_ports 참조.
@@ -189,7 +204,8 @@ class EbsSimulateService:
     def align(cls):
         """포트 위치 계산 -> EBS 배치 -> 확인용 빨간 레이저.
 
-        align -> _do_align -> compute_target, _place_ebs, _align_prims, show_port_lasers.
+        align -> _do_align -> compute_target, _place_ebs, _align_prims,
+                              show_ebs, show_port_lasers.
 
         레일 고르기 변경시 find_rail 참조. 후보 인덱스는 _rails_from.
         직선/코너 판정 변경시 _rail_axis + CAD_SLACK, CAD_PER_UNIT 참조.
@@ -200,6 +216,8 @@ class EbsSimulateService:
         목표점 계산 변경시 compute_target 참조.
         이동만 변경시 _place_ebs. 회전/스케일 변경시 _align_prims 참조.
           xform op 쓰는 방식은 _write_transform, _set_rotation, _compose, _euler.
+        EBS 는 여기서 다시 보이게 된다 (show_ebs). init/Clear 가 꺼둔 것이다.
+        레이저는 기본으로 안 그린다 — set_show_lasers(True) 일 때만.
         레이저 굵기/색/길이 변경시 show_port_lasers + LASER_RADIUS, LASER_COLOR,
           LASER_COLOR_0, LASER_ROOT 참조.
         레이저는 _port_world 를 쓰므로 snap 모드에서는 보정된 자리에 뜬다.
@@ -245,7 +263,6 @@ class EbsSimulateService:
           빼고 _eqp_shared 에 담아 개수만 알린다.
           쓴 뒤 _check_gone 이 쉐이더 하나를 스테이지에서 되읽어 한 줄 남긴다 —
           마테리얼이 어느 철자를 읽는지는 이름만으로 알 수 없다.
-          set_lone_view(False) 로 이 동작 전체를 끌 수 있다 (UI 의 Lone 체크박스).
           되돌릴 때 값을 되돌리지 않고 우리 의견만 지운다 — 사용자가 투명하게
           해둔 것은 그대로. release_camera 가 show_equipment 를 부르므로
           Clear 버튼이 되돌린다.

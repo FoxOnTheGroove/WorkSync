@@ -162,11 +162,12 @@ class EbsDummyUI:
                     # again with port 1 slid onto the equipment's pivot.
                     self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                                               "length / puls", width=126)
-                    ui.Label("Lone:", width=38)
-                    # Camera keeps the target and the machines either side, and
-                    # turns the rest off. Off means the camera only moves.
-                    self._lone = ui.CheckBox(width=20)
-                    self._lone.model.set_value(True)
+                    ui.Label("Laser:", width=40)
+                    # The port lasers Align used to draw every time. They are
+                    # for checking the port maths against the drawing, so they
+                    # are off unless you ask.
+                    self._lasers = ui.CheckBox(width=20)
+                    self._lasers.model.set_value(False)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -322,7 +323,8 @@ class EbsDummyUI:
         EbsSimulateService.clear_port_lasers()
         EbsSimulateService.clear_sweep()
         EbsSimulateService.release_camera()
-        self._set_status("Markers and lasers cleared, camera released")
+        EbsSimulateService.hide_ebs()
+        self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
     def _on_collide(self):
         self._apply_settings()
@@ -342,7 +344,7 @@ class EbsDummyUI:
         scales = ("snap", "fixed", "puls")
         index = self._scale.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
-        EbsSimulateService.set_lone_view(self._lone.model.get_value_as_bool())
+        EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
 
     # -- display -------------------------------------------------------------
 

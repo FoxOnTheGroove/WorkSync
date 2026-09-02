@@ -236,7 +236,7 @@ class EbsSimulate:
         self._eqp_looks: dict = {}          # equipment path -> its shader paths
         self._eqp_shared: set = set()       # equipment whose Looks we cannot write
         self._gone = None                   # the layer holding the see-through opinions
-        self._lone: bool = True             # camera shows the target and its two only
+        self._lasers: bool = False          # draw the port lasers on align
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -269,6 +269,45 @@ class EbsSimulate:
         self._ebs_path_2port = (path_2port or "").strip()
         self._ebs_path_3port = (path_3port or "").strip()
 
+    def hide_ebs(self) -> int:
+        """Put both EBS prims out of sight.
+
+        Wherever they were left standing is not an answer to anything, and a
+        reader takes them for one. Init and Clear both put them away; Align is
+        what brings the one it used back.
+        """
+        return self._show_ebs([self._ebs_path_2port, self._ebs_path_3port], False)
+
+    def show_ebs(self, prim) -> int:
+        """Bring back the one Align just placed."""
+        return self._show_ebs([prim], True)
+
+    def _show_ebs(self, wanted: list, visible: bool) -> int:
+        stage = self._get_stage()
+        if stage is None:
+            return 0
+        # Two prims, so nothing here is batched: the whole reason the machines
+        # are made see-through rather than hidden is fifteen hundred of them.
+        shown = UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
+        done = 0
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for one in wanted:
+                    if isinstance(one, str):
+                        if not one:              # the path was never filled in
+                            continue
+                        one = stage.GetPrimAtPath(one)
+                    prim = one
+                    if prim is None or not prim.IsValid():
+                        continue
+                    imageable = UsdGeom.Imageable(prim)
+                    if imageable:
+                        imageable.CreateVisibilityAttr().Set(shown)
+                        done += 1
+        except Exception as e:
+            self._note(f"could not set the EBS visibility ({e})")
+        return done
+
     def set_clearance(self, value: float) -> None:
         self._clearance = max(0.0, float(value))
 
@@ -288,9 +327,10 @@ class EbsSimulate:
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
-    def set_lone_view(self, on: bool) -> None:
-        """Whether the camera step turns the other machines off."""
-        self._lone = bool(on)
+    def set_show_lasers(self, on: bool) -> None:
+        """Whether Align draws the port lasers. Off is the ordinary run; they
+        are there to check the port maths against the drawing."""
+        self._lasers = bool(on)
 
     def set_rail_root(self, path: str) -> None:
         self._rail_index = None
@@ -314,6 +354,7 @@ class EbsSimulate:
         self.clear_markers()
         self.clear_port_lasers()
         self.clear_sweep()
+        self.hide_ebs()
         self._eqp_index = {}
         self._port_map = {}
         self._triangles = {}
@@ -374,6 +415,7 @@ class EbsSimulate:
         self._local = {}
         self.make_camera()
 
+        self.hide_ebs()
         equipment = self.build_index()
         ports = self.load_ports()
         self._ready = equipment > 0 and ports > 0
@@ -662,16 +704,13 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
         stage = self._get_stage()
-        if self._lone:
-            with self._stage_timer("hide the other equipment"):
-                beside = self.side_neighbours(stage, self._target["ebs"],
-                                              self._target["equipment"])
-                hidden = self.hide_other_equipment(
-                    [str(self._target["equipment"].GetPath())] + beside)
-            self._note(f"{len(beside)} machine(s) beside it, {hidden} turned off: "
-                       + ", ".join(p.rsplit("/", 1)[-1] for p in beside))
-        else:
-            self.show_equipment()
+        with self._stage_timer("hide the other equipment"):
+            beside = self.side_neighbours(stage, self._target["ebs"],
+                                          self._target["equipment"])
+            hidden = self.hide_other_equipment(
+                [str(self._target["equipment"].GetPath())] + beside)
+        self._note(f"{len(beside)} machine(s) beside it, {hidden} turned off: "
+                   + ", ".join(p.rsplit("/", 1)[-1] for p in beside))
 
         with self._stage_timer("camera focus"):
             moved = self._move_camera(str(self._target["ebs"].GetPath()),
@@ -704,10 +743,17 @@ class EbsSimulate:
         # The cache holds world-space triangles, and the EBS has just moved.
         self._forget_triangles(self._target["ebs"])
 
-        with self._stage_timer("draw port lasers"):
-            drawn = self.show_port_lasers()
-        if drawn:
-            self._note(f"{drawn} port laser(s) drawn under {LASER_ROOT}")
+        # The EBS was out of sight until now: where it sat before Align is not
+        # an answer to anything, and seeing it there reads as one.
+        self.show_ebs(self._target["ebs"])
+
+        if self._lasers:
+            with self._stage_timer("draw port lasers"):
+                drawn = self.show_port_lasers()
+            if drawn:
+                self._note(f"{drawn} port laser(s) drawn under {LASER_ROOT}")
+        else:
+            self.clear_port_lasers()
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
     def _do_collide(self) -> dict:
