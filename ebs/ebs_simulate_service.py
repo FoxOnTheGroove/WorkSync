@@ -256,6 +256,9 @@ class EbsSimulateService:
         후보 수집 / 가지치기 변경시 _gather_nearby 참조 (대부분 여기서 걸러짐).
         박스 겹침은 _overlaps, 삼각형 판정은 _triangle_hits_box.
         메시 읽기 변경시 _mesh_triangles, _attr_value 참조.
+          _triangles 는 월드 좌표 캐시다. EBS 가 움직이면 거짓이 되므로
+          _do_align 이 _forget_triangles 로 그 하위만 버린다. 장비 것은 남는다.
+        상자로 판정한 프림은 _boxed 에 모았다가 단계 끝에 한 줄로 낸다.
         숨김 프림 처리 변경시 _is_visible 참조.
         EBS 박스 변경시 _ebs_bound 참조.
         빈 면 거리 변경시 measure_faces -> _face_prism, _nearest_in_prism,

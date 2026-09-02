@@ -199,6 +199,7 @@ class EbsSimulate:
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._rail_frame = None             # (addr point, one length on, axis) in rail space
         self._triangles: dict = {}          # mesh path -> world-space triangles
+        self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
         self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
         self._port_world: dict = {}         # port index -> world point, from the last align
@@ -283,6 +284,7 @@ class EbsSimulate:
     # -- timing --------------------------------------------------------------
 
     def _begin(self) -> None:
+        self._boxed = {}
         self._timings = []
         self._notes = []
         self._blocked = ""
@@ -636,6 +638,9 @@ class EbsSimulate:
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
 
+        # The cache holds world-space triangles, and the EBS has just moved.
+        self._forget_triangles(self._target["ebs"])
+
         with self._stage_timer("draw port lasers"):
             drawn = self.show_port_lasers()
         if drawn:
@@ -681,6 +686,11 @@ class EbsSimulate:
         else:
             self._note(f"clear of the equipment itself "
                        f"({meeting['tests']} triangle pairs tested)")
+
+        for why, paths in sorted(self._boxed.items()):
+            self._note(f"{len(paths)} judged by box, {why}: "
+                       + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
+                       + (" ..." if len(paths) > 4 else ""))
 
         with self._stage_timer("draw markers"):
             self.show_markers(self._target["ebs"], cells)
@@ -1521,14 +1531,26 @@ class EbsSimulate:
                            f"{', '.join(sorted(p.rsplit('/', 1)[-1] for p in boxed_only))}")
 
         if hits:
-            for name, where in sorted(hits.items()):
-                self._note(f"hit by {name}: {', '.join(where)}")
+            self._note(f"blocked by {len(hits)}: "
+                       + "; ".join(f"{name} {', '.join(where)}"
+                                   for name, where in sorted(hits.items())[:4])
+                       + (" ..." if len(hits) > 4 else ""))
         elif candidates:
             self._note("candidates were near but none reached a cell")
         else:
             self._note("nothing within clearance - raise it if that looks wrong")
 
         return result
+
+    def _forget_triangles(self, prim: Usd.Prim) -> None:
+        """Drop a prim's cached triangles. They are in world space, so moving it
+        makes them a lie, and only the EBS ever moves."""
+        if prim is None or not prim.IsValid():
+            return
+        root = str(prim.GetPath())
+        for path in [p for p in self._triangles
+                     if p == root or p.startswith(root + "/")]:
+            del self._triangles[path]
 
     def _mesh_triangles(self, stage, path: str) -> list:
         if path in self._triangles:
@@ -1543,8 +1565,7 @@ class EbsSimulate:
             counts = self._attr_value(mesh.GetFaceVertexCountsAttr(), tc)
             indices = self._attr_value(mesh.GetFaceVertexIndicesAttr(), tc)
             if points is None or counts is None or indices is None:
-                self._note(f"{path.rsplit('/', 1)[-1]}: no point data, "
-                           f"falling back to its box")
+                self._boxed.setdefault("no point data", []).append(path)
             else:
                 to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
                 world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
@@ -1556,8 +1577,7 @@ class EbsSimulate:
                             triangles.append((fan[0], fan[k], fan[k + 1]))
                     cursor += count
         elif prim and prim.IsValid():
-            self._note(f"{path.rsplit('/', 1)[-1]} is a "
-                       f"{prim.GetTypeName()}, tested as its box")
+            self._boxed.setdefault(f"a {prim.GetTypeName()}", []).append(path)
         self._triangles[path] = triangles
         return triangles
 
