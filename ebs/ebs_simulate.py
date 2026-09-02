@@ -131,8 +131,10 @@ GEOMETRY_TYPES = frozenset({
 
 CAMERA_PATH    = "/EbsCamera"             # session-layer camera owned by this extension
 CAMERA_FILL    = 0.9                      # how much of the view the target fills
-CAMERA_SLAB    = 0.2                      # clip this much in front of the target
+CAMERA_NEAR    = 0.01                     # nothing is clipped away in front
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
+NEIGHBOUR_REACH = 1.0    # circle to look for the machines either side, as a share
+                         # of the target's own width
 
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
 MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the alpha
@@ -209,6 +211,8 @@ class EbsSimulate:
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._rail_frame = None             # (addr point, one length on, axis) in rail space
         self._triangles: dict = {}          # mesh path -> world-space triangles
+        self._eqp_spots: dict = None        # "EQP_########" -> where its pivot stands
+        self._hidden: list = []             # equipment we turned off, to turn back on
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -329,6 +333,7 @@ class EbsSimulate:
 
     def init(self) -> dict:
         self._begin()
+        self._eqp_spots = None       # the plant may not be the one we last looked at
         self._ready = False
         self._target = None
         self._aligned = False
@@ -623,6 +628,15 @@ class EbsSimulate:
             return self._payload(False, "Run Prepare first")
         if not self._aligned:
             return self._payload(False, "Run Align first")
+        stage = self._get_stage()
+        with self._stage_timer("hide the other equipment"):
+            beside = self.side_neighbours(stage, self._target["ebs"],
+                                          self._target["equipment"])
+            hidden = self.hide_other_equipment(
+                [str(self._target["equipment"].GetPath())] + beside)
+        self._note(f"{len(beside)} machine(s) beside it, {hidden} turned off: "
+                   + ", ".join(p.rsplit("/", 1)[-1] for p in beside))
+
         with self._stage_timer("camera focus"):
             moved = self._move_camera(str(self._target["ebs"].GetPath()),
                                       self._target["anchor"])
@@ -762,6 +776,118 @@ class EbsSimulate:
             if type_name in PRUNE_TYPES or type_name.endswith("Light"):
                 continue              # geometry and shading never hold equipment
             stack.extend(_children(prim))
+
+    def equipment_spots(self, stage) -> dict:
+        """Where each machine's pivot stands. Worked out once and kept.
+
+        Not part of init: it is only the camera that wants it, and init is what
+        everything else waits on. Machines do not move, so once is enough --
+        until init runs again and the plant may be a different one.
+        """
+        if self._eqp_spots is not None:
+            return self._eqp_spots
+        spots = {}
+        with self._stage_timer(f"locate {len(self._eqp_index)} equipment"):
+            for name, path in self._eqp_index.items():
+                prim = stage.GetPrimAtPath(path)
+                if not prim or not prim.IsValid():
+                    continue
+                anchor, _ = self.resolve_anchor(prim)
+                if anchor is None or not anchor.IsValid():
+                    continue
+                spot = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+                    NOW).ExtractTranslation()
+                spots[name] = (spot[0], spot[1])
+        self._eqp_spots = spots
+        return spots
+
+    def side_neighbours(self, stage, ebs_prim, eqp_prim) -> list:
+        """The machine on each side of the target, within its own width.
+
+        Sideways is the EBS's own left and right -- the axis its two checked
+        faces look along -- so this asks the same question the collision does,
+        about the machines rather than the geometry. At most one each way, and
+        nothing at all where the target stands alone.
+        """
+        spots = self.equipment_spots(stage)
+        mine = self._equipment_id(eqp_prim)
+        key = next((name for name in self._eqp_index
+                    if name[len(EQP_PREFIX):] == mine or name == mine), None)
+        here = spots.get(key)
+        box = self._world_range(eqp_prim)
+        if here is None or box is None or box.IsEmpty():
+            return []
+        width = max(box.GetMax()[i] - box.GetMin()[i] for i in range(2))
+        reach = width * NEIGHBOUR_REACH
+        if reach <= 0:
+            return []
+
+        sideways = self._sideways(ebs_prim)
+        left = right = None
+        for name, spot in spots.items():
+            if name == key:
+                continue
+            across = spot[0] - here[0]
+            along = spot[1] - here[1]
+            if across * across + along * along > reach * reach:
+                continue                       # outside the circle
+            side = across * sideways[0] + along * sideways[1]
+            if side >= 0:
+                if right is None or side < right[0]:
+                    right = (side, name)
+            elif left is None or -side < left[0]:
+                left = (-side, name)
+        # Either may be missing: a machine at the end of a row has one side.
+        return [self._eqp_index[found[1]] for found in (left, right) if found]
+
+    def _sideways(self, ebs_prim) -> tuple:
+        """The EBS's own left-right, flattened onto the ground."""
+        try:
+            row = self._ebs_bound(ebs_prim).GetMatrix().GetRow(0)
+            length = math.sqrt(row[0] ** 2 + row[1] ** 2)
+            if length > 1e-9:
+                return (row[0] / length, row[1] / length)
+        except Exception:
+            pass
+        return (1.0, 0.0)
+
+    def hide_other_equipment(self, keep: list) -> int:
+        """Turn every machine off but these, so the view is of the target.
+
+        Only equipment: pillars, walls and the ceiling stay, because they are
+        what the clear faces are measured against. The machines are not -- the
+        only ones that can be beside this EBS are the ones either side of it.
+        """
+        stage = self._get_stage()
+        if stage is None:
+            return 0
+        self.show_equipment()
+        spared = set(keep)
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for path in self._eqp_index.values():
+                if path in spared:
+                    continue
+                prim = stage.GetPrimAtPath(path)
+                if prim and prim.IsValid():
+                    UsdGeom.Imageable(prim).MakeInvisible()
+                    self._hidden.append(path)
+        return len(self._hidden)
+
+    def show_equipment(self) -> None:
+        """Put back what we turned off. The opinion is dropped, not set back to
+        visible: a machine the user had hidden themselves stays hidden."""
+        if not self._hidden:
+            return
+        stage = self._get_stage()
+        if stage is not None:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for path in self._hidden:
+                    prim = stage.GetPrimAtPath(path)
+                    if prim and prim.IsValid():
+                        attribute = UsdGeom.Imageable(prim).GetVisibilityAttr()
+                        if attribute:
+                            attribute.Clear()
+        self._hidden = []
 
     def get_selected_equipment(self) -> str:
         stage = self._get_stage()
@@ -2536,6 +2662,7 @@ class EbsSimulate:
         return True
 
     def release_camera(self) -> None:
+        self.show_equipment()          # the view goes back with the camera
         stage = self._get_stage()
         if stage is None:
             return
@@ -2607,12 +2734,10 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        slab = corners + self._box_corners(
-            self._world_range(self._target["equipment"]) if self._target else None)
-        depths = [Gf.Dot(Gf.Vec3d(*c) - eye, -z_cam) for c in slab]
-        near, far = min(depths), max(depths)
-        margin = max((far - near) * CAMERA_SLAB, 1e-3)
-        near, far = max(near - margin, distance * 1e-4), CAMERA_FAR
+        # Nothing is clipped away in front any more. It was there to get the
+        # plant out of the way of the target, and turning the other machines
+        # off does that without also cutting the view apart when you orbit.
+        near, far = CAMERA_NEAR, CAMERA_FAR
 
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             xformable = UsdGeom.Xformable(cam_prim)

@@ -204,10 +204,25 @@ class EbsSimulateService:
     def focus(cls):
         """카메라 생성 + EBS 정면 배치 + 뷰포트 전환.
 
-        focus -> _do_focus -> make_camera, _move_camera.
+        focus -> _do_focus -> side_neighbours, hide_other_equipment,
+                              make_camera, _move_camera.
+
+        양옆 장비만 남기고 나머지 장비를 끈다. 기둥·벽·천장은 안 끈다 —
+        빈 면까지의 거리를 재는 상대가 그것들이다.
+        이웃 찾기 변경시 side_neighbours + NEIGHBOUR_REACH 참조.
+          대상 장비 폭 x NEIGHBOUR_REACH 반경 원 안에서, EBS 의 좌우 축
+          (_sideways, 3면 검사의 좌/우와 같은 축) 기준 양쪽 가장 가까운 하나씩.
+          위치는 equipment_spots 가 장비당 한 번 구해 캐시한다. init 이 비운다.
+        끄기/되돌리기는 hide_other_equipment / show_equipment.
+          되돌릴 때 '보이게' 하지 않고 우리 의견만 지운다 — 사용자가 끈 것은 그대로.
+          release_camera 가 show_equipment 를 부르므로 Clear 버튼이 되돌린다.
+        주의: _gather_nearby 는 안 보이는 프림을 장애물로 안 본다. 지금은 그게
+          맞다 — 장비끼리 부딪힐 수 있는 건 양옆뿐이고, 장비 아닌 것은 안 끄니까.
 
         초점거리/센서/클리핑 변경시 make_camera 참조.
-        위치·방향·근평면 변경시 _move_camera + CAMERA_SLAB 참조.
+        위치·방향 변경시 _move_camera 참조. 앞뒤를 안 자른다
+          (CAMERA_NEAR / CAMERA_FAR). 앞을 자르던 건 플랜트를 시야에서
+          치우려던 것인데, 그건 이제 장비를 끄는 쪽이 한다.
         화면 채움 비율 변경시 _fit_distance + CAMERA_FILL 참조.
         대상 바운드 변경시 _world_range, _box_corners 참조.
         뷰포트 전환 안 될 때 _viewport 참조 (omni.kit 없으면 조용히 실패).
