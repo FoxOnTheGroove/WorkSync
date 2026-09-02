@@ -28,6 +28,7 @@ ADDR_PATTERN = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
 PORT_PATTERN = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
 CACHE_SUFFIX  = ".ebscache.json"  # the parsed maps, written beside the source xml
 CACHE_VERSION = 1                 # bump when the stored shape changes
+READ_BLOCK    = 8 << 20           # xml is read this much at a time
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 CAD_SLACK       = 0.1             # 비유효축 허용 유격 (100/3이 안 나눠떨어짐)
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
@@ -796,24 +797,46 @@ class EbsSimulate:
         scan = _PortScan()
         try:
             with self._stage_timer(f"XML: parse ({name})"):
-                if _lxml is not None:
-                    _lxml.parse(self._xml_path, _lxml.XMLParser(target=scan))
-                else:
-                    parser = expat.ParserCreate()
-                    parser.buffer_text = True
-                    parser.StartElementHandler = scan.start
-                    parser.EndElementHandler = scan.end
-                    parser.CharacterDataHandler = scan.data
-                    with open(self._xml_path, "rb") as handle:
-                        parser.ParseFile(handle)
+                reads = self._feed_parser(scan)
         except Exception as e:
             self._note(f"xml parse failed ({name}): {e}")
             return None
         self._note(f"xml parsed with {name}"
-                   + ("" if _lxml is not None else " (lxml unavailable)"))
+                   + ("" if _lxml is not None else " (lxml unavailable)")
+                   + f", {reads} reads of {READ_BLOCK >> 20} MB")
         self._addr_cad = scan.addr_cad
         self._addr_next = scan.addr_next
         return scan.found
+
+    def _feed_parser(self, scan: "_PortScan") -> int:
+        """Read the file in big blocks and push them at whichever parser is here.
+
+        Left to themselves both parsers pull the file 2-4 kB at a time, which is
+        a round trip each over a share and was the whole of the 76 seconds. The
+        blocks are what matters, not the parser, so both take the same ones.
+        """
+        if _lxml is not None:
+            parser = _lxml.XMLParser(target=scan)
+            push, done = parser.feed, parser.close
+        else:
+            native = expat.ParserCreate()
+            native.buffer_text = True
+            native.StartElementHandler = scan.start
+            native.EndElementHandler = scan.end
+            native.CharacterDataHandler = scan.data
+            push = lambda block: native.Parse(block, False)
+            done = lambda: native.Parse(b"", True)
+
+        reads = 0
+        with open(self._xml_path, "rb") as handle:
+            while True:
+                block = handle.read(READ_BLOCK)
+                reads += 1
+                if not block:
+                    break
+                push(block)
+        done()
+        return reads
 
     def _collect_ports(self, found: dict) -> None:
         spanning, gapped = [], []
@@ -892,10 +915,20 @@ class EbsSimulate:
                         "port_addr_of": self._port_addr_of,
                         "addr_cad": self._addr_cad,
                         "addr_next": self._addr_next}
-                with open(path, "w", encoding="utf-8") as handle:
-                    json.dump(blob, handle)
+                # One write, not the thousands json.dump would make: on a
+                # share every one of those is a round trip. Written aside and
+                # renamed, so a run that dies half way leaves the old cache.
+                text = json.dumps(blob)
+                spare = path + ".part"
+                with open(spare, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                os.replace(spare, path)
             except Exception as e:
                 self._note(f"xml cache not written: {e}")
+                try:
+                    os.remove(path + ".part")
+                except OSError:
+                    pass
                 return
         self._note(f"xml cache written: {path} "
                    f"({os.path.getsize(path) / 1048576:.2f} MB)")

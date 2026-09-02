@@ -134,6 +134,9 @@ class EbsSimulateService:
         저장 형태 바꾸면 CACHE_VERSION 올릴 것. 파일명은 CACHE_SUFFIX.
 
         파서는 lxml 우선, 없으면 expat. 트리는 어느 쪽도 안 만든다.
+        파일은 READ_BLOCK(8 MB)씩 읽어 파서에 밀어넣는다 — 파서에 맡기면
+        2~4 kB 씩 읽어서, 공유 드라이브에서는 그 한 조각이 왕복 한 번이 된다.
+        읽기 루프는 _feed_parser 하나뿐이고 두 파서가 같이 쓴다.
         읽는 규칙 변경시 _PortScan 참조 (모듈 최상단, 두 파서가 같이 쓴다).
           그룹의 키 = 자기 속성 + 직속 <value key=.. value=..> 자식.
           addr 문맥은 감싸는 addr 그룹에서 내려온다.
