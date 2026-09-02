@@ -127,12 +127,22 @@ class EbsSimulateService:
     def load_ports(cls):
         """XML -> 포트 index/offset/addr, addr별 cad와 구간 puls. init이 호출.
 
-        현재 ET.parse 로 트리 만든 뒤 다회 순회. 구간별 타이밍은
-        'XML: read / parents / addr pass / port pass / collect' 로 분리돼 있고,
-        파일 형태는 _xml_shape 가 note 로 찍는다 (원소 수, 깊이, addr 수,
-        중첩 여부, addr pass 가 실제로 도는 횟수).
-        키 읽는 방식 변경시 _provider_of, _key_value, _owning_addr, _attr 참조.
+        결과를 <xml경로>.ebscache.json 에 캐시한다. 원본 size/mtime/스키마 버전이
+        같으면 파싱을 건너뛴다. 캐시가 없거나 깨졌거나 못 쓰면 파싱으로 진행하고
+        로그만 남긴다 (읽기 전용 드라이브에서도 동작).
+        캐시 정책 변경시 _load_cache, _save_cache, _source_stamp 참조.
+        저장 형태 바꾸면 CACHE_VERSION 올릴 것. 파일명은 CACHE_SUFFIX.
+
+        파서는 lxml 우선, 없으면 expat. 트리는 어느 쪽도 안 만든다.
+        읽는 규칙 변경시 _PortScan 참조 (모듈 최상단, 두 파서가 같이 쓴다).
+          그룹의 키 = 자기 속성 + 직속 <value key=.. value=..> 자식.
+          addr 문맥은 감싸는 addr 그룹에서 내려온다.
         키 이름 변경시 PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY, PULS_KEY.
+        addr/포트 이름 규칙은 ADDR_PATTERN, PORT_PATTERN.
+        네임스페이스 접두어 처리는 _plain.
+
+        타이밍: 'XML: cache read' 만 있으면 캐시 히트,
+                'XML: parse (lxml|expat)' + 'XML: cache write' 면 파싱한 것.
         """
         return cls._simulate.load_ports()
 

@@ -1,12 +1,19 @@
 import io
+import json
 import math
+import os
 import re
 import time
-import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 from contextlib import contextmanager, nullcontext, redirect_stdout
 
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
+
+try:                                  # faster where Kit ships it, optional
+    from lxml import etree as _lxml
+except Exception:
+    _lxml = None
 
 __all__ = ["EbsSimulate"]
 
@@ -17,6 +24,10 @@ CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
 CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
 NEXT_KEY    = "next-address"  # addr a NextAddr block leads to
 PULS_KEY    = "distance-puls"  # length of that segment, in offset units
+ADDR_PATTERN = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
+PORT_PATTERN = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
+CACHE_SUFFIX  = ".ebscache.json"  # the parsed maps, written beside the source xml
+CACHE_VERSION = 1                 # bump when the stored shape changes
 CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
 CAD_SLACK       = 0.1             # 비유효축 허용 유격 (100/3이 안 나눠떨어짐)
 OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
@@ -25,6 +36,82 @@ RAIL_PREFIX = "rail_"
 SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
 SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
 SCALE_MODES = (SCALE_FIXED, SCALE_PULS)
+
+def _plain(name: str) -> str:
+    """A tag or attribute name without its namespace, however it is written."""
+    return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
+
+
+def _as_float(text) -> "float | None":
+    try:
+        return float(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+class _PortScan:
+    """One streaming pass over the port xml. No tree is built.
+
+    A group's keys are its own attributes plus its <value key=.. value=..>
+    children, and the addr in force is whatever addr group encloses it. lxml
+    drives this as a parser target and expat as its handlers; both call the
+    same three methods, so the two paths cannot read the file differently.
+    """
+
+    def __init__(self):
+        self.addr_cad = {}
+        self.addr_next = {}
+        self.found = {}
+        self._groups = []            # keys of every group still open
+        self._addrs = []             # the addr each of those sits in
+        self._text = []
+
+    def start(self, tag, attrib):
+        entries = {}
+        for raw, value in attrib.items():
+            entries[_plain(raw)] = value
+        key = entries.get("key")
+        if key is not None and self._groups:
+            self._groups[-1][key.strip().lower()] = entries.get("value", "")
+        self._groups.append(entries)
+        found = ADDR_PATTERN.match((entries.get("name") or _plain(tag)).strip())
+        self._addrs.append(int(found.group(1)) if found
+                           else (self._addrs[-1] if self._addrs else None))
+        del self._text[:]
+
+    def data(self, text):
+        self._text.append(text)
+
+    def end(self, tag):
+        entries = self._groups.pop()
+        addr = self._addrs.pop()
+        key = entries.get("key")
+        if key is not None and not entries.get("value") and self._groups:
+            written = "".join(self._text).strip()
+            if written:                      # <value key="offset">100</value>
+                self._groups[-1][key.strip().lower()] = written
+        del self._text[:]
+
+        found = ADDR_PATTERN.match((entries.get("name") or _plain(tag)).strip())
+        if found:
+            cadx = _as_float(entries.get(CADX_KEY))
+            cady = _as_float(entries.get(CADY_KEY))
+            if cadx is not None or cady is not None:
+                self.addr_cad[int(found.group(1))] = (cadx or 0.0, cady or 0.0)
+        target = _as_float(entries.get(NEXT_KEY))
+        puls = _as_float(entries.get(PULS_KEY))
+        if addr is not None and target is not None and puls is not None:
+            self.addr_next.setdefault(addr, []).append((int(target), puls))
+        port_id = entries.get(PORT_ID_KEY)
+        if port_id:
+            port = PORT_PATTERN.match(port_id.strip())
+            if port:
+                self.found.setdefault(port.group(1).upper(), {})[
+                    int(port.group(2))] = (_as_float(entries.get(OFFSET_KEY)), addr)
+
+    def close(self):
+        return self.found
+
 
 def _children(prim):
     try:
@@ -694,144 +781,119 @@ class EbsSimulate:
         self._addr_next = {}
         if not self._xml_path:
             return 0
+        if self._load_cache():
+            return len(self._port_map)
 
-        with self._stage_timer("XML: read"):
-            try:
-                root = ET.parse(self._xml_path).getroot()
-            except Exception as e:
-                print(f"[ebs] XML parse failed: {e}")
-                return 0
-
-        port_pattern = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
-        addr_pattern = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
-
-        with self._stage_timer("XML: parents"):
-            parents = {child: parent for parent in root.iter() for child in parent}
-        self._xml_shape(root, addr_pattern)
-
-        with self._stage_timer("XML: addr pass"):
-            for elem in root.iter():
-                m = addr_pattern.match((elem.get("name", "")
-                                        or elem.tag.rsplit("}", 1)[-1]).strip())
-                if not m:
-                    continue
-                cadx = self._as_float(self._key_value(elem, CADX_KEY))
-                cady = self._as_float(self._key_value(elem, CADY_KEY))
-                number = int(m.group(1))
-                if cadx is not None or cady is not None:
-                    self._addr_cad[number] = (cadx or 0.0, cady or 0.0)
-                steps = []
-                for child in elem.iter():
-                    if child is elem:
-                        continue
-                    target = self._as_float(self._key_value(child, NEXT_KEY))
-                    puls = self._as_float(self._key_value(child, PULS_KEY))
-                    if target is not None and puls is not None:
-                        steps.append((int(target), puls))
-                if steps:
-                    self._addr_next[number] = steps
-
-        found = {}                       # equipment -> {index: (station, offset, addr)}
-        with self._stage_timer("XML: port pass"):
-            for elem in root.iter():
-                station, port_id = self._provider_of(elem, PORT_ID_KEY, parents)
-                if not port_id:
-                    continue
-                m = port_pattern.match(port_id.strip())
-                if not m:
-                    continue
-                equipment, index = m.group(1).upper(), int(m.group(2))
-                offset = self._as_float(self._key_value(station, OFFSET_KEY))
-                _, addr_number = self._owning_addr(station, parents, addr_pattern)
-                found.setdefault(equipment, {})[index] = (station, offset, addr_number)
-
-        with self._stage_timer("XML: collect"):
-            for key, by_index in found.items():
-                indices = sorted(by_index)
-                self._port_map[key] = indices
-                self._port_offsets[key] = {i: by_index[i][1] for i in indices}
-                by_port = {i: by_index[i][2] for i in indices
-                           if by_index[i][2] is not None}
-                self._port_addr_of[key] = by_port
-                self._port_addr[key] = by_port[max(by_port)] if by_port else None
-                if len(set(by_port.values())) > 1:
-                    print(f"[ebs] {key}: ports span several addr blocks {by_port}, "
-                          f"base addr {self._port_addr[key]}")
-                if indices != list(range(1, len(indices) + 1)):
-                    print(f"[ebs] {key}: port indices are not 1..N: {indices}")
+        found = self._scan_xml()
+        if found is None:
+            return 0
+        self._collect_ports(found)
+        self._save_cache()
         return len(self._port_map)
 
-    # -- XML helpers ---------------------------------------------------------
-
-    def _xml_shape(self, root, addr_pattern) -> None:
-        total = depth = addrs = nested = work = 0
-        stack = [(root, 0, 0)]
-        while stack:
-            elem, level, above = stack.pop()
-            total += 1
-            depth = max(depth, level)
-            here = above
-            if addr_pattern.match((elem.get("name", "")
-                                   or elem.tag.rsplit("}", 1)[-1]).strip()):
-                addrs += 1
-                nested += 1 if above else 0
-                here = above + 1
-            work += here                 # addr pass walks this element once per addr above it
-            for child in elem:
-                stack.append((child, level + 1, here))
-        self._note(f"xml shape: {total} elements, depth {depth}, {addrs} addr blocks, "
-                   f"{nested} nested, addr pass walks {work}")
-
-    def _provider_of(self, elem, key: str, parents: dict):
-        value = self._attr(elem, key)
-        if value:
-            return elem, value
-        if (self._attr(elem, "key") or "").lower() == key.lower():
-            own = self._attr(elem, "value") or (elem.text or "").strip()
-            if own:
-                return parents.get(elem, elem), own
-        return None, ""
-
-    def _key_value(self, elem, key: str) -> str:
-        if elem is None:
-            return ""
-        value = self._attr(elem, key)
-        if value:
-            return value
-        for child in list(elem):
-            if (self._attr(child, "key") or "").lower() == key.lower():
-                return self._attr(child, "value") or (child.text or "").strip()
-        return ""
-
-    @staticmethod
-    def _owning_addr(elem, parents: dict, pattern):
-        current = elem
-        while current is not None:
-            for candidate in (current.get("name", ""), current.tag.rsplit("}", 1)[-1]):
-                m = pattern.match((candidate or "").strip())
-                if m:
-                    return current, int(m.group(1))
-            current = parents.get(current)
-        return None, None
-
-    @staticmethod
-    def _as_float(text) -> "float | None":
+    def _scan_xml(self) -> "dict | None":
+        name = "lxml" if _lxml is not None else "expat"
+        scan = _PortScan()
         try:
-            return float(str(text).strip())
-        except (TypeError, ValueError):
+            with self._stage_timer(f"XML: parse ({name})"):
+                if _lxml is not None:
+                    _lxml.parse(self._xml_path, _lxml.XMLParser(target=scan))
+                else:
+                    parser = expat.ParserCreate()
+                    parser.buffer_text = True
+                    parser.StartElementHandler = scan.start
+                    parser.EndElementHandler = scan.end
+                    parser.CharacterDataHandler = scan.data
+                    with open(self._xml_path, "rb") as handle:
+                        parser.ParseFile(handle)
+        except Exception as e:
+            print(f"[ebs] XML parse failed: {e}")
+            self._note(f"xml parse failed ({name}): {e}")
             return None
+        self._note(f"xml parsed with {name}"
+                   + ("" if _lxml is not None else " (lxml unavailable)"))
+        self._addr_cad = scan.addr_cad
+        self._addr_next = scan.addr_next
+        return scan.found
 
-    @staticmethod
-    def _attr(elem, name: str) -> str:
-        if elem is None:
-            return ""
-        value = elem.attrib.get(name)
-        if value is not None:
-            return value
-        for k, v in elem.attrib.items():
-            if k.rsplit("}", 1)[-1] == name:
-                return v
-        return ""
+    def _collect_ports(self, found: dict) -> None:
+        for key, by_index in found.items():
+            indices = sorted(by_index)
+            self._port_map[key] = indices
+            self._port_offsets[key] = {i: by_index[i][0] for i in indices}
+            by_port = {i: by_index[i][1] for i in indices
+                       if by_index[i][1] is not None}
+            self._port_addr_of[key] = by_port
+            self._port_addr[key] = by_port[max(by_port)] if by_port else None
+            if len(set(by_port.values())) > 1:
+                print(f"[ebs] {key}: ports span several addr blocks {by_port}, "
+                      f"base addr {self._port_addr[key]}")
+            if indices != list(range(1, len(indices) + 1)):
+                print(f"[ebs] {key}: port indices are not 1..N: {indices}")
+
+    # -- XML cache -----------------------------------------------------------
+
+    def _cache_path(self) -> str:
+        return self._xml_path + CACHE_SUFFIX
+
+    def _source_stamp(self) -> list:
+        stat = os.stat(self._xml_path)
+        return [CACHE_VERSION, stat.st_size, stat.st_mtime_ns]
+
+    def _load_cache(self) -> bool:
+        path = self._cache_path()
+        try:
+            want = self._source_stamp()
+        except OSError as e:
+            self._note(f"xml not readable: {e}")
+            return False
+        if not os.path.exists(path):
+            return False
+        with self._stage_timer("XML: cache read"):
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    blob = json.load(handle)
+                if blob.get("stamp") != want:
+                    self._note(f"xml cache stale, parsing again "
+                               f"(cache {blob.get('stamp')}, source {want})")
+                    return False
+                port_map = {k: [int(i) for i in v]
+                            for k, v in blob["port_map"].items()}
+                offsets = {k: {int(i): v for i, v in d.items()}
+                           for k, d in blob["port_offsets"].items()}
+                addr_of = {k: {int(i): v for i, v in d.items()}
+                           for k, d in blob["port_addr_of"].items()}
+                addr = dict(blob["port_addr"])
+                cad = {int(k): tuple(v) for k, v in blob["addr_cad"].items()}
+                nxt = {int(k): [(int(t), float(pu)) for t, pu in v]
+                       for k, v in blob["addr_next"].items()}
+            except Exception as e:
+                self._note(f"xml cache unusable, parsing again: {e}")
+                return False
+        self._port_map, self._port_offsets = port_map, offsets
+        self._port_addr, self._port_addr_of = addr, addr_of
+        self._addr_cad, self._addr_next = cad, nxt
+        self._note(f"xml cache hit: {path}")
+        return True
+
+    def _save_cache(self) -> None:
+        path = self._cache_path()
+        with self._stage_timer("XML: cache write"):
+            try:
+                blob = {"stamp": self._source_stamp(),
+                        "port_map": self._port_map,
+                        "port_offsets": self._port_offsets,
+                        "port_addr": self._port_addr,
+                        "port_addr_of": self._port_addr_of,
+                        "addr_cad": self._addr_cad,
+                        "addr_next": self._addr_next}
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(blob, handle)
+            except Exception as e:
+                self._note(f"xml cache not written: {e}")
+                return
+        self._note(f"xml cache written: {path} "
+                   f"({os.path.getsize(path) / 1048576:.2f} MB)")
 
     def get_port_count(self, eqp_id: str) -> "int | None":
         indices = self.get_port_indices(eqp_id)
