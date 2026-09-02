@@ -274,7 +274,9 @@ class EbsSimulateService:
           거짓이 되므로 _do_align 이 _forget_triangles 로 그 하위만 버린다.
           장비 것은 남는다 — 장비는 안 움직인다.
         상자로 판정한 프림은 _boxed 에 모았다가 단계 끝에 한 줄로 낸다.
-        숨김 프림 처리 변경시 _is_visible 참조.
+        숨김 프림 처리 변경시 _is_visible 참조. 프림 자기 속성만 읽는다 —
+          걷기가 위에서 이미 걸러주므로 ComputeVisibility 로 조상을 다시
+          거슬러 올라갈 이유가 없다. 그게 순회 비용의 대부분이었다.
         EBS 박스 변경시 _ebs_bound 참조.
         빈 면 거리 변경시 measure_faces -> _face_prism, _nearest_in_prism,
           _gap_along, _triangle_gap 참조.

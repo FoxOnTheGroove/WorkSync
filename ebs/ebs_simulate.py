@@ -108,11 +108,19 @@ class _PortScan:
         return self.found
 
 
+try:                                  # built once: it is asked for per prim
+    _EVERY_CHILD = Usd.TraverseInstanceProxies()
+except Exception:
+    _EVERY_CHILD = None
+
+
 def _children(prim):
-    try:
-        return prim.GetFilteredChildren(Usd.TraverseInstanceProxies())
-    except Exception:
-        return prim.GetChildren()
+    if _EVERY_CHILD is not None:
+        try:
+            return prim.GetFilteredChildren(_EVERY_CHILD)
+        except Exception:
+            pass
+    return prim.GetChildren()
 
 SKIP_TYPES = frozenset({"Material", "Shader", "NodeGraph", "GeomSubset", "Camera"})
 
@@ -150,6 +158,7 @@ SWEEP_COLOR_PORT = LASER_COLOR      # where port 1 is worked out to be
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
+OURS_UNDER = tuple(p + "/" for p in OURS)   # startswith takes a tuple
 
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -1792,16 +1801,26 @@ class EbsSimulate:
                     return False
         return True
 
-    def _is_visible(self, stage, path: str) -> bool:
-        if path in self._visible:
-            return self._visible[path]
-        prim = stage.GetPrimAtPath(path)
+    def _is_visible(self, prim, path: str) -> bool:
+        """Is this prim itself shown?
+
+        Its own attribute, not the one computed down the chain of its parents:
+        the only caller walks from the top and stops at anything hidden, so an
+        ancestor's answer has already been given by the time we are here.
+        Asking for the computed one walks those ancestors again, per prim, and
+        on this plant that was most of what looking around cost.
+        """
+        known = self._visible.get(path)
+        if known is not None:
+            return known
         visible = True
-        if prim and prim.IsValid():
-            imageable = UsdGeom.Imageable(prim)
-            if imageable:
-                visible = imageable.ComputeVisibility(
-                    Usd.TimeCode.Default()) != UsdGeom.Tokens.invisible
+        try:
+            attribute = UsdGeom.Imageable(prim).GetVisibilityAttr()
+            if attribute:
+                visible = attribute.Get(Usd.TimeCode.Default()) != \
+                    UsdGeom.Tokens.invisible
+        except Exception:
+            pass
         self._visible[path] = visible
         return visible
 
@@ -1839,18 +1858,21 @@ class EbsSimulate:
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
                        root: Usd.Prim = None) -> tuple:
         found, visited = [], 0
+        ours_exact = frozenset(OURS)
+        skip_exact = frozenset(skip)
+        skip_under = tuple(s + "/" for s in skip)
         stack = [root] if root is not None else list(_children(stage.GetPseudoRoot()))
         while stack:
             prim = stack.pop()
             path = str(prim.GetPath())
-            if any(path == ours or path.startswith(ours + "/") for ours in OURS):
+            if path in ours_exact or path.startswith(OURS_UNDER):
                 continue                       # what we drew is not an obstacle
-            if any(path == s or path.startswith(s + "/") for s in skip):
+            if path in skip_exact or (skip_under and path.startswith(skip_under)):
                 continue
             type_name = prim.GetTypeName()
             if type_name in SKIP_TYPES or type_name.endswith("Light"):
                 continue
-            if not self._is_visible(stage, path):
+            if not self._is_visible(prim, path):
                 continue                       # hides the whole subtree with it
 
             visited += 1
