@@ -237,6 +237,7 @@ class EbsSimulate:
         self._eqp_shared: set = set()       # equipment whose Looks we cannot write
         self._gone = None                   # the layer holding the see-through opinions
         self._lasers: bool = False          # draw the port lasers on align
+        self._verdict: dict = {}            # what the overlay says, from the last run
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -411,6 +412,7 @@ class EbsSimulate:
         self._ready = False
         self._target = None
         self._aligned = False
+        self._verdict = {}
         self._triangles = {}
         self._local = {}
         self.make_camera()
@@ -799,13 +801,29 @@ class EbsSimulate:
             self._note(f"clear of the equipment itself "
                        f"({meeting['tests']} triangle pairs tested)")
 
+        # Inside the machine, the three faces are not the answer any more, and
+        # leaving them white would read as though they were. So they all go red
+        # whatever they measured.
+        painted = cells
+        if meeting["hit"]:
+            painted = {face: [True] * len(flags) for face, flags in cells.items()}
+
         for why, paths in sorted(self._boxed.items()):
             self._note(f"{len(paths)} judged by box, {why}: "
                        + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
                        + (" ..." if len(paths) > 4 else ""))
 
         with self._stage_timer("draw markers"):
-            self.show_markers(self._target["ebs"], cells)
+            self.show_markers(self._target["ebs"], painted)
+        # After the drawing: show_markers clears first, and the verdict is
+        # cleared along with the markers it belongs to. It is a line of text
+        # over the EBS, so it never takes the answer down with it.
+        try:
+            self._verdict = self.build_verdict(self._target["ebs"],
+                                               hit_count, meeting["hit"])
+        except Exception as e:
+            self._verdict = {}
+            self._note(f"no overlay verdict: {type(e).__name__}: {e}")
 
         # ok says the step ran, not that the answer is good -- blocked cells do
         # not clear it either, and the UI greys the grids out when it is false.
@@ -818,6 +836,31 @@ class EbsSimulate:
             cells=cells, hit_count=hit_count, distances=distances,
             equipment_hit=meeting,
         )
+
+    def build_verdict(self, ebs_prim, hit_count: int, inside: bool) -> dict:
+        """Can the EBS stand here, and where to say so.
+
+        A point and a yes or no. What it is coloured and how big the letters
+        are is the overlay's to decide -- this side does not know what a
+        viewport is.
+        """
+        bbox = self._ebs_bound(ebs_prim)
+        local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
+        if local_box.IsEmpty():
+            return {}
+        lo, hi = local_box.GetMin(), local_box.GetMax()
+        middle = to_world.Transform(
+            Gf.Vec3d(*[(lo[i] + hi[i]) * 0.5 for i in range(3)]))
+        return {
+            "centre": (middle[0], middle[1], middle[2]),
+            "span": max(hi[i] - lo[i] for i in range(3)),
+            "inside": bool(inside),
+            "blocked": int(hit_count),
+            "placeable": not inside and hit_count == 0,
+        }
+
+    def get_verdict(self) -> dict:
+        return dict(self._verdict)
 
     # -- equipment lookup ----------------------------------------------------
 
@@ -2717,6 +2760,7 @@ class EbsSimulate:
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
     def clear_markers(self) -> None:
+        self._verdict = {}          # the overlay reads this; it goes with them
         stage = self._get_stage()
         if stage is None:
             return

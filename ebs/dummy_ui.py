@@ -3,6 +3,7 @@ import csv
 import omni.ui as ui
 
 from .ebs_simulate_service import EbsSimulateService, FACES
+from .ebs_simulate_overlay import EbsSimulateOverlay
 
 __all__ = ["EbsDummyUI", "SweepLog"]
 
@@ -324,11 +325,13 @@ class EbsDummyUI:
         EbsSimulateService.clear_sweep()
         EbsSimulateService.release_camera()
         EbsSimulateService.hide_ebs()
+        EbsSimulateOverlay.hide()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
     def _on_collide(self):
         self._apply_settings()
         self._render(EbsSimulateService.collide())
+        EbsSimulateOverlay.show()      # the verdict over the EBS
 
     def _apply_settings(self):
         EbsSimulateService.set_xml_path(self._xml_field.model.get_value_as_string())
@@ -420,6 +423,7 @@ class EbsDummyUI:
     # -- teardown ------------------------------------------------------------
 
     def destroy(self):
+        EbsSimulateOverlay.destroy()   # it holds a scene view on the viewport
         self._cells = {}
         self._grid_row = None
         self._log_stack = None
