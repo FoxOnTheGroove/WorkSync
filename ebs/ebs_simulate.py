@@ -807,7 +807,6 @@ class EbsSimulate:
                     with open(self._xml_path, "rb") as handle:
                         parser.ParseFile(handle)
         except Exception as e:
-            print(f"[ebs] XML parse failed: {e}")
             self._note(f"xml parse failed ({name}): {e}")
             return None
         self._note(f"xml parsed with {name}"
@@ -817,6 +816,7 @@ class EbsSimulate:
         return scan.found
 
     def _collect_ports(self, found: dict) -> None:
+        spanning, gapped = [], []
         for key, by_index in found.items():
             indices = sorted(by_index)
             self._port_map[key] = indices
@@ -826,10 +826,15 @@ class EbsSimulate:
             self._port_addr_of[key] = by_port
             self._port_addr[key] = by_port[max(by_port)] if by_port else None
             if len(set(by_port.values())) > 1:
-                print(f"[ebs] {key}: ports span several addr blocks {by_port}, "
-                      f"base addr {self._port_addr[key]}")
+                spanning.append(key)
             if indices != list(range(1, len(indices) + 1)):
-                print(f"[ebs] {key}: port indices are not 1..N: {indices}")
+                gapped.append(key)
+        for what, names in (("span several addr blocks", spanning),
+                            ("have port indices that are not 1..N", gapped)):
+            if names:
+                self._note(f"{len(names)} equipment {what}: "
+                           + ", ".join(sorted(names)[:6])
+                           + (" ..." if len(names) > 6 else ""))
 
     # -- XML cache -----------------------------------------------------------
 
