@@ -289,15 +289,20 @@ class EbsDummyUI:
         self._apply_settings()
         self._render(EbsSimulateService.simulate(
             self._eqp_field.model.get_value_as_string()))
+        EbsSimulateOverlay.show()      # SIM runs the collide too
 
     def _on_prepare(self):
         self._apply_settings()
         self._render(EbsSimulateService.prepare(
             self._eqp_field.model.get_value_as_string()))
+        # A verdict is about where the EBS was standing. Choosing another
+        # machine, or moving it, leaves the panel saying so about nothing.
+        EbsSimulateOverlay.hide()
 
     def _on_align(self):
         self._apply_settings()
         self._render(EbsSimulateService.align())
+        EbsSimulateOverlay.hide()
 
     def _on_camera(self):
         self._render(EbsSimulateService.focus())
