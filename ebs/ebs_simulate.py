@@ -199,6 +199,7 @@ class EbsSimulate:
         self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
         self._rail_frame = None             # (addr point, one length on, axis) in rail space
         self._triangles: dict = {}          # mesh path -> world-space triangles
+        self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
         self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
@@ -274,6 +275,7 @@ class EbsSimulate:
         self._eqp_index = {}
         self._port_map = {}
         self._triangles = {}
+        self._local = {}
         self._visible = {}
         self._timings = []
         self._ready = False
@@ -321,6 +323,7 @@ class EbsSimulate:
         self._target = None
         self._aligned = False
         self._triangles = {}
+        self._local = {}
         self.make_camera()
 
         equipment = self.build_index()
@@ -714,6 +717,7 @@ class EbsSimulate:
         self._eqp_index = {}
         self._rail_index = None
         self._triangles = {}
+        self._local = {}
         if stage is None:
             return 0
         visited = 0
@@ -1548,17 +1552,22 @@ class EbsSimulate:
         if prim is None or not prim.IsValid():
             return
         root = str(prim.GetPath())
-        for path in [p for p in self._triangles
-                     if p == root or p.startswith(root + "/")]:
-            del self._triangles[path]
+        for cache in (self._triangles, self._local):
+            for path in [p for p in cache
+                         if p == root or p.startswith(root + "/")]:
+                del cache[path]
 
-    def _mesh_triangles(self, stage, path: str) -> list:
-        if path in self._triangles:
-            return self._triangles[path]
+    def _mesh_local(self, stage, path: str):
+        """A mesh's own points and faces, and where it stands. Read once.
 
-        triangles = []
-        prim = stage.GetPrimAtPath(path)
+        Kept unconverted on purpose: converting every point to world space is
+        the expensive part, and whoever asks may only want a corner of it.
+        """
+        if path in self._local:
+            return self._local[path]
+        prim = stage.GetPrimAtPath(path) if stage else None
         mesh = UsdGeom.Mesh(prim) if prim and prim.IsValid() else None
+        data = None
         if mesh:
             tc = Usd.TimeCode.Default()
             points = self._attr_value(mesh.GetPointsAttr(), tc)
@@ -1567,19 +1576,98 @@ class EbsSimulate:
             if points is None or counts is None or indices is None:
                 self._boxed.setdefault("no point data", []).append(path)
             else:
-                to_world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc)
-                world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
-                cursor = 0
-                for count in counts:
-                    if count >= 3 and cursor + count <= len(indices):
-                        fan = [world[indices[cursor + k]] for k in range(count)]
-                        for k in range(1, count - 1):
-                            triangles.append((fan[0], fan[k], fan[k + 1]))
-                    cursor += count
+                data = (points, counts, indices,
+                        UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc))
         elif prim and prim.IsValid():
             self._boxed.setdefault(f"a {prim.GetTypeName()}", []).append(path)
+        self._local[path] = data
+        return data
+
+    def _mesh_triangles(self, stage, path: str) -> list:
+        if path in self._triangles:
+            return self._triangles[path]
+        triangles = []
+        data = self._mesh_local(stage, path)
+        if data:
+            points, counts, indices, to_world = data
+            world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
+            cursor = 0
+            for count in counts:
+                if count >= 3 and cursor + count <= len(indices):
+                    fan = [world[indices[cursor + k]] for k in range(count)]
+                    for k in range(1, count - 1):
+                        triangles.append((fan[0], fan[k], fan[k + 1]))
+                cursor += count
         self._triangles[path] = triangles
         return triangles
+
+    def _triangles_reaching(self, stage, path: str, box: Gf.Range3d) -> list:
+        """(path, triangle, low corner, high corner) for what reaches into `box`.
+
+        The box is pulled back through the mesh's transform once, and the faces
+        are sifted where they live. Only what survives is worth converting, and
+        where the EBS meets a corner of a machine that is nearly none of it.
+        """
+        cached = self._triangles.get(path)
+        if cached is not None:
+            # The face check has already converted this one. Re-reading it to
+            # save a filter would be the more expensive way round.
+            lo_box, hi_box = box.GetMin(), box.GetMax()
+            kept = []
+            for a, b, c in cached:
+                lo = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
+                      min(a[2], b[2], c[2]))
+                hi = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
+                      max(a[2], b[2], c[2]))
+                if all(lo[i] <= hi_box[i] and hi[i] >= lo_box[i] for i in range(3)):
+                    kept.append((path, (a, b, c), lo, hi))
+            return kept
+
+        data = self._mesh_local(stage, path)
+        if not data:
+            return []
+        points, counts, indices, to_world = data
+        near = self._pulled_back(box, to_world)
+        if near is None:
+            return []
+        (lx, ly, lz), (hx, hy, hz) = near
+
+        kept, cursor = [], 0
+        for count in counts:
+            if count < 3 or cursor + count > len(indices):
+                cursor += count
+                continue
+            corners = [points[indices[cursor + k]] for k in range(count)]
+            xs = [c[0] for c in corners]
+            ys = [c[1] for c in corners]
+            zs = [c[2] for c in corners]
+            if (min(xs) <= hx and max(xs) >= lx and min(ys) <= hy
+                    and max(ys) >= ly and min(zs) <= hz and max(zs) >= lz):
+                fan = [to_world.Transform(Gf.Vec3d(c[0], c[1], c[2]))
+                       for c in corners]
+                for k in range(1, count - 1):
+                    a, b, c = fan[0], fan[k], fan[k + 1]
+                    kept.append((path, (a, b, c),
+                                 (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
+                                  min(a[2], b[2], c[2])),
+                                 (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
+                                  max(a[2], b[2], c[2]))))
+            cursor += count
+        return kept
+
+    @staticmethod
+    def _pulled_back(box: Gf.Range3d, to_world):
+        """`box` in the mesh's own space, as the box that surely covers it."""
+        try:
+            inverse = to_world.GetInverse()
+        except Exception:
+            return None
+        lo, hi = box.GetMin(), box.GetMax()
+        corners = [inverse.Transform(Gf.Vec3d(x, y, z))
+                   for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+                   for z in (lo[2], hi[2])]
+        return (tuple(min(c[i] for c in corners) for i in range(3)),
+                tuple(max(c[i] for c in corners) for i in range(3)))
 
     @staticmethod
     def _attr_value(attr, tc):
@@ -1769,16 +1857,11 @@ class EbsSimulate:
         several thousand triangles -- and the corners are kept because the test
         needs them again and recomputing them is most of its cost.
         """
-        lo_box, hi_box = box.GetMin(), box.GetMax()
         kept = []
         for path, mesh_box in meshes:
             if Gf.Range3d.GetIntersection(mesh_box, box).IsEmpty():
                 continue
-            for triangle in self._mesh_triangles(stage, path):
-                lo = [min(v[i] for v in triangle) for i in range(3)]
-                hi = [max(v[i] for v in triangle) for i in range(3)]
-                if all(lo[i] <= hi_box[i] and hi[i] >= lo_box[i] for i in range(3)):
-                    kept.append((path, triangle, lo, hi))
+            kept.extend(self._triangles_reaching(stage, path, box))
         return kept
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:

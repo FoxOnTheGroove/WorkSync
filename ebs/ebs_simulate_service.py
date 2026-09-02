@@ -255,9 +255,15 @@ class EbsSimulateService:
         셀 분할 변경시 _build_cells + GRID 참조. 지금 GRID=1 이라 면당 셀 1개.
         후보 수집 / 가지치기 변경시 _gather_nearby 참조 (대부분 여기서 걸러짐).
         박스 겹침은 _overlaps, 삼각형 판정은 _triangle_hits_box.
-        메시 읽기 변경시 _mesh_triangles, _attr_value 참조.
-          _triangles 는 월드 좌표 캐시다. EBS 가 움직이면 거짓이 되므로
-          _do_align 이 _forget_triangles 로 그 하위만 버린다. 장비 것은 남는다.
+        메시 읽기 변경시 _mesh_local (원본 점/면, 변환 안 함) 과 그 위의 둘:
+          _mesh_triangles   메시 전체를 월드로. 3면 검사용.
+          _triangles_reaching 상자를 로컬로 끌어와(_pulled_back) 거른 뒤
+                            살아남은 면만 월드로. 간섭 검사용.
+                            변환이 비용의 전부라, 버릴 것을 변환하면 안 된다.
+                            _triangles 에 이미 있으면 그걸 걸러 쓴다.
+          _triangles / _local 은 캐시. _triangles 는 월드 좌표라 EBS 가 움직이면
+          거짓이 되므로 _do_align 이 _forget_triangles 로 그 하위만 버린다.
+          장비 것은 남는다 — 장비는 안 움직인다.
         상자로 판정한 프림은 _boxed 에 모았다가 단계 끝에 한 줄로 낸다.
         숨김 프림 처리 변경시 _is_visible 참조.
         EBS 박스 변경시 _ebs_bound 참조.
