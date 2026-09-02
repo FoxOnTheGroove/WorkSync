@@ -237,9 +237,17 @@ class EbsSimulateService:
         EBS 를 그 장비에 올려놓는 거라 늘 거기 있고, 그러면 매번 막힘으로 뜬다.
         대신 장비와의 간섭은 따로, 정확히 본다: check_equipment 참조.
           삼각형 대 삼각형. 박스로 보면 마운트가 전부 충돌이 되므로.
-          메시 AABB 겹침 -> 겹친 상자 안의 삼각형만 추림(_triangles_in)
-            -> 여섯 모서리를 상대 면에 쏨(_triangles_meet, _segment_hits_triangle).
+          양쪽 메시 상자의 공통 영역을 먼저 잡고, 거기 닿는 삼각형만 읽는다
+            (_triangles_near — 메시당 한 번. 쌍마다 다시 읽으면 안 된다).
+          그 다음 장비 삼각형을 격자에 담고, EBS 삼각형은 같은 칸에 있는 것만
+            상자 비교 -> 실제 판정 (_meetings, _grid_of, _cells_of).
+            격자 없이 n x m 을 돌면 7200x7200 에서 10분이 넘는다. GRID_CELLS.
+          판정 자체는 여섯 모서리를 상대 면에 쏘는 것
+            (_triangles_meet, _segment_hits_triangle).
           같은 평면끼리는 안 잡는다. 그건 면이 맞닿은 것 = 마운트.
+          EBS 안에 통째로 들어간 것도 안 잡는다. 그건 들어맞은 것 = 정상.
+          이름 쌍은 MEET_LIMIT 개까지 모으고 멈춘다.
+        타이밍: 'interference: gather / read triangles / test' 로 나뉘어 있다.
         결과는 payload["equipment_hit"] = {hit, pairs, tests}.
         ok 는 그대로 True — ok 는 "돌았다"는 뜻이고, 셀이 막혀도 True 다.
         검사가 터져도 노트만 남기고 3면 결과는 살린다.

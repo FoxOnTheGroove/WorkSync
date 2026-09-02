@@ -157,6 +157,8 @@ FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 1                 # 면당 셀 분할 수. 1이면 면 하나가 셀 하나
+GRID_CELLS = 24          # most cells an axis of the interference grid gets
+MEET_LIMIT = 4           # mesh pairs named before the answer is settled
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
 REACH_RATIO = 1.5        # 가장 가까운 메시를 찾는 거리 (최장변 대비)
@@ -1682,9 +1684,11 @@ class EbsSimulate:
         """Does the EBS pass through the equipment it was placed on?
 
         The three-face check asks what is around the EBS; this asks whether the
-        EBS and the machine occupy the same space. They are meant to touch, so
-        this is deliberately the strict test -- triangles that actually cross --
-        rather than boxes, which would call every mounting a collision.
+        two occupy the same space. They are meant to touch, so this is the
+        strict test -- triangles that actually cross -- rather than boxes, which
+        would call every mounting a collision. Equipment that sits wholly inside
+        the EBS crosses nothing and is not interference either; that is a thing
+        fitting, which is what the run is hoping for.
         """
         stage = self._get_stage()
         blank = {"hit": False, "pairs": [], "tests": 0}
@@ -1700,48 +1704,112 @@ class EbsSimulate:
         if world_box.IsEmpty():
             return blank
 
-        ours, _ = self._gather_nearby(stage, cache, world_box, [], root=ebs_prim)
-        theirs, _ = self._gather_nearby(stage, cache, world_box, [], root=eqp_prim)
+        with self._stage_timer("interference: gather"):
+            ours, _ = self._gather_nearby(stage, cache, world_box, [], root=ebs_prim)
+            theirs, _ = self._gather_nearby(stage, cache, world_box, [], root=eqp_prim)
         if not ours or not theirs:
-            self._note("no interference test: "
-                       f"{len(ours)} EBS meshes against {len(theirs)} on the equipment")
+            self._note(f"no interference test: {len(ours)} EBS meshes against "
+                       f"{len(theirs)} on the equipment")
             return blank
 
-        pairs, tests = [], 0
-        for ebs_path, ebs_box in ours:
-            for eqp_path, eqp_box in theirs:
-                shared = Gf.Range3d.GetIntersection(ebs_box, eqp_box)
-                if shared.IsEmpty():
-                    continue
-                mine = self._triangles_in(stage, ebs_path, shared)
-                yours = self._triangles_in(stage, eqp_path, shared)
-                tests += len(mine) * len(yours)
-                if self._any_triangles_meet(mine, yours):
-                    pairs.append((ebs_path, eqp_path))
+        # One region for the whole question, so each mesh is read and filtered
+        # once instead of once per pairing with the other side.
+        shared = Gf.Range3d.GetIntersection(self._union([b for _, b in ours]),
+                                            self._union([b for _, b in theirs]))
+        if shared.IsEmpty():
+            self._note(f"clear of the equipment: {len(ours)} EBS meshes and "
+                       f"{len(theirs)} on it never share a box")
+            return blank
+
+        with self._stage_timer("interference: read triangles"):
+            mine = self._triangles_near(stage, ours, shared)
+            yours = self._triangles_near(stage, theirs, shared)
+        if not mine or not yours:
+            self._note(f"clear of the equipment: nothing reaches the shared box "
+                       f"({len(mine)} against {len(yours)} triangles)")
+            return blank
+
+        with self._stage_timer("interference: test"):
+            pairs, tests = self._meetings(mine, yours, shared)
+        self._note(f"interference: {len(mine)} EBS triangles against {len(yours)} "
+                   f"on the equipment, {tests} pairs tested")
         return {"hit": bool(pairs), "pairs": pairs, "tests": tests}
 
-    def _triangles_in(self, stage, path: str, box: Gf.Range3d) -> list:
-        """A mesh's triangles, kept only where they reach into `box`.
+    @staticmethod
+    def _union(boxes: list) -> Gf.Range3d:
+        lo = [min(b.GetMin()[i] for b in boxes) for i in range(3)]
+        hi = [max(b.GetMax()[i] for b in boxes) for i in range(3)]
+        return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
-        Two meshes that overlap at all usually overlap in a corner, so this is
-        what keeps the exact test off the other several thousand triangles.
+    def _triangles_near(self, stage, meshes: list, box: Gf.Range3d) -> list:
+        """(path, triangle, its low corner, its high corner) that reach into `box`.
+
+        Read and filtered once per mesh. Two meshes that overlap at all usually
+        overlap in a corner, so this is what keeps the exact test off the other
+        several thousand triangles -- and the corners are kept because the test
+        needs them again and recomputing them is most of its cost.
         """
+        lo_box, hi_box = box.GetMin(), box.GetMax()
         kept = []
-        for triangle in self._mesh_triangles(stage, path):
-            lo = [min(v[i] for v in triangle) for i in range(3)]
-            hi = [max(v[i] for v in triangle) for i in range(3)]
-            if not Gf.Range3d.GetIntersection(
-                    Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi)), box).IsEmpty():
-                kept.append(triangle)
+        for path, mesh_box in meshes:
+            if Gf.Range3d.GetIntersection(mesh_box, box).IsEmpty():
+                continue
+            for triangle in self._mesh_triangles(stage, path):
+                lo = [min(v[i] for v in triangle) for i in range(3)]
+                hi = [max(v[i] for v in triangle) for i in range(3)]
+                if all(lo[i] <= hi_box[i] and hi[i] >= lo_box[i] for i in range(3)):
+                    kept.append((path, triangle, lo, hi))
         return kept
 
+    def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
+        """Which meshes of the two actually cross, and how many pairs it took.
+
+        The exact test is expensive enough that it must not be reached often, so
+        the equipment's triangles go in a grid over the shared box and each of
+        the EBS's only meets the ones sharing a cell with it. Boxes are compared
+        before triangles; only what survives both is worth the real test.
+        """
+        grid, origin, step, spread = self._grid_of(yours, box)
+        pairs, tests = [], 0
+        for ebs_path, triangle, lo, hi in mine:
+            seen = set()
+            for key in self._cells_of(lo, hi, origin, step, spread):
+                seen.update(grid.get(key, ()))
+            for index in seen:
+                eqp_path, other, other_lo, other_hi = yours[index]
+                if any(lo[i] > other_hi[i] or hi[i] < other_lo[i] for i in range(3)):
+                    continue
+                tests += 1
+                if self._triangles_meet(triangle, other):
+                    if (ebs_path, eqp_path) not in pairs:
+                        pairs.append((ebs_path, eqp_path))
+                    if len(pairs) >= MEET_LIMIT:
+                        return pairs, tests
+        return pairs, tests
+
     @classmethod
-    def _any_triangles_meet(cls, first: list, second: list) -> bool:
-        for a in first:
-            for b in second:
-                if cls._triangles_meet(a, b):
-                    return True
-        return False
+    def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
+        """Bucket triangles by the cells of a uniform grid over `box`."""
+        origin = box.GetMin()
+        size = [max(box.GetMax()[i] - origin[i], 1e-9) for i in range(3)]
+        spread = max(1, min(GRID_CELLS, int(round(len(items) ** (1.0 / 3.0)))))
+        step = [size[i] / spread for i in range(3)]
+        grid = {}
+        for index, (_, _, lo, hi) in enumerate(items):
+            for key in cls._cells_of(lo, hi, origin, step, spread):
+                grid.setdefault(key, []).append(index)
+        return grid, origin, step, spread
+
+    @staticmethod
+    def _cells_of(lo, hi, origin, step, spread):
+        """Every cell a box touches, clamped to the grid."""
+        spans = []
+        for i in range(3):
+            first = int((lo[i] - origin[i]) / step[i])
+            last = int((hi[i] - origin[i]) / step[i])
+            spans.append(range(max(0, min(first, spread - 1)),
+                               max(0, min(last, spread - 1)) + 1))
+        return [(x, y, z) for x in spans[0] for y in spans[1] for z in spans[2]]
 
     @classmethod
     def _triangles_meet(cls, a, b) -> bool:
