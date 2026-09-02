@@ -158,7 +158,6 @@ MARKER_EMISSION = 10000.0  # 마커 발광 세기
 COLOR_GAP      = (0.9, 0.7, 0.0)   # 여유를 재는 선. 패널과 같은 짙은 황색
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
-GAP_RADIUS     = 0.004    # 선 굵기, EBS 최장변 대비
 SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
 
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
@@ -2757,9 +2756,7 @@ class EbsSimulate:
             # The line from the face out to whatever is nearest. It is what
             # the clearance panel is a label for, so it is drawn here and
             # cleared with the sheets rather than kept on its own.
-            span = max(local_box.GetMax()[i] - local_box.GetMin()[i]
-                       for i in range(3)) or 1.0
-            radius = max(span * GAP_RADIUS, 1e-6)
+            radius = self._thread_radius()
             gap_material = None
             for mark in marks or ():
                 if not mark.get("from") or not mark.get("to"):
@@ -2773,6 +2770,20 @@ class EbsSimulate:
                     drawn += 1
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
+
+    def _thread_radius(self) -> float:
+        """How thick a drawn line is: the equipment's own diagonal, scaled.
+
+        The port lasers and the clearance lines are the same kind of thing to
+        look at, so they are the same thickness and it is worked out once.
+        """
+        box = self._world_range((self._target or {}).get("equipment"))
+        if box is None:
+            span = 1.0
+        else:
+            lo, hi = box.GetMin(), box.GetMax()
+            span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
+        return max(span * LASER_RADIUS, 1e-5)
 
     @staticmethod
     def _gap_line(stage, path: str, start, end, radius: float, material) -> bool:
@@ -2820,14 +2831,8 @@ class EbsSimulate:
         if not points:
             return 0
 
-        box = self._world_range((self._target or {}).get("equipment"))
-        if box is None:
-            span = 1.0
-        else:
-            lo, hi = box.GetMin(), box.GetMax()
-            span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
         top = self._port_rail_z
-        radius = max(span * LASER_RADIUS, 1e-5)
+        radius = self._thread_radius()
 
         drawn = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):

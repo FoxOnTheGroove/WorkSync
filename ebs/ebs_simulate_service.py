@@ -397,12 +397,15 @@ class EbsSimulateService:
           윗줄 CAN / CANNOT, 아랫줄부터 사유가 한 줄에 하나 (INNER, FACE_ORDER).
           매번 통째로 다시 짓는다 — 패널 수와 모양이 결과마다 다르다.
         면 패널은 _face_panel. 막혔으면 CLASH + 막은 것 이름 (빨강).
-          비었으면 선 중점 위에 GAP, 아래에 거리 + 상대 이름 (짙은 황색).
+          비었으면 선 중점 한쪽에 GAP, 반대쪽에 거리 + 상대 이름 (짙은 황색).
+          좌우 면은 위아래, 천장은 좌우로 붙는다 (SIDE_BY_SIDE) — 화면에서
+          벌어지는 방향이 다르기 때문.
           색은 판이 지고 글자는 흰색이다 (COLOR_TEXT) — 어두운 판에 색 글자는
           플랜트를 배경으로 읽기 힘들다.
           선이 씬에 있으므로 한 판으로 두면 뒷판이 선을 가린다. 그래서 갈랐고,
           위/아래 배치는 _floating 의 anchor + LINE_ROOM.
-        선 색·굵기는 구현부 COLOR_GAP / GAP_RADIUS / GAP_EMISSION.
+        선 색은 구현부 COLOR_GAP / GAP_EMISSION. 굵기는 _thread_radius —
+          포트 레이저와 같은 값이다 (LASER_RADIUS, 장비 대각선 대비).
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
           _place 는 오프셋을 프레임 안으로 가둔다. 밖으로 내보내면 프레임이

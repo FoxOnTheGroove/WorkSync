@@ -33,9 +33,13 @@ GAP   = "clearance"               # 비었을 때, 선 위
 NO_GAP = "-"                      # 잰 것이 없을 때 거리 자리
 
 # 선은 UI 가 아니라 씬에 그린다 (show_markers 의 _gap_line). 그래서 글자는 그
-# 선의 중점 위와 아래로 갈라 붙는다 — 한 판으로 두면 뒷판이 선을 가린다.
-ABOVE, BELOW, MIDDLE = "above", "below", "middle"
-LINE_ROOM = 6                     # 선이 지나갈 자리, 위아래 판 사이 여백
+# 선의 중점 양쪽으로 갈라 붙는다 — 한 판으로 두면 뒷판이 선을 가린다.
+ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
+LINE_ROOM = 6                     # 선이 지나갈 자리, 판 사이 여백
+
+# 천장은 화면에서 위아래로 벌어지니 글자가 선 양옆으로 간다. 좌우 면은 가로로
+# 벌어지니 위아래로 간다.
+SIDE_BY_SIDE = ("ceiling",)
 
 # 판 자체가 색을 지고, 글자는 흰색이다. 어두운 판에 색 글자를 쓰면 플랜트를
 # 배경으로 읽기 힘들다.
@@ -249,11 +253,13 @@ class EbsSimulateOverlay:
         if clash:
             self._floating(at, block([CLASH] + ([name] if name else [])), ground)
             return
-        self._floating(at, block([GAP]), ground, ABOVE)
+        first, second = ((LEFT, RIGHT) if mark.get("face") in SIDE_BY_SIDE
+                         else (ABOVE, BELOW))
+        self._floating(at, block([GAP]), ground, first)
         told = [NO_GAP if gap is None else f"{gap:.3f} m"]
         if name:
             told.append(name)
-        self._floating(at, block(told), ground, BELOW)
+        self._floating(at, block(told), ground, second)
 
     @staticmethod
     def _why(said: dict) -> list:
@@ -294,17 +300,19 @@ class EbsSimulateOverlay:
                     panel.visible = False   # behind the camera, or off screen
                     continue
                 panel_w, panel_h = panel.computed_width, panel.computed_height
+                x, y = spot[0] - panel_w * 0.5, spot[1] - panel_h * 0.5
                 if anchor == ABOVE:
                     y = spot[1] - panel_h - LINE_ROOM
                 elif anchor == BELOW:
                     y = spot[1] + LINE_ROOM
-                else:
-                    y = spot[1] - panel_h * 0.5
+                elif anchor == LEFT:
+                    x = spot[0] - panel_w - LINE_ROOM
+                elif anchor == RIGHT:
+                    x = spot[0] + LINE_ROOM
                 # Held inside the frame. A placer that puts its content past
                 # the edge makes the frame bigger than the viewport, and the
                 # viewport resizes itself around it.
-                placer.offset_x = min(max(spot[0] - panel_w * 0.5, 0.0),
-                                      max(width - panel_w, 0.0))
+                placer.offset_x = min(max(x, 0.0), max(width - panel_w, 0.0))
                 placer.offset_y = min(max(y, 0.0), max(height - panel_h, 0.0))
                 panel.visible = True
         except Exception as e:
