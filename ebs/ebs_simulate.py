@@ -133,7 +133,7 @@ CAMERA_PATH    = "/EbsCamera"             # session-layer camera owned by this e
 CAMERA_FILL    = 0.9                      # how much of the view the target fills
 CAMERA_NEAR    = 0.01                     # nothing is clipped away in front
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
-NEIGHBOUR_REACH = 1.0    # circle to look for the machines either side, as a share
+NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a share
                          # of the target's own width
 
 MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
@@ -162,6 +162,7 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)   # startswith takes a tuple
 NOW = Usd.TimeCode.Default()      # asked for per prim; make it once
+VISIBILITY = "visibility"         # the attribute hiding a prim writes
 
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -213,6 +214,7 @@ class EbsSimulate:
         self._triangles: dict = {}          # mesh path -> world-space triangles
         self._eqp_spots: dict = None        # "EQP_########" -> where its pivot stands
         self._hidden: list = []             # equipment we turned off, to turn back on
+        self._lone: bool = True             # camera shows the target and its two only
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -263,6 +265,10 @@ class EbsSimulate:
     def set_offset_scale(self, mode: str) -> None:
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
+
+    def set_lone_view(self, on: bool) -> None:
+        """Whether the camera step turns the other machines off."""
+        self._lone = bool(on)
 
     def set_rail_root(self, path: str) -> None:
         self._rail_index = None
@@ -629,13 +635,16 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
         stage = self._get_stage()
-        with self._stage_timer("hide the other equipment"):
-            beside = self.side_neighbours(stage, self._target["ebs"],
-                                          self._target["equipment"])
-            hidden = self.hide_other_equipment(
-                [str(self._target["equipment"].GetPath())] + beside)
-        self._note(f"{len(beside)} machine(s) beside it, {hidden} turned off: "
-                   + ", ".join(p.rsplit("/", 1)[-1] for p in beside))
+        if self._lone:
+            with self._stage_timer("hide the other equipment"):
+                beside = self.side_neighbours(stage, self._target["ebs"],
+                                              self._target["equipment"])
+                hidden = self.hide_other_equipment(
+                    [str(self._target["equipment"].GetPath())] + beside)
+            self._note(f"{len(beside)} machine(s) beside it, {hidden} turned off: "
+                       + ", ".join(p.rsplit("/", 1)[-1] for p in beside))
+        else:
+            self.show_equipment()
 
         with self._stage_timer("camera focus"):
             moved = self._move_camera(str(self._target["ebs"].GetPath()),
@@ -863,14 +872,9 @@ class EbsSimulate:
             return 0
         self.show_equipment()
         spared = set(keep)
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            for path in self._eqp_index.values():
-                if path in spared:
-                    continue
-                prim = stage.GetPrimAtPath(path)
-                if prim and prim.IsValid():
-                    UsdGeom.Imageable(prim).MakeInvisible()
-                    self._hidden.append(path)
+        turn_off = [path for path in self._eqp_index.values() if path not in spared]
+        if self._author_visibility(stage, turn_off, True):
+            self._hidden = turn_off
         return len(self._hidden)
 
     def show_equipment(self) -> None:
@@ -880,14 +884,54 @@ class EbsSimulate:
             return
         stage = self._get_stage()
         if stage is not None:
-            with Usd.EditContext(stage, stage.GetSessionLayer()):
-                for path in self._hidden:
+            self._author_visibility(stage, self._hidden, False)
+        self._hidden = []
+
+    def _author_visibility(self, stage, paths: list, hide: bool) -> bool:
+        """Turn a whole list off, or put it back, in one go.
+
+        One prim at a time is one change notice each, and Kit answers every one
+        of them -- fifteen hundred of those is a panel that stops responding.
+        The session layer is written through Sdf inside a change block, which
+        is the shape of the API that is safe to batch; the schema helpers read
+        the stage back as they go and are not.
+        """
+        if not paths:
+            return True
+        session = stage.GetSessionLayer()
+        try:
+            with Sdf.ChangeBlock():
+                for path in paths:
+                    spec = Sdf.CreatePrimInLayer(session, Sdf.Path(path))
+                    attribute = spec.attributes.get(VISIBILITY)
+                    if hide:
+                        if attribute is None:
+                            attribute = Sdf.AttributeSpec(
+                                spec, VISIBILITY, Sdf.ValueTypeNames.Token)
+                        attribute.default = UsdGeom.Tokens.invisible
+                    elif attribute is not None:
+                        del spec.attributes[VISIBILITY]
+            return True
+        except Exception as e:
+            self._note(f"could not set visibility in one go ({e}), "
+                       f"falling back to one at a time")
+        try:
+            with Usd.EditContext(stage, session):
+                for path in paths:
                     prim = stage.GetPrimAtPath(path)
-                    if prim and prim.IsValid():
-                        attribute = UsdGeom.Imageable(prim).GetVisibilityAttr()
+                    if not prim or not prim.IsValid():
+                        continue
+                    imageable = UsdGeom.Imageable(prim)
+                    if hide:
+                        imageable.MakeInvisible()
+                    else:
+                        attribute = imageable.GetVisibilityAttr()
                         if attribute:
                             attribute.Clear()
-        self._hidden = []
+            return True
+        except Exception as e:
+            self._note(f"visibility could not be set: {e}")
+            return False
 
     def get_selected_equipment(self) -> str:
         stage = self._get_stage()

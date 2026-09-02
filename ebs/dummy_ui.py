@@ -162,6 +162,11 @@ class EbsDummyUI:
                     # again with port 1 slid onto the equipment's pivot.
                     self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                                               "length / puls", width=126)
+                    ui.Label("Lone:", width=38)
+                    # Camera keeps the target and the machines either side, and
+                    # turns the rest off. Off means the camera only moves.
+                    self._lone = ui.CheckBox(width=20)
+                    self._lone.model.set_value(True)
                     ui.Spacer()
 
                 ui.Separator(height=6)
@@ -337,6 +342,7 @@ class EbsDummyUI:
         scales = ("snap", "fixed", "puls")
         index = self._scale.model.get_item_value_model().get_value_as_int()
         EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
+        EbsSimulateService.set_lone_view(self._lone.model.get_value_as_bool())
 
     # -- display -------------------------------------------------------------
 

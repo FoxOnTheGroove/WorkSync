@@ -96,6 +96,14 @@ class EbsSimulateService:
         return cls._simulate.set_offset_scale(mode)
 
     @classmethod
+    def set_lone_view(cls, on):
+        """카메라가 다른 장비를 끌지 여부. 기본 켜짐.
+
+        끄면 3 Camera 가 예전처럼 카메라만 옮긴다.
+        """
+        return cls._simulate.set_lone_view(on)
+
+    @classmethod
     def set_rail_root(cls, path):
         """rail_<a>_<b> 부모 경로. 바뀌면 레일 인덱스 폐기.
 
@@ -214,6 +222,11 @@ class EbsSimulateService:
           (_sideways, 3면 검사의 좌/우와 같은 축) 기준 양쪽 가장 가까운 하나씩.
           위치는 equipment_spots 가 장비당 한 번 구해 캐시한다. init 이 비운다.
         끄기/되돌리기는 hide_other_equipment / show_equipment.
+          실제 저작은 _author_visibility 가 Sdf 로 세션 레이어에 한 번에 쓴다.
+          프림당 하나씩 쓰면 변경 알림이 하나씩 가고 Kit 이 매번 응답한다 —
+          1500개면 그것만으로 멈춘다. Sdf 는 ChangeBlock 안에서 안전하지만
+          스키마 헬퍼는 아니다 (스테이지를 되읽으므로).
+          set_lone_view(False) 로 이 동작 전체를 끌 수 있다 (UI 의 Lone 체크박스).
           되돌릴 때 '보이게' 하지 않고 우리 의견만 지운다 — 사용자가 끈 것은 그대로.
           release_camera 가 show_equipment 를 부르므로 Clear 버튼이 되돌린다.
         주의: _gather_nearby 는 안 보이는 프림을 장애물로 안 본다. 지금은 그게
