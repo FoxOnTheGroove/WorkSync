@@ -254,6 +254,12 @@ class EbsSimulateService:
 
         셀 분할 변경시 _build_cells + GRID 참조. 지금 GRID=1 이라 면당 셀 1개.
         후보 수집 / 가지치기 변경시 _gather_nearby 참조 (대부분 여기서 걸러짐).
+          스테이지 순회는 한 단계에 2회다: check_collision 1, measure_faces 1.
+          measure_faces 는 세 면의 프리즘을 먼저 다 만들고 그 합집합으로 한 번만
+          걷는다 (예전엔 면마다 한 번씩 = 3회).
+          BBoxCache 는 _bounds_cache 로 만들어 _do_collide 가 셋에 나눠준다.
+          월드 바운드 계산이 비용의 전부이고, 캐시는 그걸 기억한다.
+          따로 만들면 같은 프림을 세 번 다시 잰다.
         박스 겹침은 _overlaps, 삼각형 판정은 _triangle_hits_box.
         메시 읽기 변경시 _mesh_local (원본 점/면, 변환 안 함) 과 그 위의 둘:
           _mesh_triangles   메시 전체를 월드로. 3면 검사용.

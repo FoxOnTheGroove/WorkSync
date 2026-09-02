@@ -660,10 +660,12 @@ class EbsSimulate:
         # is always right there, and it would read as blocked on every run. What
         # it is actually in the way of is asked separately, and exactly.
         apart = [self._target["ebs"], self._target["equipment"]]
-        cells = self.check_collision(self._target["ebs"], exclude=apart)
+        bounds = self._bounds_cache()          # shared: it remembers what it read
+        cells = self.check_collision(self._target["ebs"], exclude=apart, cache=bounds)
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         with self._stage_timer("measure clear faces"):
-            distances = self.measure_faces(self._target["ebs"], cells, exclude=apart)
+            distances = self.measure_faces(self._target["ebs"], cells,
+                                           exclude=apart, cache=bounds)
         for face, found in distances.items():
             if found.get("distance") is None:
                 self._note(f"{face}: clear, nothing within "
@@ -676,7 +678,8 @@ class EbsSimulate:
         with self._stage_timer("equipment interference"):
             try:
                 meeting = self.check_equipment(self._target["ebs"],
-                                               self._target["equipment"])
+                                               self._target["equipment"],
+                                               cache=bounds)
             except Exception as e:
                 meeting = {"hit": False, "pairs": [], "tests": 0}
                 self._note(f"interference check failed: {type(e).__name__}: {e}")
@@ -1438,17 +1441,23 @@ class EbsSimulate:
 
     # -- collision -----------------------------------------------------------
 
-    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None) -> dict:
-        stage = self._get_stage()
-        if stage is None:
-            return {face: [] for face in FACES}
-        self._visible = {}          # visibility can change between runs
-
-        cache = UsdGeom.BBoxCache(
+    @staticmethod
+    def _bounds_cache():
+        """One of these a step. It remembers, and computing a world bound on a
+        plant this size is the whole cost of looking anything up."""
+        return UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
             useExtentsHint=True,          # read extentsHint instead of walking geometry
         )
+
+    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
+                        cache=None) -> dict:
+        stage = self._get_stage()
+        if stage is None:
+            return {face: [] for face in FACES}
+        self._visible = {}          # visibility can change between runs
+        cache = cache if cache is not None else self._bounds_cache()
 
         with self._stage_timer("EBS bounds"):
             ebs_bbox = self._ebs_bound(ebs_prim)
@@ -1820,7 +1829,8 @@ class EbsSimulate:
             stack.extend(_children(prim))
         return found, visited
 
-    def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim) -> dict:
+    def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
+                        cache=None) -> dict:
         """Does the EBS pass through the equipment it was placed on?
 
         The three-face check asks what is around the EBS; this asks whether the
@@ -1835,11 +1845,7 @@ class EbsSimulate:
         if stage is None or eqp_prim is None or not eqp_prim.IsValid():
             return blank
 
-        cache = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        )
+        cache = cache if cache is not None else self._bounds_cache()
         world_box = self._ebs_bound(ebs_prim).ComputeAlignedRange()
         if world_box.IsEmpty():
             return blank
@@ -2056,7 +2062,7 @@ class EbsSimulate:
         return dict(self._grid_shape)
 
     def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
-                      exclude: list = None) -> dict:
+                      exclude: list = None, cache=None) -> dict:
         stage = self._get_stage()
         if stage is None:
             return {}
@@ -2068,20 +2074,29 @@ class EbsSimulate:
         reach = max(local_box.GetMax()[i] - local_box.GetMin()[i]
                     for i in range(3)) * REACH_RATIO
         skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-        cache = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        )
+        cache = cache if cache is not None else self._bounds_cache()
 
-        results = {}
+        # Every face's reach, worked out first, so the stage is walked once for
+        # all of them rather than once each.
+        wanted = {}
         for face, (axis, outward, coord, _, _) in self._face_planes.items():
             if any(cells.get(face, [])):
                 continue                       # something is touching it already
             prism = self._face_prism(local_box, axis, outward, coord, reach)
-            world_prism = Gf.BBox3d(prism, to_world).ComputeAlignedRange()
-            found = self._nearest_in_prism(stage, cache, prism, world_prism, to_world,
-                                           axis, outward, coord, skip)
+            wanted[face] = (prism, Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
+                            axis, outward, coord)
+        if not wanted:
+            return {}
+
+        whole = self._union([box for _, box, _, _, _ in wanted.values()])
+        candidates, _ = self._gather_nearby(stage, cache, whole, skip)
+
+        results = {}
+        for face, (prism, world_prism, axis, outward, coord) in wanted.items():
+            near = [(path, box) for path, box in candidates
+                    if self._overlaps(box, world_prism)]
+            found = self._nearest_in_prism(stage, near, prism, to_world,
+                                           axis, outward, coord)
             results[face] = found or {"distance": None, "prim": "", "reach": reach}
         return results
 
@@ -2096,9 +2111,8 @@ class EbsSimulate:
             lo[axis], hi[axis] = coord - reach, coord
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
-    def _nearest_in_prism(self, stage, cache, prism, world_prism, to_world,
-                          axis, outward, coord, skip):
-        candidates, _ = self._gather_nearby(stage, cache, world_prism, skip)
+    def _nearest_in_prism(self, stage, candidates, prism, to_world,
+                          axis, outward, coord):
         if not candidates:
             return None
 
