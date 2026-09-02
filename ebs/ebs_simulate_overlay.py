@@ -244,9 +244,16 @@ class EbsSimulateOverlay:
             self._panel.visible = False        # behind the camera, or off screen
             return
         x, y = spot
-        # The panel is laid out around the point, not from its corner.
-        self._placer.offset_x = x - self._panel.computed_width * 0.5
-        self._placer.offset_y = y - self._panel.computed_height * 0.5
+        # The panel is laid out around the point, not from its corner -- and
+        # then held inside the frame. A placer that puts its content past the
+        # edge makes the frame bigger than the viewport, and the viewport
+        # resizes itself around it. Near an edge the panel stops there instead.
+        width, height = self._frame.computed_width, self._frame.computed_height
+        panel_w, panel_h = self._panel.computed_width, self._panel.computed_height
+        self._placer.offset_x = min(max(x - panel_w * 0.5, 0.0),
+                                    max(width - panel_w, 0.0))
+        self._placer.offset_y = min(max(y - panel_h * 0.5, 0.0),
+                                    max(height - panel_h, 0.0))
         self._panel.visible = True
 
     def _to_screen(self, point):

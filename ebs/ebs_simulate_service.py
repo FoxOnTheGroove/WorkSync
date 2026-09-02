@@ -386,6 +386,8 @@ class EbsSimulateService:
           줄마다 라벨 하나라 _detail 은 매번 비우고 다시 채운다 (_say).
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
+          _place 는 오프셋을 프레임 안으로 가둔다. 밖으로 내보내면 프레임이
+          뷰포트보다 커지고 뷰포트가 그에 맞춰 리사이즈된다.
           USD 프림은 글자를 못 담으므로 씬이 아니라 UI 로 올린다.
         """
         return cls._simulate.get_verdict()
