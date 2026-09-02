@@ -371,13 +371,19 @@ class EbsSimulateService:
         """마지막 collide 의 판정. 오버레이가 읽는다.
 
         {"centre": 월드 좌표, "span": EBS 최장변, "inside": 내부 간섭 여부,
-         "faces": 막힌 면 이름들, "blocked": 막힌 셀 수, "placeable": 세울 수 있나}
+         "faces": [{"face": 면, "name": 막은 것의 이름}], "blocked": 막힌 셀 수,
+         "placeable": 세울 수 있나}
+        이름은 owner_name 이 정한다. 막은 메시 경로를 위로 타면서,
+          GROUP_NAMES 중 하나면 그것, search root 바로 아래면 그 장비 이름.
+          먼저 만나는 쪽이 이긴다. 둘 다 아니면 메시 이름 그대로.
+          어느 프림이 막았는지는 check_collision 이 _blockers 에 면당 하나 담는다.
         만드는 곳은 build_verdict. 비어 있으면 그릴 것이 없다는 뜻이다.
         show_markers 가 clear_markers 를 먼저 부르고 clear_markers 가 이걸
         비우므로, _do_collide 는 마커를 그린 뒤에 만든다. 순서 주의.
         색·글자 크기·문구는 여기 없다 — ebs_simulate_overlay 의 몫.
         문구는 영문이다 — 뷰포트 폰트에 한글이 없어 빈칸으로 나온다.
-          윗줄 CAN / CANNOT, 아랫줄은 사유 (INNER, FACE_WORDS). 전부 오버레이 쪽.
+          윗줄 CAN / CANNOT, 아랫줄부터 사유가 한 줄에 하나 (INNER, FACE_ORDER).
+          줄마다 라벨 하나라 _detail 은 매번 비우고 다시 채운다 (_say).
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
           USD 프림은 글자를 못 담으므로 씬이 아니라 UI 로 올린다.

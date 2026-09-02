@@ -24,14 +24,10 @@ CAN    = "EBS INSTALL AVAILABLE"
 CANNOT = "EBS INSTALL BLOCKED"
 CLEAR  = "no collision"
 
-# 무엇에 막혔는지. 없으면 위의 CLEAR.
-INNER = "INNER: through the equipment"
-FACE_WORDS = {
-    "left":    "LEFT: blocked",
-    "right":   "RIGHT: blocked",
-    "ceiling": "CEILING: blocked",
-}
+# 무엇에 막혔는지. 한 줄에 하나. 없으면 위의 CLEAR.
+INNER = "internal clash"
 FACE_ORDER = ("left", "right", "ceiling")
+NAMELESS = "-"
 
 COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
 COLOR_CANNOT = 0xFF2626E6      # 빨강
@@ -167,10 +163,9 @@ class EbsSimulateOverlay:
                                 "", height=0, alignment=ui.Alignment.CENTER,
                                 style={"font_size": TEXT_SIZE,
                                        "color": COLOR_CAN})
-                            self._detail = ui.Label(
-                                "", height=0, alignment=ui.Alignment.CENTER,
-                                style={"font_size": DETAIL_SIZE,
-                                       "color": COLOR_DETAIL})
+                            # Refilled every run: one line per thing in the
+                            # way, and a label holds one line.
+                            self._detail = ui.VStack(spacing=0, height=0)
             self._panel.visible = False
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
@@ -195,7 +190,7 @@ class EbsSimulateOverlay:
         self._label.text = CAN if ok else CANNOT
         self._label.style = {"font_size": TEXT_SIZE,
                              "color": COLOR_CAN if ok else COLOR_CANNOT}
-        self._detail.text = self._why(said)
+        self._say(self._why(said))
         self._at = said.get("centre")
         if self._at is None:
             return False
@@ -203,13 +198,23 @@ class EbsSimulateOverlay:
         return self._start()
 
     @staticmethod
-    def _why(said: dict) -> str:
-        """What it is caught on, in the order it is read: inside first, then
-        the faces left to right and the ceiling last."""
+    def _why(said: dict) -> list:
+        """What it is caught on, a line each, in the order it is read: inside
+        first, then the faces left to right and the ceiling last. Each face is
+        named by whatever is in the way, not by the mesh that touched it."""
         told = [INNER] if said.get("inside") else []
-        blocked = set(said.get("faces") or ())
-        told += [FACE_WORDS[face] for face in FACE_ORDER if face in blocked]
-        return "   ".join(told) if told else CLEAR
+        blocked = {found["face"]: found.get("name") or NAMELESS
+                   for found in (said.get("faces") or ())}
+        told += [f"{face} : {blocked[face]}"
+                 for face in FACE_ORDER if face in blocked]
+        return told or [CLEAR]
+
+    def _say(self, lines: list) -> None:
+        self._detail.clear()
+        with self._detail:
+            for line in lines:
+                ui.Label(line, height=0, alignment=ui.Alignment.CENTER,
+                         style={"font_size": DETAIL_SIZE, "color": COLOR_DETAIL})
 
     # -- following the camera -------------------------------------------------
 

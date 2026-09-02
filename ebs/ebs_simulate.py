@@ -136,6 +136,11 @@ CAMERA_NEAR    = 0.01                     # fixed, right against the lens: no
 CAMERA_FAR     = 1.0e6                    # the far plane stays open
 NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a share
                          # of the target's own width
+# Walking up from a blocking mesh, these names answer for whatever is under
+# them. Anything under the search root answers as the machine instead -- the
+# prim just inside the root. Whichever is met first going up wins.
+GROUP_NAMES = ("AMH", "Construction")
+
 NEIGHBOUR_BAND = 0.5     # and how far out of the target's own row it may sit,
                          # same share: beside it, not across the aisle from it
 
@@ -233,6 +238,7 @@ class EbsSimulate:
         self._gone = None                   # the layer holding the see-through opinions
         self._lasers: bool = False          # draw the port lasers on align
         self._verdict: dict = {}            # what the overlay says, from the last run
+        self._blockers: dict = {}           # face -> the prim that blocked it first
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
         self._visible: dict = {}            # prim path -> visibility, for one run
@@ -832,6 +838,26 @@ class EbsSimulate:
             equipment_hit=meeting,
         )
 
+    def owner_name(self, path: str) -> str:
+        """What to call whatever is at this path, read from above it.
+
+        A mesh's own name says nothing to anyone -- it is the machine it
+        belongs to that is in the way. So the path is walked upwards: one of
+        the group names answers for its whole subtree, and the prim just
+        inside the search root answers as the machine. Whichever is met first
+        going up wins, and the mesh's own name is what is left if neither is.
+        """
+        parts = [part for part in str(path or "").split("/") if part]
+        if not parts:
+            return ""
+        root = [part for part in (self._search_root or "").split("/") if part]
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i] in GROUP_NAMES:
+                return parts[i]
+            if root and parts[:i] == root:
+                return parts[i]
+        return parts[-1]
+
     def build_verdict(self, ebs_prim, cells: dict, inside: bool) -> dict:
         """Can the EBS stand here, and where to say so.
 
@@ -846,7 +872,9 @@ class EbsSimulate:
         lo, hi = local_box.GetMin(), local_box.GetMax()
         middle = to_world.Transform(
             Gf.Vec3d(*[(lo[i] + hi[i]) * 0.5 for i in range(3)]))
-        blocked = [face for face in FACES if any(cells.get(face, []))]
+        blocked = [{"face": face,
+                    "name": self.owner_name(self._blockers.get(face, ""))}
+                   for face in FACES if any(cells.get(face, []))]
         return {
             "centre": (middle[0], middle[1], middle[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
@@ -1878,6 +1906,7 @@ class EbsSimulate:
         with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
             result = {face: [False] * len(boxes) for face, boxes in cells.items()}
             hits = {}
+            self._blockers = {}
             triangle_tests = 0
             boxed_only = set()
             flat = [(face, i, cell)
@@ -1905,6 +1934,7 @@ class EbsSimulate:
                             if (not Gf.Range3d.GetIntersection(tri_box, cell).IsEmpty()
                                     and self._triangle_hits_box(triangle, cell)):
                                 result[face][i] = True
+                                self._blockers.setdefault(face, path)
                                 hits.setdefault(path.rsplit("/", 1)[-1], []).append(
                                     f"{face}[{i}]")
                     continue
@@ -1913,6 +1943,7 @@ class EbsSimulate:
                     boxed_only.add(path)
                 for face, i, _ in targets:
                     result[face][i] = True
+                    self._blockers.setdefault(face, path)
                     hits.setdefault(path.rsplit("/", 1)[-1], []).append(f"{face}[{i}]")
 
             if triangle_tests:
