@@ -5,9 +5,13 @@ looks is decided here -- the simulation side hands over a point and a yes or
 no and does not know what a viewport is.
 
 Text in a viewport is not scene description: a USD prim cannot hold a line of
-letters. It is omni.ui.scene that draws it, over the render, always facing the
-camera, and the viewport keeps it lined up with whatever the camera does.
+letters. So this is an ordinary omni.ui panel sitting in the viewport window's
+own frame, and the world point is projected to where it lands on screen every
+frame. That is more code than asking omni.ui.scene for a billboard, and it is
+plain omni.ui the whole way down, which is the part that can be relied on.
 """
+
+import omni.ui as ui
 
 from .ebs_simulate_service import EbsSimulateService
 
@@ -18,9 +22,11 @@ FRAME_ID = "ebs_simulate_overlay"
 CAN    = "이 위치에 EBS 세울 수 있음"
 CANNOT = "이 위치에 EBS 세울 수 없음"
 
-COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR, omni.ui 순서)
+COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
 COLOR_CANNOT = 0xFF2626E6      # 빨강
+COLOR_PANEL  = 0xC0141414      # 뒤에 깔리는 판. 글자가 씬에 묻히지 않게
 TEXT_SIZE    = 22
+PAD_X, PAD_Y = 10, 5
 
 
 class EbsSimulateOverlay:
@@ -40,7 +46,6 @@ class EbsSimulateOverlay:
 
     @classmethod
     def hide(cls, vp_name: str = None):
-        """Take the drawing away, keep the frame."""
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
                 overlay.clear()
@@ -86,23 +91,32 @@ class EbsSimulateOverlay:
     def __init__(self, vp_name):
         self._vp_name = vp_name
         self._window = None
-        self._view = None
+        self._frame = None
+        self._placer = None
+        self._panel = None
+        self._label = None
+        self._follow = None      # the update subscription, only while showing
+        self._at = None          # the world point being followed
 
     def _build(self, window) -> bool:
         try:
-            from omni.ui import scene as sc
-        except ImportError:
-            print("[ebs] omni.ui.scene is not available, no overlay")
-            return False
-        try:
-            with window.get_frame(FRAME_ID):
-                self._view = sc.SceneView()
-            # The viewport drives it from here: the camera moves, the scene
-            # view follows, and we never touch a projection matrix ourselves.
-            window.viewport_api.add_scene_view(self._view)
+            self._frame = window.get_frame(FRAME_ID)
+            with self._frame:
+                # The placer is what moves; everything inside it is laid out
+                # once and then just carried about.
+                self._placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+                with self._placer:
+                    self._panel = ui.ZStack(width=0, height=0)
+                    with self._panel:
+                        ui.Rectangle(style={"background_color": COLOR_PANEL,
+                                            "border_radius": 4})
+                        self._label = ui.Label(
+                            "", alignment=ui.Alignment.CENTER,
+                            style={"font_size": TEXT_SIZE, "color": COLOR_CAN,
+                                   "margin_width": PAD_X, "margin_height": PAD_Y})
+            self._panel.visible = False
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
-            self._view = None
             return False
         self._window = window
         return True
@@ -110,40 +124,89 @@ class EbsSimulateOverlay:
     def refresh(self) -> bool:
         said = EbsSimulateService.get_verdict()
         self.clear()
-        if not said or self._view is None:
+        if not said or self._label is None:
             return False
-        return self._draw(said)
-
-    def _draw(self, said: dict) -> bool:
-        from omni.ui import scene as sc
-        import omni.ui as ui
         ok = bool(said.get("placeable"))
+        self._label.text = CAN if ok else CANNOT
+        self._label.style = {"font_size": TEXT_SIZE,
+                             "color": COLOR_CAN if ok else COLOR_CANNOT,
+                             "margin_width": PAD_X, "margin_height": PAD_Y}
+        self._at = said.get("centre")
+        if self._at is None:
+            return False
+        self._place()                    # so it is there before the next frame
+        return self._start()
+
+    # -- following the camera -------------------------------------------------
+
+    def _start(self) -> bool:
+        """Move with the camera. The app's update stream is asked rather than
+        the viewport's, because every Kit has one."""
         try:
-            with self._view.scene:
-                with sc.Transform(transform=sc.Matrix44.get_translation_matrix(
-                        *said["centre"])):
-                    sc.Label(CAN if ok else CANNOT,
-                             alignment=ui.Alignment.CENTER,
-                             color=COLOR_CAN if ok else COLOR_CANNOT,
-                             size=TEXT_SIZE)
+            import omni.kit.app
+            self._follow = omni.kit.app.get_app().get_update_event_stream() \
+                .create_subscription_to_pop(lambda e: self._place(),
+                                            name="ebs overlay follow")
         except Exception as e:
-            print(f"[ebs] could not draw the overlay: {e}")
+            print(f"[ebs] the overlay will not follow the camera: {e}")
             return False
         return True
 
+    def _place(self) -> None:
+        if self._at is None or self._panel is None:
+            return
+        try:
+            spot = self._to_screen(self._at)
+        except Exception as e:
+            print(f"[ebs] could not place the overlay: {e}")
+            self.clear()
+            return
+        if spot is None:
+            self._panel.visible = False        # behind the camera, or off screen
+            return
+        x, y = spot
+        # The panel is laid out around the point, not from its corner.
+        self._placer.offset_x = x - self._panel.computed_width * 0.5
+        self._placer.offset_y = y - self._panel.computed_height * 0.5
+        self._panel.visible = True
+
+    def _to_screen(self, point):
+        """Where a world point lands in the frame, in UI units. None if it is
+        behind the camera or outside the view."""
+        from pxr import Gf
+        api = self._window.viewport_api
+        at = Gf.Vec3d(*point)
+        view = api.view
+        if view.Transform(at)[2] >= 0.0:
+            return None                        # behind the lens
+        try:
+            clip = api.world_to_ndc
+        except AttributeError:
+            clip = view * api.projection
+        ndc = clip.Transform(at)               # Transform divides by w for us
+        if not (-1.0 <= ndc[0] <= 1.0 and -1.0 <= ndc[1] <= 1.0):
+            return None
+        # The frame's own size, so this is in the same units the placer wants
+        # and the display's scaling never enters into it.
+        width = self._frame.computed_width
+        height = self._frame.computed_height
+        if not width or not height:
+            return None
+        return ((ndc[0] * 0.5 + 0.5) * width,
+                (0.5 - ndc[1] * 0.5) * height)
+
+    # -- teardown -------------------------------------------------------------
+
     def clear(self) -> None:
-        if self._view is not None:
-            try:
-                self._view.scene.clear()
-            except Exception:
-                pass
+        self._follow = None       # dropping the handle ends the subscription
+        self._at = None
+        if self._panel is not None:
+            self._panel.visible = False
 
     def _destroy(self) -> None:
         self.clear()
-        if self._view is not None and self._window is not None:
-            try:
-                self._window.viewport_api.remove_scene_view(self._view)
-            except Exception:
-                pass
-        self._view = None
+        self._label = None
+        self._panel = None
+        self._placer = None
+        self._frame = None
         self._window = None

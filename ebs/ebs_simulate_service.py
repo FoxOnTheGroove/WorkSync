@@ -378,6 +378,9 @@ class EbsSimulateService:
         show_markers 가 clear_markers 를 먼저 부르고 clear_markers 가 이걸
         비우므로, _do_collide 는 마커를 그린 뒤에 만든다. 순서 주의.
         색·글자 크기·문구는 여기 없다 — ebs_simulate_overlay 의 몫.
+        그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
+          centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
+          USD 프림은 글자를 못 담으므로 씬이 아니라 UI 로 올린다.
         """
         return cls._simulate.get_verdict()
 
