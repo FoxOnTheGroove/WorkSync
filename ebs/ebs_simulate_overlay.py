@@ -19,13 +19,26 @@ __all__ = ["EbsSimulateOverlay"]
 
 FRAME_ID = "ebs_simulate_overlay"
 
-CAN    = "이 위치에 EBS 세울 수 있음"
-CANNOT = "이 위치에 EBS 세울 수 없음"
+# 한글은 뷰포트 폰트에 없어서 빈칸으로 나온다. 영문만 쓴다.
+CAN    = "EBS INSTALL AVAILABLE"
+CANNOT = "EBS INSTALL BLOCKED"
+CLEAR  = "no collision"
+
+# 무엇에 막혔는지. 없으면 위의 CLEAR.
+INNER = "INNER: through the equipment"
+FACE_WORDS = {
+    "left":    "LEFT: blocked",
+    "right":   "RIGHT: blocked",
+    "ceiling": "CEILING: blocked",
+}
+FACE_ORDER = ("left", "right", "ceiling")
 
 COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
 COLOR_CANNOT = 0xFF2626E6      # 빨강
+COLOR_DETAIL = 0xFFC8C8C8      # 두 번째 줄. 판정이 아니라 사유라 눈에 덜 띈다
 COLOR_PANEL  = 0xC0141414      # 뒤에 깔리는 판. 글자가 씬에 묻히지 않게
 TEXT_SIZE    = 22
+DETAIL_SIZE  = 15
 PAD_X, PAD_Y = 10, 5
 
 
@@ -131,6 +144,7 @@ class EbsSimulateOverlay:
         self._placer = None
         self._panel = None
         self._label = None
+        self._detail = None
         self._follow = None      # the update subscription, only while showing
         self._at = None          # the world point being followed
 
@@ -146,10 +160,17 @@ class EbsSimulateOverlay:
                     with self._panel:
                         ui.Rectangle(style={"background_color": COLOR_PANEL,
                                             "border_radius": 4})
-                        self._label = ui.Label(
-                            "", alignment=ui.Alignment.CENTER,
-                            style={"font_size": TEXT_SIZE, "color": COLOR_CAN,
-                                   "margin_width": PAD_X, "margin_height": PAD_Y})
+                        with ui.VStack(spacing=1,
+                                       style={"margin_width": PAD_X,
+                                              "margin_height": PAD_Y}):
+                            self._label = ui.Label(
+                                "", height=0, alignment=ui.Alignment.CENTER,
+                                style={"font_size": TEXT_SIZE,
+                                       "color": COLOR_CAN})
+                            self._detail = ui.Label(
+                                "", height=0, alignment=ui.Alignment.CENTER,
+                                style={"font_size": DETAIL_SIZE,
+                                       "color": COLOR_DETAIL})
             self._panel.visible = False
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
@@ -173,13 +194,22 @@ class EbsSimulateOverlay:
         ok = bool(said.get("placeable"))
         self._label.text = CAN if ok else CANNOT
         self._label.style = {"font_size": TEXT_SIZE,
-                             "color": COLOR_CAN if ok else COLOR_CANNOT,
-                             "margin_width": PAD_X, "margin_height": PAD_Y}
+                             "color": COLOR_CAN if ok else COLOR_CANNOT}
+        self._detail.text = self._why(said)
         self._at = said.get("centre")
         if self._at is None:
             return False
         self._place()                    # so it is there before the next frame
         return self._start()
+
+    @staticmethod
+    def _why(said: dict) -> str:
+        """What it is caught on, in the order it is read: inside first, then
+        the faces left to right and the ceiling last."""
+        told = [INNER] if said.get("inside") else []
+        blocked = set(said.get("faces") or ())
+        told += [FACE_WORDS[face] for face in FACE_ORDER if face in blocked]
+        return "   ".join(told) if told else CLEAR
 
     # -- following the camera -------------------------------------------------
 
@@ -250,6 +280,7 @@ class EbsSimulateOverlay:
     def _destroy(self) -> None:
         self.clear()
         self._label = None
+        self._detail = None
         self._panel = None
         self._placer = None
         self._frame = None

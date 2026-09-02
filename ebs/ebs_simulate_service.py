@@ -361,8 +361,6 @@ class EbsSimulateService:
           만들어 show_markers 에 넘긴다 — payload 의 cells 는 실제 판정 그대로다.
           안에 들어가 있으면 3면은 더 이상 답이 아닌데, 희게 두면 답으로 읽힌다.
         EBS 중앙 빌보드는 build_verdict -> get_verdict -> ebs_simulate_overlay.
-        격자선 변경시 _grid_bands + GRID_COLOR, GRID_OPACITY, GRID_EMISSION,
-          GRID_LINE, GRID_LIFT 참조.
         면이 한쪽만 보일 때 _marker_sheet, _marker_quad + SHEET_GAP 참조.
         RTX에서 실제로 보이는 쉐이더는 _mdl_shader. _preview_shader 는 폴백.
         """
@@ -373,11 +371,13 @@ class EbsSimulateService:
         """마지막 collide 의 판정. 오버레이가 읽는다.
 
         {"centre": 월드 좌표, "span": EBS 최장변, "inside": 내부 간섭 여부,
-         "blocked": 막힌 셀 수, "placeable": 세울 수 있나}
+         "faces": 막힌 면 이름들, "blocked": 막힌 셀 수, "placeable": 세울 수 있나}
         만드는 곳은 build_verdict. 비어 있으면 그릴 것이 없다는 뜻이다.
         show_markers 가 clear_markers 를 먼저 부르고 clear_markers 가 이걸
         비우므로, _do_collide 는 마커를 그린 뒤에 만든다. 순서 주의.
         색·글자 크기·문구는 여기 없다 — ebs_simulate_overlay 의 몫.
+        문구는 영문이다 — 뷰포트 폰트에 한글이 없어 빈칸으로 나온다.
+          윗줄 CAN / CANNOT, 아랫줄은 사유 (INNER, FACE_WORDS). 전부 오버레이 쪽.
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
           USD 프림은 글자를 못 담으므로 씬이 아니라 UI 로 올린다.

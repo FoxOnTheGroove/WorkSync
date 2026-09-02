@@ -145,11 +145,6 @@ COLOR_BLOCKED  = (0.9, 0.2, 0.2)
 BLOCKED_OPACITY = 0.6      # the blocked face is the answer, so it reads solid
 BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
-GRID_COLOR     = (0.05, 0.05, 0.05)   # the outline around each face
-GRID_OPACITY   = 0.5      # the lines read as lines, so they are not as faint
-GRID_EMISSION  = 300.0    # and they are not trying to glow through the plant either
-GRID_LINE      = 0.004    # line thickness, as a share of the EBS's longest edge
-GRID_LIFT      = 0.0002   # enough off the surface to win the tie, not enough to see
 MARKER_EMISSION = 10000.0  # 마커 발광 세기
 SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
 
@@ -820,7 +815,7 @@ class EbsSimulate:
         # over the EBS, so it never takes the answer down with it.
         try:
             self._verdict = self.build_verdict(self._target["ebs"],
-                                               hit_count, meeting["hit"])
+                                               cells, meeting["hit"])
         except Exception as e:
             self._verdict = {}
             self._note(f"no overlay verdict: {type(e).__name__}: {e}")
@@ -837,7 +832,7 @@ class EbsSimulate:
             equipment_hit=meeting,
         )
 
-    def build_verdict(self, ebs_prim, hit_count: int, inside: bool) -> dict:
+    def build_verdict(self, ebs_prim, cells: dict, inside: bool) -> dict:
         """Can the EBS stand here, and where to say so.
 
         A point and a yes or no. What it is coloured and how big the letters
@@ -851,12 +846,15 @@ class EbsSimulate:
         lo, hi = local_box.GetMin(), local_box.GetMax()
         middle = to_world.Transform(
             Gf.Vec3d(*[(lo[i] + hi[i]) * 0.5 for i in range(3)]))
+        blocked = [face for face in FACES if any(cells.get(face, []))]
         return {
             "centre": (middle[0], middle[1], middle[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
             "inside": bool(inside),
-            "blocked": int(hit_count),
-            "placeable": not inside and hit_count == 0,
+            "faces": blocked,
+            "blocked": sum(sum(1 for c in cells.get(face, []) if c)
+                           for face in FACES),
+            "placeable": not inside and not blocked,
         }
 
     def get_verdict(self) -> dict:
@@ -2616,8 +2614,6 @@ class EbsSimulate:
         built = self._build_cells(local_box)
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, MARKER_ROOT)
-            lines = self._marker_material(stage, "grid", GRID_COLOR, GRID_OPACITY,
-                                          GRID_EMISSION)
             materials = {
                 True: (self._marker_material(stage, "blocked", COLOR_BLOCKED,
                                              BLOCKED_OPACITY, BLOCKED_EMISSION),
@@ -2634,15 +2630,6 @@ class EbsSimulate:
                     self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_{i}", points,
                                        material, colour, alpha)
                     drawn += 1
-
-                plane = self._face_planes.get(face)
-                shape = self._grid_shape.get(face)
-                if not plane or not shape:
-                    continue
-                for i, quad in enumerate(self._grid_bands(local_box, plane, shape)):
-                    points = [to_world.Transform(Gf.Vec3d(*corner)) for corner in quad]
-                    self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_line_{i}",
-                                       points, lines, GRID_COLOR, GRID_OPACITY)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
 
@@ -2859,32 +2846,6 @@ class EbsSimulate:
         put("specular_level", Sdf.ValueTypeNames.Float, 0.0)
         material.CreateSurfaceOutput("mdl").ConnectToSource(
             shader.ConnectableAPI(), "out")
-
-    def _grid_bands(self, box: Gf.Range3d, plane, shape) -> list:
-        fixed_axis, outward, coord, row_axis, col_axis = plane
-        rows, cols = shape
-        lo, hi = box.GetMin(), box.GetMax()
-        longest = max(hi[i] - lo[i] for i in range(3)) or 1.0
-        half = max(longest * GRID_LINE, 1e-6) / 2.0
-        surface = coord + outward * max(longest * GRID_LIFT, 1e-6)
-
-        def band(thin_axis, at, long_axis):
-            quad = []
-            for near, far in ((0, 0), (0, 1), (1, 1), (1, 0)):
-                corner = [0.0, 0.0, 0.0]
-                corner[fixed_axis] = surface
-                corner[thin_axis] = at + (half if near else -half)
-                corner[long_axis] = hi[long_axis] if far else lo[long_axis]
-                quad.append(tuple(corner))
-            return quad
-
-        bands = []
-        for count, along, across in ((rows, row_axis, col_axis),
-                                     (cols, col_axis, row_axis)):
-            first, last = lo[along], hi[along]
-            for step in range(count + 1):
-                bands.append(band(along, first + (last - first) * step / count, across))
-        return bands
 
     # -- camera --------------------------------------------------------------
 
