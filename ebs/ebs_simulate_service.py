@@ -230,7 +230,19 @@ class EbsSimulateService:
     def collide(cls):
         """EBS 좌/우/천장 충돌 판정 + 빈 면 거리 + 씬에 마커.
 
-        collide -> _do_collide -> check_collision, measure_faces, show_markers.
+        collide -> _do_collide -> check_collision, measure_faces,
+                                  check_equipment, show_markers.
+
+        대상 장비는 3면 검사에서 빠져있다 (exclude 에 EBS 와 같이 들어감).
+        EBS 를 그 장비에 올려놓는 거라 늘 거기 있고, 그러면 매번 막힘으로 뜬다.
+        대신 장비와의 간섭은 따로, 정확히 본다: check_equipment 참조.
+          삼각형 대 삼각형. 박스로 보면 마운트가 전부 충돌이 되므로.
+          메시 AABB 겹침 -> 겹친 상자 안의 삼각형만 추림(_triangles_in)
+            -> 여섯 모서리를 상대 면에 쏨(_triangles_meet, _segment_hits_triangle).
+          같은 평면끼리는 안 잡는다. 그건 면이 맞닿은 것 = 마운트.
+        결과는 payload["equipment_hit"] = {hit, pairs, tests}.
+        ok 는 그대로 True — ok 는 "돌았다"는 뜻이고, 셀이 막혀도 True 다.
+        검사가 터져도 노트만 남기고 3면 결과는 살린다.
 
         셀 분할 변경시 _build_cells + GRID 참조. 지금 GRID=1 이라 면당 셀 1개.
         후보 수집 / 가지치기 변경시 _gather_nearby 참조 (대부분 여기서 걸러짐).

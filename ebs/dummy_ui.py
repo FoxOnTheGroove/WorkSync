@@ -355,9 +355,15 @@ class EbsDummyUI:
 
         self._set_status(result.get("reason", ""))
         port = result.get("port_count")
+        # The equipment is not part of the face grids, so its own verdict says
+        # itself or the line reads as if nothing was checked against it.
+        meeting = result.get("equipment_hit") or {}
+        through = ("  |  THROUGH THE EQUIPMENT" if meeting.get("hit")
+                   else "  |  clear of the equipment" if meeting.get("tests")
+                   else "")
         self._info_label.text = (
             f"{result.get('equipment_id', '')}  |  port {port if port is not None else '-'}"
-            f"  |  {result.get('ebs', '') or '-'}"
+            f"  |  {result.get('ebs', '') or '-'}{through}"
         )
         self._log_timings(result.get("timings", []), result.get("total_ms"),
                           result.get("notes", []))

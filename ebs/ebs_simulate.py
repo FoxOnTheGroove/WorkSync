@@ -646,12 +646,14 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
 
-        cells = self.check_collision(self._target["ebs"],
-                                     exclude=[self._target["ebs"]])
+        # The equipment is out of the face check: the EBS is placed on it, so it
+        # is always right there, and it would read as blocked on every run. What
+        # it is actually in the way of is asked separately, and exactly.
+        apart = [self._target["ebs"], self._target["equipment"]]
+        cells = self.check_collision(self._target["ebs"], exclude=apart)
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         with self._stage_timer("measure clear faces"):
-            distances = self.measure_faces(self._target["ebs"], cells,
-                                           exclude=[self._target["ebs"]])
+            distances = self.measure_faces(self._target["ebs"], cells, exclude=apart)
         for face, found in distances.items():
             if found.get("distance") is None:
                 self._note(f"{face}: clear, nothing within "
@@ -659,12 +661,38 @@ class EbsSimulate:
             else:
                 self._note(f"{face}: clear, nearest {found['distance']:.4f} away "
                            f"({found['prim'].rsplit('/', 1)[-1]})")
+
+        # A secondary check must not take the face result down with it.
+        with self._stage_timer("equipment interference"):
+            try:
+                meeting = self.check_equipment(self._target["ebs"],
+                                               self._target["equipment"])
+            except Exception as e:
+                meeting = {"hit": False, "pairs": [], "tests": 0}
+                self._note(f"interference check failed: {type(e).__name__}: {e}")
+        if meeting["hit"]:
+            self._note(f"the EBS runs through the equipment at "
+                       f"{len(meeting['pairs'])} place(s): "
+                       + ", ".join(f"{a.rsplit('/', 1)[-1]} x {b.rsplit('/', 1)[-1]}"
+                                   for a, b in meeting["pairs"][:4])
+                       + (" ..." if len(meeting["pairs"]) > 4 else ""))
+        else:
+            self._note(f"clear of the equipment itself "
+                       f"({meeting['tests']} triangle pairs tested)")
+
         with self._stage_timer("draw markers"):
             self.show_markers(self._target["ebs"], cells)
+
+        # ok says the step ran, not that the answer is good -- blocked cells do
+        # not clear it either, and the UI greys the grids out when it is false.
+        told = ("No collision" if hit_count == 0
+                else f"{hit_count} cell(s) blocked")
+        if meeting["hit"]:
+            told += ", and through the equipment"
         return self._payload(
-            True,
-            "No collision" if hit_count == 0 else f"{hit_count} cell(s) blocked",
+            True, told,
             cells=cells, hit_count=hit_count, distances=distances,
+            equipment_hit=meeting,
         )
 
     # -- equipment lookup ----------------------------------------------------
@@ -1623,9 +1651,10 @@ class EbsSimulate:
                            f"using the measured bound")
         return exact
 
-    def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
+    def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
+                       root: Usd.Prim = None) -> tuple:
         found, visited = [], 0
-        stack = list(_children(stage.GetPseudoRoot()))
+        stack = [root] if root is not None else list(_children(stage.GetPseudoRoot()))
         while stack:
             prim = stack.pop()
             path = str(prim.GetPath())
@@ -1648,6 +1677,121 @@ class EbsSimulate:
                 continue
             stack.extend(_children(prim))
         return found, visited
+
+    def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim) -> dict:
+        """Does the EBS pass through the equipment it was placed on?
+
+        The three-face check asks what is around the EBS; this asks whether the
+        EBS and the machine occupy the same space. They are meant to touch, so
+        this is deliberately the strict test -- triangles that actually cross --
+        rather than boxes, which would call every mounting a collision.
+        """
+        stage = self._get_stage()
+        blank = {"hit": False, "pairs": [], "tests": 0}
+        if stage is None or eqp_prim is None or not eqp_prim.IsValid():
+            return blank
+
+        cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+        world_box = self._ebs_bound(ebs_prim).ComputeAlignedRange()
+        if world_box.IsEmpty():
+            return blank
+
+        ours, _ = self._gather_nearby(stage, cache, world_box, [], root=ebs_prim)
+        theirs, _ = self._gather_nearby(stage, cache, world_box, [], root=eqp_prim)
+        if not ours or not theirs:
+            self._note("no interference test: "
+                       f"{len(ours)} EBS meshes against {len(theirs)} on the equipment")
+            return blank
+
+        pairs, tests = [], 0
+        for ebs_path, ebs_box in ours:
+            for eqp_path, eqp_box in theirs:
+                shared = Gf.Range3d.GetIntersection(ebs_box, eqp_box)
+                if shared.IsEmpty():
+                    continue
+                mine = self._triangles_in(stage, ebs_path, shared)
+                yours = self._triangles_in(stage, eqp_path, shared)
+                tests += len(mine) * len(yours)
+                if self._any_triangles_meet(mine, yours):
+                    pairs.append((ebs_path, eqp_path))
+        return {"hit": bool(pairs), "pairs": pairs, "tests": tests}
+
+    def _triangles_in(self, stage, path: str, box: Gf.Range3d) -> list:
+        """A mesh's triangles, kept only where they reach into `box`.
+
+        Two meshes that overlap at all usually overlap in a corner, so this is
+        what keeps the exact test off the other several thousand triangles.
+        """
+        kept = []
+        for triangle in self._mesh_triangles(stage, path):
+            lo = [min(v[i] for v in triangle) for i in range(3)]
+            hi = [max(v[i] for v in triangle) for i in range(3)]
+            if not Gf.Range3d.GetIntersection(
+                    Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi)), box).IsEmpty():
+                kept.append(triangle)
+        return kept
+
+    @classmethod
+    def _any_triangles_meet(cls, first: list, second: list) -> bool:
+        for a in first:
+            for b in second:
+                if cls._triangles_meet(a, b):
+                    return True
+        return False
+
+    @classmethod
+    def _triangles_meet(cls, a, b) -> bool:
+        """Do two triangles actually cross?
+
+        Where two triangles that are not in the same plane meet, the meeting is
+        a segment, and its ends are edges of one piercing the other. So the six
+        edges against the two faces is the whole test. Triangles lying in one
+        plane are not caught, and are not what interference means here: that is
+        two surfaces flush against each other, which is how a thing gets mounted.
+        """
+        for edge in ((a[0], a[1]), (a[1], a[2]), (a[2], a[0])):
+            if cls._segment_hits_triangle(edge[0], edge[1], b):
+                return True
+        for edge in ((b[0], b[1]), (b[1], b[2]), (b[2], b[0])):
+            if cls._segment_hits_triangle(edge[0], edge[1], a):
+                return True
+        return False
+
+    @staticmethod
+    def _segment_hits_triangle(start, end, triangle) -> bool:
+        """Moller-Trumbore, with the ray cut to the segment."""
+        v0, v1, v2 = triangle
+        direction = [end[i] - start[i] for i in range(3)]
+        edge1 = [v1[i] - v0[i] for i in range(3)]
+        edge2 = [v2[i] - v0[i] for i in range(3)]
+
+        def cross(p, q):
+            return [p[1] * q[2] - p[2] * q[1],
+                    p[2] * q[0] - p[0] * q[2],
+                    p[0] * q[1] - p[1] * q[0]]
+
+        def dot(p, q):
+            return p[0] * q[0] + p[1] * q[1] + p[2] * q[2]
+
+        pitch = cross(direction, edge2)
+        slope = dot(edge1, pitch)
+        if abs(slope) < 1e-12:
+            return False                     # parallel: the coplanar case
+        scale = 1.0 / slope
+        offset = [start[i] - v0[i] for i in range(3)]
+        u = scale * dot(offset, pitch)
+        if u < 0.0 or u > 1.0:
+            return False
+        turn = cross(offset, edge1)
+        v = scale * dot(direction, turn)
+        if v < 0.0 or u + v > 1.0:
+            return False
+        along = scale * dot(edge2, turn)
+        return 0.0 <= along <= 1.0
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
@@ -2262,7 +2406,8 @@ class EbsSimulate:
 
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
                  equipment=None, eqp_id: str = "", port_count=None,
-                 distances: dict = None, rows: list = None) -> dict:
+                 distances: dict = None, rows: list = None,
+                 equipment_hit: dict = None) -> dict:
         target = self._target or {}
         equipment = equipment or target.get("equipment")
         ebs = target.get("ebs")
@@ -2280,6 +2425,7 @@ class EbsSimulate:
             "grid": dict(self._grid_shape),
             "distances": distances or {},
             "rows": rows or [],              # a sweep's table, for whoever writes it out
+            "equipment_hit": equipment_hit or {"hit": False, "pairs": [], "tests": 0},
             "timings": list(self._timings),
             "notes": list(self._notes),
             "total_ms": (time.perf_counter() - self._started) * 1000.0,
