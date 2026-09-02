@@ -29,22 +29,22 @@ FACE_ORDER = ("left", "right", "ceiling")
 NAMELESS = "-"
 
 CLASH = "clash"                   # 면 패널: 막혔을 때
-GAP   = "clearance"               # 비었을 때, 선 위(천장은 선 왼쪽)
+GAP   = "clearance"               # 비었을 때, 선 위
 NO_GAP = "-"                      # 잰 것이 없을 때 거리 자리
 
-# 좌우 면은 화면에서 가로로 벌어지니 글자가 선 위아래로, 천장은 세로로 벌어지니
-# 글자가 선 양옆으로 간다. 그래서 천장만 눕는다.
-LIE_DOWN = ("ceiling",)
+# 선은 UI 가 아니라 씬에 그린다 (show_markers 의 _gap_line). 그래서 글자는 그
+# 선의 중점 위와 아래로 갈라 붙는다 — 한 판으로 두면 뒷판이 선을 가린다.
+ABOVE, BELOW, MIDDLE = "above", "below", "middle"
+LINE_ROOM = 6                     # 선이 지나갈 자리, 위아래 판 사이 여백
 
+# 판 자체가 색을 지고, 글자는 흰색이다. 어두운 판에 색 글자를 쓰면 플랜트를
+# 배경으로 읽기 힘들다.
 COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
 COLOR_CANNOT = 0xFF2626E6      # 빨강
-COLOR_DETAIL = 0xFFC8C8C8      # 판정 아래 사유. 판정이 아니라 사유라 덜 띈다
-COLOR_PANEL  = 0xC0141414      # 뒤에 깔리는 판. 글자가 씬에 묻히지 않게
+COLOR_TEXT   = 0xFFFFFFFF
 TEXT_SIZE    = 22
 DETAIL_SIZE  = 15
 FACE_SIZE    = 15
-LINE_LENGTH  = 44              # 여유를 나타내는 선의 길이
-LINE_THICK   = 2
 PAD_X, PAD_Y = 10, 5
 
 
@@ -148,7 +148,7 @@ class EbsSimulateOverlay:
         self._api = None         # the viewport, for turning world into screen
         self._frame = None
         self._stack = None       # everything floats in here
-        self._marks = []         # (placer, panel, world point) for each panel
+        self._marks = []         # (placer, panel, world point, anchor) each
         self._follow = None      # the update subscription, only while showing
 
     def _build(self, window) -> bool:
@@ -191,20 +191,23 @@ class EbsSimulateOverlay:
 
     # -- the panels -----------------------------------------------------------
 
-    def _floating(self, at, fill):
-        """One panel, hung on a world point. Nothing is laid out until it is
-        placed, and nothing shows until it has been."""
+    def _floating(self, at, fill, ground, anchor=MIDDLE):
+        """One panel, hung on a world point, sitting on it or clear of it.
+
+        Nothing is laid out until it is placed, and nothing shows until it
+        has been.
+        """
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
         with placer:
             panel = ui.ZStack(width=0, height=0)
             with panel:
-                ui.Rectangle(style={"background_color": COLOR_PANEL,
+                ui.Rectangle(style={"background_color": ground,
                                     "border_radius": 4})
                 fill()
         panel.visible = False
-        self._marks.append((placer, panel, tuple(at)))
+        self._marks.append((placer, panel, tuple(at), anchor))
 
     def _verdict_panel(self, said: dict) -> None:
         ok = bool(said.get("placeable"))
@@ -214,51 +217,43 @@ class EbsSimulateOverlay:
                                              "margin_height": PAD_Y}):
                 ui.Label(CAN if ok else CANNOT, height=0,
                          alignment=ui.Alignment.CENTER,
-                         style={"font_size": TEXT_SIZE,
-                                "color": COLOR_CAN if ok else COLOR_CANNOT})
+                         style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
                 for line in self._why(said):
                     ui.Label(line, height=0, alignment=ui.Alignment.CENTER,
                              style={"font_size": DETAIL_SIZE,
-                                    "color": COLOR_DETAIL})
+                                    "color": COLOR_TEXT})
 
-        self._floating(said.get("centre"), fill)
+        self._floating(said.get("centre"), fill,
+                       COLOR_CAN if ok else COLOR_CANNOT)
 
     def _face_panel(self, mark: dict) -> None:
+        """The clearance a face has, written either side of the line drawn for
+        it in the scene: the word above it, the number and what the number is
+        to below it."""
         clash = mark.get("state") == "clash"
-        colour = COLOR_CANNOT if clash else COLOR_CAN
+        ground = COLOR_CANNOT if clash else COLOR_CAN
         gap = mark.get("distance")
-        told = NO_GAP if gap is None else f"{gap:.3f} m"
-        # The line stands for the gap, so it runs the way the gap does: across
-        # the screen on the sides, up and down on the ceiling.
-        flat = mark.get("face") not in LIE_DOWN
+        name = mark.get("name") or ""
 
-        def word(text):
-            ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
-                     style={"font_size": FACE_SIZE, "color": colour})
+        def block(lines):
+            def fill():
+                with ui.VStack(spacing=1, style={"margin_width": PAD_X,
+                                                 "margin_height": PAD_Y}):
+                    for text in lines:
+                        ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
+                                 style={"font_size": FACE_SIZE,
+                                        "color": COLOR_TEXT})
+            return fill
 
-        def rule():
-            if flat:
-                ui.Line(width=LINE_LENGTH, height=LINE_THICK * 3,
-                        alignment=ui.Alignment.V_CENTER,
-                        style={"color": colour, "border_width": LINE_THICK})
-            else:
-                ui.Line(width=LINE_THICK * 3, height=LINE_LENGTH,
-                        alignment=ui.Alignment.H_CENTER,
-                        style={"color": colour, "border_width": LINE_THICK})
-
-        def fill():
-            style = {"margin_width": PAD_X, "margin_height": PAD_Y}
-            if clash:
-                with ui.VStack(spacing=1, style=style):
-                    word(CLASH)
-                return
-            stack = ui.VStack if flat else ui.HStack
-            with stack(spacing=3, style=style):
-                word(GAP)
-                rule()
-                word(told)
-
-        self._floating(mark.get("at"), fill)
+        at = mark.get("at")
+        if clash:
+            self._floating(at, block([CLASH] + ([name] if name else [])), ground)
+            return
+        self._floating(at, block([GAP]), ground, ABOVE)
+        told = [NO_GAP if gap is None else f"{gap:.3f} m"]
+        if name:
+            told.append(name)
+        self._floating(at, block(told), ground, BELOW)
 
     @staticmethod
     def _why(said: dict) -> list:
@@ -293,20 +288,24 @@ class EbsSimulateOverlay:
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
-            for placer, panel, at in self._marks:
+            for placer, panel, at, anchor in self._marks:
                 spot = self._to_screen(at)
                 if spot is None:
                     panel.visible = False   # behind the camera, or off screen
                     continue
-                # Laid out around the point, not from its corner -- and then
-                # held inside the frame. A placer that puts its content past
+                panel_w, panel_h = panel.computed_width, panel.computed_height
+                if anchor == ABOVE:
+                    y = spot[1] - panel_h - LINE_ROOM
+                elif anchor == BELOW:
+                    y = spot[1] + LINE_ROOM
+                else:
+                    y = spot[1] - panel_h * 0.5
+                # Held inside the frame. A placer that puts its content past
                 # the edge makes the frame bigger than the viewport, and the
                 # viewport resizes itself around it.
-                panel_w, panel_h = panel.computed_width, panel.computed_height
                 placer.offset_x = min(max(spot[0] - panel_w * 0.5, 0.0),
                                       max(width - panel_w, 0.0))
-                placer.offset_y = min(max(spot[1] - panel_h * 0.5, 0.0),
-                                      max(height - panel_h, 0.0))
+                placer.offset_y = min(max(y, 0.0), max(height - panel_h, 0.0))
                 panel.visible = True
         except Exception as e:
             print(f"[ebs] could not place the overlay: {e}")

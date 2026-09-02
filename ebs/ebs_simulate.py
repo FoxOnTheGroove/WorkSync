@@ -155,6 +155,10 @@ BLOCKED_OPACITY = 0.6      # the blocked face is the answer, so it reads solid
 BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 MARKER_EMISSION = 10000.0  # 마커 발광 세기
+COLOR_GAP      = (0.9, 0.7, 0.0)   # 여유를 재는 선. 패널과 같은 짙은 황색
+GAP_OPACITY    = 1.0
+GAP_EMISSION   = 3000.0
+GAP_RADIUS     = 0.004    # 선 굵기, EBS 최장변 대비
 SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
 
 LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
@@ -818,17 +822,21 @@ class EbsSimulate:
                        + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
                        + (" ..." if len(paths) > 4 else ""))
 
-        with self._stage_timer("draw markers"):
-            self.show_markers(self._target["ebs"], painted)
-        # After the drawing: show_markers clears first, and the verdict is
-        # cleared along with the markers it belongs to. It is a line of text
-        # over the EBS, so it never takes the answer down with it.
+        # The verdict is worked out before the drawing, because the gap lines
+        # are part of it, and held aside until after: show_markers clears
+        # first, and clearing the markers clears the verdict with them. It is
+        # a few labels, so it never takes the answer down with it either.
         try:
-            self._verdict = self.build_verdict(self._target["ebs"], cells,
-                                               distances, meeting["hit"])
+            verdict = self.build_verdict(self._target["ebs"], cells,
+                                         distances, meeting["hit"])
         except Exception as e:
-            self._verdict = {}
+            verdict = {}
             self._note(f"no overlay verdict: {type(e).__name__}: {e}")
+
+        with self._stage_timer("draw markers"):
+            self.show_markers(self._target["ebs"], painted,
+                              verdict.get("marks"))
+        self._verdict = verdict
 
         # ok says the step ran, not that the answer is good -- blocked cells do
         # not clear it either, and the UI greys the grids out when it is false.
@@ -920,15 +928,19 @@ class EbsSimulate:
             surface = list(middle)
             surface[axis] = coord
 
+            blank = {"face": face, "distance": None, "name": "",
+                     "at": world(surface), "from": None, "to": None}
             if any(cells.get(face, [])):
-                marks.append({"face": face, "state": STATE_CLASH,
-                              "distance": None, "at": world(surface)})
+                blank["state"] = STATE_CLASH
+                blank["name"] = self.owner_name(self._blockers.get(face, ""))
+                marks.append(blank)
                 continue
 
-            at = (distances.get(face) or {}).get("at")
+            found = distances.get(face) or {}
+            at = found.get("at")
             if at is None:                     # nothing came within the reach
-                marks.append({"face": face, "state": STATE_CLEAR,
-                              "distance": None, "at": world(surface)})
+                blank["state"] = STATE_CLEAR
+                marks.append(blank)
                 continue
             start = list(at)
             start[axis] = coord                # straight back onto the face
@@ -937,7 +949,9 @@ class EbsSimulate:
             marks.append({
                 "face": face, "state": STATE_CLEAR,
                 "distance": gap * per_unit,
+                "name": self.owner_name(found.get("prim", "")),
                 "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
+                "from": near, "to": far,
             })
         return marks
 
@@ -2707,7 +2721,8 @@ class EbsSimulate:
 
     # -- collision markers ---------------------------------------------------
 
-    def show_markers(self, ebs_prim: Usd.Prim, cells: dict) -> int:
+    def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
+                     marks: list = None) -> int:
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -2738,8 +2753,62 @@ class EbsSimulate:
                     self._marker_sheet(stage, f"{MARKER_ROOT}/{face}_{i}", points,
                                        material, colour, alpha)
                     drawn += 1
+
+            # The line from the face out to whatever is nearest. It is what
+            # the clearance panel is a label for, so it is drawn here and
+            # cleared with the sheets rather than kept on its own.
+            span = max(local_box.GetMax()[i] - local_box.GetMin()[i]
+                       for i in range(3)) or 1.0
+            radius = max(span * GAP_RADIUS, 1e-6)
+            gap_material = None
+            for mark in marks or ():
+                if not mark.get("from") or not mark.get("to"):
+                    continue
+                if gap_material is None:
+                    gap_material = self._marker_material(
+                        stage, "gap", COLOR_GAP, GAP_OPACITY, GAP_EMISSION)
+                if self._gap_line(stage, f"{MARKER_ROOT}/{mark['face']}_gap",
+                                  mark["from"], mark["to"], radius,
+                                  gap_material):
+                    drawn += 1
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
+
+    @staticmethod
+    def _gap_line(stage, path: str, start, end, radius: float, material) -> bool:
+        """A rod from one point to the other.
+
+        A cylinder is built along Z and then turned onto the direction it has
+        to run: the gap is measured perpendicular to a face, and a face can
+        point any way the EBS does.
+        """
+        direction = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        height = direction.GetLength()
+        if height <= 1e-9:
+            return False
+        rod = UsdGeom.Cylinder.Define(stage, path)
+        rod.CreateAxisAttr(UsdGeom.Tokens.z)
+        rod.CreateHeightAttr(height)
+        rod.CreateRadiusAttr(radius)
+        rod.CreateExtentAttr(Vt.Vec3fArray([
+            Gf.Vec3f(-radius, -radius, -height / 2.0),
+            Gf.Vec3f(radius, radius, height / 2.0)]))
+        rod.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_GAP)]))
+        matrix = Gf.Matrix4d(1.0)
+        # SetRotate clears the translation, so the turn goes on first.
+        matrix.SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0),
+                                     direction.GetNormalized()))
+        matrix.SetTranslateOnly(
+            Gf.Vec3d(*[(start[i] + end[i]) * 0.5 for i in range(3)]))
+        UsdGeom.Xformable(rod).AddTransformOp().Set(matrix)
+        try:
+            rod.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(rod.GetPrim()).Bind(material)
+        return True
 
     def show_port_lasers(self, points: dict = None) -> int:
         stage = self._get_stage()

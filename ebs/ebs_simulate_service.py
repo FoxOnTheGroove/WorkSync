@@ -374,12 +374,17 @@ class EbsSimulateService:
          "faces": [{"face": 면, "name": 막은 것의 이름}], "blocked": 막힌 셀 수,
          "placeable": 세울 수 있나,
          "marks": [{"face": 면, "state": clash|clear, "distance": m 또는 None,
-                    "at": 패널을 매달 월드 좌표}]}
+                    "name": 상대 이름, "at": 선의 중점,
+                    "from": 면 위의 점, "to": 상대 위의 점}]}
         marks 는 _face_marks. 막힌 면은 면 중앙에, 빈 면은 EBS 면과 가장 가까운
           메시 사이의 중점에 매단다. 가까운 점은 measure_faces 가 넘겨준다
           (_nearest_in_prism 의 "at" — 삼각형 정점, 또는 _box_point).
           거리는 두 월드 점 사이로 잰다. 프리즘이 쓰는 수는 EBS 로컬이라
           EBS 에 스케일이 걸려 있으면 틀린다. m 환산은 GetStageMetersPerUnit.
+          from/to 사이의 선은 씬에 그린다 — show_markers 가 _gap_line 으로
+          실린더를 세운다. 마커와 같이 지워지라고 MARKER_ROOT 아래 둔다.
+          그래서 _do_collide 는 판정을 그리기 '전에' 만들어 들고 있다가
+          그린 뒤에 _verdict 에 넣는다. clear_markers 가 _verdict 를 비우므로.
         이름은 owner_name 이 정한다. 막은 메시 경로를 위로 타면서,
           GROUP_NAMES 중 하나면 그것, search root 바로 아래면 그 장비 이름.
           먼저 만나는 쪽이 이긴다. 둘 다 아니면 메시 이름 그대로.
@@ -391,9 +396,13 @@ class EbsSimulateService:
         문구는 영문이다 — 뷰포트 폰트에 한글이 없어 빈칸으로 나온다.
           윗줄 CAN / CANNOT, 아랫줄부터 사유가 한 줄에 하나 (INNER, FACE_ORDER).
           매번 통째로 다시 짓는다 — 패널 수와 모양이 결과마다 다르다.
-        면 패널은 _face_panel. 막혔으면 CLASH 한 줄(빨강), 비었으면
-          GAP / 선 / 거리 (짙은 황색). 좌우는 세로로 쌓고 천장만 눕는다
-          (LIE_DOWN) — 화면에서 벌어지는 방향이 다르기 때문.
+        면 패널은 _face_panel. 막혔으면 CLASH + 막은 것 이름 (빨강).
+          비었으면 선 중점 위에 GAP, 아래에 거리 + 상대 이름 (짙은 황색).
+          색은 판이 지고 글자는 흰색이다 (COLOR_TEXT) — 어두운 판에 색 글자는
+          플랜트를 배경으로 읽기 힘들다.
+          선이 씬에 있으므로 한 판으로 두면 뒷판이 선을 가린다. 그래서 갈랐고,
+          위/아래 배치는 _floating 의 anchor + LINE_ROOM.
+        선 색·굵기는 구현부 COLOR_GAP / GAP_RADIUS / GAP_EMISSION.
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
           _place 는 오프셋을 프레임 안으로 가둔다. 밖으로 내보내면 프레임이
