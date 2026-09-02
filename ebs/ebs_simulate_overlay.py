@@ -73,24 +73,60 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _window(vp_name: str = None):
+        """The viewport window, however this build hands one out.
+
+        Each helper is looked up on its own. Importing them together meant one
+        name missing took the whole import down, and what came back was
+        "omni.kit is not here" about a Kit that was plainly running.
+        """
         try:
-            from omni.kit.viewport.utility import (get_active_viewport_window,
-                                                   get_viewport_window_by_name)
-        except ImportError:
-            print("[ebs] no viewport to draw the overlay on (omni.kit not here)")
-            return None
-        try:
-            return (get_viewport_window_by_name(vp_name) if vp_name
-                    else get_active_viewport_window())
+            import omni.kit.viewport.utility as vp_util
         except Exception as e:
-            print(f"[ebs] could not find the viewport window: {e}")
+            print(f"[ebs] viewport utility unavailable: {e}")
             return None
+
+        tried = []
+
+        def ask(name, call):
+            helper = getattr(vp_util, name, None)
+            if helper is None:
+                tried.append(f"{name}: not in this build")
+                return None
+            try:
+                got = call(helper)
+            except Exception as e:
+                tried.append(f"{name}: {e}")
+                return None
+            if got is None:
+                tried.append(f"{name}: gave nothing back")
+            return got
+
+        window = None
+        if vp_name:
+            window = ask("get_viewport_window_by_name", lambda f: f(vp_name))
+        if window is None:
+            pair = ask("get_active_viewport_and_window", lambda f: f())
+            window = pair[1] if pair else None
+        if window is None:
+            window = ask("get_active_viewport_window", lambda f: f())
+        if window is None:
+            # Older builds only hand out the API, and it is the window that
+            # owns a frame. Ask the workspace for it by name.
+            try:
+                window = ui.Workspace.get_window(vp_name or "Viewport")
+            except Exception as e:
+                tried.append(f"Workspace.get_window: {e}")
+        if window is None:
+            print("[ebs] no viewport window to draw the overlay on -- "
+                  + "; ".join(tried))
+        return window
 
     # -- one viewport ---------------------------------------------------------
 
     def __init__(self, vp_name):
         self._vp_name = vp_name
         self._window = None
+        self._api = None         # the viewport, for turning world into screen
         self._frame = None
         self._placer = None
         self._panel = None
@@ -118,6 +154,14 @@ class EbsSimulateOverlay:
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
             return False
+        self._api = getattr(window, "viewport_api", None)
+        if self._api is None:
+            try:
+                from omni.kit.viewport.utility import get_active_viewport
+                self._api = get_active_viewport()
+            except Exception as e:
+                print(f"[ebs] the overlay has no viewport to project through: {e}")
+                return False
         self._window = window
         return True
 
@@ -174,7 +218,7 @@ class EbsSimulateOverlay:
         """Where a world point lands in the frame, in UI units. None if it is
         behind the camera or outside the view."""
         from pxr import Gf
-        api = self._window.viewport_api
+        api = self._api
         at = Gf.Vec3d(*point)
         view = api.view
         if view.Transform(at)[2] >= 0.0:
@@ -209,4 +253,5 @@ class EbsSimulateOverlay:
         self._panel = None
         self._placer = None
         self._frame = None
+        self._api = None
         self._window = None
