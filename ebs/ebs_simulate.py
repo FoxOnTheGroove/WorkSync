@@ -212,7 +212,6 @@ class EbsSimulate:
         self._xml_path: str = ""
         self._ebs_path_2port: str = ""
         self._ebs_path_3port: str = ""
-        self._clearance: float = 0.0
         self._search_root: str = ""
         self._eqp_index: dict = {}
         self._port_map: dict = {}
@@ -303,12 +302,8 @@ class EbsSimulate:
                          FACE_LEFT: max(0.0, float(side)),
                          FACE_RIGHT: max(0.0, float(side))}
 
-    def set_clearance(self, value: float) -> None:
-        self._clearance = max(0.0, float(value))
-
-    def _probe_depth(self, box: Gf.Range3d) -> float:
-        if self._clearance > 0.0:
-            return self._clearance
+    @staticmethod
+    def _probe_depth(box: Gf.Range3d) -> float:
         longest = max(box.GetMax()[i] - box.GetMin()[i] for i in range(3))
         return max(longest * PROBE_RATIO, 1e-6)
 
@@ -1846,9 +1841,8 @@ class EbsSimulate:
         coarse = len(candidates)
 
         size = local_box.GetMax() - local_box.GetMin()
-        self._note(f"precision {self._precision}, probe depth {depth:.4f}"
-                   f"{' (set by hand)' if self._clearance > 0 else ' (from the EBS size)'}"
-                   f", EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
+        self._note(f"precision {self._precision}, probe depth {depth:.4f}, "
+                   f"EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
         self._note(f"EBS local box {tuple(round(v, 3) for v in local_box.GetMin())} .. "
                    f"{tuple(round(v, 3) for v in local_box.GetMax())} "
                    f"(the cells tile exactly this)")

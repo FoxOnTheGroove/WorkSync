@@ -131,8 +131,6 @@ class EbsSimulateService:
           320 MB 실측: I/O 0.1s, expat 3.4s, 나머지 전부 _PortScan.
           키 이름 -> PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY,
             PULS_KEY. 이름 규칙 -> ADDR_PATTERN, PORT_PATTERN.
-        접촉 여유 -> set_clearance 는 없앴다. _clearance 는 0 고정이고
-          _probe_depth 가 PROBE_RATIO 로 자동 계산한다.
         """
         return cls._simulate.init()
 
