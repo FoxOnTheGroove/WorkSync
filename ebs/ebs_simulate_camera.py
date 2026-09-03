@@ -22,10 +22,20 @@ class EbsSimulateCamera:
 
     def __init__(self):
         self._previous = None      # 우리 카메라로 바꾸기 전에 뷰포트가 보던 것
+        self._orbit = False        # interest 둘레를 도는 모드인가
+        self._interest = None      # 그 점, 월드 좌표
 
     @property
     def previous(self):
         return self._previous
+
+    @property
+    def orbit(self) -> bool:
+        return self._orbit
+
+    @property
+    def interest(self):
+        return self._interest
 
     @staticmethod
     def viewport():
@@ -36,8 +46,21 @@ class EbsSimulateCamera:
             print(f"[ebs] viewport utility unavailable: {e}")
             return None
 
-    def make(self, stage) -> bool:
+    def exists(self, stage) -> bool:
+        """카메라가 있고, 카메라 타입인가.
+
+        프림이 유효하냐로 묻지 않는다 — 뷰포트가 그 경로를 보는 동안 Kit 이
+        제 상태를 써서 타입 없는 over 가 남을 수 있고, 그것도 IsValid 는
+        참이다. 그대로 쓰면 clippingRange 에서 empty typename 이 난다.
+        """
         if stage is None:
+            return False
+        prim = stage.GetPrimAtPath(CAMERA_PATH)
+        return bool(prim.IsValid() and UsdGeom.Camera(prim))
+
+    def make(self, stage) -> bool:
+        """없을 때만 만든다. 한 번 만든 것은 세션 내내 그대로 쓴다."""
+        if stage is None or self.exists(stage):
             return False
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
@@ -51,6 +74,13 @@ class EbsSimulateCamera:
         return True
 
     def release(self, stage) -> None:
+        """뷰포트를 돌려주고 궤도 모드를 끈다. 카메라는 남긴다.
+
+        지우면 다음 Camera 가 새로 만들어야 하고, 그 사이 Kit 이 그 경로에
+        써 둔 것이 남아 골치가 된다. 세션 내내 같은 하나를 쓴다.
+        """
+        self._orbit = False
+        self._interest = None
         if stage is None:
             return
         viewport = self.viewport()
@@ -60,6 +90,12 @@ class EbsSimulateCamera:
             except Exception as e:
                 print(f"[ebs] could not restore the viewport camera: {e}")
         self._previous = None
+
+    def remove(self, stage) -> None:
+        """익스텐션이 내려갈 때만. 세션 중에는 부르지 않는다."""
+        self.release(stage)
+        if stage is None:
+            return
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             if stage.GetPrimAtPath(CAMERA_PATH).IsValid():
                 stage.RemovePrim(CAMERA_PATH)
@@ -80,22 +116,18 @@ class EbsSimulateCamera:
         distance = CAMERA_BACK
         eye = interest + z_cam * distance
         self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, distance)
+        # 여기서부터 궤도 모드다. 카메라는 이 점을 계속 바라보고, 움직일 때는
+        # 제자리에서 도는 것이 아니라 이 점 둘레를 돈다.
+        self._interest = interest
+        self._orbit = True
         return (f"camera {distance:.2f} back from the EBS centre, "
-                f"near plane {CAMERA_NEAR:.2f}, nothing culled")
+                f"orbiting ({interest[0]:.2f}, {interest[1]:.2f}, "
+                f"{interest[2]:.2f}), near plane {CAMERA_NEAR:.2f}")
 
     def _camera(self, stage):
-        """카메라 프림. 없으면 만든다.
-
-        프림이 유효하냐가 아니라 카메라냐를 묻는다 — Clear 로 지운 뒤에도
-        뷰포트가 그 경로를 보는 동안 Kit 이 제 상태를 써서 타입 없는 over 가
-        남는다. 그것도 IsValid 는 참이고, 그대로 쓰면 clippingRange 에서
-        empty typename 이 난다. Define 이 그 over 에 타입을 얹는다.
-        """
-        cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
-        camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
-        if camera:
-            return cam_prim, camera
-        self.make(stage)
+        """카메라 프림. 없으면 만든다. 보통은 init 이 이미 만들어 두었다."""
+        if not self.exists(stage):
+            self.make(stage)
         cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
         camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
         if not camera:

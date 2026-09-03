@@ -24,8 +24,11 @@ class EbsSimulateService:
 
     @classmethod
     def finalize(cls):
-        """teardown -> clear_markers, clear_port_lasers, clear_sweep,
-        release_camera, hide_ebs."""
+        """teardown -> show_equipment, EbsSimulateCamera.remove, clear_markers,
+        clear_port_lasers, clear_sweep, hide_ebs.
+
+        카메라 프림을 실제로 지우는 곳은 여기뿐이다 — 세션 중에는 남긴다.
+        """
         if cls._simulate:
             cls._simulate.teardown()
         cls._simulate = None
@@ -118,7 +121,8 @@ class EbsSimulateService:
     def init(cls):
         """스테이지 색인 + XML 포트 테이블. 지오메트리는 안 읽음.
 
-        init -> EbsSimulateCamera.make, hide_ebs, build_index, load_ports.
+        init -> EbsSimulateCamera.make (없을 때만), hide_ebs, build_index,
+                load_ports.
         레일 인덱스는 여기서 안 만든다.
         느리면 로그의 'build index' / 'XML: parse' 비교 후 해당 쪽.
 
@@ -217,8 +221,12 @@ class EbsSimulateService:
             축 -> _frame. 쓰기 -> _write. 근평면 CAMERA_NEAR 고정, 컬링 없음.
             궤도 회전의 중심은 omni:kit:centerOfInterest — 제자리 자전이 아니라
             그 점 둘레를 도는 공전이 되게 하는 값이다.
-          _camera -> 없으면 만든다 (Clear 가 지우므로). 단 IsValid 로 묻지 말 것,
-            타입 없는 over 가 남는다. UsdGeom.Camera(prim) 으로 물어야 한다.
+          _camera -> 없으면 만든다. 보통은 init 이 이미 만들어 두었다.
+            있나 없나는 exists 로 묻는다. IsValid 로 묻지 말 것 — 타입 없는
+            over 가 남을 수 있고 그것도 참이다. UsdGeom.Camera(prim) 으로.
+          궤도 모드 -> place 가 켜고 release 가 끈다 (orbit / interest).
+            Camera 때 켜지고 Clear 때 꺼진다. 켜져 있는 동안 카메라는 그
+            점을 계속 바라보고, 움직임은 그 점 둘레를 도는 것이다.
         거리 -> CAMERA_BACK. interest 에서 정면으로 그만큼 뒤. 고정이다.
           화면에 맞추지 않는다 — 배율이 달라지면 여유 길이를 눈으로 못 비교한다.
         대상 바운드 -> _world_range (여기가 카메라에 넘기는 상자).
@@ -229,9 +237,11 @@ class EbsSimulateService:
 
     @classmethod
     def release_camera(cls):
-        """원래 카메라 복귀 + /EbsCamera 삭제 + show_equipment.
+        """원래 카메라 복귀 + 궤도 모드 해제 + show_equipment. 프림은 남긴다.
 
         구현 -> EbsSimulateCamera.release. 장비 되돌리기만 구현부 몫.
+        지우는 것은 remove 뿐이고 teardown 만 부른다 — 세션 내내 같은 하나를
+        쓴다. 지웠다 다시 만들면 그 사이 Kit 이 그 경로에 써 둔 것이 남는다.
         """
         return cls._simulate.release_camera()
 

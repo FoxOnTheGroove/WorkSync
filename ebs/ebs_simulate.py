@@ -338,7 +338,8 @@ class EbsSimulate:
         return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
-        self.release_camera()
+        self.show_equipment()
+        self._camera.remove(self._get_stage())
         self.clear_markers()
         self.clear_port_lasers()
         self.clear_sweep()
