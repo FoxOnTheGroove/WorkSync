@@ -18,7 +18,6 @@ NAMELESS = "-"
 CLASH = "clash"                   # 면 패널: 막혔을 때
 GAP   = "clearance"               # 비었을 때, 선 위
 TIGHT = "interference"            # 안 닿았는데 최소 여유 미달일 때, 같은 자리
-NO_GAP = "-"                      # 잰 것이 없을 때 거리 자리
 LEAST = "min {0:.3f} m"           # 지켜야 하는 최소 여유, 거리 아래
 
 # 선은 UI 가 아니라 씬에 그린다 (show_markers 의 _gap_line). 그래서 글자는 그
@@ -218,13 +217,17 @@ class EbsSimulateOverlay:
 
         at = mark.get("at")
         if clash:
-            self._floating(at, block([CLASH] + ([name] if name else [])), ground)
+            self._floating(at, block([CLASH]), ground)
             return
         first, second = ((LEFT, RIGHT) if mark.get("face") in SIDE_BY_SIDE
                          else (ABOVE, BELOW))
         self._floating(at, block([TIGHT if state == "tight" else GAP]),
                        ground, first)
-        told = [NO_GAP if gap is None else f"{gap:.3f} m"]
+        # 잰 것이 없으면 아래 판도 없다. 재지 못했다는 것은 reach 밖이라는 뜻이고,
+        # 거기에 대고 쓸 거리도 상대도 없다.
+        if gap is None:
+            return
+        told = [f"{gap:.3f} m"]
         if least:
             told.append(LEAST.format(least))
         if name:

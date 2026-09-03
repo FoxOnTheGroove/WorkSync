@@ -124,7 +124,7 @@ GEOMETRY_TYPES = frozenset({
 })
 
 CAMERA_PATH    = "/EbsCamera"
-CAMERA_BACK    = 110.0    # 대상 앞에서 뒤로 물러나는 거리, 스테이지 단위.
+CAMERA_BACK    = 30.0     # 대상 앞에서 뒤로 물러나는 거리, 스테이지 단위.
                           # 화면에 맞추지 않는다 — 장비마다 배율이 달라지면
                           # 여유 길이가 눈으로 비교가 안 된다
 VERDICT_HEIGHT = 0.8      # 판정 패널을 매다는 높이. EBS 바닥 0, 천장 1.
@@ -191,9 +191,9 @@ GRID_CELLS = 24
 MEET_LIMIT = 4
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
-REACH_RATIO = 30.0       # 가장 가까운 메시를 찾는 거리 (최장변 대비).
-                         # 플랜트를 가로지르는 정도. 넓힌 만큼 훑는 상자가
-                         # 커지고 후보가 늘어난다 — 'gather nearby' 참조
+REACH_RATIO = 1.5        # 가장 가까운 메시를 찾는 거리 (최장변 대비).
+                         # 넓힌 만큼 훑는 상자가 커지고 후보가 늘어난다 —
+                         # 'gather nearby' 참조. 넘어가면 거리 없이 여유로만 본다
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"
