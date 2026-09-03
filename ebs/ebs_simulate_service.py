@@ -228,24 +228,23 @@ class EbsSimulateService:
             Camera 때 켜지고 Clear 때 꺼진다. 켜져 있는 동안 카메라는 그
             점을 계속 바라보고, 움직임은 그 점 둘레를 도는 것이다.
           되돌리기 -> reset (_home). UI 의 Refresh 버튼.
-          입력 -> _grab. 프레임에 위젯을 덮는 것으로는 안 막힌다 — 뷰포트의
-            조작은 omni.ui 가 아니라 제 SceneView 에서 온다. 같은 자리에
-            우리 SceneView(ORBIT_FRAME) 를 세우고 Screen 에 제스처를 달고,
-            GestureManager 가 남의 제스처를 전부 막는다 (should_prevent).
-            SceneView 는 프레임을 꽉 채워야 한다. 크기를 안 주면 접힌다.
-            Kit 기본 조작·우클릭 메뉴·프림 선택이 전부 거기서 멈춘다.
-            _drop 이 걷는다. 창 찾기는 모듈함수 viewport_window (오버레이도
-            같은 것을 쓴다).
-          제스처 -> _gestures. 세 버튼의 드래그·클릭 + 더블클릭 + 휠을 전부
-            가져간다. 오른쪽과 가운데는 받기만 하고 아무것도 안 한다 — 그래야
-            막힌다. 빌드에 없는 이름은 건너뛴다 (하나 때문에 전부 안 붙으면
-            뷰포트가 통째로 남는다).
-          끌기 = 공전 -> _start_drag / _drag / _end_drag -> _turn.
-            반지름 고정, interest 를 월드 up 으로 바라봐서 롤이 없다.
-            축은 끌기당 하나로 잠근다 (AXIS_LOCK) — 요와 피치가 안 섞인다.
-            극 근처는 _room 이 막는다 (PITCH_LIMIT).
-            속도 -> YAW_PER_UNIT / PITCH_PER_UNIT. 화면 폭이 대략 2 다.
-          클릭·더블클릭·휠 -> _click / _double / _wheel. 자리만 있고 비었다.
+          입력 -> _grab. 뷰포트 프레임(ORBIT_FRAME)에 투명한 판을 깔고 받는다.
+            판은 프레임을 꽉 채워야 한다. 크기를 안 주면 접히고 아무것도 못 받는다.
+            omni.ui.scene 의 Screen 으로도 해봤으나 이 빌드에서는 제스처가
+            아예 안 뜬다 (라벨이 안 그려지던 것과 같은 자리). 판은 받기는 한다.
+            _drop 이 걷는다. 창 찾기는 모듈함수 viewport_window (오버레이 공용).
+          아직 못 막는 것: 뷰포트의 조작은 omni.ui 가 아니라 제 입력 경로에서
+            오므로 판을 얹어도 지나간다. 우클릭·우드래그·휠클릭 드래그·러버밴드가
+            그대로 산다. 막을 수단은 아직 못 찾았다.
+            선택만은 _mute_selection 이 뒤에서 지운다 — 못 막으니 골라지면
+            바로 비운다 (SELECTION_CHANGED 구독, _stage_event).
+          제스처 -> _pressed / _moved / _end_drag / _double / _wheel.
+            왼쪽만 쓴다. 나머지 버튼은 우리 쪽에서 아무것도 안 한다.
+          끌기 = 공전 -> _drag -> _turn. 반지름 고정, interest 를 월드 up 으로
+            바라봐서 롤이 없다. 축은 끌기당 하나로 잠근다 (AXIS_LOCK) — 요와
+            피치가 안 섞인다. 극 근처는 _room 이 막는다 (PITCH_LIMIT).
+            속도 -> YAW_PER_PIXEL / PITCH_PER_PIXEL.
+          더블클릭·휠 -> _double / _wheel. 자리만 있고 비었다.
         거리 -> CAMERA_BACK. interest 에서 정면으로 그만큼 뒤. 고정이다.
           화면에 맞추지 않는다 — 배율이 달라지면 여유 길이를 눈으로 못 비교한다.
         대상 바운드 -> _world_range (여기가 카메라에 넘기는 상자).

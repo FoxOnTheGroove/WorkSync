@@ -15,10 +15,9 @@ APERTURE_H = 20.955
 APERTURE_V = 15.2908
 
 ORBIT_FRAME = "ebs_orbit_input"   # 뷰포트를 덮어 입력을 가로채는 프레임
-# 끌기 양은 Screen 기준이라 화면 폭이 대략 2 다. 전체를 가로지르면 180도.
-YAW_PER_UNIT   = 90.0
-PITCH_PER_UNIT = 90.0
-AXIS_LOCK  = 0.02   # 이만큼 끌기 전에는 축을 안 정한다. 요와 피치는 안 섞인다
+YAW_PER_PIXEL   = 0.35   # 1 픽셀 끌 때 도는 각도, 도
+PITCH_PER_PIXEL = 0.35
+AXIS_LOCK  = 5      # 이만큼 끌기 전에는 축을 안 정한다. 요와 피치는 안 섞인다
 PITCH_LIMIT = 85.0  # 수평에서 위아래로 여기까지. 극을 넘으면 롤이 생긴다
 
 LEFT_BUTTON, RIGHT_BUTTON, MIDDLE_BUTTON = 0, 1, 2
@@ -83,8 +82,9 @@ class EbsSimulateCamera:
         self._orbit = False        # interest 둘레를 도는 모드인가
         self._interest = None      # 그 점, 월드 좌표
         self._frame_ui = None      # 입력을 가로채는 프레임
-        self._view = None          # 그 안의 SceneView
-        self._catch = None         # 화면 전체를 받는 Screen
+        self._catch = None         # 그 안의 투명한 판
+        self._at = None            # 마지막 마우스 자리
+        self._selection = None     # 선택을 지우는 구독
         self._from = None          # 끌기 시작한 화면 좌표
         self._axis = None          # 이번 끌기가 도는 축: 'yaw' 또는 'pitch'
         self._home = None          # place 가 놓았던 자리. refresh 가 돌아갈 곳
@@ -226,12 +226,12 @@ class EbsSimulateCamera:
     # -- 입력 가로채기 --------------------------------------------------------
 
     def _grab(self) -> bool:
-        """뷰포트의 마우스를 가져온다.
+        """뷰포트 위에 판을 깔고 마우스를 받는다.
 
-        프레임에 판을 깔아 덮는 것으로는 안 된다 — 뷰포트의 조작은 omni.ui 가
-        아니라 제 SceneView 에서 오고, 그 위에 위젯을 얹어도 그대로 지나간다.
-        같은 자리에 우리 SceneView 를 세우고, 화면 전체를 받는 Screen 에
-        제스처를 달고, 남의 제스처는 못 뜨게 막는 GestureManager 를 붙인다.
+        omni.ui.scene 의 Screen 으로도 해봤으나 이 빌드에서는 제스처가 아예
+        안 뜬다 — 라벨이 안 그려지던 것과 같은 자리다. 판은 받기는 한다.
+        막지는 못한다: 뷰포트의 조작은 omni.ui 가 아니라 제 입력 경로에서
+        오므로 위에 위젯을 얹어도 그대로 지나간다. 그건 따로 처리한다.
         """
         if self._catch is not None:
             return True
@@ -240,112 +240,96 @@ class EbsSimulateCamera:
             return False
         try:
             import omni.ui as ui
-            from omni.ui import scene as sc
-        except Exception as e:
-            print(f"[ebs] omni.ui.scene unavailable, cannot take the input: {e}")
-            return False
-
-        class Keep(sc.GestureManager):
-            """두 메소드 다 '이 매니저를 쓰는 제스처', 곧 우리 것에 대한 물음이다.
-
-            should_prevent 에서 True 를 돌려주면 우리 제스처가 스스로를 막는다.
-            남의 제스처는 제 매니저를 보므로 여기서 막을 수 없다 — 여기서 할
-            수 있는 것은 우리 것이 안 막히게 하는 것뿐이다.
-            """
-
-            def can_be_prevented(self, gesture) -> bool:
-                return False
-
-            def should_prevent(self, gesture, preventer) -> bool:
-                return False
-
-        try:
-            keeper = Keep()
             self._frame_ui = window.get_frame(ORBIT_FRAME)
             with self._frame_ui:
-                # 크기를 안 주면 접힌다. 접힌 것 위로는 아무것도 안 지나간다.
-                self._view = sc.SceneView(width=ui.Percent(100),
-                                          height=ui.Percent(100))
-                with self._view.scene:
-                    self._catch = sc.Screen(gestures=self._gestures(sc, keeper))
-            try:
-                window.viewport_api.add_scene_view(self._view)
-            except Exception as e:
-                print(f"[ebs] the input sheet is not registered with the "
-                      f"viewport ({e}); it may still take the mouse")
+                # 크기를 안 주면 접힌다. 접힌 판은 아무것도 못 받는다.
+                self._catch = ui.Rectangle(
+                    width=ui.Percent(100), height=ui.Percent(100),
+                    style={"background_color": 0x01000000})
+            self._catch.set_mouse_pressed_fn(
+                lambda x, y, button, mod: self._pressed(x, y, button))
+            self._catch.set_mouse_moved_fn(
+                lambda x, y, mod, held: self._moved(x, y))
+            self._catch.set_mouse_released_fn(
+                lambda x, y, button, mod: self._end_drag())
+            self._catch.set_mouse_double_clicked_fn(
+                lambda x, y, button, mod: self._double())
+            self._catch.set_mouse_wheel_fn(
+                lambda dx, dy, mod: self._wheel())
         except Exception as e:
             print(f"[ebs] could not take the viewport input: {e}")
             self._drop()
             return False
+        self._mute_selection()
         return True
-
-    def _gestures(self, sc, keeper) -> list:
-        """쓸 것 다섯 개와, 나머지를 삼키기만 하는 것들.
-
-        이름이 없는 빌드가 있을 수 있어 하나씩 물어본다 — 하나 없다고 전체가
-        안 붙으면 뷰포트가 통째로 그대로 남는다.
-        """
-        made = []
-
-        def add(name, **kw):
-            kind = getattr(sc, name, None)
-            if kind is None:
-                return
-            try:
-                made.append(kind(manager=keeper, **kw))
-            except Exception as e:
-                print(f"[ebs] {name} not taken: {e}")
-
-        add("DragGesture", mouse_button=LEFT_BUTTON,
-            on_began_fn=lambda g: self._start_drag(),
-            on_changed_fn=lambda g: self._drag_by(g),
-            on_ended_fn=lambda g: self._end_drag())
-        add("ClickGesture", mouse_button=LEFT_BUTTON,
-            on_ended_fn=lambda g: self._click())
-        add("DoubleClickGesture", mouse_button=LEFT_BUTTON,
-            on_ended_fn=lambda g: self._double())
-        add("ScrollGesture", on_ended_fn=lambda g: self._wheel(g))
-        # 오른쪽과 가운데는 받기만 하고 아무것도 안 한다. 그래야 막힌다.
-        for button in (RIGHT_BUTTON, MIDDLE_BUTTON):
-            add("DragGesture", mouse_button=button)
-            add("ClickGesture", mouse_button=button)
-        return made
 
     def _drop(self) -> None:
         self._from = self._axis = None
-        if self._view is not None:
-            try:
-                viewport_window().viewport_api.remove_scene_view(self._view)
-            except Exception:
-                pass
+        self._selection = None
         if self._frame_ui is not None:
             try:
                 self._frame_ui.clear()
             except Exception:
                 pass
-        self._view = None
         self._catch = None
         self._frame_ui = None
 
+    def _mute_selection(self) -> None:
+        """궤도 모드에서는 프림이 안 골라진다.
+
+        고르는 것 자체를 막지는 못해서, 골라지면 바로 지운다. 장비는 이름을
+        적어 넣어 고르는 쪽으로 갈 것이라 선택이 남을 이유가 없다.
+        """
+        try:
+            import omni.usd
+            self._selection = (omni.usd.get_context().get_stage_event_stream()
+                               .create_subscription_to_pop(
+                                   self._stage_event, name="ebs orbit"))
+        except Exception as e:
+            print(f"[ebs] prims can still be picked while orbiting: {e}")
+
+    def _stage_event(self, event) -> None:
+        if not self._orbit:
+            return
+        try:
+            import omni.usd
+            if event.type != int(omni.usd.StageEventType.SELECTION_CHANGED):
+                return
+            picked = omni.usd.get_context().get_selection()
+            if picked.get_selected_prim_paths():
+                picked.clear_selected_prim_paths()
+        except Exception:
+            pass
+
     # -- 제스처 ---------------------------------------------------------------
+
+    def _pressed(self, x, y, button) -> None:
+        # 왼쪽만 쓴다. 나머지 버튼은 우리 쪽에서 아무것도 안 한다.
+        if button != LEFT_BUTTON:
+            self._from = self._axis = None
+            return
+        self._start_drag()
+        self._at = (x, y)
+
+    def _moved(self, x, y) -> None:
+        if self._from is None or self._at is None:
+            return
+        dx, dy = x - self._at[0], y - self._at[1]
+        self._at = (x, y)
+        self._drag(dx, dy)
 
     def _start_drag(self) -> None:
         self._from = (0.0, 0.0)
         self._axis = None
 
-    def _drag_by(self, gesture) -> None:
-        moved = self._moved_by(gesture)
-        if moved is not None:
-            self._drag(moved[0], moved[1])
+    def _end_drag(self) -> None:
+        self._from = self._axis = self._at = None
 
-    @staticmethod
-    def _moved_by(gesture):
-        """이번 프레임에 움직인 양. Screen 위라 화면 기준이다."""
-        try:
-            moved = gesture.gesture_payload.moved
-            return (moved[0], moved[1])
-        except Exception:
-            return None
+    def _double(self) -> None:
+        pass                     # 아직 정해진 것이 없다
+
+    def _wheel(self) -> None:
+        pass                     # 아직 정해진 것이 없다
 
     def _drag(self, dx: float, dy: float) -> None:
         if self._from is None or not self._orbit:
@@ -358,12 +342,11 @@ class EbsSimulateCamera:
             if max(abs(total[0]), abs(total[1])) < AXIS_LOCK:
                 return
             self._axis = "yaw" if abs(total[0]) >= abs(total[1]) else "pitch"
-        # 씬이 손을 따라온다: 오른쪽으로 끌면 눈이 오른쪽으로 공전하고,
-        # 아래로 끌면 위에서 내려다보게 된다. 화면 y 는 위가 양수다.
+        # 화면 y 는 아래가 양수다. 아래로 끌면 눈이 올라간다.
         if self._axis == "yaw":
-            self._turn(yaw=-dx * YAW_PER_UNIT)
+            self._turn(yaw=-dx * YAW_PER_PIXEL)
         else:
-            self._turn(pitch=-dy * PITCH_PER_UNIT)
+            self._turn(pitch=dy * PITCH_PER_PIXEL)
 
     def _end_drag(self) -> None:
         self._from = self._axis = None
