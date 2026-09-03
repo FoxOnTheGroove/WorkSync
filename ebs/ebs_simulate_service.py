@@ -1,4 +1,4 @@
-"""EBS 시뮬레이션 공개 API. 구현은 전부 ebs_simulate.py.
+"""EBS 시뮬레이션 공개 API. 구현은 ebs_simulate.py, 카메라만 ebs_simulate_camera.py.
 
 주석은 "뭘 바꾸려면 어디를 보라"는 색인이다. 본문은 전부 한 줄 위임.
 단계: init -> prepare -> align -> focus -> collide. simulate()는 뒤 넷 연속.
@@ -234,16 +234,19 @@ class EbsSimulateService:
           Clear 는 release_camera -> show_equipment 로 되돌린다.
         주의: opacity 0 은 충돌 검사에서 안 빠진다. _gather_nearby 는
           visibility 만 본다.
-        카메라 만들기 -> make_camera. Define 만 한다 (release_camera 부르면
-          숨긴 장비가 도로 살아난다). 초점거리/센서/클리핑도 여기.
-        카메라 배치 -> _move_camera. 없으면 스스로 만든다 (Clear 가 지우므로).
-          단 IsValid 로 묻지 말 것 — 타입 없는 over 가 남는다. UsdGeom.Camera(prim)
-          으로 물어야 한다 (안 그러면 clippingRange 에서 empty typename).
-          근평면은 CAMERA_NEAR 고정. 컬링 없음.
-        거리 -> CAMERA_BACK. EBS 상자 중앙에서 정면으로 그만큼 뒤. 고정이다.
-          화면에 맞추지 않는다 — 장비마다 배율이 달라지면 여유 길이가 눈으로
-          비교가 안 된다.
-        대상 바운드 -> _world_range.
+        카메라는 전부 ebs_simulate_camera.EbsSimulateCamera 다. 구현부의
+          make_camera / release_camera / _move_camera 는 그리로 넘기는 껍데기.
+          make -> Define 만. release_camera 를 부르면 숨긴 장비가 도로 살아난다.
+            초점거리/센서 -> FOCAL, APERTURE_H, APERTURE_V.
+          place -> 상자와 바라볼 프림을 받아 놓는다. 상자 중앙이 interest.
+            축 -> _frame. 쓰기 -> _write. 근평면 CAMERA_NEAR 고정, 컬링 없음.
+            궤도 회전의 중심은 omni:kit:centerOfInterest — 제자리 자전이 아니라
+            그 점 둘레를 도는 공전이 되게 하는 값이다.
+          _camera -> 없으면 만든다 (Clear 가 지우므로). 단 IsValid 로 묻지 말 것,
+            타입 없는 over 가 남는다. UsdGeom.Camera(prim) 으로 물어야 한다.
+        거리 -> CAMERA_BACK. interest 에서 정면으로 그만큼 뒤. 고정이다.
+          화면에 맞추지 않는다 — 배율이 달라지면 여유 길이를 눈으로 못 비교한다.
+        대상 바운드 -> _world_range (여기가 카메라에 넘기는 상자).
         판정 패널 높이는 별개다 -> VERDICT_HEIGHT (build_verdict).
         뷰포트 전환 -> _viewport (omni.kit 없으면 조용히 실패).
         """
@@ -251,12 +254,18 @@ class EbsSimulateService:
 
     @classmethod
     def make_camera(cls):
-        """세션 레이어에 /EbsCamera. init 과 _move_camera 가 호출. 뷰포트는 안 건드림."""
+        """세션 레이어에 /EbsCamera. init 과 place 가 호출. 뷰포트는 안 건드림.
+
+        구현 -> ebs_simulate_camera.EbsSimulateCamera.make.
+        """
         return cls._simulate.make_camera()
 
     @classmethod
     def release_camera(cls):
-        """원래 카메라 복귀 + /EbsCamera 삭제 + show_equipment."""
+        """원래 카메라 복귀 + /EbsCamera 삭제 + show_equipment.
+
+        구현 -> EbsSimulateCamera.release. 장비 되돌리기만 구현부 몫.
+        """
         return cls._simulate.release_camera()
 
     # -- 4단계 collide -------------------------------------------------------

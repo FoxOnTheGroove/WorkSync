@@ -10,6 +10,8 @@ from contextlib import contextmanager, nullcontext, redirect_stdout
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
 
+from .ebs_simulate_camera import EbsSimulateCamera, CAMERA_PATH
+
 __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
@@ -123,14 +125,8 @@ GEOMETRY_TYPES = frozenset({
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
 })
 
-CAMERA_PATH    = "/EbsCamera"
-CAMERA_BACK    = 30.0     # 대상 앞에서 뒤로 물러나는 거리, 스테이지 단위.
-                          # 화면에 맞추지 않는다 — 장비마다 배율이 달라지면
-                          # 여유 길이가 눈으로 비교가 안 된다
 VERDICT_HEIGHT = 0.8      # 판정 패널을 매다는 높이. EBS 바닥 0, 천장 1.
                           # 카메라가 보는 점은 상자 중앙 그대로다
-CAMERA_NEAR    = 0.01
-CAMERA_FAR     = 1.0e6
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
@@ -248,7 +244,7 @@ class EbsSimulate:
         self._port_world: dict = {}
         self._port_rail_z: float = 0.0
         self._face_planes: dict = {}
-        self._previous_camera = None
+        self._camera = EbsSimulateCamera()
         self._precision: str = PRECISION_TRI
         self._timings: list = []
         self._notes: list = []
@@ -2829,119 +2825,28 @@ class EbsSimulate:
 
 
     def make_camera(self) -> bool:
-        stage = self._get_stage()
-        if stage is None:
-            return False
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
-            camera.CreateFocalLengthAttr(50.0)
-            camera.CreateHorizontalApertureAttr(20.955)
-            camera.CreateVerticalApertureAttr(15.2908)
-            camera.CreateClippingRangeAttr(Gf.Vec2f(0.1, 1.0e6))
-            prim = camera.GetPrim()
-            prim.CreateAttribute("omni:kit:centerOfInterest",
-                                 Sdf.ValueTypeNames.Vector3d).Set(
-                                     Gf.Vec3d(0.0, 0.0, -100.0))
-
-        self._note(f"camera {CAMERA_PATH} created (the viewport switches to it "
-                   f"when the camera step runs)")
-        return True
+        made = self._camera.make(self._get_stage())
+        if made:
+            self._note(f"camera {CAMERA_PATH} created (the viewport switches "
+                       f"to it when the camera step runs)")
+        return made
 
     def release_camera(self) -> None:
         self.show_equipment()
-        stage = self._get_stage()
-        if stage is None:
-            return
-        viewport = self._viewport()
-        if viewport is not None and self._previous_camera:
-            try:
-                viewport.camera_path = self._previous_camera
-            except Exception as e:
-                print(f"[ebs] could not restore the viewport camera: {e}")
-        self._previous_camera = None
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            if stage.GetPrimAtPath(CAMERA_PATH).IsValid():
-                stage.RemovePrim(CAMERA_PATH)
-
-    @staticmethod
-    def _viewport():
-        try:
-            from omni.kit.viewport.utility import get_active_viewport
-            return get_active_viewport()
-        except Exception as e:
-            print(f"[ebs] viewport utility unavailable: {e}")
-            return None
+        self._camera.release(self._get_stage())
 
     def _move_camera(self, prim_path: str, facing: Usd.Prim = None) -> bool:
         stage = self._get_stage()
-        viewport = self._viewport()
-        if stage is None or viewport is None:
+        if stage is None:
             return False
         prim = stage.GetPrimAtPath(prim_path)
         if not prim.IsValid():
             return False
-        cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
-        camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
-        if not camera:
-            self.make_camera()
-            cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
-            camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
-            if not camera:
-                print("[ebs] could not create the camera")
-                return False
-        if str(viewport.camera_path) != CAMERA_PATH:
-            self._previous_camera = str(viewport.camera_path)
-            try:
-                viewport.camera_path = CAMERA_PATH
-            except Exception as e:
-                print(f"[ebs] could not switch the viewport camera: {e}")
-
         facing = facing if (facing is not None and facing.IsValid()) else prim
-        tc = Usd.TimeCode.Default()
-        rot = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
-            tc).ExtractRotationMatrix()
-        up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
-        view = Gf.Vec3d(rot[1][0], rot[1][1], rot[1][2]).GetNormalized()
-        up = Gf.Vec3d(rot[up_row][0], rot[up_row][1], rot[up_row][2]).GetNormalized()
-
-        z_cam = -view
-        x_cam = Gf.Cross(up, z_cam).GetNormalized()
-        y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
-
-        framed = self._world_range(prim)
-        if framed is None:
+        told = self._camera.place(stage, self._world_range(prim), facing)
+        if not told:
             return False
-        low, high = framed.GetMin(), framed.GetMax()
-        centre = Gf.Vec3d(*[(low[i] + high[i]) * 0.5 for i in range(3)])
-
-        distance = CAMERA_BACK
-        eye = centre + z_cam * distance
-        matrix = Gf.Matrix4d(
-            x_cam[0], x_cam[1], x_cam[2], 0.0,
-            y_cam[0], y_cam[1], y_cam[2], 0.0,
-            z_cam[0], z_cam[1], z_cam[2], 0.0,
-            eye[0],   eye[1],   eye[2],   1.0,
-        )
-
-        near, far = CAMERA_NEAR, CAMERA_FAR
-
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            xformable = UsdGeom.Xformable(cam_prim)
-            transform_op = next(
-                (op for op in xformable.GetOrderedXformOps()
-                 if op.GetOpName() == "xformOp:transform"), None)
-            if transform_op is not None:
-                transform_op.Set(matrix)
-            else:
-                xformable.ClearXformOpOrder()
-                xformable.AddTransformOp().Set(matrix)
-            camera.CreateClippingRangeAttr().Set(
-                Gf.Vec2f(float(near), float(far)))
-            coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
-            if coi and coi.IsValid():
-                coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
-        self._note(f"camera {distance:.2f} back from the EBS centre, "
-                   f"near plane {near:.2f}, nothing culled")
+        self._note(told)
         return True
 
     def _world_range(self, prim) -> "Gf.Range3d | None":
