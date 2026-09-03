@@ -95,6 +95,7 @@ class EbsSimulateService:
 
         미달이면 닿지 않아도 tight(간섭) -> 빨강 + placeable False.
         판정 -> _face_marks.
+        UI 의 Min gap 두 칸이 매 동작 전에 이걸 넘긴다 (_apply_settings).
         """
         return cls._simulate.set_min_gaps(side, ceiling)
 
