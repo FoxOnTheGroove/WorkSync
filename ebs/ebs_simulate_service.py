@@ -228,18 +228,25 @@ class EbsSimulateService:
             Camera 때 켜지고 Clear 때 꺼진다. 켜져 있는 동안 카메라는 그
             점을 계속 바라보고, 움직임은 그 점 둘레를 도는 것이다.
           되돌리기 -> reset (_home). UI 의 Refresh 버튼.
-          입력 -> _grab. 뷰포트 프레임(ORBIT_FRAME)에 투명한 판을 깔고 받는다.
-            판은 프레임을 꽉 채워야 한다. 크기를 안 주면 접히고 아무것도 못 받는다.
-            omni.ui.scene 의 Screen 으로도 해봤으나 이 빌드에서는 제스처가
-            아예 안 뜬다 (라벨이 안 그려지던 것과 같은 자리). 판은 받기는 한다.
-            _drop 이 걷는다. 창 찾기는 모듈함수 viewport_window (오버레이 공용).
-          아직 못 막는 것: 뷰포트의 조작은 omni.ui 가 아니라 제 입력 경로에서
-            오므로 판을 얹어도 지나간다. 우클릭·우드래그·휠클릭 드래그·러버밴드가
-            그대로 산다. 막을 수단은 아직 못 찾았다.
-            선택만은 _mute_selection 이 뒤에서 지운다 — 못 막으니 골라지면
-            바로 비운다 (SELECTION_CHANGED 구독, _stage_event).
-          제스처 -> _pressed / _moved / _end_drag / _double / _wheel.
-            왼쪽만 쓴다. 나머지 버튼은 우리 쪽에서 아무것도 안 한다.
+          입력 -> _grab. 두 갈래다.
+            _grab_arena: RegisterScene 으로 뷰포트 자신의 씬 안에 우리
+              제스처를 넣는다. 이래야 Kit 것과 같은 아레나에 선다. 따로
+              SceneView 를 세우면 아레나가 달라 우리 것은 안 뜨고 Kit 것은
+              안 막힌다 (해봤다).
+              매니저는 can_be_prevented=False. 같은 버튼에 함께 걸리면 막힐
+              수 있는 Kit 쪽이 물러난다. should_prevent 는 '우리 것을 막을까'
+              라는 물음이므로 False 여야 한다 — True 면 우리가 우리를 막는다.
+            _grab_sheet: 등록이 안 되는 빌드의 폴백. 프레임에 판을 깔아 받기만
+              한다. 막지는 못한다 — 뷰포트 조작은 omni.ui 를 안 거친다.
+              판은 프레임을 꽉 채워야 한다. 크기를 안 주면 접힌다.
+            _drop 이 둘 다 걷는다. 창 찾기는 viewport_window (오버레이 공용).
+          선택 -> _mute_selection. 골라지면 바로 지운다 (SELECTION_CHANGED
+            구독, _stage_event). 아레나에 못 들어간 경우의 보험이기도 하다.
+          제스처 -> _gestures (아레나) / _pressed·_moved (판).
+            세 버튼의 드래그·클릭을 다 가져간다 — 오른쪽과 가운데도 우리가
+            가져가야 Kit 이 그 버튼으로 카메라를 못 옮긴다. 받기만 하고 아무
+            것도 안 한다. 빌드에 없는 제스처 이름은 건너뛴다.
+            Screen 의 끌기 양은 UNIT_PIXELS 로 픽셀에 맞춘다 (_dragged).
           끌기 = 공전 -> _drag -> _turn. 반지름 고정, interest 를 월드 up 으로
             바라봐서 롤이 없다. 축은 끌기당 하나로 잠근다 (AXIS_LOCK) — 요와
             피치가 안 섞인다. 극 근처는 _room 이 막는다 (PITCH_LIMIT).
