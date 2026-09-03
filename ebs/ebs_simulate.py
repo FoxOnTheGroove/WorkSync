@@ -124,10 +124,11 @@ GEOMETRY_TYPES = frozenset({
 })
 
 CAMERA_PATH    = "/EbsCamera"
-CAMERA_FILL    = 0.9
-VERDICT_HEIGHT = 0.85     # 판정 패널을 매다는 높이. EBS 바닥 0, 천장 1.
-                          # 카메라도 이 점을 본다. 화면에 담기는 세로
-                          # 범위는 이 점 기준 대칭 = 높이의 1.7배
+CAMERA_BACK    = 110.0    # 대상 앞에서 뒤로 물러나는 거리, 스테이지 단위.
+                          # 화면에 맞추지 않는다 — 장비마다 배율이 달라지면
+                          # 여유 길이가 눈으로 비교가 안 된다
+VERDICT_HEIGHT = 0.8      # 판정 패널을 매다는 높이. EBS 바닥 0, 천장 1.
+                          # 카메라가 보는 점은 상자 중앙 그대로다
 CAMERA_NEAR    = 0.01
 CAMERA_FAR     = 1.0e6
 NEIGHBOUR_REACH = 1.5
@@ -2887,25 +2888,12 @@ class EbsSimulate:
         y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
 
         framed = self._world_range(prim)
-        corners = self._box_corners(framed)
-        if not corners:
+        if framed is None:
             return False
         low, high = framed.GetMin(), framed.GetMax()
-        centre = [(low[i] + high[i]) * 0.5 for i in range(3)]
-        centre[up_row] = low[up_row] + (high[up_row] - low[up_row]) * VERDICT_HEIGHT
-        centre = Gf.Vec3d(*centre)
-        # 위로 남는 자리가 있어야 천장 여유선과 판정 패널이 화면에 들어온다.
-        # 보는 점을 기준으로 위아래 대칭이 되게 아래 모서리를 위로 되비춘다 —
-        # 담기는 세로 범위가 바닥에서 높이의 1.7배까지가 된다.
-        mirrored = []
-        for corner in corners:
-            flipped = list(corner)
-            flipped[up_row] = 2.0 * centre[up_row] - corner[up_row]
-            mirrored.append(tuple(flipped))
-        corners = corners + mirrored
+        centre = Gf.Vec3d(*[(low[i] + high[i]) * 0.5 for i in range(3)])
 
-        distance = self._fit_distance(cam_prim, viewport, corners, centre,
-                                      x_cam, y_cam, z_cam)
+        distance = CAMERA_BACK
         eye = centre + z_cam * distance
         matrix = Gf.Matrix4d(
             x_cam[0], x_cam[1], x_cam[2], 0.0,
@@ -2931,8 +2919,8 @@ class EbsSimulate:
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
-        self._note(f"camera at {distance:.2f}, looking at {VERDICT_HEIGHT:.2f} "
-                   f"of the EBS height, near plane {near:.2f}, nothing culled")
+        self._note(f"camera {distance:.2f} back from the EBS centre, "
+                   f"near plane {near:.2f}, nothing culled")
         return True
 
     def _world_range(self, prim) -> "Gf.Range3d | None":
@@ -2944,37 +2932,6 @@ class EbsSimulate:
             useExtentsHint=True,
         ).ComputeWorldBound(prim).ComputeAlignedRange()
         return None if box.IsEmpty() else box
-
-    @staticmethod
-    def _box_corners(box) -> list:
-        if box is None:
-            return []
-        lo, hi = box.GetMin(), box.GetMax()
-        return [(x, y, z) for x in (lo[0], hi[0])
-                for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
-
-    @staticmethod
-    def _fit_distance(cam_prim, viewport, corners, centre, x_cam, y_cam, z_cam) -> float:
-        camera = UsdGeom.Camera(cam_prim)
-        focal = camera.GetFocalLengthAttr().Get() or 50.0
-        aperture = camera.GetHorizontalApertureAttr().Get() or 20.955
-        tan_h = (aperture * 0.5) / focal
-        try:
-            width, height = viewport.resolution
-            aspect = (width / height) if height else 1.0
-        except Exception:
-            aspect = 1.0
-        tan_v = tan_h / aspect if aspect else tan_h
-
-        needed = 0.0
-        for corner in corners:
-            offset = Gf.Vec3d(*corner) - centre
-            along = Gf.Dot(offset, z_cam)
-            wide = abs(Gf.Dot(offset, x_cam)) / tan_h if tan_h else 0.0
-            tall = abs(Gf.Dot(offset, y_cam)) / tan_v if tan_v else 0.0
-            needed = max(needed, along + max(wide, tall))
-        return max(needed / CAMERA_FILL, 1e-3)
-
 
     @staticmethod
     def _get_stage() -> "Usd.Stage | None":

@@ -232,12 +232,11 @@ class EbsSimulateService:
           단 IsValid 로 묻지 말 것 — 타입 없는 over 가 남는다. UsdGeom.Camera(prim)
           으로 물어야 한다 (안 그러면 clippingRange 에서 empty typename).
           근평면은 CAMERA_NEAR 고정. 컬링 없음.
-        보는 점 -> VERDICT_HEIGHT. EBS 바닥 0 천장 1 기준 0.85 높이.
-          판정 패널과 같은 점이다 (build_verdict 도 같은 상수).
-          그 점 기준 위아래 대칭으로 담는다 = 세로 범위가 높이의 1.7배.
-          천장 여유선과 패널이 위로 삐져나가지 않게 하려는 것.
-        화면 채움 -> _fit_distance + CAMERA_FILL.
-        대상 바운드 -> _world_range, _box_corners.
+        거리 -> CAMERA_BACK. EBS 상자 중앙에서 정면으로 그만큼 뒤. 고정이다.
+          화면에 맞추지 않는다 — 장비마다 배율이 달라지면 여유 길이가 눈으로
+          비교가 안 된다.
+        대상 바운드 -> _world_range.
+        판정 패널 높이는 별개다 -> VERDICT_HEIGHT (build_verdict).
         뷰포트 전환 -> _viewport (omni.kit 없으면 조용히 실패).
         """
         return cls._simulate.focus()
