@@ -18,7 +18,16 @@ ORBIT_FRAME = "ebs_orbit_input"   # 뷰포트를 덮어 입력을 가로채는 �
 YAW_PER_PIXEL   = 0.35   # 1 픽셀 끌 때 도는 각도, 도
 PITCH_PER_PIXEL = 0.35
 AXIS_LOCK  = 5      # 이만큼 끌기 전에는 축을 안 정한다. 요와 피치는 안 섞인다
-UNIT_PIXELS = 500.0  # Screen 의 끌기 양을 픽셀로 옮기는 환산. 화면 폭이 대략 2
+
+# Kit 의 카메라 조작은 이 설정의 사전으로 정해진다. 비우면 아무 버튼도 카메라를
+# 안 옮긴다. 원래 값은 되돌릴 때 쓰려고 쥐고 있고, 못 읽었으면 문서의 기본값.
+CAMERA_BINDINGS = "/exts/omni.kit.viewport.window/bindings/camera"
+DEFAULT_BINDINGS = {
+    "PanGesture": "Any MiddleButton", "TumbleGesture": "Alt LeftButton",
+    "ZoomGesture": "Alt RightButton", "LookGesture": "RightButton",
+    "ZoomScrollGesture": "Any", "FlightSpeedGesture": "RightButton",
+    "FlightMode": "RightButton",
+}
 PITCH_LIMIT = 85.0  # 수평에서 위아래로 여기까지. 극을 넘으면 롤이 생긴다
 
 LEFT_BUTTON, RIGHT_BUTTON, MIDDLE_BUTTON = 0, 1, 2
@@ -83,11 +92,12 @@ class EbsSimulateCamera:
         self._orbit = False        # interest 둘레를 도는 모드인가
         self._interest = None      # 그 점, 월드 좌표
         self._frame_ui = None      # 입력을 가로채는 프레임
-        self._scene = None         # 뷰포트 씬에 등록한 우리 제스처
-        self._catch = None         # 등록이 안 될 때 까는 판
+        self._catch = None         # 그 안의 투명한 판
         self._at = None            # 마지막 마우스 자리
         self._selection = None     # 선택을 지우는 구독
-        self._why = ""             # 아레나에 못 들어갔다면 그 사유
+        self._no_pick = None       # 쥐고 있는 동안 선택이 꺼진다
+        self._no_menu = None       # 쥐고 있는 동안 우클릭 메뉴가 꺼진다
+        self._bindings = None      # 비우기 전의 카메라 조작 바인딩
         self._from = None          # 끌기 시작한 화면 좌표
         self._axis = None          # 이번 끌기가 도는 축: 'yaw' 또는 'pitch'
         self._home = None          # place 가 놓았던 자리. refresh 가 돌아갈 곳
@@ -229,160 +239,66 @@ class EbsSimulateCamera:
     # -- 입력 가로채기 --------------------------------------------------------
 
     def _grab(self) -> bool:
-        """뷰포트가 제 제스처를 처리하는 그 자리에 우리 제스처를 넣는다.
+        """뷰포트의 마우스를 우리가 받고, Kit 은 못 받게 한다.
 
-        따로 SceneView 를 세워봤자 아레나가 다르다 — 우리 것은 안 뜨고 Kit 것은
-        안 막힌다. RegisterScene 은 뷰포트 자신의 씬 안에서 우리를 만들어 주므로
-        같은 아레나에 선다. 거기서는 can_be_prevented 가 False 인 쪽이 이긴다:
-        같은 버튼에 우리와 Kit 이 함께 걸리면 막힐 수 있는 Kit 쪽이 막힌다.
-
-        그것마저 없는 빌드면 프레임에 판을 깔아 받기라도 한다. 판은 받을 뿐
-        막지는 못한다 — 뷰포트의 조작은 omni.ui 를 안 거친다.
+        받기는 프레임에 깐 판이 한다 — 이 빌드에서 확인된 유일한 경로다.
+        막기는 Kit 이 제공하는 스위치 셋으로 한다. 판 위에 얹거나 제스처
+        매니저로 겨루는 것으로는 안 막힌다 (다 해봤다):
+          선택       omni.kit.viewport.utility.disable_selection
+          우클릭 메뉴 omni.kit.viewport.utility.disable_context_menu
+          카메라 조작 /exts/omni.kit.viewport.window/bindings/camera 를 비움
+        앞의 둘은 핸들을 쥐고 있는 동안만 꺼진다. 놓으면 돌아온다.
         """
-        if self._catch is not None or self._scene is not None:
+        if self._catch is not None:
             return True
         window = viewport_window()
-        took = "arena" if self._grab_arena() else ""
-        if not took and window is not None and self._grab_sheet(window):
-            took = "sheet"
-        self._report(window, took)
-        if not took:
+        if window is None:
             return False
+        if not self._grab_sheet(window):
+            return False
+        self._silence(window)
         self._mute_selection()
         return True
 
-    def _report(self, window, took: str) -> None:
-        """Camera 를 누를 때마다 이 자리의 사실을 그대로 찍는다.
-
-        Kit 을 여기서 열어볼 수 없으니, 무엇이 있고 무엇이 없는지는 이 로그가
-        말해야 한다. 추측으로 고치는 것보다 한 번 찍는 편이 싸다.
-        """
+    def _silence(self, window) -> None:
         say = lambda line: print(f"[ebs] input: {line}")
-        say(f"took {took or 'nothing'}"
-            + (f", registry said {self._why}" if self._why else ""))
-
-        def names(thing, label):
-            if thing is None:
-                say(f"{label}: none")
-                return
-            got = sorted(n for n in dir(thing) if not n.startswith("_"))
-            say(f"{label}: {', '.join(got)}")
-
-        names(window, "window")
-        names(getattr(window, "viewport_api", None), "viewport_api")
-
-        for module in ("omni.ui.scene", "omni.kit.viewport.registry",
-                       "omni.kit.manipulator.camera"):
-            try:
-                found = __import__(module, fromlist=["x"])
-            except Exception as e:
-                say(f"{module}: {type(e).__name__}: {e}")
-                continue
-            got = sorted(n for n in dir(found)
-                         if not n.startswith("_") and n[:1].isupper())
-            say(f"{module}: {', '.join(got) or '(nothing public)'}")
-
+        try:
+            from omni.kit.viewport.utility import disable_selection
+            self._no_pick = disable_selection(window, disable_click=True)
+            say("selection off")
+        except Exception as e:
+            self._no_pick = None
+            say(f"selection NOT off: {type(e).__name__}: {e}")
+        try:
+            from omni.kit.viewport.utility import disable_context_menu
+            self._no_menu = disable_context_menu(window)
+            say("context menu off")
+        except Exception as e:
+            self._no_menu = None
+            say(f"context menu NOT off: {type(e).__name__}: {e}")
         try:
             import carb.settings
             settings = carb.settings.get_settings()
-            for key in ("/app/viewport", "/persistent/app/viewport",
-                        "/exts/omni.kit.manipulator.camera"):
-                say(f"{key} = {settings.get(key)}")
+            was = settings.get(CAMERA_BINDINGS)
+            self._bindings = was if isinstance(was, dict) and was else dict(
+                DEFAULT_BINDINGS)
+            settings.set(CAMERA_BINDINGS, {})
+            now = settings.get(CAMERA_BINDINGS)
+            say(f"camera bindings {sorted(self._bindings)} -> {now}")
         except Exception as e:
-            say(f"carb.settings: {type(e).__name__}: {e}")
+            self._bindings = None
+            say(f"camera bindings NOT cleared: {type(e).__name__}: {e}")
 
-    def _grab_arena(self) -> bool:
-        try:
-            from omni.kit.viewport.registry import RegisterScene
-            from omni.ui import scene as sc
-        except Exception as e:
-            self._why = f"{type(e).__name__}: {e}"
-            return False
-
-        owner = self
-
-        class Keep(sc.GestureManager):
-            # 두 물음 다 '이 매니저를 단 제스처', 곧 우리 것에 대한 것이다.
-            # 우리 것은 아무것도 안 막고, 아무한테도 안 막힌다. 같은 버튼에
-            # 함께 걸리면 막힐 수 있는 Kit 쪽이 물러난다.
-            def can_be_prevented(self, gesture) -> bool:
-                return False
-
-            def should_prevent(self, gesture, preventer) -> bool:
-                return False
-
-        class Ours:
-            """뷰포트가 제 씬을 지을 때 우리를 하나 만들어 준다."""
-
-            def __init__(self, desc):
-                self.__screen = sc.Screen(gestures=owner._gestures(sc, Keep()))
-
-            @property
-            def visible(self) -> bool:
-                return True
-
-            @visible.setter
-            def visible(self, value) -> None:
-                pass
-
-            @property
-            def categories(self) -> tuple:
-                return ("manipulator",)
-
-            @property
-            def name(self) -> str:
-                return "EBS orbit"
-
-            def destroy(self) -> None:
-                self.__screen = None
-
-        try:
-            self._scene = RegisterScene(Ours, "ebs.orbit")
-        except Exception as e:
-            self._why = f"RegisterScene refused: {type(e).__name__}: {e}"
-            self._scene = None
-            return False
-        return True
-
-    def _gestures(self, sc, keeper) -> list:
-        """쓸 것과, 받기만 하고 아무것도 안 하는 것들.
-
-        오른쪽과 가운데도 우리가 가져가야 Kit 이 그 버튼으로 카메라를 못 옮긴다.
-        빌드에 없는 이름은 건너뛴다 — 하나 때문에 전부 안 붙으면 뷰포트가 통째로
-        Kit 손에 남는다.
-        """
-        made = []
-
-        def add(name, **kw):
-            kind = getattr(sc, name, None)
-            if kind is None:
-                return
+    def _restore(self) -> None:
+        self._no_pick = None       # 핸들을 놓으면 Kit 이 되돌린다
+        self._no_menu = None
+        if self._bindings is not None:
             try:
-                made.append(kind(manager=keeper, **kw))
+                import carb.settings
+                carb.settings.get_settings().set(CAMERA_BINDINGS, self._bindings)
             except Exception as e:
-                print(f"[ebs] {name} not taken: {e}")
-
-        add("DragGesture", mouse_button=LEFT_BUTTON,
-            on_began_fn=lambda g: self._start_drag(),
-            on_changed_fn=lambda g: self._dragged(g),
-            on_ended_fn=lambda g: self._end_drag())
-        add("ClickGesture", mouse_button=LEFT_BUTTON,
-            on_ended_fn=lambda g: None)
-        add("DoubleClickGesture", mouse_button=LEFT_BUTTON,
-            on_ended_fn=lambda g: self._double())
-        add("ScrollGesture", on_ended_fn=lambda g: self._wheel())
-        for button in (RIGHT_BUTTON, MIDDLE_BUTTON):
-            add("DragGesture", mouse_button=button)
-            add("ClickGesture", mouse_button=button)
-        return made
-
-    def _dragged(self, gesture) -> None:
-        """Screen 위의 끌기. 화면 폭이 대략 2 라 픽셀로 환산해 쓴다."""
-        try:
-            moved = gesture.gesture_payload.moved
-        except Exception:
-            return
-        self._drag(moved[0] * UNIT_PIXELS, -moved[1] * UNIT_PIXELS)
+                print(f"[ebs] input: camera bindings NOT restored: {e}")
+            self._bindings = None
 
     def _grab_sheet(self, window) -> bool:
         try:
@@ -404,7 +320,7 @@ class EbsSimulateCamera:
             self._catch.set_mouse_wheel_fn(
                 lambda dx, dy, mod: self._wheel())
         except Exception as e:
-            print(f"[ebs] could not take the viewport input: {e}")
+            print(f"[ebs] input: could not lay the sheet: {e}")
             self._drop()
             return False
         return True
@@ -412,17 +328,12 @@ class EbsSimulateCamera:
     def _drop(self) -> None:
         self._from = self._axis = self._at = None
         self._selection = None
-        if self._scene is not None:
-            try:
-                self._scene.destroy()
-            except Exception:
-                pass
+        self._restore()
         if self._frame_ui is not None:
             try:
                 self._frame_ui.clear()
             except Exception:
                 pass
-        self._scene = None
         self._catch = None
         self._frame_ui = None
 

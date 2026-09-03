@@ -228,28 +228,24 @@ class EbsSimulateService:
             Camera 때 켜지고 Clear 때 꺼진다. 켜져 있는 동안 카메라는 그
             점을 계속 바라보고, 움직임은 그 점 둘레를 도는 것이다.
           되돌리기 -> reset (_home). UI 의 Refresh 버튼.
-          입력 -> _grab. 두 갈래다.
-            _grab_arena: RegisterScene 으로 뷰포트 자신의 씬 안에 우리
-              제스처를 넣는다. 이래야 Kit 것과 같은 아레나에 선다. 따로
-              SceneView 를 세우면 아레나가 달라 우리 것은 안 뜨고 Kit 것은
-              안 막힌다 (해봤다).
-              매니저는 can_be_prevented=False. 같은 버튼에 함께 걸리면 막힐
-              수 있는 Kit 쪽이 물러난다. should_prevent 는 '우리 것을 막을까'
-              라는 물음이므로 False 여야 한다 — True 면 우리가 우리를 막는다.
-            _grab_sheet: 등록이 안 되는 빌드의 폴백. 프레임에 판을 깔아 받기만
-              한다. 막지는 못한다 — 뷰포트 조작은 omni.ui 를 안 거친다.
-              판은 프레임을 꽉 채워야 한다. 크기를 안 주면 접힌다.
-            _drop 이 둘 다 걷는다. 창 찾기는 viewport_window (오버레이 공용).
-            _report 가 Camera 마다 이 자리의 사실을 찍는다 — 어느 쪽을 탔는지,
-              레지스트리가 왜 안 됐는지, 창/뷰포트/모듈에 무엇이 있는지,
-              carb 설정이 무엇인지. Kit 을 열어볼 수 없으니 로그가 눈이다.
+          입력 -> _grab. 받기와 막기가 따로다.
+            받기 -> _grab_sheet. 프레임(ORBIT_FRAME)에 투명한 판을 깔고 받는다.
+              이 빌드에서 확인된 유일한 경로. 판은 프레임을 꽉 채워야 한다.
+            막기 -> _silence. Kit 이 제공하는 스위치 셋을 내린다:
+              선택       omni.kit.viewport.utility.disable_selection
+              우클릭 메뉴 omni.kit.viewport.utility.disable_context_menu
+              카메라 조작 CAMERA_BINDINGS 설정을 {} 로 (비우면 아무 버튼도
+                        카메라를 안 옮긴다). 원래 값은 _bindings 에 쥔다.
+              앞의 둘은 핸들(_no_pick, _no_menu)을 쥐고 있는 동안만 꺼진다.
+              판 위에 얹기, 제스처 매니저, RegisterScene 은 다 안 됐다.
+            되돌리기 -> _restore. 핸들을 놓고 바인딩을 되돌린다. 못 읽었으면
+              문서의 DEFAULT_BINDINGS 로 — 빈 채로 두면 Kit 이 영영 안 움직인다.
+            _drop 이 판과 스위치를 같이 걷는다. 창 찾기는 viewport_window.
+            결과는 '[ebs] input:' 로 찍힌다 — 어느 스위치가 내려갔고 안 내려갔는지.
           선택 -> _mute_selection. 골라지면 바로 지운다 (SELECTION_CHANGED
-            구독, _stage_event). 아레나에 못 들어간 경우의 보험이기도 하다.
-          제스처 -> _gestures (아레나) / _pressed·_moved (판).
-            세 버튼의 드래그·클릭을 다 가져간다 — 오른쪽과 가운데도 우리가
-            가져가야 Kit 이 그 버튼으로 카메라를 못 옮긴다. 받기만 하고 아무
-            것도 안 한다. 빌드에 없는 제스처 이름은 건너뛴다.
-            Screen 의 끌기 양은 UNIT_PIXELS 로 픽셀에 맞춘다 (_dragged).
+            구독, _stage_event). disable_selection 이 안 먹을 때의 보험.
+          제스처 -> _pressed / _moved / _end_drag / _double / _wheel.
+            왼쪽만 쓴다. 나머지 버튼은 우리 쪽에서 아무것도 안 한다.
           끌기 = 공전 -> _drag -> _turn. 반지름 고정, interest 를 월드 up 으로
             바라봐서 롤이 없다. 축은 끌기당 하나로 잠근다 (AXIS_LOCK) — 요와
             피치가 안 섞인다. 극 근처는 _room 이 막는다 (PITCH_LIMIT).
