@@ -31,6 +31,7 @@ NAMELESS = "-"
 CLASH = "clash"                   # 면 패널: 막혔을 때
 GAP   = "clearance"               # 비었을 때, 선 위
 NO_GAP = "-"                      # 잰 것이 없을 때 거리 자리
+LEAST = "min {0:.3f} m"           # 지켜야 하는 최소 여유, 거리 아래
 
 # 선은 UI 가 아니라 씬에 그린다 (show_markers 의 _gap_line). 그래서 글자는 그
 # 선의 중점 양쪽으로 갈라 붙는다 — 한 판으로 두면 뒷판이 선을 가린다.
@@ -234,9 +235,13 @@ class EbsSimulateOverlay:
         """The clearance a face has, written either side of the line drawn for
         it in the scene: the word above it, the number and what the number is
         to below it."""
-        clash = mark.get("state") == "clash"
-        ground = COLOR_CANNOT if clash else COLOR_CAN
+        state = mark.get("state")
+        clash = state == "clash"
+        # Three states, two colours: clear is the yellow one, and both ways of
+        # failing -- touching, or closer than it is allowed to be -- are red.
+        ground = COLOR_CAN if state == "clear" else COLOR_CANNOT
         gap = mark.get("distance")
+        least = mark.get("min_gap")
         name = mark.get("name") or ""
 
         def block(lines):
@@ -257,6 +262,8 @@ class EbsSimulateOverlay:
                          else (ABOVE, BELOW))
         self._floating(at, block([GAP]), ground, first)
         told = [NO_GAP if gap is None else f"{gap:.3f} m"]
+        if least:
+            told.append(LEAST.format(least))
         if name:
             told.append(name)
         self._floating(at, block(told), ground, second)

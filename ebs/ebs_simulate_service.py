@@ -371,6 +371,16 @@ class EbsSimulateService:
         return cls._simulate.collide()
 
     @classmethod
+    def set_min_gaps(cls, side, ceiling):
+        """3면이 지켜야 하는 최소 여유, m. 기본 옆 0.6 / 천장 0.1.
+
+        기본값은 MIN_GAP_SIDE / MIN_GAP_CEILING.
+        이보다 가까우면 닿지 않았어도 간섭(tight)으로 본다 — 선과 패널이
+        빨개지고 placeable 이 False 가 된다. 판정하는 곳은 _face_marks.
+        """
+        return cls._simulate.set_min_gaps(side, ceiling)
+
+    @classmethod
     def get_verdict(cls):
         """마지막 collide 의 판정. 오버레이가 읽는다.
 
@@ -378,8 +388,11 @@ class EbsSimulateService:
          "faces": [{"face": 면, "name": 막은 것의 이름}], "blocked": 막힌 셀 수,
          "placeable": 세울 수 있나,
          "marks": [{"face": 면, "state": clash|clear, "distance": m 또는 None,
-                    "name": 상대 이름, "at": 선의 중점,
-                    "from": 면 위의 점, "to": 상대 위의 점}]}
+                    "name": 상대 이름, "min_gap": 지켜야 하는 여유 m,
+                    "at": 선의 중점, "from": 면 위의 점, "to": 상대 위의 점}]}
+        state 는 셋이다: clear(황색) / tight(최소 여유 미달, 빨강) / clash(막힘).
+          tight 도 faces 에 들어가고 placeable 을 내린다 — 지켜야 하는 것은
+          표면이 아니라 여유다. 기준은 set_min_gaps.
         marks 는 _face_marks. 막힌 면은 면 중앙에, 빈 면은 EBS 면과 가장 가까운
           메시 사이의 중점에 매단다. 가까운 점은 measure_faces 가 넘겨준다
           (_nearest_in_prism 의 "at" — 삼각형 정점, 또는 _box_point).
@@ -401,14 +414,15 @@ class EbsSimulateService:
           윗줄 CAN / CANNOT, 아랫줄부터 사유가 한 줄에 하나 (INNER, FACE_ORDER).
           매번 통째로 다시 짓는다 — 패널 수와 모양이 결과마다 다르다.
         면 패널은 _face_panel. 막혔으면 CLASH + 막은 것 이름 (빨강).
-          비었으면 선 중점 한쪽에 GAP, 반대쪽에 거리 + 상대 이름 (짙은 황색).
+          비었으면 선 중점 한쪽에 GAP, 반대쪽에 거리 + 최소 여유 + 상대 이름.
+          clear 만 황색이고 tight 와 clash 는 빨강 — 못 세우는 이유는 하나다.
           좌우 면은 위아래, 천장은 좌우로 붙는다 (SIDE_BY_SIDE) — 화면에서
           벌어지는 방향이 다르기 때문.
           색은 판이 지고 글자는 흰색이다 (COLOR_TEXT) — 어두운 판에 색 글자는
           플랜트를 배경으로 읽기 힘들다.
           선이 씬에 있으므로 한 판으로 두면 뒷판이 선을 가린다. 그래서 갈랐고,
           위/아래 배치는 _floating 의 anchor + LINE_ROOM.
-        선 색은 구현부 COLOR_GAP / GAP_EMISSION. 굵기는 _thread_radius —
+        선 색은 구현부 COLOR_GAP / COLOR_TIGHT / GAP_EMISSION. 굵기는 _thread_radius —
           포트 레이저와 같은 값이다 (LASER_RADIUS, 장비 대각선 대비).
         그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
           centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).

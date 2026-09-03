@@ -142,8 +142,14 @@ NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a sha
 GROUP_NAMES = ("AMH", "Construction")
 
 STATE_CLASH = "clash"     # 면이 막혔다. 거리는 없다
+STATE_TIGHT = "tight"     # 닿지는 않았는데 최소 여유보다 가깝다. 간섭
 STATE_CLEAR = "clear"     # 비었다. distance 가 있으면 그 거리, None 이면
                           # reach 안에 아무것도 없었다는 뜻
+
+# 지켜야 하는 최소 여유, m. 면마다 다르다 — 천장은 붙어도 되지만 옆은 사람이
+# 지나가야 한다. set_min_gaps 로 바꾼다.
+MIN_GAP_CEILING = 0.1
+MIN_GAP_SIDE = 0.6
 
 NEIGHBOUR_BAND = 0.5     # and how far out of the target's own row it may sit,
                          # same share: beside it, not across the aisle from it
@@ -156,6 +162,7 @@ BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 MARKER_EMISSION = 10000.0  # 마커 발광 세기
 COLOR_GAP      = (0.9, 0.7, 0.0)   # 여유를 재는 선. 패널과 같은 짙은 황색
+COLOR_TIGHT    = (0.9, 0.15, 0.15)  # 최소 여유보다 가까울 때. 간섭
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
 SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
@@ -247,6 +254,9 @@ class EbsSimulate:
         self._gone = None                   # the layer holding the see-through opinions
         self._lasers: bool = False          # draw the port lasers on align
         self._verdict: dict = {}            # what the overlay says, from the last run
+        self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
+                         FACE_LEFT: MIN_GAP_SIDE,
+                         FACE_RIGHT: MIN_GAP_SIDE}   # 면 -> 최소 여유, m
         self._blockers: dict = {}           # face -> the prim that blocked it first
         self._local: dict = {}              # mesh path -> its own points and faces
         self._boxed: dict = {}              # why a prim was judged by its box -> paths
@@ -318,6 +328,16 @@ class EbsSimulate:
         except Exception as e:
             self._note(f"could not set the EBS visibility ({e})")
         return done
+
+    def set_min_gaps(self, side: float, ceiling: float) -> None:
+        """The clearance each face has to keep, in metres.
+
+        Under it the face is reported as interference: nothing is touching,
+        but nothing is meant to be that close either.
+        """
+        self._min_gap = {FACE_CEILING: max(0.0, float(ceiling)),
+                         FACE_LEFT: max(0.0, float(side)),
+                         FACE_RIGHT: max(0.0, float(side))}
 
     def set_clearance(self, value: float) -> None:
         self._clearance = max(0.0, float(value))
@@ -883,11 +903,14 @@ class EbsSimulate:
         lo, hi = local_box.GetMin(), local_box.GetMax()
         middle = to_world.Transform(
             Gf.Vec3d(*[(lo[i] + hi[i]) * 0.5 for i in range(3)]))
-        blocked = [{"face": face,
-                    "name": self.owner_name(self._blockers.get(face, ""))}
-                   for face in FACES if any(cells.get(face, []))]
+        marks = self._face_marks(local_box, to_world, cells, distances)
+        # Too close counts against it as much as touching does: it is the
+        # clearance that has to hold, not just the surface.
+        blocked = [{"face": mark["face"], "name": mark["name"],
+                    "state": mark["state"]}
+                   for mark in marks if mark["state"] != STATE_CLEAR]
         return {
-            "marks": self._face_marks(local_box, to_world, cells, distances),
+            "marks": marks,
             "centre": (middle[0], middle[1], middle[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
             "inside": bool(inside),
@@ -926,8 +949,10 @@ class EbsSimulate:
             surface = list(middle)
             surface[axis] = coord
 
+            least = self._min_gap.get(face, 0.0)
             blank = {"face": face, "distance": None, "name": "",
-                     "at": world(surface), "from": None, "to": None}
+                     "min_gap": least, "at": world(surface),
+                     "from": None, "to": None}
             if any(cells.get(face, [])):
                 blank["state"] = STATE_CLASH
                 blank["name"] = self.owner_name(self._blockers.get(face, ""))
@@ -948,10 +973,11 @@ class EbsSimulate:
             start[axis] = coord                # straight back onto the face
             end[axis] = coord + (reach if outward > 0 else -reach)
             near, far = world(start), world(end)
-            gap = sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5
+            gap = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             marks.append({
-                "face": face, "state": STATE_CLEAR,
-                "distance": gap * per_unit,
+                "face": face,
+                "state": STATE_TIGHT if gap < least else STATE_CLEAR,
+                "distance": gap, "min_gap": least,
                 "name": self.owner_name(found.get("prim", "")),
                 "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
                 "from": near, "to": far,
@@ -2771,16 +2797,19 @@ class EbsSimulate:
             # the clearance panel is a label for, so it is drawn here and
             # cleared with the sheets rather than kept on its own.
             radius = self._thread_radius()
-            gap_material = None
+            threads = {}
             for mark in marks or ():
                 if not mark.get("from") or not mark.get("to"):
                     continue
-                if gap_material is None:
-                    gap_material = self._marker_material(
-                        stage, "gap", COLOR_GAP, GAP_OPACITY, GAP_EMISSION)
+                tight = mark.get("state") == STATE_TIGHT
+                colour = COLOR_TIGHT if tight else COLOR_GAP
+                if colour not in threads:
+                    threads[colour] = self._marker_material(
+                        stage, "tight" if tight else "gap", colour,
+                        GAP_OPACITY, GAP_EMISSION)
                 if self._gap_line(stage, f"{MARKER_ROOT}/{mark['face']}_gap",
                                   mark["from"], mark["to"], radius,
-                                  gap_material):
+                                  threads[colour], colour):
                     drawn += 1
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
@@ -2800,7 +2829,8 @@ class EbsSimulate:
         return max(span * LASER_RADIUS, 1e-5)
 
     @staticmethod
-    def _gap_line(stage, path: str, start, end, radius: float, material) -> bool:
+    def _gap_line(stage, path: str, start, end, radius: float, material,
+                  colour=COLOR_GAP) -> bool:
         """A rod from one point to the other.
 
         A cylinder is built along Z and then turned onto the direction it has
@@ -2818,7 +2848,7 @@ class EbsSimulate:
         rod.CreateExtentAttr(Vt.Vec3fArray([
             Gf.Vec3f(-radius, -radius, -height / 2.0),
             Gf.Vec3f(radius, radius, height / 2.0)]))
-        rod.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_GAP)]))
+        rod.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         matrix = Gf.Matrix4d(1.0)
         # SetRotate clears the translation, so the turn goes on first.
         matrix.SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0),
