@@ -257,7 +257,17 @@ class EbsSimulateService:
           팔 하나를 돌리기와 줌이 같이 쓴다 -> _hold (지금 팔) + _settle
             (그 끝에 눈을 놓고 자세를 다시 세움). 자세를 매번 다시 세우므로
             롤이 쌓일 자리가 없다.
-          더블클릭 -> _double. 자리만 있고 비었다.
+          더블클릭 = 중심 옮기기 -> _double. 찍은 표면이 새 interest 가 되고,
+            카메라는 그만큼 평행이동한다 (_look_at: 팔과 반지름 그대로 두고
+            interest 만 바꿔 _settle). 방향과 거리는 안 변하고, 찍은 점이
+            화면 한가운데로 온다. 미루지 않고 그 자리에서 옮긴다 — 안 그러면
+            다음에 조금 돌리는 순간 화면이 홱 돌아간다.
+            무엇이 찍혔나 -> viewport.request_query (화면 좌표 -> 월드 좌표를
+              뷰포트가 이미 안다). omni.kit.raycast.query 는 광선을 우리가
+              만들어야 하고 익스텐션도 하나 더 켜야 해서 안 쓴다.
+            좌표 -> _ndc (판 기준 -1..1) -> map_ndc_to_texture_pixel.
+            결과 거르기 -> _picked. 허공과 OURS(우리가 그린 것)는 흘린다.
+            Refresh 는 _home 의 interest 까지 되돌린다.
         거리 -> CAMERA_BACK. interest 에서 정면으로 그만큼 뒤. 고정이다.
           화면에 맞추지 않는다 — 배율이 달라지면 여유 길이를 눈으로 못 비교한다.
         대상 바운드 -> _world_range (여기가 카메라에 넘기는 상자).

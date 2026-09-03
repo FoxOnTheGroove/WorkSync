@@ -237,12 +237,21 @@ class EbsSimulateOverlay:
                     x = spot[0] - panel_w - LINE_ROOM
                 elif anchor == RIGHT:
                     x = spot[0] + LINE_ROOM
-                placer.offset_x = min(max(x, 0.0), max(width - panel_w, 0.0))
-                placer.offset_y = min(max(y, 0.0), max(height - panel_h, 0.0))
+                if self._outside(x, y, panel_w, panel_h, width, height):
+                    panel.visible = False
+                    continue
+                placer.offset_x = x
+                placer.offset_y = y
                 panel.visible = True
         except Exception as e:
             print(f"[ebs] could not place the overlay: {e}")
             self.clear()
+
+    @staticmethod
+    def _outside(x, y, panel_w, panel_h, width, height) -> bool:
+        if width <= 0 or height <= 0:
+            return False
+        return x < 0 or y < 0 or x + panel_w > width or y + panel_h > height
 
     def _to_screen(self, point):
         from pxr import Gf

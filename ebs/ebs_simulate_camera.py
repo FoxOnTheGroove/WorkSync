@@ -180,8 +180,9 @@ class EbsSimulateCamera:
         cam_prim, camera = self._camera(stage)
         if camera is None:
             return ""
-        x_cam, y_cam, z_cam, eye, distance = self._home
+        x_cam, y_cam, z_cam, eye, distance, interest = self._home
         self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, distance)
+        self._interest = interest       # 더블클릭으로 옮겨 둔 중심도 제자리로
         self._from = self._axis = None
         return f"camera back to {distance:.2f} in front of the EBS"
 
@@ -213,7 +214,7 @@ class EbsSimulateCamera:
         # 여기서부터 궤도 모드다. 카메라는 이 점을 계속 바라보고, 움직일 때는
         # 제자리에서 도는 것이 아니라 이 점 둘레를 돈다.
         self._interest = interest
-        self._home = (x_cam, y_cam, z_cam, eye, distance)
+        self._home = (x_cam, y_cam, z_cam, eye, distance, interest)
         self._orbit = True
         self._grab()
         return (f"camera {distance:.2f} back from the EBS centre, "
@@ -320,7 +321,7 @@ class EbsSimulateCamera:
             self._catch.set_mouse_released_fn(
                 lambda x, y, button, mod: self._end_drag())
             self._catch.set_mouse_double_clicked_fn(
-                lambda x, y, button, mod: self._double())
+                lambda x, y, button, mod: self._double(x, y, button))
             self._catch.set_mouse_wheel_fn(
                 lambda dx, dy, mod: self._wheel(dy))
         except Exception as e:
@@ -392,8 +393,65 @@ class EbsSimulateCamera:
     def _end_drag(self) -> None:
         self._from = self._axis = self._at = None
 
-    def _double(self) -> None:
-        pass                     # 아직 정해진 것이 없다
+    def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
+        """찍은 자리의 표면이 새 interest 가 된다. 카메라도 그만큼 따라 옮긴다.
+
+        무엇이 찍혔는지는 뷰포트에게 묻는다 (request_query) — 화면 한 점이
+        무엇에 닿는지는 뷰포트가 이미 알고 있고, 월드 좌표까지 돌려준다.
+        omni.kit.raycast.query 는 광선을 우리가 만들어 쏘는 쪽이라 여기서는
+        일이 더 많고, 익스텐션도 하나 더 켜야 한다.
+        """
+        if not self._orbit or button != LEFT_BUTTON:
+            return
+        ndc = self._ndc(x, y)
+        viewport = self.viewport()
+        if ndc is None or viewport is None:
+            return
+        try:
+            pixel, inside = viewport.map_ndc_to_texture_pixel(ndc)
+            if not inside:
+                return
+            viewport.request_query(pixel, self._picked)
+        except Exception as e:
+            print(f"[ebs] could not ask what is under the cursor: {e}")
+
+    def _ndc(self, x: float, y: float):
+        """화면 좌표를 판 안의 -1..1 로. 판 밖이면 아무것도 아니다."""
+        catch = self._catch
+        if catch is None:
+            return None
+        try:
+            width, height = catch.computed_width, catch.computed_height
+            if width <= 0 or height <= 0:
+                return None
+            u = (x - catch.screen_position_x) / width
+            v = (y - catch.screen_position_y) / height
+        except Exception:
+            return None
+        if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+            return None
+        return (u * 2.0 - 1.0, 1.0 - v * 2.0)
+
+    def _picked(self, path, position=None, *rest) -> None:
+        if not path or position is None:
+            return                       # 허공을 찍었다
+        try:
+            from .ebs_simulate import OURS, OURS_UNDER
+        except Exception:
+            OURS, OURS_UNDER = (CAMERA_PATH,), (CAMERA_PATH + "/",)
+        path = str(path)
+        if path in OURS or path.startswith(tuple(OURS_UNDER)):
+            return                       # 우리가 그린 것은 대상이 아니다
+        self._look_at(Gf.Vec3d(position[0], position[1], position[2]))
+
+    def _look_at(self, target) -> None:
+        """interest 만 옮긴다. 팔과 반지름이 그대로라 눈은 같은 만큼 평행이동
+        하고, 보던 방향도 그대로다. 찍은 점이 화면 한가운데로 온다."""
+        hold = self._hold()
+        if hold is None:
+            return
+        self._interest = target
+        self._settle(hold, hold[3], hold[4])
 
     def _wheel(self, notches: float = 0.0) -> None:
         # 위로 굴리면 가까워진다.
