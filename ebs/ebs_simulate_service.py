@@ -250,7 +250,14 @@ class EbsSimulateService:
             바라봐서 롤이 없다. 축은 끌기당 하나로 잠근다 (AXIS_LOCK) — 요와
             피치가 안 섞인다. 극 근처는 _room 이 막는다 (PITCH_LIMIT).
             속도 -> YAW_PER_PIXEL / PITCH_PER_PIXEL.
-          더블클릭·휠 -> _double / _wheel. 자리만 있고 비었다.
+          휠 = 줌 -> _wheel -> _zoom. 반지름만 바뀌고 방향과 자세는 그대로.
+            칸마다 같은 비율을 곱한다 (ZOOM_PER_NOTCH) — 멀리서는 성큼,
+            가까이서는 자잘하게. 끝은 기본 거리 대비 ZOOM_NEAREST /
+            ZOOM_FURTHEST. Refresh 는 _home 을 쓰므로 줌도 같이 되돌아온다.
+          팔 하나를 돌리기와 줌이 같이 쓴다 -> _hold (지금 팔) + _settle
+            (그 끝에 눈을 놓고 자세를 다시 세움). 자세를 매번 다시 세우므로
+            롤이 쌓일 자리가 없다.
+          더블클릭 -> _double. 자리만 있고 비었다.
         거리 -> CAMERA_BACK. interest 에서 정면으로 그만큼 뒤. 고정이다.
           화면에 맞추지 않는다 — 배율이 달라지면 여유 길이를 눈으로 못 비교한다.
         대상 바운드 -> _world_range (여기가 카메라에 넘기는 상자).

@@ -19,6 +19,10 @@ YAW_PER_PIXEL   = 0.35   # 1 픽셀 끌 때 도는 각도, 도
 PITCH_PER_PIXEL = 0.35
 AXIS_LOCK  = 5      # 이만큼 끌기 전에는 축을 안 정한다. 요와 피치는 안 섞인다
 
+ZOOM_PER_NOTCH = 0.88   # 휠 한 칸에 반지름이 이만큼이 된다. 위로 굴리면 가까이
+ZOOM_NEAREST   = 0.15   # 기본 거리(CAMERA_BACK) 대비 가장 가까이
+ZOOM_FURTHEST  = 8.0    # 그리고 가장 멀리
+
 # Kit 의 카메라 조작은 이 설정의 사전으로 정해진다. 비우면 아무 버튼도 카메라를
 # 안 옮긴다. 원래 값은 되돌릴 때 쓰려고 쥐고 있고, 못 읽었으면 문서의 기본값.
 CAMERA_BINDINGS = "/exts/omni.kit.viewport.window/bindings/camera"
@@ -318,7 +322,7 @@ class EbsSimulateCamera:
             self._catch.set_mouse_double_clicked_fn(
                 lambda x, y, button, mod: self._double())
             self._catch.set_mouse_wheel_fn(
-                lambda dx, dy, mod: self._wheel())
+                lambda dx, dy, mod: self._wheel(dy))
         except Exception as e:
             print(f"[ebs] input: could not lay the sheet: {e}")
             self._drop()
@@ -391,8 +395,10 @@ class EbsSimulateCamera:
     def _double(self) -> None:
         pass                     # 아직 정해진 것이 없다
 
-    def _wheel(self) -> None:
-        pass                     # 아직 정해진 것이 없다
+    def _wheel(self, notches: float = 0.0) -> None:
+        # 위로 굴리면 가까워진다.
+        if notches:
+            self._zoom(notches)
 
     def _drag(self, dx: float, dy: float) -> None:
         if self._from is None or not self._orbit:
@@ -413,24 +419,44 @@ class EbsSimulateCamera:
 
     # -- 공전 -----------------------------------------------------------------
 
-    def _turn(self, yaw: float = 0.0, pitch: float = 0.0) -> None:
-        """interest 둘레로 눈을 옮긴다. 반지름은 그대로, 롤은 없다."""
+    def _hold(self):
+        """지금 카메라가 interest 를 붙잡고 있는 팔. 돌리기와 줌이 같이 쓴다."""
         stage = self._stage()
         if stage is None or self._interest is None:
-            return
+            return None
         cam_prim, camera = self._camera(stage)
         if camera is None:
-            return
+            return None
         eye = self._eye(cam_prim)
         if eye is None:
-            return
-
-        up = self._up(stage)
+            return None
         arm = eye - self._interest
         radius = arm.GetLength()
         if radius <= 1e-9:
-            return
+            return None
+        return stage, cam_prim, camera, arm, radius
 
+    def _settle(self, hold, arm, radius: float) -> None:
+        """그 팔 끝에 눈을 놓고, 언제나 interest 를 월드 up 으로 바라보게 한다.
+
+        자세를 팔에서 매번 다시 세우므로 롤이 쌓일 자리가 없다.
+        """
+        stage, cam_prim, camera = hold[0], hold[1], hold[2]
+        up = self._up(stage)
+        eye = self._interest + arm.GetNormalized() * radius
+        z_cam = (eye - self._interest).GetNormalized()
+        x_cam = Gf.Cross(up, z_cam).GetNormalized()
+        y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
+        self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, radius)
+
+    def _turn(self, yaw: float = 0.0, pitch: float = 0.0) -> None:
+        """interest 둘레로 눈을 옮긴다. 반지름은 그대로."""
+        hold = self._hold()
+        if hold is None:
+            return
+        stage, arm, radius = hold[0], hold[3], hold[4]
+
+        up = self._up(stage)
         if yaw:
             arm = Gf.Rotation(up, yaw).TransformDir(arm)
         if pitch:
@@ -439,13 +465,24 @@ class EbsSimulateCamera:
                 # 양수 = 눈이 올라간다. _room 이 재는 고도와 부호가 같다.
                 side = Gf.Cross(arm, up).GetNormalized()
                 arm = Gf.Rotation(side, pitch).TransformDir(arm)
+        self._settle(hold, arm, radius)
 
-        eye = self._interest + arm.GetNormalized() * radius
-        # 언제나 interest 를 월드 up 으로 바라본다. 롤이 생길 자리가 없다.
-        z_cam = (eye - self._interest).GetNormalized()
-        x_cam = Gf.Cross(up, z_cam).GetNormalized()
-        y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
-        self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, radius)
+    def _zoom(self, notches: float) -> None:
+        """가까이 오거나 멀어진다. 방향은 그대로, 반지름만 바뀐다.
+
+        칸마다 같은 비율로 곱한다 — 멀리서는 성큼, 가까이서는 자잘하게
+        움직여야 어디서 굴리든 같은 손맛이 난다.
+        """
+        hold = self._hold()
+        if hold is None:
+            return
+        arm, radius = hold[3], hold[4]
+        want = radius * (ZOOM_PER_NOTCH ** notches)
+        want = min(max(want, CAMERA_BACK * ZOOM_NEAREST),
+                   CAMERA_BACK * ZOOM_FURTHEST)
+        if abs(want - radius) < 1e-9:
+            return                          # 끝에 닿았다
+        self._settle(hold, arm, want)
 
     @staticmethod
     def _room(arm, up, pitch: float) -> float:
