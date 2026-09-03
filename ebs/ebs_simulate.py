@@ -200,7 +200,9 @@ GRID_CELLS = 24          # most cells an axis of the interference grid gets
 MEET_LIMIT = 4           # mesh pairs named before the answer is settled
 OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
 PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
-REACH_RATIO = 1.5        # 가장 가까운 메시를 찾는 거리 (최장변 대비)
+REACH_RATIO = 30.0       # 가장 가까운 메시를 찾는 거리 (최장변 대비).
+                         # 플랜트를 가로지르는 정도. 넓힌 만큼 훑는 상자가
+                         # 커지고 후보가 늘어난다 — 'gather nearby' 참조
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"  # the mesh triangles themselves
@@ -719,8 +721,12 @@ class EbsSimulate:
                                           self._target["equipment"])
             hidden = self.hide_other_equipment(
                 [str(self._target["equipment"].GetPath())] + beside)
-        self._note(f"{len(beside)} machine(s) beside it, {hidden} turned off: "
-                   + ", ".join(p.rsplit("/", 1)[-1] for p in beside))
+        # One machine a side at most, so this is three names at most. Anything
+        # else still standing is a machine whose Looks could not be written --
+        # _author_opacity counts those in a note of its own.
+        kept = [self._target["equipment"].GetPath()] + beside
+        self._note(f"kept {len(kept)} ({', '.join(str(p).rsplit('/', 1)[-1] for p in kept)}), "
+                   f"{hidden} made see-through")
 
         with self._stage_timer("camera focus"):
             moved = self._move_camera(str(self._target["ebs"].GetPath()),
@@ -809,13 +815,6 @@ class EbsSimulate:
             self._note(f"clear of the equipment itself "
                        f"({meeting['tests']} triangle pairs tested)")
 
-        # Inside the machine, the three faces are not the answer any more, and
-        # leaving them white would read as though they were. So they all go red
-        # whatever they measured.
-        painted = cells
-        if meeting["hit"]:
-            painted = {face: [True] * len(flags) for face, flags in cells.items()}
-
         for why, paths in sorted(self._boxed.items()):
             self._note(f"{len(paths)} judged by box, {why}: "
                        + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
@@ -833,7 +832,7 @@ class EbsSimulate:
             self._note(f"no overlay verdict: {type(e).__name__}: {e}")
 
         with self._stage_timer("draw markers"):
-            self.show_markers(self._target["ebs"], painted,
+            self.show_markers(self._target["ebs"], cells,
                               verdict.get("marks"))
         self._verdict = verdict
 
@@ -941,9 +940,14 @@ class EbsSimulate:
                 blank["state"] = STATE_CLEAR
                 marks.append(blank)
                 continue
-            start = list(at)
+            # Anchored where the answer came from, but exactly as long as
+            # the answer: the number is the nearest corner's, and the point is
+            # the middle of the face that corner belongs to.
+            reach = found.get("distance", 0.0)
+            start, end = list(at), list(at)
             start[axis] = coord                # straight back onto the face
-            near, far = world(start), world(at)
+            end[axis] = coord + (reach if outward > 0 else -reach)
+            near, far = world(start), world(end)
             gap = sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5
             marks.append({
                 "face": face, "state": STATE_CLEAR,
@@ -2701,10 +2705,14 @@ class EbsSimulate:
 
     @staticmethod
     def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float):
-        """How far the nearest vertex sits off the face, and which one it is.
+        """How far the nearest vertex sits off the face, and where to draw to.
 
-        The overlay draws a line to that vertex, so the answer is the pair
-        rather than the number.
+        The number is the nearest vertex's, because the clearance is the
+        smallest gap and a corner is where a triangle comes closest. Where the
+        line is drawn is another question: hanging off a corner reads as
+        arbitrary, so it goes to the middle of the triangle instead -- unless
+        the middle falls outside the face's own footprint, and then the corner
+        is all there is.
         """
         lo, hi = prism.GetMin(), prism.GetMax()
         best, at = None, None
@@ -2716,7 +2724,13 @@ class EbsSimulate:
             gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
             if gap >= 0 and (best is None or gap < best):
                 best, at = gap, vertex
-        return None if best is None else (best, at)
+        if best is None:
+            return None
+        middle = tuple(sum(v[i] for v in triangle) / 3.0 for i in range(3))
+        if all(lo[i] - OVERLAP_EPS <= middle[i] <= hi[i] + OVERLAP_EPS
+               for i in range(3) if i != axis):
+            at = middle
+        return best, at
 
     # -- collision markers ---------------------------------------------------
 

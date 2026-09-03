@@ -355,11 +355,15 @@ class EbsSimulateService:
         EBS 박스 변경시 _ebs_bound 참조.
         빈 면 거리 변경시 measure_faces -> _face_prism, _nearest_in_prism,
           _gap_along, _triangle_gap 참조.
+          찾는 거리는 REACH_RATIO (EBS 최장변 대비). 넓히면 훑는 상자가 커져
+          'gather nearby' 가 느려진다.
+          거리는 가장 가까운 꼭짓점 것이다 — 여유는 최솟값이어야 한다.
+          선을 어디에 그을지는 별개로, 그 삼각형의 중점이다. 중점이 면 밖으로
+          나가면 꼭짓점으로 되돌아간다 (_triangle_gap).
         막힌 면 색/투명도 변경시 COLOR_BLOCKED, BLOCKED_OPACITY, BLOCKED_EMISSION.
         빈 면은 COLOR_CLEAR, MARKER_OPACITY, MARKER_EMISSION. 둘은 따로 논다.
-        내부 간섭이면 3면이 통째로 빨개진다. _do_collide 가 전부 True 인 사본을
-          만들어 show_markers 에 넘긴다 — payload 의 cells 는 실제 판정 그대로다.
-          안에 들어가 있으면 3면은 더 이상 답이 아닌데, 희게 두면 답으로 읽힌다.
+        3면 충돌과 내부 간섭은 따로 논다. 내부 간섭이라고 3면을 빨갛게 칠하지
+          않는다 — 서로 다른 검사고, 오버레이가 internal clash 로 따로 말한다.
         EBS 중앙 빌보드는 build_verdict -> get_verdict -> ebs_simulate_overlay.
         면이 한쪽만 보일 때 _marker_sheet, _marker_quad + SHEET_GAP 참조.
         RTX에서 실제로 보이는 쉐이더는 _mdl_shader. _preview_shader 는 폴백.
