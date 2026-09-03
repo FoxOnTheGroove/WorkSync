@@ -313,6 +313,9 @@ class EbsSimulateService:
 
         state 셋: clear(황색) / tight(최소 여유 미달, 빨강) / clash(막힘).
           tight 도 faces 에 들어가고 placeable 을 내린다. 기준 -> set_min_gaps.
+          3면 판도 tight 면 막힌 것처럼 빨갛게 칠한다 (show_markers 가 marks 를
+          보고 판단). payload 의 cells 는 실제로 닿은 것만 말한다.
+          clash 와 다른 점은 선이 있고, 거리가 나오고, 문구가 interference 인 것.
         marks -> _face_marks. 막힌 면은 면 중앙, 빈 면은 선 중점에 매단다.
           가까운 점 -> _nearest_in_prism 의 "at" (삼각형 중점 또는 _box_point).
           거리는 두 월드 점 사이로 잰다 (프리즘 수는 EBS 로컬이라 스케일에

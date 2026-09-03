@@ -2520,8 +2520,13 @@ class EbsSimulate:
                 False: (self._marker_material(stage, "clear", COLOR_CLEAR),
                         COLOR_CLEAR, MARKER_OPACITY),
             }
+            # 최소 여유 미달도 막힌 것처럼 칠한다. 닿았느냐가 아니라 여유가
+            # 지켜졌느냐를 보는 것이라, 화면에서 둘을 나눌 이유가 없다.
+            tight = {mark["face"] for mark in marks or ()
+                     if mark.get("state") == STATE_TIGHT}
             for face, boxes in built.items():
-                flags = cells.get(face, [])
+                flags = ([True] * len(boxes) if face in tight
+                         else cells.get(face, []))
                 for i, (_, quad) in enumerate(boxes):
                     material, colour, alpha = materials[
                         bool(i < len(flags) and flags[i])]
