@@ -232,6 +232,10 @@ class EbsSimulateService:
           단 IsValid 로 묻지 말 것 — 타입 없는 over 가 남는다. UsdGeom.Camera(prim)
           으로 물어야 한다 (안 그러면 clippingRange 에서 empty typename).
           근평면은 CAMERA_NEAR 고정. 컬링 없음.
+        보는 점 -> VERDICT_HEIGHT. EBS 바닥 0 천장 1 기준 0.85 높이.
+          판정 패널과 같은 점이다 (build_verdict 도 같은 상수).
+          그 점 기준 위아래 대칭으로 담는다 = 세로 범위가 높이의 1.7배.
+          천장 여유선과 패널이 위로 삐져나가지 않게 하려는 것.
         화면 채움 -> _fit_distance + CAMERA_FILL.
         대상 바운드 -> _world_range, _box_corners.
         뷰포트 전환 -> _viewport (omni.kit 없으면 조용히 실패).
@@ -305,7 +309,8 @@ class EbsSimulateService:
     def get_verdict(cls):
         """마지막 collide 의 판정. 오버레이가 읽는다. 만드는 곳 build_verdict.
 
-        {"centre": 월드 좌표, "span": EBS 최장변, "inside": 내부 간섭,
+        {"centre": 월드 좌표 (VERDICT_HEIGHT 높이), "span": EBS 최장변,
+         "inside": 내부 간섭,
          "faces": [{"face", "name", "state"}], "blocked": 막힌 셀 수,
          "placeable": 세울 수 있나,
          "marks": [{"face", "state", "distance": m|None, "min_gap": m,

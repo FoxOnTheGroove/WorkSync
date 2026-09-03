@@ -125,6 +125,9 @@ GEOMETRY_TYPES = frozenset({
 
 CAMERA_PATH    = "/EbsCamera"
 CAMERA_FILL    = 0.9
+VERDICT_HEIGHT = 0.85     # 판정 패널을 매다는 높이. EBS 바닥 0, 천장 1.
+                          # 카메라도 이 점을 본다. 화면에 담기는 세로
+                          # 범위는 이 점 기준 대칭 = 높이의 1.7배
 CAMERA_NEAR    = 0.01
 CAMERA_FAR     = 1.0e6
 NEIGHBOUR_REACH = 1.5
@@ -823,8 +826,10 @@ class EbsSimulate:
         if local_box.IsEmpty():
             return {}
         lo, hi = local_box.GetMin(), local_box.GetMax()
-        middle = to_world.Transform(
-            Gf.Vec3d(*[(lo[i] + hi[i]) * 0.5 for i in range(3)]))
+        spot = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+        up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
+        spot[up_axis] = lo[up_axis] + (hi[up_axis] - lo[up_axis]) * VERDICT_HEIGHT
+        middle = to_world.Transform(Gf.Vec3d(*spot))
         marks = self._face_marks(local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
@@ -2885,8 +2890,19 @@ class EbsSimulate:
         corners = self._box_corners(framed)
         if not corners:
             return False
-        centre = Gf.Vec3d(*[(framed.GetMin()[i] + framed.GetMax()[i]) * 0.5
-                            for i in range(3)])
+        low, high = framed.GetMin(), framed.GetMax()
+        centre = [(low[i] + high[i]) * 0.5 for i in range(3)]
+        centre[up_row] = low[up_row] + (high[up_row] - low[up_row]) * VERDICT_HEIGHT
+        centre = Gf.Vec3d(*centre)
+        # 위로 남는 자리가 있어야 천장 여유선과 판정 패널이 화면에 들어온다.
+        # 보는 점을 기준으로 위아래 대칭이 되게 아래 모서리를 위로 되비춘다 —
+        # 담기는 세로 범위가 바닥에서 높이의 1.7배까지가 된다.
+        mirrored = []
+        for corner in corners:
+            flipped = list(corner)
+            flipped[up_row] = 2.0 * centre[up_row] - corner[up_row]
+            mirrored.append(tuple(flipped))
+        corners = corners + mirrored
 
         distance = self._fit_distance(cam_prim, viewport, corners, centre,
                                       x_cam, y_cam, z_cam)
@@ -2915,8 +2931,8 @@ class EbsSimulate:
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
-        self._note(f"camera at {distance:.2f} from the target, "
-                   f"near plane {near:.2f}, nothing culled")
+        self._note(f"camera at {distance:.2f}, looking at {VERDICT_HEIGHT:.2f} "
+                   f"of the EBS height, near plane {near:.2f}, nothing culled")
         return True
 
     def _world_range(self, prim) -> "Gf.Range3d | None":
