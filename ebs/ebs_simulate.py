@@ -405,7 +405,9 @@ class EbsSimulate:
         self._verdict = {}
         self._triangles = {}
         self._local = {}
-        self.make_camera()
+        if self._camera.make(self._get_stage()):
+            self._note(f"camera {CAMERA_PATH} created (the viewport switches "
+                       f"to it when the camera step runs)")
 
         self.hide_ebs()
         equipment = self.build_index()
@@ -697,10 +699,14 @@ class EbsSimulate:
         self._note(f"kept {len(kept)} ({', '.join(str(p).rsplit('/', 1)[-1] for p in kept)}), "
                    f"{hidden} made see-through")
 
+        ebs = self._target["ebs"]
+        anchor = self._target["anchor"]
+        facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
         with self._stage_timer("camera focus"):
-            moved = self._move_camera(str(self._target["ebs"].GetPath()),
-                                      self._target["anchor"])
-        return self._payload(moved, "Camera on the EBS" if moved
+            told = self._camera.place(stage, self._world_range(ebs), facing)
+        if told:
+            self._note(told)
+        return self._payload(bool(told), "Camera on the EBS" if told
                              else "Camera focus failed")
 
     def _do_align(self) -> dict:
@@ -2824,30 +2830,9 @@ class EbsSimulate:
             shader.ConnectableAPI(), "out")
 
 
-    def make_camera(self) -> bool:
-        made = self._camera.make(self._get_stage())
-        if made:
-            self._note(f"camera {CAMERA_PATH} created (the viewport switches "
-                       f"to it when the camera step runs)")
-        return made
-
     def release_camera(self) -> None:
         self.show_equipment()
         self._camera.release(self._get_stage())
-
-    def _move_camera(self, prim_path: str, facing: Usd.Prim = None) -> bool:
-        stage = self._get_stage()
-        if stage is None:
-            return False
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim.IsValid():
-            return False
-        facing = facing if (facing is not None and facing.IsValid()) else prim
-        told = self._camera.place(stage, self._world_range(prim), facing)
-        if not told:
-            return False
-        self._note(told)
-        return True
 
     def _world_range(self, prim) -> "Gf.Range3d | None":
         if prim is None or not prim.IsValid():

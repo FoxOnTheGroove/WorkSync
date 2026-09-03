@@ -5,9 +5,9 @@
 상수는 전부 ebs_simulate.py 최상단. 오버레이 것만 ebs_simulate_overlay.py.
 """
 
-from .ebs_simulate import EbsSimulate, FACES, GRID
+from .ebs_simulate import EbsSimulate
 
-__all__ = ["EbsSimulateService", "FACES", "GRID"]
+__all__ = ["EbsSimulateService"]
 
 
 class EbsSimulateService:
@@ -41,11 +41,6 @@ class EbsSimulateService:
     def set_ebs_paths(cls, path_2port, path_3port):
         """2포트 / 3포트 EBS 프림 경로. 고르는 규칙은 _do_prepare."""
         return cls._simulate.set_ebs_paths(path_2port, path_3port)
-
-    @classmethod
-    def set_clearance(cls, value):
-        """접촉 여유. 0이면 자동. 자동값은 _probe_depth + PROBE_RATIO."""
-        return cls._simulate.set_clearance(value)
 
     @classmethod
     def set_search_root(cls, path):
@@ -123,36 +118,23 @@ class EbsSimulateService:
     def init(cls):
         """스테이지 색인 + XML 포트 테이블. 지오메트리는 안 읽음.
 
-        init -> make_camera, hide_ebs, build_index, load_ports.
+        init -> EbsSimulateCamera.make, hide_ebs, build_index, load_ports.
         레일 인덱스는 여기서 안 만든다.
         느리면 로그의 'build index' / 'XML: parse' 비교 후 해당 쪽.
+
+        스테이지 색인 -> build_index -> _walk.
+        포트 테이블 -> load_ports. 캐시 -> _load_cache, _save_cache,
+          _source_stamp. <xml>.ebscache.json, size/mtime/CACHE_VERSION 이 같으면
+          파싱 생략. 못 쓰면 파싱으로 진행하고 로그만 남긴다.
+          파서 -> _PortScan (모듈 최상단). expat, 트리 안 만듦.
+          읽기 -> _feed_parser, READ_BLOCK 8 MB 씩.
+          320 MB 실측: I/O 0.1s, expat 3.4s, 나머지 전부 _PortScan.
+          키 이름 -> PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY,
+            PULS_KEY. 이름 규칙 -> ADDR_PATTERN, PORT_PATTERN.
+        접촉 여유 -> set_clearance 는 없앴다. _clearance 는 0 고정이고
+          _probe_depth 가 PROBE_RATIO 로 자동 계산한다.
         """
         return cls._simulate.init()
-
-    @classmethod
-    def build_index(cls):
-        """EQP_이름 -> 프림 경로. 순회 규칙 -> _walk."""
-        return cls._simulate.build_index()
-
-    @classmethod
-    def load_ports(cls):
-        """XML -> 포트 index/offset/addr, addr별 cad와 구간 puls.
-
-        캐시 -> _load_cache, _save_cache, _source_stamp.
-          <xml>.ebscache.json. size/mtime/버전 같으면 파싱 생략.
-          없거나 깨졌거나 못 쓰면 파싱으로 진행, 로그만 남김.
-          저장 형태 바꾸면 CACHE_VERSION 올릴 것. 파일명 CACHE_SUFFIX.
-        파서 -> _PortScan (모듈 최상단). expat, 트리 안 만듦.
-          읽기 루프 -> _feed_parser, READ_BLOCK 8 MB 씩.
-          320 MB 실측: I/O 0.1s, expat 3.4s, 나머지 전부 _PortScan.
-          더 빠르게 하려면 손댈 곳은 _PortScan 이다.
-        키 이름 -> PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY, PULS_KEY.
-        이름 규칙 -> ADDR_PATTERN, PORT_PATTERN. 네임스페이스 -> _plain.
-        타이밍: 'XML: cache read' 만 있으면 캐시 히트.
-        """
-        return cls._simulate.load_ports()
-
-    # -- 1단계 prepare -------------------------------------------------------
 
     @classmethod
     def prepare(cls, equipment=""):
@@ -168,13 +150,6 @@ class EbsSimulateService:
     def get_selected_equipment(cls):
         """뷰포트 선택 -> EQP_ 프림 경로. 구현 _resolve_by_selection."""
         return cls._simulate.get_selected_equipment()
-
-    @classmethod
-    def get_port_count(cls, eqp_id):
-        """XML 기준 포트 개수. 구현 get_port_indices."""
-        return cls._simulate.get_port_count(eqp_id)
-
-    # -- 2단계 align ---------------------------------------------------------
 
     @classmethod
     def align(cls):
@@ -204,8 +179,8 @@ class EbsSimulateService:
     def focus(cls):
         """카메라 생성 + EBS 정면 배치 + 뷰포트 전환 + 양옆 빼고 투명화.
 
-        focus -> _do_focus -> side_neighbours, hide_other_equipment,
-                              make_camera, _move_camera.
+        focus -> _do_focus -> side_band, hide_other_equipment,
+                              EbsSimulateCamera.place.
 
         이웃 찾기 -> side_band + NEIGHBOUR_REACH. side_neighbours 는 그 껍데기.
           점이 아니라 상자로 본다. 장비 월드 AABB 를 EBS 좌우축(_sideways,
@@ -234,9 +209,11 @@ class EbsSimulateService:
           Clear 는 release_camera -> show_equipment 로 되돌린다.
         주의: opacity 0 은 충돌 검사에서 안 빠진다. _gather_nearby 는
           visibility 만 본다.
-        카메라는 전부 ebs_simulate_camera.EbsSimulateCamera 다. 구현부의
-          make_camera / release_camera / _move_camera 는 그리로 넘기는 껍데기.
-          make -> Define 만. release_camera 를 부르면 숨긴 장비가 도로 살아난다.
+        카메라는 전부 ebs_simulate_camera.EbsSimulateCamera 다. 구현부는
+          _camera 로 들고 있고, 껍데기는 안 둔다 — _do_focus 와 init 이 직접
+          부른다. 밖으로 나가는 것은 release_camera 하나뿐이다 (장비 되돌리기가
+          붙어 있어서).
+          make -> Define 만. release 를 부르면 숨긴 장비가 도로 살아난다.
             초점거리/센서 -> FOCAL, APERTURE_H, APERTURE_V.
           place -> 상자와 바라볼 프림을 받아 놓는다. 상자 중앙이 interest.
             축 -> _frame. 쓰기 -> _write. 근평면 CAMERA_NEAR 고정, 컬링 없음.
@@ -251,14 +228,6 @@ class EbsSimulateService:
         뷰포트 전환 -> _viewport (omni.kit 없으면 조용히 실패).
         """
         return cls._simulate.focus()
-
-    @classmethod
-    def make_camera(cls):
-        """세션 레이어에 /EbsCamera. init 과 place 가 호출. 뷰포트는 안 건드림.
-
-        구현 -> ebs_simulate_camera.EbsSimulateCamera.make.
-        """
-        return cls._simulate.make_camera()
 
     @classmethod
     def release_camera(cls):
@@ -405,24 +374,3 @@ class EbsSimulateService:
         """/EbsPortSweep 삭제. SWEEP_ROOT."""
         return cls._simulate.clear_sweep()
 
-    # -- 결과 조회 (각 API 반환 payload 에 이미 포함) ------------------------
-
-    @classmethod
-    def get_result(cls):
-        """마지막 payload 전체. 키 추가/변경 -> _payload."""
-        return cls._simulate.get_result()
-
-    @classmethod
-    def get_grid_shape(cls):
-        """면별 (행, 열). GRID=1 이면 전부 (1, 1)."""
-        return cls._simulate.get_grid_shape()
-
-    @classmethod
-    def get_notes(cls):
-        """마지막 실행 진단 메시지. 쌓는 곳 _note."""
-        return cls._simulate.get_notes()
-
-    @classmethod
-    def get_timings(cls):
-        """마지막 실행 [라벨, ms]. 재는 곳 _stage_timer."""
-        return cls._simulate.get_timings()
