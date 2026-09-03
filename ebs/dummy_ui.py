@@ -169,6 +169,7 @@ class EbsDummyUI:
                     ui.Button("2 Align", clicked_fn=self._on_align)
                     ui.Button("3 Camera", clicked_fn=self._on_camera)
                     ui.Button("4 Collide", clicked_fn=self._on_collide)
+                    ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
 
                 ui.Separator(height=6)
@@ -222,6 +223,10 @@ class EbsDummyUI:
 
     def _on_camera(self):
         self._render(EbsSimulateService.focus())
+
+    def _on_refresh(self):
+        # 돌려본 카메라를 Camera 가 놓았던 자리로. 궤도 모드는 켜진 채다.
+        self._render(EbsSimulateService.refresh_camera())
 
     def _on_sweep(self):
         self._apply_settings()

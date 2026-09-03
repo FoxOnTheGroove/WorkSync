@@ -85,6 +85,7 @@ class EbsSimulateCamera:
         self._catch = None         # 그 안의 투명한 판
         self._from = None          # 끌기 시작한 화면 좌표
         self._axis = None          # 이번 끌기가 도는 축: 'yaw' 또는 'pitch'
+        self._home = None          # place 가 놓았던 자리. refresh 가 돌아갈 곳
 
     @property
     def previous(self):
@@ -153,6 +154,18 @@ class EbsSimulateCamera:
                 print(f"[ebs] could not restore the viewport camera: {e}")
         self._previous = None
 
+    def reset(self, stage) -> str:
+        """place 가 놓았던 그 자리로. 돌려놓은 것을 되돌린다."""
+        if stage is None or self._home is None:
+            return ""
+        cam_prim, camera = self._camera(stage)
+        if camera is None:
+            return ""
+        x_cam, y_cam, z_cam, eye, distance = self._home
+        self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, distance)
+        self._from = self._axis = None
+        return f"camera back to {distance:.2f} in front of the EBS"
+
     def remove(self, stage) -> None:
         """익스텐션이 내려갈 때만. 세션 중에는 부르지 않는다."""
         self.release(stage)
@@ -181,6 +194,7 @@ class EbsSimulateCamera:
         # 여기서부터 궤도 모드다. 카메라는 이 점을 계속 바라보고, 움직일 때는
         # 제자리에서 도는 것이 아니라 이 점 둘레를 돈다.
         self._interest = interest
+        self._home = (x_cam, y_cam, z_cam, eye, distance)
         self._orbit = True
         self._grab()
         return (f"camera {distance:.2f} back from the EBS centre, "
@@ -225,7 +239,12 @@ class EbsSimulateCamera:
             import omni.ui as ui
             self._frame_ui = window.get_frame(ORBIT_FRAME)
             with self._frame_ui:
-                self._catch = ui.Rectangle(style={"background_color": 0x00000000})
+                # 프레임을 꽉 채워야 한다. 크기를 안 주면 판이 접히고,
+                # 접힌 판 위로는 아무것도 지나가지 않아 뷰포트가 그대로 받는다.
+                # 배경은 알파 1 — 눈에 안 보이면서 없는 칸은 아니다.
+                self._catch = ui.Rectangle(
+                    width=ui.Percent(100), height=ui.Percent(100),
+                    style={"background_color": 0x01000000})
             self._catch.set_mouse_pressed_fn(
                 lambda x, y, button, mod: self._pressed(x, y, button))
             self._catch.set_mouse_moved_fn(

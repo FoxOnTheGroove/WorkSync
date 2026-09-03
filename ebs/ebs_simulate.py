@@ -2829,6 +2829,12 @@ class EbsSimulate:
         self.show_equipment()
         self._camera.release(self._get_stage())
 
+    def refresh_camera(self) -> dict:
+        told = self._camera.reset(self._get_stage())
+        if told:
+            self._note(told)
+        return self._payload(bool(told), told or "Run Camera first")
+
     def _world_range(self, prim) -> "Gf.Range3d | None":
         if prim is None or not prim.IsValid():
             return None

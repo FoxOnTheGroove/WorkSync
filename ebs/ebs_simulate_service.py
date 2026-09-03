@@ -227,7 +227,10 @@ class EbsSimulateService:
           궤도 모드 -> place 가 켜고 release 가 끈다 (orbit / interest).
             Camera 때 켜지고 Clear 때 꺼진다. 켜져 있는 동안 카메라는 그
             점을 계속 바라보고, 움직임은 그 점 둘레를 도는 것이다.
+          되돌리기 -> reset (_home). UI 의 Refresh 버튼.
           입력 -> _grab 이 뷰포트를 투명한 판(ORBIT_FRAME)으로 덮는다.
+            판은 프레임을 꽉 채우고 배경 알파가 1 이다. 크기를 안 주면 접히고,
+            접힌 판 위로는 입력이 안 걸려 뷰포트가 그대로 받는다.
             Kit 기본 조작·우클릭 메뉴·프림 선택이 전부 거기서 멈춘다.
             _drop 이 걷는다. 창 찾기는 모듈함수 viewport_window (오버레이도
             같은 것을 쓴다).
@@ -257,6 +260,15 @@ class EbsSimulateService:
         return cls._simulate.release_camera()
 
     # -- 4단계 collide -------------------------------------------------------
+
+    @classmethod
+    def refresh_camera(cls):
+        """카메라를 Camera 가 놓았던 자리로 되돌린다. 궤도 모드는 그대로.
+
+        구현 -> EbsSimulateCamera.reset. place 가 _home 에 적어둔 것을 다시 쓴다.
+        Camera 를 아직 안 눌렀으면 아무것도 안 한다.
+        """
+        return cls._simulate.refresh_camera()
 
     @classmethod
     def collide(cls):
