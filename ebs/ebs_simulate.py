@@ -13,29 +13,29 @@ import omni.usd
 __all__ = ["EbsSimulate"]
 
 EQP_PREFIX = "EQP_"
-PORT_ID_KEY = "port-id"       # value identifying a port: '<equipment>_<n>'
-OFFSET_KEY  = "offset"        # port distance from its addr, along the rail direction
-CADX_KEY    = "cad-x"         # rail start point along X, on the addr group
-CADY_KEY    = "cad-y"         # rail start point along Y, on the addr group
-NEXT_KEY    = "next-address"  # addr a NextAddr block leads to
-PULS_KEY    = "distance-puls"  # length of that segment, in offset units
+PORT_ID_KEY = "port-id"
+OFFSET_KEY  = "offset"
+CADX_KEY    = "cad-x"
+CADY_KEY    = "cad-y"
+NEXT_KEY    = "next-address"
+PULS_KEY    = "distance-puls"
 ADDR_PATTERN = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
 PORT_PATTERN = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
-CACHE_SUFFIX  = ".ebscache.json"  # the parsed maps, written beside the source xml
-CACHE_VERSION = 1                 # bump when the stored shape changes
-READ_BLOCK    = 8 << 20           # xml is read this much at a time
-CAD_PER_UNIT    = 100.0 / 3.0     # cad-x units per stage unit
+CACHE_SUFFIX  = ".ebscache.json"
+CACHE_VERSION = 1
+READ_BLOCK    = 8 << 20
+CAD_PER_UNIT    = 100.0 / 3.0
 CAD_SLACK       = 0.1             # 비유효축 허용 유격 (100/3이 안 나눠떨어짐)
-OFFSET_PER_UNIT = 100000.0        # offset units per stage unit
+OFFSET_PER_UNIT = 100000.0
 RAIL_PREFIX = "rail_"
 
-SCALE_FIXED = "fixed"   # offset / OFFSET_PER_UNIT, the same everywhere
-SCALE_PULS  = "puls"    # offset x (segment length / segment distance-puls)
-SCALE_SNAP  = "snap"    # puls, then slid so port 1 sits on the pivot. align only
+SCALE_FIXED = "fixed"
+SCALE_PULS  = "puls"
+SCALE_SNAP  = "snap"
 SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_SNAP)
 
+
 def _plain(name: str) -> str:
-    """A tag or attribute name without its namespace, however it is written."""
     return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
 
 
@@ -47,18 +47,12 @@ def _as_float(text) -> "float | None":
 
 
 class _PortScan:
-    """One streaming pass over the port xml. No tree is built.
-
-    A group's keys are its own attributes plus its <value key=.. value=..>
-    children, and the addr in force is whatever addr group encloses it.
-    """
-
     def __init__(self):
         self.addr_cad = {}
         self.addr_next = {}
         self.found = {}
-        self._groups = []            # keys of every group still open
-        self._addrs = []             # the addr each of those sits in
+        self._groups = []
+        self._addrs = []
         self._text = []
 
     def start(self, tag, attrib):
@@ -83,7 +77,7 @@ class _PortScan:
         key = entries.get("key")
         if key is not None and not entries.get("value") and self._groups:
             written = "".join(self._text).strip()
-            if written:                      # <value key="offset">100</value>
+            if written:
                 self._groups[-1][key.strip().lower()] = written
         del self._text[:]
 
@@ -108,7 +102,7 @@ class _PortScan:
         return self.found
 
 
-try:                                  # built once: it is asked for per prim
+try:
     _EVERY_CHILD = Usd.TraverseInstanceProxies()
 except Exception:
     _EVERY_CHILD = None
@@ -129,16 +123,11 @@ GEOMETRY_TYPES = frozenset({
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
 })
 
-CAMERA_PATH    = "/EbsCamera"             # session-layer camera owned by this extension
-CAMERA_FILL    = 0.9                      # how much of the view the target fills
-CAMERA_NEAR    = 0.01                     # fixed, right against the lens: no
-                                          # culling, nothing in front is cut
-CAMERA_FAR     = 1.0e6                    # the far plane stays open
-NEIGHBOUR_REACH = 1.5    # circle to look for the machines either side, as a share
-                         # of the target's own width
-# Walking up from a blocking mesh, these names answer for whatever is under
-# them. Anything under the search root answers as the machine instead -- the
-# prim just inside the root. Whichever is met first going up wins.
+CAMERA_PATH    = "/EbsCamera"
+CAMERA_FILL    = 0.9
+CAMERA_NEAR    = 0.01
+CAMERA_FAR     = 1.0e6
+NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
 STATE_CLASH = "clash"     # 면이 막혔다. 거리는 없다
@@ -151,13 +140,12 @@ STATE_CLEAR = "clear"     # 비었다. distance 가 있으면 그 거리, None �
 MIN_GAP_CEILING = 0.1
 MIN_GAP_SIDE = 0.6
 
-NEIGHBOUR_BAND = 0.5     # and how far out of the target's own row it may sit,
-                         # same share: beside it, not across the aisle from it
+NEIGHBOUR_BAND = 0.5
 
-MARKER_ROOT    = "/EbsCollisionMarkers"   # session-layer scope holding the cell quads
-MARKER_OPACITY = 0.075    # faint, and carried by the emission rather than the alpha
+MARKER_ROOT    = "/EbsCollisionMarkers"
+MARKER_OPACITY = 0.075
 COLOR_BLOCKED  = (0.9, 0.2, 0.2)
-BLOCKED_OPACITY = 0.6      # the blocked face is the answer, so it reads solid
+BLOCKED_OPACITY = 0.6
 BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 MARKER_EMISSION = 10000.0  # 마커 발광 세기
@@ -167,30 +155,22 @@ GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
 SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
 
-LASER_ROOT     = "/EbsPortLasers"   # session-layer scope holding the port test lasers
-LASER_COLOR    = (1.0, 0.05, 0.05)  # the real ports read from the XML
-LASER_COLOR_0  = (1.0, 0.75, 0.0)   # the virtual port 0 the EBS is placed on
-LASER_RADIUS   = 0.0013   # laser radius, as a share of the equipment's bbox diagonal
+LASER_ROOT     = "/EbsPortLasers"
+LASER_COLOR    = (1.0, 0.05, 0.05)
+LASER_COLOR_0  = (1.0, 0.75, 0.0)
+LASER_RADIUS   = 0.0013
 
-SWEEP_ROOT     = "/EbsPortSweep"    # port-1 lasers for every equipment at once
-SWEEP_COLOR_PORT = LASER_COLOR      # where port 1 is worked out to be
-SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)  # where the equipment itself is
+SWEEP_ROOT     = "/EbsPortSweep"
+SWEEP_COLOR_PORT = LASER_COLOR
+SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
-OURS_UNDER = tuple(p + "/" for p in OURS)   # startswith takes a tuple
-NOW = Usd.TimeCode.Default()      # asked for per prim; make it once
-LOOKS = "Looks"                   # the material folder right under a machine
+OURS_UNDER = tuple(p + "/" for p in OURS)
+NOW = Usd.TimeCode.Default()
+LOOKS = "Looks"
 SHADER_TYPE = "Shader"
-GONE_THRESHOLD = 0.5     # anything under this is cut, and nothing is over it
-GONE_LAYER = "ebs_hidden.usda"   # our own layer, holding only those opinions
-# What a shader is told to make its machine disappear. UsdPreviewSurface reads
-# the camelCase names, an MDL surface the underscored ones, and each ignores
-# the spelling it does not know. The threshold is what makes this a cutout
-# rather than a blend: at zero the surface is still drawn, just fully
-# see-through, which sorts against everything behind it and reads wrong. Above
-# zero the fragment is thrown away instead. Turning the prim off would be the
-# same picture and a far dearer one: visibility is resolved down the whole
-# tree beneath it.
+GONE_THRESHOLD = 0.5
+GONE_LAYER = "ebs_hidden.usda"
 GONE = (("inputs:opacity", "Float", 0.0),
         ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
         ("inputs:enable_opacity", "Bool", True),
@@ -203,87 +183,86 @@ FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 1                 # 면당 셀 분할 수. 1이면 면 하나가 셀 하나
-GRID_CELLS = 24          # most cells an axis of the interference grid gets
-MEET_LIMIT = 4           # mesh pairs named before the answer is settled
-OVERLAP_EPS = 1e-6       # boxes merely touching a face do not count as blocking
-PROBE_RATIO = 0.01       # contact tolerance, as a share of the EBS's longest edge
+GRID_CELLS = 24
+MEET_LIMIT = 4
+OVERLAP_EPS = 1e-6
+PROBE_RATIO = 0.01
 REACH_RATIO = 30.0       # 가장 가까운 메시를 찾는 거리 (최장변 대비).
                          # 플랜트를 가로지르는 정도. 넓힌 만큼 훑는 상자가
                          # 커지고 후보가 늘어난다 — 'gather nearby' 참조
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
-PRECISION_TRI  = "triangle"  # the mesh triangles themselves
+PRECISION_TRI  = "triangle"
 
 PRUNE_TYPES = frozenset({
     "Mesh", "Points", "BasisCurves", "NurbsCurves", "Capsule", "Cone", "Cube",
     "Cylinder", "Sphere", "Plane", "GeomSubset",
     "Material", "Shader", "NodeGraph", "Camera",
 })
-ANCHOR_DEPTH = 6         # how many transform levels down from the equipment the anchor is
-PASS_TYPES  = ("Scope",)      # prim types descended through without counting
-MIN_PORTS = 2            # ports a placement needs: one gap to step by, at least
-MAX_PORTS = 3            # ports the EBS spans; an equipment with more is another shape
+ANCHOR_DEPTH = 6
+PASS_TYPES  = ("Scope",)
+MIN_PORTS = 2
+MAX_PORTS = 3
 
 PIVOT_TOLERANCE = 1.0    # 포트 1에서 이만큼 넘게 떨어지면 피봇이 아님
-PIVOT_ACROSS = 0.5       # the same, times this, across the rail rather than along it
+PIVOT_ACROSS = 0.5
+
 
 class EbsSimulate:
-
     def __init__(self):
         self._xml_path: str = ""
         self._ebs_path_2port: str = ""
         self._ebs_path_3port: str = ""
-        self._clearance: float = 0.0        # 0 = derive the probe depth from the EBS
-        self._search_root: str = ""         # limit the scan to this subtree when set
-        self._eqp_index: dict = {}          # "EQP_########" -> prim path
-        self._port_map: dict = {}           # "########" -> sorted port indices
-        self._port_offsets: dict = {}       # "########" -> {index: offset}
-        self._port_addr: dict = {}          # "########" -> base addr number
-        self._port_addr_of: dict = {}       # "########" -> {index: addr number}
-        self._addr_cad: dict = {}           # addr number -> (cad-x, cad-y)
-        self._addr_next: dict = {}          # addr number -> [(next addr, distance-puls)]
-        self._offset_scale: str = SCALE_SNAP    # how an offset becomes a distance
-        self._rail_root: str = ""           # parent path holding the rail prims
-        self._rail_index: dict = None       # addr -> [(rail prim, neighbour addr)]
-        self._rail_frame = None             # (addr point, one length on, axis) in rail space
-        self._triangles: dict = {}          # mesh path -> world-space triangles
-        self._eqp_spots: dict = None        # "EQP_########" -> where its pivot stands
-        self._hidden: list = []             # equipment we turned off, to turn back on
-        self._eqp_looks: dict = {}          # equipment path -> its shader paths
-        self._eqp_shared: set = set()       # equipment whose Looks we cannot write
-        self._gone = None                   # the layer holding the see-through opinions
-        self._lasers: bool = False          # draw the port lasers on align
-        self._verdict: dict = {}            # what the overlay says, from the last run
+        self._clearance: float = 0.0
+        self._search_root: str = ""
+        self._eqp_index: dict = {}
+        self._port_map: dict = {}
+        self._port_offsets: dict = {}
+        self._port_addr: dict = {}
+        self._port_addr_of: dict = {}
+        self._addr_cad: dict = {}
+        self._addr_next: dict = {}
+        self._offset_scale: str = SCALE_SNAP
+        self._rail_root: str = ""
+        self._rail_index: dict = None
+        self._rail_frame = None
+        self._triangles: dict = {}
+        self._eqp_spots: dict = None
+        self._hidden: list = []
+        self._eqp_looks: dict = {}
+        self._eqp_shared: set = set()
+        self._gone = None
+        self._lasers: bool = False
+        self._verdict: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
                          FACE_LEFT: MIN_GAP_SIDE,
                          FACE_RIGHT: MIN_GAP_SIDE}   # 면 -> 최소 여유, m
-        self._blockers: dict = {}           # face -> the prim that blocked it first
-        self._local: dict = {}              # mesh path -> its own points and faces
-        self._boxed: dict = {}              # why a prim was judged by its box -> paths
-        self._visible: dict = {}            # prim path -> visibility, for one run
-        self._grid_shape: dict = {}         # face -> (rows, cols) of the last run
-        self._port_world: dict = {}         # port index -> world point, from the last align
-        self._port_rail_z: float = 0.0      # world Z of the rail the ports sit on
-        self._face_planes: dict = {}        # face -> (axis, outward, coord, rows, cols)
-        self._previous_camera = None        # viewport camera to restore on release
+        self._blockers: dict = {}
+        self._local: dict = {}
+        self._boxed: dict = {}
+        self._visible: dict = {}
+        self._grid_shape: dict = {}
+        self._port_world: dict = {}
+        self._port_rail_z: float = 0.0
+        self._face_planes: dict = {}
+        self._previous_camera = None
         self._precision: str = PRECISION_TRI
-        self._timings: list = []            # [label, elapsed_ms] for the last run
-        self._notes: list = []              # diagnostics for the last run, shown in the UI
-        self._blocked: str = ""             # why the run cannot go on, if it cannot
-        self._why: str = ""                 # why the last placement could not be worked out
+        self._timings: list = []
+        self._notes: list = []
+        self._blocked: str = ""
+        self._why: str = ""
         self._started: float = 0.0
-        self._ready: bool = False           # set by init(), required before prepare()
-        self._target: dict = None           # prepared equipment / EBS for the step buttons
+        self._ready: bool = False
+        self._target: dict = None
         self._aligned: bool = False
         self._result: dict = {}
 
-    # -- settings ------------------------------------------------------------
 
     def set_xml_path(self, path: str) -> None:
         path = (path or "").strip()
         if path != self._xml_path:
             self._port_map = {}
-            self._ready = False          # the port table has to be read again
+            self._ready = False
         self._xml_path = path
 
     def set_ebs_paths(self, path_2port: str, path_3port: str) -> None:
@@ -291,31 +270,22 @@ class EbsSimulate:
         self._ebs_path_3port = (path_3port or "").strip()
 
     def hide_ebs(self) -> int:
-        """Put both EBS prims out of sight.
-
-        Wherever they were left standing is not an answer to anything, and a
-        reader takes them for one. Init and Clear both put them away; Align is
-        what brings the one it used back.
-        """
         return self._show_ebs([self._ebs_path_2port, self._ebs_path_3port], False)
 
     def show_ebs(self, prim) -> int:
-        """Bring back the one Align just placed."""
         return self._show_ebs([prim], True)
 
     def _show_ebs(self, wanted: list, visible: bool) -> int:
         stage = self._get_stage()
         if stage is None:
             return 0
-        # Two prims, so nothing here is batched: the whole reason the machines
-        # are made see-through rather than hidden is fifteen hundred of them.
         shown = UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
         done = 0
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 for one in wanted:
                     if isinstance(one, str):
-                        if not one:              # the path was never filled in
+                        if not one:
                             continue
                         one = stage.GetPrimAtPath(one)
                     prim = one
@@ -330,11 +300,6 @@ class EbsSimulate:
         return done
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
-        """The clearance each face has to keep, in metres.
-
-        Under it the face is reported as interference: nothing is touching,
-        but nothing is meant to be that close either.
-        """
         self._min_gap = {FACE_CEILING: max(0.0, float(ceiling)),
                          FACE_LEFT: max(0.0, float(side)),
                          FACE_RIGHT: max(0.0, float(side))}
@@ -359,8 +324,6 @@ class EbsSimulate:
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
     def set_show_lasers(self, on: bool) -> None:
-        """Whether Align draws the port lasers. Off is the ordinary run; they
-        are there to check the port maths against the drawing."""
         self._lasers = bool(on)
 
     def set_rail_root(self, path: str) -> None:
@@ -371,7 +334,7 @@ class EbsSimulate:
         path = (path or "").strip()
         if path != self._search_root:
             self._eqp_index = {}
-            self._ready = False          # the stage has to be scanned again
+            self._ready = False
         self._search_root = path
 
     def get_result(self) -> dict:
@@ -397,7 +360,6 @@ class EbsSimulate:
         self._aligned = False
         self._result = {}
 
-    # -- timing --------------------------------------------------------------
 
     def _begin(self) -> None:
         self._boxed = {}
@@ -429,15 +391,14 @@ class EbsSimulate:
         finally:
             self._timings.append([label, (time.perf_counter() - started) * 1000.0])
 
-    # -- steps ---------------------------------------------------------------
 
     def init(self) -> dict:
         self._begin()
-        self._eqp_spots = None       # the plant may not be the one we last looked at
+        self._eqp_spots = None
         self._eqp_looks = {}
         self._eqp_shared = set()
         if self._gone is not None:
-            self._gone.Clear()               # nothing stays hidden across an init
+            self._gone.Clear()
         self._hidden = []
         self._ready = False
         self._target = None
@@ -486,7 +447,7 @@ class EbsSimulate:
 
         names = sorted(self._eqp_index)
         spots, rows, failed = {}, [], []
-        parents = {}                         # rail parent path -> its world matrix
+        parents = {}
         tc = Usd.TimeCode.Default()
         with self._stage_timer(f"port 1 of {len(names)} equipment"):
             for position, name in enumerate(names):
@@ -551,7 +512,7 @@ class EbsSimulate:
             spots[row["equipment"]] = (row["_port"] if doubted else row["_draw"],
                                        row["_here"])
 
-        self._blocked = ""                   # a bad equipment does not stop the sweep
+        self._blocked = ""
         with self._stage_timer("draw sweep"):
             try:
                 drawn = self.show_sweep(spots)
@@ -579,7 +540,7 @@ class EbsSimulate:
         run = (onward[0] - origin[0], onward[1] - origin[1])
         length = math.sqrt(run[0] ** 2 + run[1] ** 2) or 1.0
         along = (run[0] / length, run[1] / length)
-        across = (-along[1], along[0])                   # the axis we do not care about
+        across = (-along[1], along[0])
 
         def project(point, unit):
             return ((point[0] - origin[0]) * unit[0]
@@ -615,14 +576,6 @@ class EbsSimulate:
         return row
 
     def _pivot_state(self, row: dict, here, eqp_id: str) -> str:
-        """What a measured row says about its pivot. The sweep's verdict.
-
-        A pivot carrying no transform of its own first, then how far off it
-        sits, and last of all -- only when nothing else was the matter -- a
-        machine with more ports than the EBS spans. Sharing a pivot is not
-        decided here: _mark_shared only ever adds to a row already doubted, so
-        a TRUE from this is a TRUE in the report too.
-        """
         off = []
         if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
             off.append("axis")
@@ -682,7 +635,6 @@ class EbsSimulate:
             return result
         return self._do_collide()
 
-    # -- step bodies (shared by the single-step buttons and simulate) ---------
 
     def _do_prepare(self, equipment: str) -> dict:
         self._target = None
@@ -741,9 +693,6 @@ class EbsSimulate:
                                           self._target["equipment"])
             hidden = self.hide_other_equipment(
                 [str(self._target["equipment"].GetPath())] + beside)
-        # One machine a side at most, so this is three names at most. Anything
-        # else still standing is a machine whose Looks could not be written --
-        # _author_opacity counts those in a note of its own.
         kept = [self._target["equipment"].GetPath()] + beside
         self._note(f"kept {len(kept)} ({', '.join(str(p).rsplit('/', 1)[-1] for p in kept)}), "
                    f"{hidden} made see-through")
@@ -776,11 +725,8 @@ class EbsSimulate:
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
 
-        # The cache holds world-space triangles, and the EBS has just moved.
         self._forget_triangles(self._target["ebs"])
 
-        # The EBS was out of sight until now: where it sat before Align is not
-        # an answer to anything, and seeing it there reads as one.
         self.show_ebs(self._target["ebs"])
 
         if self._lasers:
@@ -798,11 +744,8 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
 
-        # The equipment is out of the face check: the EBS is placed on it, so it
-        # is always right there, and it would read as blocked on every run. What
-        # it is actually in the way of is asked separately, and exactly.
         apart = [self._target["ebs"], self._target["equipment"]]
-        bounds = self._bounds_cache()          # shared: it remembers what it read
+        bounds = self._bounds_cache()
         cells = self.check_collision(self._target["ebs"], exclude=apart, cache=bounds)
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         with self._stage_timer("measure clear faces"):
@@ -816,7 +759,6 @@ class EbsSimulate:
                 self._note(f"{face}: clear, nearest {found['distance']:.4f} away "
                            f"({found['prim'].rsplit('/', 1)[-1]})")
 
-        # A secondary check must not take the face result down with it.
         with self._stage_timer("equipment interference"):
             try:
                 meeting = self.check_equipment(self._target["ebs"],
@@ -840,10 +782,6 @@ class EbsSimulate:
                        + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
                        + (" ..." if len(paths) > 4 else ""))
 
-        # The verdict is worked out before the drawing, because the gap lines
-        # are part of it, and held aside until after: show_markers clears
-        # first, and clearing the markers clears the verdict with them. It is
-        # a few labels, so it never takes the answer down with it either.
         try:
             verdict = self.build_verdict(self._target["ebs"], cells,
                                          distances, meeting["hit"])
@@ -856,8 +794,6 @@ class EbsSimulate:
                               verdict.get("marks"))
         self._verdict = verdict
 
-        # ok says the step ran, not that the answer is good -- blocked cells do
-        # not clear it either, and the UI greys the grids out when it is false.
         told = ("No collision" if hit_count == 0
                 else f"{hit_count} cell(s) blocked")
         if meeting["hit"]:
@@ -869,14 +805,6 @@ class EbsSimulate:
         )
 
     def owner_name(self, path: str) -> str:
-        """What to call whatever is at this path, read from above it.
-
-        A mesh's own name says nothing to anyone -- it is the machine it
-        belongs to that is in the way. So the path is walked upwards: one of
-        the group names answers for its whole subtree, and the prim just
-        inside the search root answers as the machine. Whichever is met first
-        going up wins, and the mesh's own name is what is left if neither is.
-        """
         parts = [part for part in str(path or "").split("/") if part]
         if not parts:
             return ""
@@ -890,12 +818,6 @@ class EbsSimulate:
 
     def build_verdict(self, ebs_prim, cells: dict, distances: dict,
                       inside: bool) -> dict:
-        """Can the EBS stand here, and where to say so.
-
-        A point and a yes or no. What it is coloured and how big the letters
-        are is the overlay's to decide -- this side does not know what a
-        viewport is.
-        """
         bbox = self._ebs_bound(ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
@@ -904,8 +826,6 @@ class EbsSimulate:
         middle = to_world.Transform(
             Gf.Vec3d(*[(lo[i] + hi[i]) * 0.5 for i in range(3)]))
         marks = self._face_marks(local_box, to_world, cells, distances)
-        # Too close counts against it as much as touching does: it is the
-        # clearance that has to hold, not just the surface.
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
                    for mark in marks if mark["state"] != STATE_CLEAR]
@@ -922,12 +842,6 @@ class EbsSimulate:
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:
-        """One panel a face: where it hangs, and the gap it is reporting.
-
-        The gap is measured between the two world points rather than taken
-        from the number the prism worked in, because that number is in the
-        EBS's own space and the EBS may be scaled.
-        """
         stage = self._get_stage()
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -961,16 +875,13 @@ class EbsSimulate:
 
             found = distances.get(face) or {}
             at = found.get("at")
-            if at is None:                     # nothing came within the reach
+            if at is None:
                 blank["state"] = STATE_CLEAR
                 marks.append(blank)
                 continue
-            # Anchored where the answer came from, but exactly as long as
-            # the answer: the number is the nearest corner's, and the point is
-            # the middle of the face that corner belongs to.
             reach = found.get("distance", 0.0)
             start, end = list(at), list(at)
-            start[axis] = coord                # straight back onto the face
+            start[axis] = coord
             end[axis] = coord + (reach if outward > 0 else -reach)
             near, far = world(start), world(end)
             gap = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
@@ -987,7 +898,6 @@ class EbsSimulate:
     def get_verdict(self) -> dict:
         return dict(self._verdict)
 
-    # -- equipment lookup ----------------------------------------------------
 
     def build_index(self) -> int:
         stage = self._get_stage()
@@ -1021,19 +931,13 @@ class EbsSimulate:
             name = prim.GetName().upper()
             yield prim, name
             if name.startswith(EQP_PREFIX):
-                continue              # do not descend into equipment internals
+                continue
             type_name = prim.GetTypeName()
             if type_name in PRUNE_TYPES or type_name.endswith("Light"):
-                continue              # geometry and shading never hold equipment
+                continue
             stack.extend(_children(prim))
 
     def equipment_spots(self, stage) -> dict:
-        """Where each machine's pivot stands. Worked out once and kept.
-
-        Not part of init: it is only the camera that wants it, and init is what
-        everything else waits on. Machines do not move, so once is enough --
-        until init runs again and the plant may be a different one.
-        """
         if self._eqp_spots is not None:
             return self._eqp_spots
         spots = {}
@@ -1052,13 +956,6 @@ class EbsSimulate:
         return spots
 
     def side_neighbours(self, stage, ebs_prim, eqp_prim) -> list:
-        """The machine on each side of the target, within its own width.
-
-        Sideways is the EBS's own left and right -- the axis its two checked
-        faces look along -- so this asks the same question the collision does,
-        about the machines rather than the geometry. At most one each way, and
-        nothing at all where the target stands alone.
-        """
         spots = self.equipment_spots(stage)
         mine = self._equipment_id(eqp_prim)
         key = next((name for name in self._eqp_index
@@ -1081,11 +978,8 @@ class EbsSimulate:
             across = spot[0] - here[0]
             along = spot[1] - here[1]
             if across * across + along * along > reach * reach:
-                continue                       # outside the circle
+                continue
             side = across * sideways[0] + along * sideways[1]
-            # How far out of the row it stands. Without this the machine on the
-            # diagonal wins, because the circle only asks how far away it is
-            # and it still leans to one side or the other.
             depth = along * sideways[0] - across * sideways[1]
             if abs(depth) > band:
                 continue
@@ -1094,11 +988,9 @@ class EbsSimulate:
                     right = (side, name)
             elif left is None or -side < left[0]:
                 left = (-side, name)
-        # Either may be missing: a machine at the end of a row has one side.
         return [self._eqp_index[found[1]] for found in (left, right) if found]
 
     def _sideways(self, ebs_prim) -> tuple:
-        """The EBS's own left-right, flattened onto the ground."""
         try:
             row = self._ebs_bound(ebs_prim).GetMatrix().GetRow(0)
             length = math.sqrt(row[0] ** 2 + row[1] ** 2)
@@ -1109,12 +1001,6 @@ class EbsSimulate:
         return (1.0, 0.0)
 
     def hide_other_equipment(self, keep: list) -> int:
-        """Turn every machine off but these, so the view is of the target.
-
-        Only equipment: pillars, walls and the ceiling stay, because they are
-        what the clear faces are measured against. The machines are not -- the
-        only ones that can be beside this EBS are the ones either side of it.
-        """
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -1126,8 +1012,6 @@ class EbsSimulate:
         return len(self._hidden)
 
     def show_equipment(self) -> None:
-        """Put back what we turned off. The opinion is dropped, not set back to
-        solid: a machine the user had made see-through themselves stays so."""
         if not self._hidden:
             return
         stage = self._get_stage()
@@ -1136,14 +1020,6 @@ class EbsSimulate:
         self._hidden = []
 
     def _looks_shaders(self, stage, path: str) -> list:
-        """The shaders under one machine's Looks folder, the ones we can write.
-
-        Materials do not move any more than the machines do, so the walk is
-        paid on the first camera and not again until init. A machine that is
-        an instance carries its Looks inside the prototype, where an opinion
-        of ours would land on a path that composes to nothing; those are left
-        out here and counted, rather than written and silently ignored.
-        """
         found = self._eqp_looks.get(path)
         if found is not None:
             return found
@@ -1154,7 +1030,7 @@ class EbsSimulate:
             while stack:
                 prim = stack.pop()
                 if prim.GetTypeName() != SHADER_TYPE:
-                    stack.extend(_children(prim))    # network under a NodeGraph
+                    stack.extend(_children(prim))
                     continue
                 try:
                     shared = prim.IsInstanceProxy()
@@ -1168,14 +1044,6 @@ class EbsSimulate:
         return found
 
     def _gone_layer(self, stage):
-        """Our own layer over the session, holding the see-through opinions and
-        nothing else.
-
-        Putting the machines back is then one call on the layer instead of
-        fifteen hundred spec removals -- and removing specs is the one thing a
-        change block is not safe for, so the removals were going in one notice
-        at a time, or not at all.
-        """
         session = stage.GetSessionLayer()
         if self._gone is None:
             self._gone = Sdf.Layer.CreateAnonymous(GONE_LAYER)
@@ -1184,15 +1052,6 @@ class EbsSimulate:
         return self._gone
 
     def _author_opacity(self, stage, paths: list, hide: bool) -> bool:
-        """Make a whole list see-through, or put it back, in one go.
-
-        One prim at a time is one change notice each, and Kit answers every one
-        of them -- fifteen hundred of those is a panel that stops responding.
-        The layer is written through Sdf inside a change block, which is the
-        shape of the API that is safe to batch; the schema helpers read the
-        stage back as they go and are not. The shaders are gathered first for
-        the same reason: nothing reads the stage once the block is open.
-        """
         if not paths:
             return True
         if not hide:
@@ -1234,14 +1093,6 @@ class EbsSimulate:
         return True
 
     def _check_gone(self, stage, shader: str) -> None:
-        """Read one of them back off the stage.
-
-        Whether the input we wrote is the one the material actually reads is
-        not something the name can tell us -- a surface knows one spelling of
-        opacity or the other, and an MDL module that was never given the
-        parameter knows neither. One line saying what it composed to answers
-        that from the log instead of from guesswork.
-        """
         try:
             prim = stage.GetPrimAtPath(shader)
             if not prim or not prim.IsValid():
@@ -1326,12 +1177,11 @@ class EbsSimulate:
                 return current, False
             first = children[0]
             if first.GetTypeName() in PASS_TYPES:
-                current = first               # grouping, not a level
+                current = first
                 continue
             current, level = first, level + 1
         return current, True
 
-    # -- port count (XML) ----------------------------------------------------
 
     def load_ports(self) -> int:
         self._port_map = {}
@@ -1366,11 +1216,6 @@ class EbsSimulate:
         return scan.found
 
     def _feed_parser(self, scan: "_PortScan") -> int:
-        """Read the file in big blocks and push them at the parser.
-
-        Left to itself expat pulls the file 2 kB at a time, which is a round
-        trip each over a share. The blocks are ours so that cannot happen.
-        """
         parser = expat.ParserCreate()
         parser.buffer_text = True
         parser.StartElementHandler = scan.start
@@ -1409,7 +1254,6 @@ class EbsSimulate:
                            + ", ".join(sorted(names)[:6])
                            + (" ..." if len(names) > 6 else ""))
 
-    # -- XML cache -----------------------------------------------------------
 
     def _cache_path(self) -> str:
         return self._xml_path + CACHE_SUFFIX
@@ -1465,9 +1309,6 @@ class EbsSimulate:
                         "port_addr_of": self._port_addr_of,
                         "addr_cad": self._addr_cad,
                         "addr_next": self._addr_next}
-                # One write, not the thousands json.dump would make: on a
-                # share every one of those is a round trip. Written aside and
-                # renamed, so a run that dies half way leaves the old cache.
                 text = json.dumps(blob)
                 spare = path + ".part"
                 with open(spare, "w", encoding="utf-8") as handle:
@@ -1490,7 +1331,6 @@ class EbsSimulate:
     def get_port_indices(self, eqp_id: str) -> list:
         return list(self._port_map.get(eqp_id.upper(), []))
 
-    # -- rail and port geometry ----------------------------------------------
 
     def find_rail(self, stage: Usd.Stage, addr_number: int, prefer=()):
         prefix = f"{RAIL_PREFIX}{addr_number}_"
@@ -1596,7 +1436,7 @@ class EbsSimulate:
         cad_a, cad_b = self._addr_cad[addr_a], self._addr_cad[addr_b]
         span = (cad_b[0] - cad_a[0], cad_b[1] - cad_a[1])
 
-        length = span[axis] / CAD_PER_UNIT                   # signed: carries direction
+        length = span[axis] / CAD_PER_UNIT
         direction = 1.0 if length >= 0 else -1.0
 
         rail_local = self._local_translation(rail)
@@ -1643,7 +1483,7 @@ class EbsSimulate:
         spacing = self._port_spacing(key, offsets)
         if spacing is None:
             return None
-        offset_zero = offsets[1] + spacing                   # one step past port 1
+        offset_zero = offsets[1] + spacing
 
         gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
                 for i in sorted(offsets) if i + 1 in offsets]
@@ -1717,7 +1557,7 @@ class EbsSimulate:
             if cad is None:
                 print(f"[ebs] {key}: port {index} sits in addr {addr}, which has no cad")
                 continue
-            gap = (cad[axis] - base_cad[axis]) / CAD_PER_UNIT      # signed, in units
+            gap = (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             shift = direction * gap * OFFSET_PER_UNIT
             offsets[index] = offset + shift
             print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
@@ -1755,7 +1595,7 @@ class EbsSimulate:
         slide = self._snap_shift(to_world, axis, rail, spots, anchor_world, eqp_id)
 
         for index, spot in spots.items():
-            self._port_rail_z = spot[2]      # the rail's own height, shared by all ports
+            self._port_rail_z = spot[2]
             self._port_world[index] = Gf.Vec3d(spot[0] + slide[0], spot[1] + slide[1],
                                                anchor_world[2])
 
@@ -1775,16 +1615,6 @@ class EbsSimulate:
 
     def _snap_shift(self, to_world, axis: int, rail, spots: dict, here,
                     eqp_id: str) -> tuple:
-        """How far to slide every port so port 1 lands on the pivot.
-
-        Only in snap mode, and only when the placement is otherwise sound. The
-        amount is the residual the report calls coord_diff, taken off every
-        port at once, so the spacing between them is untouched -- it is the
-        origin that moves, not the pitch. Off the rail and in z nothing moves.
-
-        This is align's alone: the sweep works off compute_port_points, so its
-        coord_diff still says what the residual was.
-        """
         if self._offset_scale != SCALE_SNAP:
             return (0.0, 0.0)
         if 1 not in spots or self._rail_frame is None:
@@ -1819,7 +1649,6 @@ class EbsSimulate:
                 Usd.TimeCode.Default())
         return Gf.Matrix4d(1.0)
 
-    # -- alignment -----------------------------------------------------------
 
     def _place_ebs(self, ebs_prim: Usd.Prim, world_position: Gf.Vec3d,
                    anchor: Usd.Prim) -> bool:
@@ -1915,7 +1744,7 @@ class EbsSimulate:
     @staticmethod
     def _euler(rotation, order: str = "XYZ") -> tuple:
         axes = {"X": 0, "Y": 1, "Z": 2}
-        a, b, c = (axes[ch] for ch in order)          # first, second, third axis
+        a, b, c = (axes[ch] for ch in order)
         m = [[rotation[i][j] for j in range(3)] for i in range(3)]
 
         p = [a, b, c]
@@ -1923,7 +1752,7 @@ class EbsSimulate:
         r = [[m[p[i]][p[j]] for j in range(3)] for i in range(3)]
 
         beta = math.asin(max(-1.0, min(1.0, -sign * r[0][2])))
-        if abs(math.cos(beta)) < 1e-9:                 # gimbal lock
+        if abs(math.cos(beta)) < 1e-9:
             alpha = 0.0
             gamma = math.atan2(-sign * r[1][0], r[1][1])
         else:
@@ -1947,16 +1776,13 @@ class EbsSimulate:
         scale = [Gf.Vec3d(rows[i][0], rows[i][1], rows[i][2]).GetLength() for i in range(3)]
         return Gf.Vec3d(*[v if v > 1e-12 else 1.0 for v in scale])
 
-    # -- collision -----------------------------------------------------------
 
     @staticmethod
     def _bounds_cache():
-        """One of these a step. It remembers, and computing a world bound on a
-        plant this size is the whole cost of looking anything up."""
         return UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,          # read extentsHint instead of walking geometry
+            useExtentsHint=True,
         )
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
@@ -1964,7 +1790,7 @@ class EbsSimulate:
         stage = self._get_stage()
         if stage is None:
             return {face: [] for face in FACES}
-        self._visible = {}          # visibility can change between runs
+        self._visible = {}
         cache = cache if cache is not None else self._bounds_cache()
 
         with self._stage_timer("EBS bounds"):
@@ -2067,8 +1893,6 @@ class EbsSimulate:
         return result
 
     def _forget_triangles(self, prim: Usd.Prim) -> None:
-        """Drop a prim's cached triangles. They are in world space, so moving it
-        makes them a lie, and only the EBS ever moves."""
         if prim is None or not prim.IsValid():
             return
         root = str(prim.GetPath())
@@ -2078,11 +1902,6 @@ class EbsSimulate:
                 del cache[path]
 
     def _mesh_local(self, stage, path: str):
-        """A mesh's own points and faces, and where it stands. Read once.
-
-        Kept unconverted on purpose: converting every point to world space is
-        the expensive part, and whoever asks may only want a corner of it.
-        """
         if path in self._local:
             return self._local[path]
         prim = stage.GetPrimAtPath(path) if stage else None
@@ -2122,17 +1941,9 @@ class EbsSimulate:
         return triangles
 
     def _triangles_reaching(self, stage, path: str, box: Gf.Range3d) -> list:
-        """(path, triangle, low corner, high corner) for what reaches into `box`.
-
-        The box is pulled back through the mesh's transform once, and the faces
-        are sifted where they live. Only what survives is worth converting, and
-        where the EBS meets a corner of a machine that is nearly none of it.
-        """
         lo_box, hi_box = box.GetMin(), box.GetMax()
         cached = self._triangles.get(path)
         if cached is not None:
-            # The face check has already converted this one. Re-reading it to
-            # save a filter would be the more expensive way round.
             kept = []
             for a, b, c in cached:
                 lo = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
@@ -2151,12 +1962,6 @@ class EbsSimulate:
         if near is None:
             return []
         (lx, ly, lz), (hx, hy, hz) = near
-        # Converting a point through Gf allocates one and crosses the binding,
-        # and so does reading each of its three numbers back. Sixty thousand
-        # triangles of that is most of what this costs, so the matrix is taken
-        # apart once and the arithmetic done here, in plain floats. Whether
-        # that is the same arithmetic is not assumed: the first point is done
-        # both ways, and the fast path is only used where they agree.
         a00 = a01 = a02 = a10 = a11 = a12 = a20 = a21 = a22 = 0.0
         a30 = a31 = a32 = 0.0
         plain = False
@@ -2182,9 +1987,6 @@ class EbsSimulate:
         except Exception:
             plain = False
 
-        # A million faces go through this and most are nowhere near the box,
-        # so what it costs per face is what it costs. One pass, each point read
-        # once, nothing built that gets thrown away.
         kept, cursor, total = [], 0, len(indices)
         for count in counts:
             end = cursor + count
@@ -2232,8 +2034,6 @@ class EbsSimulate:
                        min(a[2], b[2], c[2]))
                 high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
                         max(a[2], b[2], c[2]))
-                # The face got through on its own corners; a triangle of it
-                # still need not reach the box. Same rule as the cached path.
                 if (low[0] <= hi_box[0] and high[0] >= lo_box[0]
                         and low[1] <= hi_box[1] and high[1] >= lo_box[1]
                         and low[2] <= hi_box[2] and high[2] >= lo_box[2]):
@@ -2243,7 +2043,6 @@ class EbsSimulate:
 
     @staticmethod
     def _pulled_back(box: Gf.Range3d, to_world):
-        """`box` in the mesh's own space, as the box that surely covers it."""
         try:
             inverse = to_world.GetInverse()
         except Exception:
@@ -2304,21 +2103,10 @@ class EbsSimulate:
         return True
 
     def _is_visible(self, prim, path: str) -> bool:
-        """Is this prim itself shown?
-
-        Its own attribute, not the one computed down the chain of its parents:
-        the only caller walks from the top and stops at anything hidden, so an
-        ancestor's answer has already been given by the time we are here.
-        Asking for the computed one walks those ancestors again, per prim, and
-        on this plant that was most of what looking around cost.
-        """
         known = self._visible.get(path)
         if known is not None:
             return known
         visible = True
-        # Asked of every prim, so nothing here may raise on the ordinary case:
-        # a prim that is not imageable at all is common, and letting that come
-        # back as an exception costs more than the question does.
         imageable = UsdGeom.Imageable(prim)
         if imageable:
             attribute = imageable.GetVisibilityAttr()
@@ -2369,14 +2157,14 @@ class EbsSimulate:
             prim = stack.pop()
             path = str(prim.GetPath())
             if path in ours_exact or path.startswith(OURS_UNDER):
-                continue                       # what we drew is not an obstacle
+                continue
             if path in skip_exact or (skip_under and path.startswith(skip_under)):
                 continue
             type_name = prim.GetTypeName()
             if type_name in SKIP_TYPES or type_name.endswith("Light"):
                 continue
             if not self._is_visible(prim, path):
-                continue                       # hides the whole subtree with it
+                continue
 
             visited += 1
             box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
@@ -2390,15 +2178,6 @@ class EbsSimulate:
 
     def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
-        """Does the EBS pass through the equipment it was placed on?
-
-        The three-face check asks what is around the EBS; this asks whether the
-        two occupy the same space. They are meant to touch, so this is the
-        strict test -- triangles that actually cross -- rather than boxes, which
-        would call every mounting a collision. Equipment that sits wholly inside
-        the EBS crosses nothing and is not interference either; that is a thing
-        fitting, which is what the run is hoping for.
-        """
         stage = self._get_stage()
         blank = {"hit": False, "pairs": [], "tests": 0}
         if stage is None or eqp_prim is None or not eqp_prim.IsValid():
@@ -2417,8 +2196,6 @@ class EbsSimulate:
                        f"{len(theirs)} on the equipment")
             return blank
 
-        # One region for the whole question, so each mesh is read and filtered
-        # once instead of once per pairing with the other side.
         shared = Gf.Range3d.GetIntersection(self._union([b for _, b in ours]),
                                             self._union([b for _, b in theirs]))
         if shared.IsEmpty():
@@ -2447,13 +2224,6 @@ class EbsSimulate:
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
     def _triangles_near(self, stage, meshes: list, box: Gf.Range3d) -> list:
-        """(path, triangle, its low corner, its high corner) that reach into `box`.
-
-        Read and filtered once per mesh. Two meshes that overlap at all usually
-        overlap in a corner, so this is what keeps the exact test off the other
-        several thousand triangles -- and the corners are kept because the test
-        needs them again and recomputing them is most of its cost.
-        """
         kept = []
         for path, mesh_box in meshes:
             if Gf.Range3d.GetIntersection(mesh_box, box).IsEmpty():
@@ -2462,13 +2232,6 @@ class EbsSimulate:
         return kept
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
-        """Which meshes of the two actually cross, and how many pairs it took.
-
-        The exact test is expensive enough that it must not be reached often, so
-        the equipment's triangles go in a grid over the shared box and each of
-        the EBS's only meets the ones sharing a cell with it. Boxes are compared
-        before triangles; only what survives both is worth the real test.
-        """
         grid, origin, step, spread = self._grid_of(yours, box)
         pairs, tests = [], 0
         for ebs_path, triangle, lo, hi in mine:
@@ -2489,7 +2252,6 @@ class EbsSimulate:
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
-        """Bucket triangles by the cells of a uniform grid over `box`."""
         origin = box.GetMin()
         size = [max(box.GetMax()[i] - origin[i], 1e-9) for i in range(3)]
         spread = max(1, min(GRID_CELLS, int(round(len(items) ** (1.0 / 3.0)))))
@@ -2502,7 +2264,6 @@ class EbsSimulate:
 
     @staticmethod
     def _cells_of(lo, hi, origin, step, spread):
-        """Every cell a box touches, clamped to the grid."""
         spans = []
         for i in range(3):
             first = int((lo[i] - origin[i]) / step[i])
@@ -2513,14 +2274,6 @@ class EbsSimulate:
 
     @classmethod
     def _triangles_meet(cls, a, b) -> bool:
-        """Do two triangles actually cross?
-
-        Where two triangles that are not in the same plane meet, the meeting is
-        a segment, and its ends are edges of one piercing the other. So the six
-        edges against the two faces is the whole test. Triangles lying in one
-        plane are not caught, and are not what interference means here: that is
-        two surfaces flush against each other, which is how a thing gets mounted.
-        """
         for edge in ((a[0], a[1]), (a[1], a[2]), (a[2], a[0])):
             if cls._segment_hits_triangle(edge[0], edge[1], b):
                 return True
@@ -2531,7 +2284,6 @@ class EbsSimulate:
 
     @staticmethod
     def _segment_hits_triangle(start, end, triangle) -> bool:
-        """Moller-Trumbore, with the ray cut to the segment."""
         v0, v1, v2 = triangle
         direction = [end[i] - start[i] for i in range(3)]
         edge1 = [v1[i] - v0[i] for i in range(3)]
@@ -2548,7 +2300,7 @@ class EbsSimulate:
         pitch = cross(direction, edge2)
         slope = dot(edge1, pitch)
         if abs(slope) < 1e-12:
-            return False                     # parallel: the coplanar case
+            return False
         scale = 1.0 / slope
         offset = [start[i] - v0[i] for i in range(3)]
         u = scale * dot(offset, pitch)
@@ -2563,8 +2315,8 @@ class EbsSimulate:
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
-        front_axis = 3 - up_axis                        # front/back, not evaluated
-        side_axis = 3 - up_axis - front_axis            # sides (X when Z-up)
+        front_axis = 3 - up_axis
+        side_axis = 3 - up_axis - front_axis
         t = self._probe_depth(box)
         lo, hi = box.GetMin(), box.GetMax()
         extent = [hi[i] - lo[i] for i in range(3)]
@@ -2635,12 +2387,10 @@ class EbsSimulate:
         skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
         cache = cache if cache is not None else self._bounds_cache()
 
-        # Every face's reach, worked out first, so the stage is walked once for
-        # all of them rather than once each.
         wanted = {}
         for face, (axis, outward, coord, _, _) in self._face_planes.items():
             if any(cells.get(face, [])):
-                continue                       # something is touching it already
+                continue
             prism = self._face_prism(local_box, axis, outward, coord, reach)
             wanted[face] = (prism, Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
                             axis, outward, coord)
@@ -2694,7 +2444,7 @@ class EbsSimulate:
                 continue
             triangles = self._mesh_triangles(stage, path)
             if not triangles:
-                best, best_path = gap, path          # nothing to refine with
+                best, best_path = gap, path
                 best_at = self._box_point(local, prism, axis, outward, coord, gap)
                 continue
             for triangle in triangles:
@@ -2708,9 +2458,6 @@ class EbsSimulate:
 
     @staticmethod
     def _box_point(local, prism, axis: int, outward: int, coord: float, gap: float):
-        """Where a prim judged by its box is taken to be: its near side along
-        the axis, its middle across, pulled inside the prism so the line the
-        overlay draws starts on the face it belongs to."""
         lo, hi = prism.GetMin(), prism.GetMax()
         point = [0.0, 0.0, 0.0]
         point[axis] = coord + (gap if outward > 0 else -gap)
@@ -2731,15 +2478,6 @@ class EbsSimulate:
 
     @staticmethod
     def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float):
-        """How far the nearest vertex sits off the face, and where to draw to.
-
-        The number is the nearest vertex's, because the clearance is the
-        smallest gap and a corner is where a triangle comes closest. Where the
-        line is drawn is another question: hanging off a corner reads as
-        arbitrary, so it goes to the middle of the triangle instead -- unless
-        the middle falls outside the face's own footprint, and then the corner
-        is all there is.
-        """
         lo, hi = prism.GetMin(), prism.GetMax()
         best, at = None, None
         for vertex in triangle:
@@ -2758,7 +2496,6 @@ class EbsSimulate:
             at = middle
         return best, at
 
-    # -- collision markers ---------------------------------------------------
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
                      marks: list = None) -> int:
@@ -2793,9 +2530,6 @@ class EbsSimulate:
                                        material, colour, alpha)
                     drawn += 1
 
-            # The line from the face out to whatever is nearest. It is what
-            # the clearance panel is a label for, so it is drawn here and
-            # cleared with the sheets rather than kept on its own.
             radius = self._thread_radius()
             threads = {}
             for mark in marks or ():
@@ -2815,11 +2549,6 @@ class EbsSimulate:
         return drawn
 
     def _thread_radius(self) -> float:
-        """How thick a drawn line is: the equipment's own diagonal, scaled.
-
-        The port lasers and the clearance lines are the same kind of thing to
-        look at, so they are the same thickness and it is worked out once.
-        """
         box = self._world_range((self._target or {}).get("equipment"))
         if box is None:
             span = 1.0
@@ -2831,12 +2560,6 @@ class EbsSimulate:
     @staticmethod
     def _gap_line(stage, path: str, start, end, radius: float, material,
                   colour=COLOR_GAP) -> bool:
-        """A rod from one point to the other.
-
-        A cylinder is built along Z and then turned onto the direction it has
-        to run: the gap is measured perpendicular to a face, and a face can
-        point any way the EBS does.
-        """
         direction = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         height = direction.GetLength()
         if height <= 1e-9:
@@ -2850,7 +2573,6 @@ class EbsSimulate:
             Gf.Vec3f(radius, radius, height / 2.0)]))
         rod.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         matrix = Gf.Matrix4d(1.0)
-        # SetRotate clears the translation, so the turn goes on first.
         matrix.SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0),
                                      direction.GetNormalized()))
         matrix.SetTranslateOnly(
@@ -2884,7 +2606,7 @@ class EbsSimulate:
             for index in sorted(points):
                 colour = LASER_COLOR_0 if index == 0 else LASER_COLOR
                 spot = points[index]
-                bottom = spot[2]             # where the EBS sits
+                bottom = spot[2]
                 height = max(abs(top - bottom), 1e-3)
                 self._laser_cylinder(stage, f"{LASER_ROOT}/port_{index}",
                                      Gf.Vec3d(spot[0], spot[1], (top + bottom) / 2.0),
@@ -2917,7 +2639,7 @@ class EbsSimulate:
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, SWEEP_ROOT)
             for name, (port, here) in spots.items():
-                top, bottom = port[2], here[2]      # rail down to the equipment
+                top, bottom = port[2], here[2]
                 height = max(abs(top - bottom), 1e-3)
                 middle = (top + bottom) / 2.0
                 stem = self._prim_name(name)
@@ -2973,7 +2695,7 @@ class EbsSimulate:
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
     def clear_markers(self) -> None:
-        self._verdict = {}          # the overlay reads this; it goes with them
+        self._verdict = {}
         stage = self._get_stage()
         if stage is None:
             return
@@ -3073,14 +2795,11 @@ class EbsSimulate:
         material.CreateSurfaceOutput("mdl").ConnectToSource(
             shader.ConnectableAPI(), "out")
 
-    # -- camera --------------------------------------------------------------
 
     def make_camera(self) -> bool:
         stage = self._get_stage()
         if stage is None:
             return False
-        # Not release_camera: that also puts the hidden machines back, and the
-        # camera step turns them off just before asking for the camera.
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             camera = UsdGeom.Camera.Define(stage, CAMERA_PATH)
             camera.CreateFocalLengthAttr(50.0)
@@ -3097,7 +2816,7 @@ class EbsSimulate:
         return True
 
     def release_camera(self) -> None:
-        self.show_equipment()          # the view goes back with the camera
+        self.show_equipment()
         stage = self._get_stage()
         if stage is None:
             return
@@ -3129,17 +2848,10 @@ class EbsSimulate:
         prim = stage.GetPrimAtPath(prim_path)
         if not prim.IsValid():
             return False
-        # Clear takes the camera away with it, and pressing Camera again is a
-        # perfectly ordinary thing to do, so build another one. Asking whether
-        # the prim is valid is not the question: Kit writes its own camera
-        # state at that path while the viewport is still pointed at it, so what
-        # is left behind is a prim with nothing but an over on it. That is
-        # valid, and it is not a camera -- which is the empty typename the
-        # clipping range came back with. Ask for the camera itself instead.
         cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
         camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
         if not camera:
-            self.make_camera()      # Define types the leftover over back up
+            self.make_camera()
             cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
             camera = UsdGeom.Camera(cam_prim) if cam_prim.IsValid() else None
             if not camera:
@@ -3181,9 +2893,6 @@ class EbsSimulate:
             eye[0],   eye[1],   eye[2],   1.0,
         )
 
-        # Nothing is cut out of the view. The slab that used to be carved in
-        # front of the camera took the plant apart when you orbited, and the
-        # machines being turned off is what clears the way now.
         near, far = CAMERA_NEAR, CAMERA_FAR
 
         with Usd.EditContext(stage, stage.GetSessionLayer()):
@@ -3200,7 +2909,7 @@ class EbsSimulate:
                 Gf.Vec2f(float(near), float(far)))
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
-                coi.Set(Gf.Vec3d(0.0, 0.0, -distance))   # orbit around the target
+                coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
         self._note(f"camera at {distance:.2f} from the target, "
                    f"near plane {near:.2f}, nothing culled")
         return True
@@ -3245,7 +2954,6 @@ class EbsSimulate:
             needed = max(needed, along + max(wide, tall))
         return max(needed / CAMERA_FILL, 1e-3)
 
-    # -- internals -----------------------------------------------------------
 
     @staticmethod
     def _get_stage() -> "Usd.Stage | None":
@@ -3271,7 +2979,7 @@ class EbsSimulate:
             "hit_count": hit_count,
             "grid": dict(self._grid_shape),
             "distances": distances or {},
-            "rows": rows or [],              # a sweep's table, for whoever writes it out
+            "rows": rows or [],
             "equipment_hit": equipment_hit or {"hit": False, "pairs": [], "tests": 0},
             "timings": list(self._timings),
             "notes": list(self._notes),

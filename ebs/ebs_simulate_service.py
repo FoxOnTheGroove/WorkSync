@@ -1,8 +1,8 @@
 """EBS 시뮬레이션 공개 API. 구현은 전부 ebs_simulate.py.
 
-여기 주석은 "뭘 바꾸려면 어디를 보라"는 색인이다. 본문은 전부 한 줄 위임.
-단계: init -> prepare -> align -> focus -> collide. simulate()는 뒤 넷을 연속 실행.
-상수는 전부 ebs_simulate.py 최상단.
+주석은 "뭘 바꾸려면 어디를 보라"는 색인이다. 본문은 전부 한 줄 위임.
+단계: init -> prepare -> align -> focus -> collide. simulate()는 뒤 넷 연속.
+상수는 전부 ebs_simulate.py 최상단. 오버레이 것만 ebs_simulate_overlay.py.
 """
 
 from .ebs_simulate import EbsSimulate, FACES, GRID
@@ -34,93 +34,83 @@ class EbsSimulateService:
 
     @classmethod
     def set_xml_path(cls, path):
-        """포트 XML 경로. 바뀌면 _ready 내려가서 init 재실행 필요.
-
-        실제 읽기는 load_ports.
-        """
+        """포트 XML 경로. 바뀌면 _ready 내려감. 읽기는 load_ports."""
         return cls._simulate.set_xml_path(path)
 
     @classmethod
     def set_ebs_paths(cls, path_2port, path_3port):
-        """2포트 / 3포트 EBS 프림 경로.
-
-        포트 수로 둘 중 고르는 로직 변경시 _do_prepare 참조.
-        """
+        """2포트 / 3포트 EBS 프림 경로. 고르는 규칙은 _do_prepare."""
         return cls._simulate.set_ebs_paths(path_2port, path_3port)
 
     @classmethod
     def set_clearance(cls, value):
-        """접촉 여유. 0이면 자동.
-
-        자동값 계산 변경시 _probe_depth + PROBE_RATIO 참조.
-        """
+        """접촉 여유. 0이면 자동. 자동값은 _probe_depth + PROBE_RATIO."""
         return cls._simulate.set_clearance(value)
 
     @classmethod
     def set_search_root(cls, path):
         """EQP_ 탐색 서브트리. 비우면 스테이지 전체.
 
-        순회 범위 / 가지치기 변경시 _walk + PRUNE_TYPES, EQP_PREFIX 참조.
-        인스턴스 프록시 처리 변경시 모듈함수 _children 참조.
-        init 속도 문제는 여기부터.
+        순회 범위 -> _walk + PRUNE_TYPES, EQP_PREFIX.
+        인스턴스 프록시 -> 모듈함수 _children.
+        init 이 느리면 여기부터.
         """
         return cls._simulate.set_search_root(path)
 
     @classmethod
     def set_precision(cls, mode):
-        """'bbox' / 'mesh' / 'triangle'.
+        """'bbox' / 'mesh' / 'triangle'. UI 는 box(=mesh)/triangle 둘만 노출.
 
-        UI 는 'box'(= mesh) 와 'triangle' 둘만 노출한다. bbox 와 mesh 가
-        같은 테스트라서, 셋을 보여줄 이유가 없다. API 는 셋 다 받는다.
-        판정 분기 변경시 check_collision 내 PRECISION_TRI 비교, _nearest_in_prism 참조.
-        삼각형 판정 자체는 _triangle_hits_box.
+        분기 -> check_collision 의 PRECISION_TRI 비교, _nearest_in_prism.
+        삼각형 판정 -> _triangle_hits_box.
         """
         return cls._simulate.set_precision(mode)
 
     @classmethod
     def set_offset_scale(cls, mode):
         """'fixed' = offset / 100000. 'puls' = offset x (구간길이 / distance-puls).
-        'snap' = puls 로 걷고, 판정이 TRUE 면 포트 1 을 장비 피봇의 유효축에 얹음. 기본값.
+        'snap' = puls + 판정 TRUE 면 포트 1 을 피봇 유효축에 얹음. 기본값.
 
-        fixed 계산 변경시 _coords_by_offset + OFFSET_PER_UNIT 참조.
-        puls 계산 변경시 _coords_by_puls + _addr_step 참조.
-        addr 넘어가는 처리는 _coords_by_puls 안.
-        snap 보정 변경시 _snap_shift 참조. 걷는 건 puls 와 완전히 동일하고,
-          보정은 compute_target 안에서만 일어난다 = align 전용.
-          전 포트를 같은 값만큼 민다. 간격은 안 변하고 원점만 움직인다.
-          미는 양은 CSV 의 coord_diff. 비유효축과 z 는 안 건드린다.
-          TRUE 가 아니면 안 민다 — 판정은 _pivot_state (스윕과 공용).
-          sweep 은 compute_port_points 를 직접 부르므로 영향 없음.
-          따라서 CSV 의 coord_diff 는 계속 보정 전 잔차를 말한다.
-        모드 추가시 SCALE_MODES + dummy_ui 콤보 같이.
+        fixed -> _coords_by_offset + OFFSET_PER_UNIT.
+        puls  -> _coords_by_puls + _addr_step. addr 넘김도 그 안.
+        snap  -> _snap_shift. 걷는 것은 puls 와 동일, 보정은 compute_target 안
+                 = align 전용. 전 포트를 같은 값만큼 민다 (간격 불변).
+                 판정 -> _pivot_state (스윕과 공용). sweep 은 영향 없음
+                 (compute_port_points 직접 호출).
+        모드 추가 -> SCALE_MODES + dummy_ui 콤보.
         """
         return cls._simulate.set_offset_scale(mode)
 
     @classmethod
     def set_show_lasers(cls, on):
-        """align 이 포트 레이저를 그릴지 여부. 기본 꺼짐.
+        """align 이 포트 레이저를 그릴지. 기본 꺼짐. UI 의 Laser 체크박스.
 
-        포트 계산을 도면과 대조할 때만 쓴다. 그리는 쪽은 show_port_lasers,
-        끌 때는 _do_align 이 clear_port_lasers 를 부른다.
-        UI 의 Laser 체크박스가 이걸 넘긴다.
+        그리기 -> show_port_lasers. 끄면 _do_align 이 clear_port_lasers.
         """
         return cls._simulate.set_show_lasers(on)
 
     @classmethod
+    def set_min_gaps(cls, side, ceiling):
+        """3면 최소 여유, m. 기본 MIN_GAP_SIDE 0.6 / MIN_GAP_CEILING 0.1.
+
+        미달이면 닿지 않아도 tight(간섭) -> 빨강 + placeable False.
+        판정 -> _face_marks.
+        """
+        return cls._simulate.set_min_gaps(side, ceiling)
+
+    @classmethod
     def hide_ebs(cls):
-        """EBS 프림 두 개를 안 보이게.
+        """EBS 프림 둘 다 끔. init 과 Clear 가 부른다.
 
         hide_ebs / show_ebs -> _show_ebs (세션 레이어에 visibility 직접).
-        init 과 Clear 가 끄고, align 이 쓴 것 하나만 다시 켠다.
-        align 전 EBS 가 아무데나 서 있는 것은 결과가 아닌데 결과로 읽힌다.
-        장비 쪽 숨기기(opacity)와 다른 방식인 이유는 프림이 둘뿐이라서다 —
-        일괄 처리가 필요했던 이유가 1500개였다.
+        align 이 쓴 것 하나만 다시 켠다. 장비 쪽(opacity)과 방식이 다른 것은
+        프림이 둘뿐이라서다.
         """
         return cls._simulate.hide_ebs()
 
     @classmethod
     def set_rail_root(cls, path):
-        """rail_<a>_<b> 부모 경로. 바뀌면 레일 인덱스 폐기.
+        """rail_<a>_<b> 부모 경로. 바뀌면 인덱스 폐기.
 
         인덱스는 첫 align 때 _rails_from 이 lazy 생성.
         """
@@ -130,49 +120,34 @@ class EbsSimulateService:
 
     @classmethod
     def init(cls):
-        """스테이지 색인 + XML 포트 테이블. 캐시는 다음 init까지 유지.
+        """스테이지 색인 + XML 포트 테이블. 지오메트리는 안 읽음.
 
         init -> make_camera, hide_ebs, build_index, load_ports.
-        지오메트리 안 읽음. 레일 인덱스 여기서 안 만듦.
-        느릴 때: 로그의 'build index' / 'parse XML' 두 값 비교 후
-                 build_index 또는 load_ports 참조.
+        레일 인덱스는 여기서 안 만든다.
+        느리면 로그의 'build index' / 'XML: parse' 비교 후 해당 쪽.
         """
         return cls._simulate.init()
 
     @classmethod
     def build_index(cls):
-        """EQP_이름 -> 프림 경로. init이 호출.
-
-        순회 규칙 변경시 _walk 참조.
-        """
+        """EQP_이름 -> 프림 경로. 순회 규칙 -> _walk."""
         return cls._simulate.build_index()
 
     @classmethod
     def load_ports(cls):
-        """XML -> 포트 index/offset/addr, addr별 cad와 구간 puls. init이 호출.
+        """XML -> 포트 index/offset/addr, addr별 cad와 구간 puls.
 
-        결과를 <xml경로>.ebscache.json 에 캐시한다. 원본 size/mtime/스키마 버전이
-        같으면 파싱을 건너뛴다. 캐시가 없거나 깨졌거나 못 쓰면 파싱으로 진행하고
-        로그만 남긴다 (읽기 전용 드라이브에서도 동작).
-        캐시 정책 변경시 _load_cache, _save_cache, _source_stamp 참조.
-        저장 형태 바꾸면 CACHE_VERSION 올릴 것. 파일명은 CACHE_SUFFIX.
-
-        파서는 expat. 트리는 안 만든다. (lxml 도 써봤으나 Kit 에 없고,
-        있어도 병목이 파서가 아니라서 의미 없었음 — 아래 참고.)
-        파일은 READ_BLOCK(8 MB)씩 읽어 파서에 밀어넣는다 — 파서에 맡기면
-        2 kB 씩 읽어서, 공유 드라이브에서는 그 한 조각이 왕복 한 번이 된다.
-        읽기 루프는 _feed_parser.
-        읽는 규칙 변경시 _PortScan 참조 (모듈 최상단).
-        320 MB 기준 실측: I/O 0.1s, expat 3.4s, _PortScan 핸들러가 나머지 전부.
-        더 빠르게 하려면 손댈 곳은 _PortScan 이지, 파서나 읽기가 아니다.
-          그룹의 키 = 자기 속성 + 직속 <value key=.. value=..> 자식.
-          addr 문맥은 감싸는 addr 그룹에서 내려온다.
-        키 이름 변경시 PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY, PULS_KEY.
-        addr/포트 이름 규칙은 ADDR_PATTERN, PORT_PATTERN.
-        네임스페이스 접두어 처리는 _plain.
-
-        타이밍: 'XML: cache read' 만 있으면 캐시 히트,
-                'XML: parse' + 'XML: cache write' 면 파싱한 것.
+        캐시 -> _load_cache, _save_cache, _source_stamp.
+          <xml>.ebscache.json. size/mtime/버전 같으면 파싱 생략.
+          없거나 깨졌거나 못 쓰면 파싱으로 진행, 로그만 남김.
+          저장 형태 바꾸면 CACHE_VERSION 올릴 것. 파일명 CACHE_SUFFIX.
+        파서 -> _PortScan (모듈 최상단). expat, 트리 안 만듦.
+          읽기 루프 -> _feed_parser, READ_BLOCK 8 MB 씩.
+          320 MB 실측: I/O 0.1s, expat 3.4s, 나머지 전부 _PortScan.
+          더 빠르게 하려면 손댈 곳은 _PortScan 이다.
+        키 이름 -> PORT_ID_KEY, OFFSET_KEY, CADX_KEY, CADY_KEY, NEXT_KEY, PULS_KEY.
+        이름 규칙 -> ADDR_PATTERN, PORT_PATTERN. 네임스페이스 -> _plain.
+        타이밍: 'XML: cache read' 만 있으면 캐시 히트.
         """
         return cls._simulate.load_ports()
 
@@ -183,8 +158,8 @@ class EbsSimulateService:
         """장비 확정 + 포트 수 + EBS + 피봇. 빈 문자열이면 뷰포트 선택.
 
         prepare -> _do_prepare.
-        장비 찾기 변경시 _resolve_by_name, _resolve_by_selection 참조.
-        피봇 내려가는 깊이/규칙 변경시 resolve_anchor + ANCHOR_DEPTH, PASS_TYPES 참조.
+        장비 찾기 -> _resolve_by_name, _resolve_by_selection.
+        피봇 -> resolve_anchor + ANCHOR_DEPTH, PASS_TYPES.
         """
         return cls._simulate.prepare(equipment)
 
@@ -202,25 +177,23 @@ class EbsSimulateService:
 
     @classmethod
     def align(cls):
-        """포트 위치 계산 -> EBS 배치 -> 확인용 빨간 레이저.
+        """포트 위치 계산 -> EBS 배치 -> (옵션) 확인용 레이저.
 
         align -> _do_align -> compute_target, _place_ebs, _align_prims,
                               show_ebs, show_port_lasers.
 
-        레일 고르기 변경시 find_rail 참조. 후보 인덱스는 _rails_from.
-        직선/코너 판정 변경시 _rail_axis + CAD_SLACK, CAD_PER_UNIT 참조.
-        포트 좌표 계산 변경시 compute_port_points 참조 (여기가 본체).
-          축척은 _coords_by_offset / _coords_by_puls.
-          addr 기준 재정렬은 _rebase_offsets.
-          0번 포트 위치는 _port_spacing.
-        목표점 계산 변경시 compute_target 참조.
-        이동만 변경시 _place_ebs. 회전/스케일 변경시 _align_prims 참조.
-          xform op 쓰는 방식은 _write_transform, _set_rotation, _compose, _euler.
-        EBS 는 여기서 다시 보이게 된다 (show_ebs). init/Clear 가 꺼둔 것이다.
-        레이저는 기본으로 안 그린다 — set_show_lasers(True) 일 때만.
-        레이저 굵기/색/길이 변경시 show_port_lasers + LASER_RADIUS, LASER_COLOR,
-          LASER_COLOR_0, LASER_ROOT 참조.
-        레이저는 _port_world 를 쓰므로 snap 모드에서는 보정된 자리에 뜬다.
+        레일 고르기 -> find_rail. 후보 인덱스 -> _rails_from.
+        직선/코너 -> _rail_axis + CAD_SLACK, CAD_PER_UNIT.
+        포트 좌표 -> compute_port_points (본체).
+          축척 -> _coords_by_offset / _coords_by_puls.
+          addr 재정렬 -> _rebase_offsets. 0번 포트 -> _port_spacing.
+        목표점 -> compute_target.
+        이동 -> _place_ebs. 회전/스케일 -> _align_prims.
+          xform op -> _write_transform, _set_rotation, _compose, _euler.
+        EBS 를 다시 보이게 -> show_ebs (init/Clear 가 꺼둔 것).
+        레이저 -> show_port_lasers + LASER_RADIUS, LASER_COLOR, LASER_COLOR_0,
+          LASER_ROOT. 기본으로 안 그림 (set_show_lasers).
+          _port_world 를 쓰므로 snap 모드에서는 보정된 자리에 뜬다.
         """
         return cls._simulate.align()
 
@@ -228,213 +201,147 @@ class EbsSimulateService:
 
     @classmethod
     def focus(cls):
-        """카메라 생성 + EBS 정면 배치 + 뷰포트 전환.
+        """카메라 생성 + EBS 정면 배치 + 뷰포트 전환 + 양옆 빼고 투명화.
 
         focus -> _do_focus -> side_neighbours, hide_other_equipment,
                               make_camera, _move_camera.
 
-        양옆 장비만 남기고 나머지 장비를 끈다. 기둥·벽·천장은 안 끈다 —
-        빈 면까지의 거리를 재는 상대가 그것들이다.
-        이웃 찾기 변경시 side_neighbours + NEIGHBOUR_REACH / NEIGHBOUR_BAND 참조.
-          대상 장비 폭 x NEIGHBOUR_REACH 반경 원 안에서, EBS 의 좌우 축
-          (_sideways, 3면 검사의 좌/우와 같은 축) 기준 양쪽 가장 가까운 하나씩.
-          원만 보면 대각선 장비가 이긴다 — 거리만 묻고 어느 쪽으로 기울었는지는
-          안 물으므로. 그래서 줄에서 벗어난 정도(좌우축의 수직 성분)가
-          폭 x NEIGHBOUR_BAND 를 넘으면 뺀다.
-          위치는 equipment_spots 가 장비당 한 번 구해 캐시한다. init 이 비운다.
-        끄기/되돌리기는 hide_other_equipment / show_equipment.
-          visibility 를 끄지 않는다. 장비 프림 바로 아래 Looks 폴더의 쉐이더에
-          opacity 0 을 먹인다 (_looks_shaders 가 쉐이더 경로 수집, 장비당 한 번
-          캐시. init 이 비운다 / _author_opacity 가 저작). visibility 는 하위
-          트리 전체를 다시 풀어야 해서 훨씬 비싸다.
-          쉐이더 입력 이름은 GONE 상수. UsdPreviewSurface 는 camelCase,
-          MDL 은 underscore. 서로 모르는 철자는 무시한다.
-          문턱값(GONE_THRESHOLD)이 핵심. 0 이면 blend 라 면이 그려지긴 하고
-          뒤엣것과 정렬이 어긋나 이상하게 보인다. 0 보다 크면 컷아웃이라
-          투명도 0 인 프래그먼트를 아예 버린다.
-          프림당 하나씩 쓰면 변경 알림이 하나씩 가고 Kit 이 매번 응답한다 —
-          1500개면 그것만으로 멈춘다. Sdf 는 ChangeBlock 안에서 안전하지만
-          스키마 헬퍼는 아니다 (스테이지를 되읽으므로). 쉐이더 수집을 블록 밖에서
-          먼저 끝내는 것도 같은 이유다.
-          쓰는 곳은 세션 레이어가 아니라 그 위에 얹은 전용 레이어 (_gone_layer).
-          되돌리기가 Clear() 한 번이 된다. 스펙 제거는 ChangeBlock 이 안전하지
-          않은 유일한 동작이라, 하나씩 지우던 예전 방식은 안 지워지곤 했다.
-          인스턴스 장비는 Looks 가 프로토타입 안이라 못 쓴다. _looks_shaders 가
-          빼고 _eqp_shared 에 담아 개수만 알린다.
-          쓴 뒤 _check_gone 이 쉐이더 하나를 스테이지에서 되읽어 한 줄 남긴다 —
-          마테리얼이 어느 철자를 읽는지는 이름만으로 알 수 없다.
-          되돌릴 때 값을 되돌리지 않고 우리 의견만 지운다 — 사용자가 투명하게
-          해둔 것은 그대로. release_camera 가 show_equipment 를 부르므로
-          Clear 버튼이 되돌린다.
-        주의: opacity 0 은 충돌 검사에서 안 빠진다. _gather_nearby 는 visibility
-          만 보므로 숨긴 장비도 여전히 장애물이다. 지금 3면 검사는 대상 장비를
-          빼고 도니 결과는 같지만, 숨긴 만큼 빨라지지는 않는다.
-
-        초점거리/센서/클리핑 변경시 make_camera 참조.
-          make_camera 는 Define 만 한다. release_camera 를 부르지 않는다 —
-          숨긴 직후에 불리므로 부르면 장비가 도로 살아난다.
-          _move_camera 가 카메라 없으면 스스로 만든다. Clear 가 카메라 프림을
-          지우므로, 안 그러면 Clear 뒤에 Camera 가 죽는다.
-          단 프림 IsValid 로 묻지 말 것. 뷰포트가 아직 그 경로를 보는 동안 Kit 이
-          제 카메라 상태를 써서 타입 없는 over 가 남는다 — IsValid 는 참이고
-          카메라는 아니다. UsdGeom.Camera(prim) 로 물어야 한다 (안 그러면
-          clippingRange 에서 empty typename). Define 이 그 over 에 타입을 얹는다.
-        위치·방향 변경시 _move_camera 참조.
-          대상 앞을 잘라내던 슬랩은 없앴다 — 플랜트를 치우는 건 이제 장비를
-          끄는 쪽이 하고, 자르면 궤도 회전할 때 화면이 갈라졌다.
-          근평면은 CAMERA_NEAR 고정. 거리에 비례시키지 않는다 — 컬링 없음.
-        화면 채움 비율 변경시 _fit_distance + CAMERA_FILL 참조.
-        대상 바운드 변경시 _world_range, _box_corners 참조.
-        뷰포트 전환 안 될 때 _viewport 참조 (omni.kit 없으면 조용히 실패).
+        이웃 찾기 -> side_neighbours + NEIGHBOUR_REACH, NEIGHBOUR_BAND.
+          폭 x REACH 반경 원 안에서, EBS 좌우축(_sideways, 3면 검사와 같은 축)
+          기준 방향당 하나씩. 줄에서 벗어난 정도가 폭 x BAND 넘으면 뺀다
+          (안 그러면 대각선 장비가 이긴다).
+          위치 -> equipment_spots. 장비당 한 번 캐시, init 이 비움.
+          기둥·벽·천장은 안 끈다 — 빈 면 거리를 재는 상대다.
+        끄기/되돌리기 -> hide_other_equipment / show_equipment.
+          visibility 가 아니라 Looks 아래 쉐이더의 opacity 0.
+          쉐이더 수집 -> _looks_shaders (장비당 한 번 캐시, init 이 비움).
+          저작 -> _author_opacity. 입력 이름 -> GONE.
+            문턱값 GONE_THRESHOLD 가 핵심. 0 이면 blend 라 안 사라진다.
+            Sdf 는 ChangeBlock 안에서 안전, 스키마 헬퍼는 아님. 수집을 블록
+            밖에서 먼저 끝내는 것도 같은 이유.
+          쓰는 곳 -> _gone_layer (세션 위에 얹은 전용 레이어). 되돌리기가
+            Clear() 한 번. 스펙 제거는 ChangeBlock 이 안전하지 않다.
+          인스턴스 장비는 못 쓴다 -> _eqp_shared 에 담아 개수만 알림.
+          되읽어 확인 -> _check_gone (한 줄).
+          Clear 는 release_camera -> show_equipment 로 되돌린다.
+        주의: opacity 0 은 충돌 검사에서 안 빠진다. _gather_nearby 는
+          visibility 만 본다.
+        카메라 만들기 -> make_camera. Define 만 한다 (release_camera 부르면
+          숨긴 장비가 도로 살아난다). 초점거리/센서/클리핑도 여기.
+        카메라 배치 -> _move_camera. 없으면 스스로 만든다 (Clear 가 지우므로).
+          단 IsValid 로 묻지 말 것 — 타입 없는 over 가 남는다. UsdGeom.Camera(prim)
+          으로 물어야 한다 (안 그러면 clippingRange 에서 empty typename).
+          근평면은 CAMERA_NEAR 고정. 컬링 없음.
+        화면 채움 -> _fit_distance + CAMERA_FILL.
+        대상 바운드 -> _world_range, _box_corners.
+        뷰포트 전환 -> _viewport (omni.kit 없으면 조용히 실패).
         """
         return cls._simulate.focus()
 
     @classmethod
     def make_camera(cls):
-        """세션 레이어에 /EbsCamera 재생성. init과 focus가 호출. 뷰포트는 안 건드림."""
+        """세션 레이어에 /EbsCamera. init 과 _move_camera 가 호출. 뷰포트는 안 건드림."""
         return cls._simulate.make_camera()
 
     @classmethod
     def release_camera(cls):
-        """원래 카메라 복귀 + /EbsCamera 삭제."""
+        """원래 카메라 복귀 + /EbsCamera 삭제 + show_equipment."""
         return cls._simulate.release_camera()
 
     # -- 4단계 collide -------------------------------------------------------
 
     @classmethod
     def collide(cls):
-        """EBS 좌/우/천장 충돌 판정 + 빈 면 거리 + 씬에 마커.
+        """EBS 좌/우/천장 판정 + 빈 면 거리 + 대상 장비 간섭 + 씬에 마커.
 
         collide -> _do_collide -> check_collision, measure_faces,
-                                  check_equipment, show_markers, build_verdict.
+                                  check_equipment, build_verdict, show_markers.
 
-        대상 장비는 3면 검사에서 빠져있다 (exclude 에 EBS 와 같이 들어감).
-        EBS 를 그 장비에 올려놓는 거라 늘 거기 있고, 그러면 매번 막힘으로 뜬다.
-        대신 장비와의 간섭은 따로, 정확히 본다: check_equipment 참조.
-          삼각형 대 삼각형. 박스로 보면 마운트가 전부 충돌이 되므로.
-          양쪽 메시 상자의 공통 영역을 먼저 잡고, 거기 닿는 삼각형만 읽는다
-            (_triangles_near — 메시당 한 번. 쌍마다 다시 읽으면 안 된다).
-          그 다음 장비 삼각형을 격자에 담고, EBS 삼각형은 같은 칸에 있는 것만
-            상자 비교 -> 실제 판정 (_meetings, _grid_of, _cells_of).
-            격자 없이 n x m 을 돌면 7200x7200 에서 10분이 넘는다. GRID_CELLS.
-          판정 자체는 여섯 모서리를 상대 면에 쏘는 것
-            (_triangles_meet, _segment_hits_triangle).
-          같은 평면끼리는 안 잡는다. 그건 면이 맞닿은 것 = 마운트.
-          EBS 안에 통째로 들어간 것도 안 잡는다. 그건 들어맞은 것 = 정상.
-          이름 쌍은 MEET_LIMIT 개까지 모으고 멈춘다.
-        타이밍: 'interference: gather / read triangles / test' 로 나뉘어 있다.
-        결과는 payload["equipment_hit"] = {hit, pairs, tests}.
-        ok 는 그대로 True — ok 는 "돌았다"는 뜻이고, 셀이 막혀도 True 다.
-        검사가 터져도 노트만 남기고 3면 결과는 살린다.
+        대상 장비는 3면 검사에서 빠진다 (exclude). 대신 따로 정확히 본다.
+        3면 충돌과 내부 간섭은 서로 색을 빌려주지 않는다.
 
-        셀 분할 변경시 _build_cells + GRID 참조. 지금 GRID=1 이라 면당 셀 1개.
-        후보 수집 / 가지치기 변경시 _gather_nearby 참조 (대부분 여기서 걸러짐).
-          스테이지 순회는 한 단계에 2회다: check_collision 1, measure_faces 1.
-          measure_faces 는 세 면의 프리즘을 먼저 다 만들고 그 합집합으로 한 번만
-          걷는다 (예전엔 면마다 한 번씩 = 3회).
-          BBoxCache 는 _bounds_cache 로 만들어 _do_collide 가 셋에 나눠준다.
-          월드 바운드 계산이 비용의 전부이고, 캐시는 그걸 기억한다.
-          따로 만들면 같은 프림을 세 번 다시 잰다.
-        박스 겹침은 _overlaps, 삼각형 판정은 _triangle_hits_box.
-        메시 읽기 변경시 _mesh_local (원본 점/면, 변환 안 함) 과 그 위의 둘:
-          _mesh_triangles   메시 전체를 월드로. 3면 검사용.
+        장비 간섭 -> check_equipment. 삼각형 대 삼각형 (박스로 보면 마운트가
+          전부 충돌이 된다).
+          공통 영역의 삼각형만 읽기 -> _triangles_near (메시당 한 번).
+          격자로 쌍 줄이기 -> _meetings, _grid_of, _cells_of + GRID_CELLS.
+            격자 없이 n x m 이면 7200x7200 에서 10분 넘는다.
+          판정 -> _triangles_meet, _segment_hits_triangle (여섯 모서리).
+          같은 평면 = 마운트, 통째로 들어간 것 = 정상. 둘 다 안 잡는다.
+          이름 쌍은 MEET_LIMIT 까지. 결과 -> payload["equipment_hit"].
+          터져도 노트만 남기고 3면 결과는 살린다.
+        타이밍: 'interference: gather / read triangles / test'.
+
+        셀 분할 -> _build_cells + GRID (지금 1, 면당 셀 1개).
+        후보 수집 -> _gather_nearby (대부분 여기서 걸러짐).
+          순회는 단계당 2회: check_collision 1, measure_faces 1.
+          measure_faces 는 세 면 프리즘의 합집합으로 한 번만 걷는다.
+          BBoxCache -> _bounds_cache. _do_collide 가 셋에 나눠준다.
+        박스 겹침 -> _overlaps. 삼각형 -> _triangle_hits_box.
+        메시 읽기 -> _mesh_local (원본, 변환 없음) 과 그 위의 둘:
+          _mesh_triangles     전체를 월드로. 3면 검사용.
           _triangles_reaching 상자를 로컬로 끌어와(_pulled_back) 거른 뒤
-                            살아남은 면만 월드로. 간섭 검사용.
-                            변환이 비용의 전부라, 버릴 것을 변환하면 안 된다.
-                            변환도 Gf 를 안 거치고 행렬 성분으로 직접 곱한다.
-                            규약이 맞는지 메시마다 첫 점으로 확인하고, 어긋나면
-                            Gf 로 물러난다 (노트에 'an unexpected transform').
-                            _triangles 에 이미 있으면 그걸 걸러 쓴다.
-          _triangles / _local 은 캐시. _triangles 는 월드 좌표라 EBS 가 움직이면
-          거짓이 되므로 _do_align 이 _forget_triangles 로 그 하위만 버린다.
-          장비 것은 남는다 — 장비는 안 움직인다.
-        상자로 판정한 프림은 _boxed 에 모았다가 단계 끝에 한 줄로 낸다.
-        숨김 프림 처리 변경시 _is_visible 참조. 프림 자기 속성만 읽는다 —
-          걷기가 위에서 이미 걸러주므로 ComputeVisibility 로 조상을 다시
-          거슬러 올라갈 이유가 없다. 그게 순회 비용의 대부분이었다.
-        EBS 박스 변경시 _ebs_bound 참조.
-        빈 면 거리 변경시 measure_faces -> _face_prism, _nearest_in_prism,
-          _gap_along, _triangle_gap 참조.
-          찾는 거리는 REACH_RATIO (EBS 최장변 대비). 넓히면 훑는 상자가 커져
-          'gather nearby' 가 느려진다.
-          거리는 가장 가까운 꼭짓점 것이다 — 여유는 최솟값이어야 한다.
-          선을 어디에 그을지는 별개로, 그 삼각형의 중점이다. 중점이 면 밖으로
-          나가면 꼭짓점으로 되돌아간다 (_triangle_gap).
-        막힌 면 색/투명도 변경시 COLOR_BLOCKED, BLOCKED_OPACITY, BLOCKED_EMISSION.
-        빈 면은 COLOR_CLEAR, MARKER_OPACITY, MARKER_EMISSION. 둘은 따로 논다.
-        3면 충돌과 내부 간섭은 따로 논다. 내부 간섭이라고 3면을 빨갛게 칠하지
-          않는다 — 서로 다른 검사고, 오버레이가 internal clash 로 따로 말한다.
-        EBS 중앙 빌보드는 build_verdict -> get_verdict -> ebs_simulate_overlay.
-        면이 한쪽만 보일 때 _marker_sheet, _marker_quad + SHEET_GAP 참조.
-        RTX에서 실제로 보이는 쉐이더는 _mdl_shader. _preview_shader 는 폴백.
+                              살아남은 면만 월드로. 간섭 검사용.
+                              메시마다 첫 점으로 규약 확인, 어긋나면 Gf 로 물러남.
+          캐시 _triangles(월드) / _local. EBS 가 움직이면 _do_align 이
+          _forget_triangles 로 그 하위만 버린다. 장비 것은 남는다.
+        상자로 판정한 프림 -> _boxed, 단계 끝에 한 줄.
+        숨김 프림 -> _is_visible. 프림 자기 속성만 본다 (조상은 걷기가 이미 걸렀다).
+        EBS 박스 -> _ebs_bound.
+
+        빈 면 거리 -> measure_faces -> _face_prism, _nearest_in_prism,
+          _gap_along, _triangle_gap.
+          찾는 거리 -> REACH_RATIO. 넓히면 'gather nearby' 가 느려진다.
+          거리는 최근접 꼭짓점 것 (여유는 최솟값이어야 한다).
+          선을 그을 자리는 그 삼각형의 중점. 면 밖이면 꼭짓점으로 폴백.
+        마커 색 -> COLOR_BLOCKED / BLOCKED_OPACITY / BLOCKED_EMISSION,
+          빈 면은 COLOR_CLEAR / MARKER_OPACITY / MARKER_EMISSION.
+        한쪽만 보이는 면 -> _marker_sheet, _marker_quad + SHEET_GAP.
+        RTX 에서 보이는 쉐이더는 _mdl_shader. _preview_shader 는 폴백.
+        오버레이 -> build_verdict / get_verdict.
         """
         return cls._simulate.collide()
 
     @classmethod
-    def set_min_gaps(cls, side, ceiling):
-        """3면이 지켜야 하는 최소 여유, m. 기본 옆 0.6 / 천장 0.1.
-
-        기본값은 MIN_GAP_SIDE / MIN_GAP_CEILING.
-        이보다 가까우면 닿지 않았어도 간섭(tight)으로 본다 — 선과 패널이
-        빨개지고 placeable 이 False 가 된다. 판정하는 곳은 _face_marks.
-        """
-        return cls._simulate.set_min_gaps(side, ceiling)
-
-    @classmethod
     def get_verdict(cls):
-        """마지막 collide 의 판정. 오버레이가 읽는다.
+        """마지막 collide 의 판정. 오버레이가 읽는다. 만드는 곳 build_verdict.
 
-        {"centre": 월드 좌표, "span": EBS 최장변, "inside": 내부 간섭 여부,
-         "faces": [{"face": 면, "name": 막은 것의 이름}], "blocked": 막힌 셀 수,
+        {"centre": 월드 좌표, "span": EBS 최장변, "inside": 내부 간섭,
+         "faces": [{"face", "name", "state"}], "blocked": 막힌 셀 수,
          "placeable": 세울 수 있나,
-         "marks": [{"face": 면, "state": clash|clear, "distance": m 또는 None,
-                    "name": 상대 이름, "min_gap": 지켜야 하는 여유 m,
-                    "at": 선의 중점, "from": 면 위의 점, "to": 상대 위의 점}]}
-        state 는 셋이다: clear(황색) / tight(최소 여유 미달, 빨강) / clash(막힘).
-          tight 도 faces 에 들어가고 placeable 을 내린다 — 지켜야 하는 것은
-          표면이 아니라 여유다. 기준은 set_min_gaps.
-        marks 는 _face_marks. 막힌 면은 면 중앙에, 빈 면은 EBS 면과 가장 가까운
-          메시 사이의 중점에 매단다. 가까운 점은 measure_faces 가 넘겨준다
-          (_nearest_in_prism 의 "at" — 삼각형 정점, 또는 _box_point).
-          거리는 두 월드 점 사이로 잰다. 프리즘이 쓰는 수는 EBS 로컬이라
-          EBS 에 스케일이 걸려 있으면 틀린다. m 환산은 GetStageMetersPerUnit.
-          from/to 사이의 선은 씬에 그린다 — show_markers 가 _gap_line 으로
-          실린더를 세운다. 마커와 같이 지워지라고 MARKER_ROOT 아래 둔다.
-          그래서 _do_collide 는 판정을 그리기 '전에' 만들어 들고 있다가
-          그린 뒤에 _verdict 에 넣는다. clear_markers 가 _verdict 를 비우므로.
-        이름은 owner_name 이 정한다. 막은 메시 경로를 위로 타면서,
-          GROUP_NAMES 중 하나면 그것, search root 바로 아래면 그 장비 이름.
-          먼저 만나는 쪽이 이긴다. 둘 다 아니면 메시 이름 그대로.
-          어느 프림이 막았는지는 check_collision 이 _blockers 에 면당 하나 담는다.
-        만드는 곳은 build_verdict. 비어 있으면 그릴 것이 없다는 뜻이다.
-        show_markers 가 clear_markers 를 먼저 부르고 clear_markers 가 이걸
-        비우므로, _do_collide 는 마커를 그린 뒤에 만든다. 순서 주의.
-        색·글자 크기·문구는 여기 없다 — ebs_simulate_overlay 의 몫.
-        문구는 영문이다 — 뷰포트 폰트에 한글이 없어 빈칸으로 나온다.
-          윗줄 CAN / CANNOT, 아랫줄부터 사유가 한 줄에 하나 (INNER, FACE_ORDER).
-          매번 통째로 다시 짓는다 — 패널 수와 모양이 결과마다 다르다.
-        면 패널은 _face_panel. 막혔으면 CLASH + 막은 것 이름 (빨강).
-          비었으면 선 중점 한쪽에 GAP, 반대쪽에 거리 + 최소 여유 + 상대 이름.
-          clear 만 황색이고 tight 와 clash 는 빨강 — 못 세우는 이유는 하나다.
-          좌우 면은 위아래, 천장은 좌우로 붙는다 (SIDE_BY_SIDE) — 화면에서
-          벌어지는 방향이 다르기 때문.
-          색은 판이 지고 글자는 흰색이다 (COLOR_TEXT) — 어두운 판에 색 글자는
-          플랜트를 배경으로 읽기 힘들다.
-          선이 씬에 있으므로 한 판으로 두면 뒷판이 선을 가린다. 그래서 갈랐고,
-          위/아래 배치는 _floating 의 anchor + LINE_ROOM.
-        선 색은 구현부 COLOR_GAP / COLOR_TIGHT / GAP_EMISSION. 굵기는 _thread_radius —
-          포트 레이저와 같은 값이다 (LASER_RADIUS, 장비 대각선 대비).
-        그리는 방식은 omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer 다.
-          centre 를 매 프레임 화면좌표로 투영해서 옮긴다 (_to_screen, _place).
-          _place 는 오프셋을 프레임 안으로 가둔다. 밖으로 내보내면 프레임이
-          뷰포트보다 커지고 뷰포트가 그에 맞춰 리사이즈된다.
-          USD 프림은 글자를 못 담으므로 씬이 아니라 UI 로 올린다.
+         "marks": [{"face", "state", "distance": m|None, "min_gap": m,
+                    "name", "at": 선 중점, "from": 면 위 점, "to": 상대 위 점}]}
+
+        state 셋: clear(황색) / tight(최소 여유 미달, 빨강) / clash(막힘).
+          tight 도 faces 에 들어가고 placeable 을 내린다. 기준 -> set_min_gaps.
+        marks -> _face_marks. 막힌 면은 면 중앙, 빈 면은 선 중점에 매단다.
+          가까운 점 -> _nearest_in_prism 의 "at" (삼각형 중점 또는 _box_point).
+          거리는 두 월드 점 사이로 잰다 (프리즘 수는 EBS 로컬이라 스케일에
+          약하다). m 환산 -> GetStageMetersPerUnit.
+          선은 씬에 그린다 -> show_markers 가 _gap_line 으로 실린더.
+            MARKER_ROOT 아래 = 마커와 같이 지워진다. 색 COLOR_GAP / COLOR_TIGHT,
+            굵기 _thread_radius (레이저와 같은 값, LASER_RADIUS).
+          순서 주의: clear_markers 가 _verdict 를 비우므로 _do_collide 는
+            판정을 그리기 전에 만들어 들고 있다가 그린 뒤에 넣는다.
+        이름 -> owner_name. 막은 메시 경로를 위로 타면서 GROUP_NAMES 중 하나면
+          그것, search root 바로 아래면 그 장비 이름. 먼저 만나는 쪽이 이긴다.
+          어느 프림이 막았는지 -> check_collision 이 _blockers 에 면당 하나.
+        비어 있으면 그릴 것이 없다는 뜻.
+
+        그리는 쪽은 ebs_simulate_overlay. 색·크기·문구는 전부 거기.
+          문구는 영문 (뷰포트 폰트에 한글 없음): CAN / CANNOT / INNER / FACE_ORDER.
+          면 패널 -> _face_panel. clear 만 황색, tight 와 clash 는 빨강.
+            좌우는 선 위아래, 천장은 좌우 (SIDE_BY_SIDE).
+            판이 색을 지고 글자는 흰색 (COLOR_TEXT).
+            선이 씬에 있어 한 판으로 두면 가린다 -> _floating 의 anchor + LINE_ROOM.
+          omni.ui.scene 이 아니라 뷰포트 프레임의 ui.Placer.
+            매 프레임 화면좌표로 투영 -> _to_screen, _place.
+            _place 는 오프셋을 프레임 안에 가둔다 (안 그러면 뷰포트가 리사이즈됨).
         """
         return cls._simulate.get_verdict()
 
     @classmethod
     def clear_markers(cls):
-        """/EbsCollisionMarkers 삭제. MARKER_ROOT."""
+        """/EbsCollisionMarkers 삭제. MARKER_ROOT. _verdict 도 같이 비운다."""
         return cls._simulate.clear_markers()
 
     @classmethod
@@ -446,33 +353,26 @@ class EbsSimulateService:
 
     @classmethod
     def simulate(cls, equipment=""):
-        """prepare -> align -> focus -> collide 연속. 실패시 중단. init 선행 필요.
+        """prepare -> align -> focus -> collide 연속. 실패시 중단. init 선행.
 
-        구현 simulate 은 _do_prepare, _do_align, _do_focus, _do_collide 를 차례로 호출.
-        단계 순서 변경시 거기만.
+        구현 simulate 이 _do_* 넷을 차례로 호출. 순서 변경은 거기만.
         """
         return cls._simulate.simulate(equipment)
 
-    # -- 검증용 스윕 (5단계와 무관) ------------------------------------------
+    # -- 검증용 스윕 (단계와 무관) -------------------------------------------
 
     @classmethod
     def sweep_ports(cls):
-        """전 장비 1번 포트(빨강) + 피봇(초록) 기둥, 장비당 1행 표를 rows 로 반환.
+        """전 장비 1번 포트(빨강) + 피봇(초록) 기둥, 장비당 1행을 rows 로.
 
         엑셀 출력은 dummy_ui.SweepLog. 여기서 안 씀.
-
-        판정(pivot_ok) 변경시 sweep_ports 안의 분기만 참조.
-          허용치는 PIVOT_TOLERANCE(레일 방향), PIVOT_ACROSS(수직, 0.5배).
-          포트 수 경계는 MIN_PORTS, MAX_PORTS.
-        측정값 열 변경시 _measure 참조.
-        피봇 중복 표시 변경시 _mark_shared 참조.
-        분포 로그 변경시 _report_spread 참조.
-        기둥 그리기 변경시 show_sweep + SWEEP_COLOR_PORT, SWEEP_COLOR_EQP,
-          SWEEP_ROOT, LASER_RADIUS 참조. 프림 이름 규칙은 _prim_name.
-        위치 계산은 align 과 동일 경로 (compute_port_points).
-
+        판정 -> sweep_ports 안의 분기 + PIVOT_TOLERANCE, PIVOT_ACROSS,
+          MIN_PORTS, MAX_PORTS.
+        측정값 열 -> _measure. 피봇 중복 -> _mark_shared. 분포 -> _report_spread.
+        기둥 -> show_sweep + SWEEP_COLOR_PORT, SWEEP_COLOR_EQP, SWEEP_ROOT,
+          LASER_RADIUS. 이름 규칙 -> _prim_name.
+        위치 계산은 align 과 같은 경로 (compute_port_points).
         주의: rows 의 pivot_ok 문자열은 dummy_ui.SweepLog.NOTES 가 받는다.
-              값 바꾸면 양쪽 같이.
         """
         return cls._simulate.sweep_ports()
 
@@ -485,7 +385,7 @@ class EbsSimulateService:
 
     @classmethod
     def get_result(cls):
-        """마지막 payload 전체. 키 추가/변경시 _payload 참조."""
+        """마지막 payload 전체. 키 추가/변경 -> _payload."""
         return cls._simulate.get_result()
 
     @classmethod
@@ -495,10 +395,10 @@ class EbsSimulateService:
 
     @classmethod
     def get_notes(cls):
-        """마지막 실행 진단 메시지. 쌓는 곳은 _note."""
+        """마지막 실행 진단 메시지. 쌓는 곳 _note."""
         return cls._simulate.get_notes()
 
     @classmethod
     def get_timings(cls):
-        """마지막 실행 [라벨, ms]. 재는 곳은 _stage_timer."""
+        """마지막 실행 [라벨, ms]. 재는 곳 _stage_timer."""
         return cls._simulate.get_timings()

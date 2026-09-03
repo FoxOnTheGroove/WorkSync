@@ -1,16 +1,3 @@
-"""Viewport overlay: the verdict over the EBS, and a gap on each of its faces.
-
-Everything it draws comes from the public API, and everything about how it
-looks is decided here -- the simulation side hands over points and numbers and
-does not know what a viewport is.
-
-Text in a viewport is not scene description: a USD prim cannot hold a line of
-letters. So these are ordinary omni.ui panels sitting in the viewport window's
-own frame, and each world point is projected to where it lands on screen every
-frame. That is more code than asking omni.ui.scene for a billboard, and it is
-plain omni.ui the whole way down, which is the part that can be relied on.
-"""
-
 import omni.ui as ui
 
 from .ebs_simulate_service import EbsSimulateService
@@ -54,15 +41,11 @@ PAD_X, PAD_Y = 10, 5
 
 
 class EbsSimulateOverlay:
-    """One overlay per viewport window, kept by window name."""
-
     _instances = {}
 
-    # -- what the panel calls -------------------------------------------------
 
     @classmethod
     def show(cls, vp_name: str = None):
-        """Draw the verdict from the last collide. Nothing to say -> nothing."""
         overlay = cls._get(vp_name)
         if overlay is not None:
             overlay.refresh()
@@ -97,12 +80,6 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _window(vp_name: str = None):
-        """The viewport window, however this build hands one out.
-
-        Each helper is looked up on its own. Importing them together meant one
-        name missing took the whole import down, and what came back was
-        "omni.kit is not here" about a Kit that was plainly running.
-        """
         try:
             import omni.kit.viewport.utility as vp_util
         except Exception as e:
@@ -134,8 +111,6 @@ class EbsSimulateOverlay:
         if window is None:
             window = ask("get_active_viewport_window", lambda f: f())
         if window is None:
-            # Older builds only hand out the API, and it is the window that
-            # owns a frame. Ask the workspace for it by name.
             try:
                 window = ui.Workspace.get_window(vp_name or "Viewport")
             except Exception as e:
@@ -145,23 +120,20 @@ class EbsSimulateOverlay:
                   + "; ".join(tried))
         return window
 
-    # -- one viewport ---------------------------------------------------------
 
     def __init__(self, vp_name):
         self._vp_name = vp_name
         self._window = None
-        self._api = None         # the viewport, for turning world into screen
+        self._api = None
         self._frame = None
-        self._stack = None       # everything floats in here
-        self._marks = []         # (placer, panel, world point, anchor) each
-        self._follow = None      # the update subscription, only while showing
+        self._stack = None
+        self._marks = []
+        self._follow = None
 
     def _build(self, window) -> bool:
         try:
             self._frame = window.get_frame(FRAME_ID)
             with self._frame:
-                # A frame holds one child, and the panels overlap, so they all
-                # go in a stack and each carries its own placer.
                 self._stack = ui.ZStack()
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
@@ -191,17 +163,11 @@ class EbsSimulateOverlay:
             print(f"[ebs] could not build the overlay: {e}")
             self.clear()
             return False
-        self._place()                    # so it is there before the next frame
+        self._place()
         return self._start()
 
-    # -- the panels -----------------------------------------------------------
 
     def _floating(self, at, fill, ground, anchor=MIDDLE):
-        """One panel, hung on a world point, sitting on it or clear of it.
-
-        Nothing is laid out until it is placed, and nothing shows until it
-        has been.
-        """
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
@@ -232,13 +198,8 @@ class EbsSimulateOverlay:
                        COLOR_CAN if ok else COLOR_CANNOT)
 
     def _face_panel(self, mark: dict) -> None:
-        """The clearance a face has, written either side of the line drawn for
-        it in the scene: the word above it, the number and what the number is
-        to below it."""
         state = mark.get("state")
         clash = state == "clash"
-        # Three states, two colours: clear is the yellow one, and both ways of
-        # failing -- touching, or closer than it is allowed to be -- are red.
         ground = COLOR_CAN if state == "clear" else COLOR_CANNOT
         gap = mark.get("distance")
         least = mark.get("min_gap")
@@ -270,9 +231,6 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _why(said: dict) -> list:
-        """What it is caught on, a line each, in the order it is read: inside
-        first, then the faces left to right and the ceiling last. Each face is
-        named by whatever is in the way, not by the mesh that touched it."""
         told = [INNER] if said.get("inside") else []
         blocked = {found["face"]: found.get("name") or NAMELESS
                    for found in (said.get("faces") or ())}
@@ -280,11 +238,8 @@ class EbsSimulateOverlay:
                  for face in FACE_ORDER if face in blocked]
         return told or [CLEAR]
 
-    # -- following the camera -------------------------------------------------
 
     def _start(self) -> bool:
-        """Move with the camera. The app's update stream is asked rather than
-        the viewport's, because every Kit has one."""
         try:
             import omni.kit.app
             self._follow = omni.kit.app.get_app().get_update_event_stream() \
@@ -304,7 +259,7 @@ class EbsSimulateOverlay:
             for placer, panel, at, anchor in self._marks:
                 spot = self._to_screen(at)
                 if spot is None:
-                    panel.visible = False   # behind the camera, or off screen
+                    panel.visible = False
                     continue
                 panel_w, panel_h = panel.computed_width, panel.computed_height
                 x, y = spot[0] - panel_w * 0.5, spot[1] - panel_h * 0.5
@@ -316,9 +271,6 @@ class EbsSimulateOverlay:
                     x = spot[0] - panel_w - LINE_ROOM
                 elif anchor == RIGHT:
                     x = spot[0] + LINE_ROOM
-                # Held inside the frame. A placer that puts its content past
-                # the edge makes the frame bigger than the viewport, and the
-                # viewport resizes itself around it.
                 placer.offset_x = min(max(x, 0.0), max(width - panel_w, 0.0))
                 placer.offset_y = min(max(y, 0.0), max(height - panel_h, 0.0))
                 panel.visible = True
@@ -327,23 +279,19 @@ class EbsSimulateOverlay:
             self.clear()
 
     def _to_screen(self, point):
-        """Where a world point lands in the frame, in UI units. None if it is
-        behind the camera or outside the view."""
         from pxr import Gf
         api = self._api
         at = Gf.Vec3d(*point)
         view = api.view
         if view.Transform(at)[2] >= 0.0:
-            return None                        # behind the lens
+            return None
         try:
             clip = api.world_to_ndc
         except AttributeError:
             clip = view * api.projection
-        ndc = clip.Transform(at)               # Transform divides by w for us
+        ndc = clip.Transform(at)
         if not (-1.0 <= ndc[0] <= 1.0 and -1.0 <= ndc[1] <= 1.0):
             return None
-        # The frame's own size, so this is in the same units the placer wants
-        # and the display's scaling never enters into it.
         width = self._frame.computed_width
         height = self._frame.computed_height
         if not width or not height:
@@ -351,10 +299,9 @@ class EbsSimulateOverlay:
         return ((ndc[0] * 0.5 + 0.5) * width,
                 (0.5 - ndc[1] * 0.5) * height)
 
-    # -- teardown -------------------------------------------------------------
 
     def clear(self) -> None:
-        self._follow = None       # dropping the handle ends the subscription
+        self._follow = None
         self._marks = []
         if self._stack is not None:
             try:
