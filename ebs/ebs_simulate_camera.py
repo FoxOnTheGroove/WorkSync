@@ -1,3 +1,5 @@
+import math
+
 from pxr import Usd, UsdGeom, Sdf, Gf
 
 __all__ = ["EbsSimulateCamera", "CAMERA_PATH", "CAMERA_BACK",
@@ -12,6 +14,61 @@ FOCAL      = 50.0
 APERTURE_H = 20.955
 APERTURE_V = 15.2908
 
+ORBIT_FRAME = "ebs_orbit_input"   # 뷰포트를 덮어 입력을 가로채는 프레임
+YAW_PER_PIXEL   = 0.35            # 가로로 1 픽셀 끌 때 도는 각도, 도
+PITCH_PER_PIXEL = 0.35
+AXIS_LOCK  = 5     # 이만큼 끌기 전에는 축을 안 정한다. 요와 피치는 안 섞인다
+PITCH_LIMIT = 85.0  # 수평에서 위아래로 여기까지. 극을 넘으면 롤이 생긴다
+
+LEFT_BUTTON = 0
+
+
+def viewport_window(name: str = None):
+    """뷰포트 창. 이 빌드가 어떤 도우미를 갖고 있든 하나는 찾는다.
+
+    하나씩 따로 묻는다 — 같이 임포트하면 이 빌드에 없는 이름 하나가 전체를
+    끌어내리고, "omni.kit 이 없다"는 말이 돌아온다. 멀쩡히 도는 Kit 을 두고.
+    """
+    try:
+        import omni.kit.viewport.utility as vp_util
+    except Exception as e:
+        print(f"[ebs] viewport utility unavailable: {e}")
+        return None
+
+    tried = []
+
+    def ask(helper_name, call):
+        helper = getattr(vp_util, helper_name, None)
+        if helper is None:
+            tried.append(f"{helper_name}: not in this build")
+            return None
+        try:
+            got = call(helper)
+        except Exception as e:
+            tried.append(f"{helper_name}: {e}")
+            return None
+        if got is None:
+            tried.append(f"{helper_name}: gave nothing back")
+        return got
+
+    window = None
+    if name:
+        window = ask("get_viewport_window_by_name", lambda f: f(name))
+    if window is None:
+        pair = ask("get_active_viewport_and_window", lambda f: f())
+        window = pair[1] if pair else None
+    if window is None:
+        window = ask("get_active_viewport_window", lambda f: f())
+    if window is None:
+        try:
+            import omni.ui as ui
+            window = ui.Workspace.get_window(name or "Viewport")
+        except Exception as e:
+            tried.append(f"Workspace.get_window: {e}")
+    if window is None:
+        print("[ebs] no viewport window -- " + "; ".join(tried))
+    return window
+
 
 class EbsSimulateCamera:
     """/EbsCamera 하나를 만들고, 놓고, 되돌린다.
@@ -24,6 +81,10 @@ class EbsSimulateCamera:
         self._previous = None      # 우리 카메라로 바꾸기 전에 뷰포트가 보던 것
         self._orbit = False        # interest 둘레를 도는 모드인가
         self._interest = None      # 그 점, 월드 좌표
+        self._frame_ui = None      # 입력을 가로채는 프레임
+        self._catch = None         # 그 안의 투명한 판
+        self._from = None          # 끌기 시작한 화면 좌표
+        self._axis = None          # 이번 끌기가 도는 축: 'yaw' 또는 'pitch'
 
     @property
     def previous(self):
@@ -79,6 +140,7 @@ class EbsSimulateCamera:
         지우면 다음 Camera 가 새로 만들어야 하고, 그 사이 Kit 이 그 경로에
         써 둔 것이 남아 골치가 된다. 세션 내내 같은 하나를 쓴다.
         """
+        self._drop()
         self._orbit = False
         self._interest = None
         if stage is None:
@@ -120,6 +182,7 @@ class EbsSimulateCamera:
         # 제자리에서 도는 것이 아니라 이 점 둘레를 돈다.
         self._interest = interest
         self._orbit = True
+        self._grab()
         return (f"camera {distance:.2f} back from the EBS centre, "
                 f"orbiting ({interest[0]:.2f}, {interest[1]:.2f}, "
                 f"{interest[2]:.2f}), near plane {CAMERA_NEAR:.2f}")
@@ -143,6 +206,152 @@ class EbsSimulateCamera:
             viewport.camera_path = CAMERA_PATH
         except Exception as e:
             print(f"[ebs] could not switch the viewport camera: {e}")
+
+    # -- 입력 가로채기 --------------------------------------------------------
+
+    def _grab(self) -> bool:
+        """뷰포트를 투명한 판으로 덮는다. 그 위의 입력은 전부 우리 것이다.
+
+        Kit 의 기본 조작을 하나씩 끄는 대신 위를 덮는다. 카메라 조작도,
+        우클릭 메뉴도, 프림 선택도 이 판에서 멈춘다 — 선택은 어차피 이름을
+        적어 넣는 쪽으로 갈 것이라 막는 편이 맞다.
+        """
+        if self._catch is not None:
+            return True
+        window = viewport_window()
+        if window is None:
+            return False
+        try:
+            import omni.ui as ui
+            self._frame_ui = window.get_frame(ORBIT_FRAME)
+            with self._frame_ui:
+                self._catch = ui.Rectangle(style={"background_color": 0x00000000})
+            self._catch.set_mouse_pressed_fn(
+                lambda x, y, button, mod: self._pressed(x, y, button))
+            self._catch.set_mouse_moved_fn(
+                lambda x, y, mod, held: self._moved(x, y))
+            self._catch.set_mouse_released_fn(
+                lambda x, y, button, mod: self._let_go())
+            self._catch.set_mouse_double_clicked_fn(
+                lambda x, y, button, mod: self._double(x, y, button))
+            self._catch.set_mouse_wheel_fn(
+                lambda dx, dy, mod: self._wheel(dx, dy))
+        except Exception as e:
+            print(f"[ebs] could not take the viewport input: {e}")
+            self._catch = None
+            self._frame_ui = None
+            return False
+        return True
+
+    def _drop(self) -> None:
+        self._from = self._axis = None
+        if self._frame_ui is not None:
+            try:
+                self._frame_ui.clear()
+            except Exception:
+                pass
+        self._catch = None
+        self._frame_ui = None
+
+    # -- 제스처 ---------------------------------------------------------------
+
+    def _pressed(self, x, y, button) -> None:
+        # 왼쪽만 쓴다. 오른쪽과 가운데는 삼키고 아무것도 안 한다.
+        self._from = (x, y) if button == LEFT_BUTTON else None
+        self._axis = None
+
+    def _moved(self, x, y) -> None:
+        if self._from is None or not self._orbit:
+            return
+        dx, dy = x - self._from[0], y - self._from[1]
+        if self._axis is None:
+            # 어느 쪽으로 더 끌었는지로 축을 한 번 정하고, 그 끌기 동안은 그
+            # 축만 돈다. 요와 피치가 섞이는 일은 없다.
+            if max(abs(dx), abs(dy)) < AXIS_LOCK:
+                return
+            self._axis = "yaw" if abs(dx) >= abs(dy) else "pitch"
+        self._from = (x, y)
+        # 씬이 손을 따라온다: 오른쪽으로 끌면 씬이 오른쪽으로 돌고 (눈은 왼쪽
+        # 으로 공전), 아래로 끌면 위에서 내려다보게 된다 (눈이 올라간다).
+        if self._axis == "yaw":
+            self._turn(yaw=dx * YAW_PER_PIXEL)
+        else:
+            self._turn(pitch=dy * PITCH_PER_PIXEL)
+
+    def _let_go(self) -> None:
+        self._from = self._axis = None
+
+    def _double(self, x, y, button) -> None:
+        pass                     # 아직 정해진 것이 없다
+
+    def _wheel(self, dx, dy) -> None:
+        pass                     # 아직 정해진 것이 없다
+
+    # -- 공전 -----------------------------------------------------------------
+
+    def _turn(self, yaw: float = 0.0, pitch: float = 0.0) -> None:
+        """interest 둘레로 눈을 옮긴다. 반지름은 그대로, 롤은 없다."""
+        stage = self._stage()
+        if stage is None or self._interest is None:
+            return
+        cam_prim, camera = self._camera(stage)
+        if camera is None:
+            return
+        eye = self._eye(cam_prim)
+        if eye is None:
+            return
+
+        up = self._up(stage)
+        arm = eye - self._interest
+        radius = arm.GetLength()
+        if radius <= 1e-9:
+            return
+
+        if yaw:
+            arm = Gf.Rotation(up, yaw).TransformDir(arm)
+        if pitch:
+            pitch = self._room(arm, up, pitch)
+            if pitch:
+                # 양수 = 눈이 올라간다. _room 이 재는 고도와 부호가 같다.
+                side = Gf.Cross(arm, up).GetNormalized()
+                arm = Gf.Rotation(side, pitch).TransformDir(arm)
+
+        eye = self._interest + arm.GetNormalized() * radius
+        # 언제나 interest 를 월드 up 으로 바라본다. 롤이 생길 자리가 없다.
+        z_cam = (eye - self._interest).GetNormalized()
+        x_cam = Gf.Cross(up, z_cam).GetNormalized()
+        y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
+        self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, radius)
+
+    @staticmethod
+    def _room(arm, up, pitch: float) -> float:
+        """극을 넘지 않도록 남은 각도만 돌려준다. 넘으면 롤이 생긴다."""
+        height = Gf.Dot(arm.GetNormalized(), up)
+        now = math.degrees(math.asin(max(-1.0, min(1.0, height))))
+        return max(-PITCH_LIMIT, min(PITCH_LIMIT, now + pitch)) - now
+
+    @staticmethod
+    def _up(stage):
+        if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y:
+            return Gf.Vec3d(0.0, 1.0, 0.0)
+        return Gf.Vec3d(0.0, 0.0, 1.0)
+
+    @staticmethod
+    def _eye(cam_prim):
+        try:
+            spot = UsdGeom.Xformable(cam_prim).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()).ExtractTranslation()
+            return Gf.Vec3d(spot[0], spot[1], spot[2])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _stage():
+        try:
+            import omni.usd
+            return omni.usd.get_context().get_stage()
+        except Exception:
+            return None
 
     @staticmethod
     def _frame(stage, facing) -> tuple:

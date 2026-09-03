@@ -227,6 +227,17 @@ class EbsSimulateService:
           궤도 모드 -> place 가 켜고 release 가 끈다 (orbit / interest).
             Camera 때 켜지고 Clear 때 꺼진다. 켜져 있는 동안 카메라는 그
             점을 계속 바라보고, 움직임은 그 점 둘레를 도는 것이다.
+          입력 -> _grab 이 뷰포트를 투명한 판(ORBIT_FRAME)으로 덮는다.
+            Kit 기본 조작·우클릭 메뉴·프림 선택이 전부 거기서 멈춘다.
+            _drop 이 걷는다. 창 찾기는 모듈함수 viewport_window (오버레이도
+            같은 것을 쓴다).
+          제스처 -> _pressed / _moved / _let_go / _double / _wheel.
+            왼쪽만 쓴다. 나머지 버튼은 삼키고 아무것도 안 한다.
+            더블클릭과 휠은 자리만 있고 아직 비어 있다.
+          끌기 = 공전 -> _turn. 반지름 고정, interest 를 월드 up 으로 바라봐서
+            롤이 없다. 축은 끌기당 하나로 잠근다 (AXIS_LOCK) — 요와 피치가
+            섞이지 않는다. 극 근처는 _room 이 막는다 (PITCH_LIMIT).
+            속도 -> YAW_PER_PIXEL / PITCH_PER_PIXEL.
         거리 -> CAMERA_BACK. interest 에서 정면으로 그만큼 뒤. 고정이다.
           화면에 맞추지 않는다 — 배율이 달라지면 여유 길이를 눈으로 못 비교한다.
         대상 바운드 -> _world_range (여기가 카메라에 넘기는 상자).

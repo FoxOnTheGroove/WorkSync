@@ -1,5 +1,6 @@
 import omni.ui as ui
 
+from .ebs_simulate_camera import viewport_window
 from .ebs_simulate_service import EbsSimulateService
 
 __all__ = ["EbsSimulateOverlay"]
@@ -78,48 +79,8 @@ class EbsSimulateOverlay:
             cls._instances[name] = overlay
         return overlay
 
-    @staticmethod
-    def _window(vp_name: str = None):
-        try:
-            import omni.kit.viewport.utility as vp_util
-        except Exception as e:
-            print(f"[ebs] viewport utility unavailable: {e}")
-            return None
-
-        tried = []
-
-        def ask(name, call):
-            helper = getattr(vp_util, name, None)
-            if helper is None:
-                tried.append(f"{name}: not in this build")
-                return None
-            try:
-                got = call(helper)
-            except Exception as e:
-                tried.append(f"{name}: {e}")
-                return None
-            if got is None:
-                tried.append(f"{name}: gave nothing back")
-            return got
-
-        window = None
-        if vp_name:
-            window = ask("get_viewport_window_by_name", lambda f: f(vp_name))
-        if window is None:
-            pair = ask("get_active_viewport_and_window", lambda f: f())
-            window = pair[1] if pair else None
-        if window is None:
-            window = ask("get_active_viewport_window", lambda f: f())
-        if window is None:
-            try:
-                window = ui.Workspace.get_window(vp_name or "Viewport")
-            except Exception as e:
-                tried.append(f"Workspace.get_window: {e}")
-        if window is None:
-            print("[ebs] no viewport window to draw the overlay on -- "
-                  + "; ".join(tried))
-        return window
-
+    # 뷰포트 창 찾기는 ebs_simulate_camera 가 갖고 있다. 같은 창이다.
+    _window = staticmethod(viewport_window)
 
     def __init__(self, vp_name):
         self._vp_name = vp_name
