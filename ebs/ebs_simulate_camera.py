@@ -245,17 +245,22 @@ class EbsSimulateCamera:
             print(f"[ebs] omni.ui.scene unavailable, cannot take the input: {e}")
             return False
 
-        class Block(sc.GestureManager):
-            """우리 것만 뜬다. 카메라 조작도 선택도 여기서 멈춘다."""
+        class Keep(sc.GestureManager):
+            """두 메소드 다 '이 매니저를 쓰는 제스처', 곧 우리 것에 대한 물음이다.
+
+            should_prevent 에서 True 를 돌려주면 우리 제스처가 스스로를 막는다.
+            남의 제스처는 제 매니저를 보므로 여기서 막을 수 없다 — 여기서 할
+            수 있는 것은 우리 것이 안 막히게 하는 것뿐이다.
+            """
 
             def can_be_prevented(self, gesture) -> bool:
                 return False
 
             def should_prevent(self, gesture, preventer) -> bool:
-                return True
+                return False
 
         try:
-            keeper = Block()
+            keeper = Keep()
             self._frame_ui = window.get_frame(ORBIT_FRAME)
             with self._frame_ui:
                 # 크기를 안 주면 접힌다. 접힌 것 위로는 아무것도 안 지나간다.
