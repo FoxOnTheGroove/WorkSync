@@ -87,6 +87,7 @@ class EbsSimulateCamera:
         self._catch = None         # 등록이 안 될 때 까는 판
         self._at = None            # 마지막 마우스 자리
         self._selection = None     # 선택을 지우는 구독
+        self._why = ""             # 아레나에 못 들어갔다면 그 사유
         self._from = None          # 끌기 시작한 화면 좌표
         self._axis = None          # 이번 끌기가 도는 축: 'yaw' 또는 'pitch'
         self._home = None          # place 가 놓았던 자리. refresh 가 돌아갈 곳
@@ -240,24 +241,62 @@ class EbsSimulateCamera:
         """
         if self._catch is not None or self._scene is not None:
             return True
-        if self._grab_arena():
-            self._mute_selection()
-            return True
         window = viewport_window()
-        if window is None:
-            return False
-        if not self._grab_sheet(window):
+        took = "arena" if self._grab_arena() else ""
+        if not took and window is not None and self._grab_sheet(window):
+            took = "sheet"
+        self._report(window, took)
+        if not took:
             return False
         self._mute_selection()
         return True
+
+    def _report(self, window, took: str) -> None:
+        """Camera 를 누를 때마다 이 자리의 사실을 그대로 찍는다.
+
+        Kit 을 여기서 열어볼 수 없으니, 무엇이 있고 무엇이 없는지는 이 로그가
+        말해야 한다. 추측으로 고치는 것보다 한 번 찍는 편이 싸다.
+        """
+        say = lambda line: print(f"[ebs] input: {line}")
+        say(f"took {took or 'nothing'}"
+            + (f", registry said {self._why}" if self._why else ""))
+
+        def names(thing, label):
+            if thing is None:
+                say(f"{label}: none")
+                return
+            got = sorted(n for n in dir(thing) if not n.startswith("_"))
+            say(f"{label}: {', '.join(got)}")
+
+        names(window, "window")
+        names(getattr(window, "viewport_api", None), "viewport_api")
+
+        for module in ("omni.ui.scene", "omni.kit.viewport.registry",
+                       "omni.kit.manipulator.camera"):
+            try:
+                found = __import__(module, fromlist=["x"])
+            except Exception as e:
+                say(f"{module}: {type(e).__name__}: {e}")
+                continue
+            got = sorted(n for n in dir(found)
+                         if not n.startswith("_") and n[:1].isupper())
+            say(f"{module}: {', '.join(got) or '(nothing public)'}")
+
+        try:
+            import carb.settings
+            settings = carb.settings.get_settings()
+            for key in ("/app/viewport", "/persistent/app/viewport",
+                        "/exts/omni.kit.manipulator.camera"):
+                say(f"{key} = {settings.get(key)}")
+        except Exception as e:
+            say(f"carb.settings: {type(e).__name__}: {e}")
 
     def _grab_arena(self) -> bool:
         try:
             from omni.kit.viewport.registry import RegisterScene
             from omni.ui import scene as sc
         except Exception as e:
-            print(f"[ebs] viewport scene registry unavailable ({e}); "
-                  f"falling back to a sheet that receives but cannot block")
+            self._why = f"{type(e).__name__}: {e}"
             return False
 
         owner = self
@@ -300,8 +339,7 @@ class EbsSimulateCamera:
         try:
             self._scene = RegisterScene(Ours, "ebs.orbit")
         except Exception as e:
-            print(f"[ebs] could not register the orbit scene ({e}); "
-                  f"falling back to a sheet")
+            self._why = f"RegisterScene refused: {type(e).__name__}: {e}"
             self._scene = None
             return False
         return True

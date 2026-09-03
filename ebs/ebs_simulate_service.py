@@ -240,6 +240,9 @@ class EbsSimulateService:
               한다. 막지는 못한다 — 뷰포트 조작은 omni.ui 를 안 거친다.
               판은 프레임을 꽉 채워야 한다. 크기를 안 주면 접힌다.
             _drop 이 둘 다 걷는다. 창 찾기는 viewport_window (오버레이 공용).
+            _report 가 Camera 마다 이 자리의 사실을 찍는다 — 어느 쪽을 탔는지,
+              레지스트리가 왜 안 됐는지, 창/뷰포트/모듈에 무엇이 있는지,
+              carb 설정이 무엇인지. Kit 을 열어볼 수 없으니 로그가 눈이다.
           선택 -> _mute_selection. 골라지면 바로 지운다 (SELECTION_CHANGED
             구독, _stage_event). 아레나에 못 들어간 경우의 보험이기도 하다.
           제스처 -> _gestures (아레나) / _pressed·_moved (판).
