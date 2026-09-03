@@ -131,6 +131,11 @@ VERDICT_HEIGHT = 0.8      # 판정 패널을 매다는 높이. EBS 바닥 0, 천
                           # 카메라가 보는 점은 상자 중앙 그대로다
 CAMERA_NEAR    = 0.01
 CAMERA_FAR     = 1.0e6
+BAND_ROOT      = "/EbsSideBand"   # 이웃을 고른 자리, 눈으로 확인용
+COLOR_BAND     = (0.2, 0.6, 1.0)
+BAND_OPACITY   = 0.12
+BAND_EMISSION  = 400.0
+BAND_RISE      = 0.15    # 낮게 깐다. 장비 높이 대비
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
@@ -144,7 +149,6 @@ STATE_CLEAR = "clear"     # 비었다. distance 가 있으면 그 거리, None �
 MIN_GAP_CEILING = 0.1
 MIN_GAP_SIDE = 0.6
 
-NEIGHBOUR_BAND = 0.5
 
 MARKER_ROOT    = "/EbsCollisionMarkers"
 MARKER_OPACITY = 0.075
@@ -168,7 +172,7 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
-OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
+OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, BAND_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)
 NOW = Usd.TimeCode.Default()
 LOOKS = "Looks"
@@ -231,7 +235,7 @@ class EbsSimulate:
         self._rail_index: dict = None
         self._rail_frame = None
         self._triangles: dict = {}
-        self._eqp_spots: dict = None
+        self._eqp_boxes: dict = None
         self._hidden: list = []
         self._eqp_looks: dict = {}
         self._eqp_shared: set = set()
@@ -352,6 +356,7 @@ class EbsSimulate:
         self.clear_markers()
         self.clear_port_lasers()
         self.clear_sweep()
+        self.clear_side_band()
         self.hide_ebs()
         self._eqp_index = {}
         self._port_map = {}
@@ -398,7 +403,7 @@ class EbsSimulate:
 
     def init(self) -> dict:
         self._begin()
-        self._eqp_spots = None
+        self._eqp_boxes = None
         self._eqp_looks = {}
         self._eqp_shared = set()
         if self._gone is not None:
@@ -693,10 +698,12 @@ class EbsSimulate:
             return self._payload(False, "Run Align first")
         stage = self._get_stage()
         with self._stage_timer("hide the other equipment"):
-            beside = self.side_neighbours(stage, self._target["ebs"],
-                                          self._target["equipment"])
+            found = self.side_band(stage, self._target["ebs"],
+                                   self._target["equipment"])
+            beside = found.get("beside", [])
             hidden = self.hide_other_equipment(
                 [str(self._target["equipment"].GetPath())] + beside)
+            self.show_side_band(found)
         kept = [self._target["equipment"].GetPath()] + beside
         self._note(f"kept {len(kept)} ({', '.join(str(p).rsplit('/', 1)[-1] for p in kept)}), "
                    f"{hidden} made see-through")
@@ -943,58 +950,80 @@ class EbsSimulate:
                 continue
             stack.extend(_children(prim))
 
-    def equipment_spots(self, stage) -> dict:
-        if self._eqp_spots is not None:
-            return self._eqp_spots
-        spots = {}
-        with self._stage_timer(f"locate {len(self._eqp_index)} equipment"):
+    def equipment_boxes(self, stage) -> dict:
+        if self._eqp_boxes is not None:
+            return self._eqp_boxes
+        boxes = {}
+        with self._stage_timer(f"measure {len(self._eqp_index)} equipment"):
             for name, path in self._eqp_index.items():
                 prim = stage.GetPrimAtPath(path)
                 if not prim or not prim.IsValid():
                     continue
-                anchor, _ = self.resolve_anchor(prim)
-                if anchor is None or not anchor.IsValid():
-                    continue
-                spot = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
-                    NOW).ExtractTranslation()
-                spots[name] = (spot[0], spot[1])
-        self._eqp_spots = spots
-        return spots
+                box = self._world_range(prim)
+                if box is not None and not box.IsEmpty():
+                    boxes[name] = box
+        self._eqp_boxes = boxes
+        return boxes
+
+    @staticmethod
+    def _cast(box, way) -> tuple:
+        """세워진 상자를 바닥의 어느 방향으로 눕혔을 때 차지하는 구간."""
+        lo, hi = box.GetMin(), box.GetMax()
+        centre = (lo[0] + hi[0]) * 0.5 * way[0] + (lo[1] + hi[1]) * 0.5 * way[1]
+        half = (abs(way[0]) * (hi[0] - lo[0]) + abs(way[1]) * (hi[1] - lo[1])) * 0.5
+        return (centre - half, centre + half)
 
     def side_neighbours(self, stage, ebs_prim, eqp_prim) -> list:
-        spots = self.equipment_spots(stage)
+        found = self.side_band(stage, ebs_prim, eqp_prim)
+        return found["beside"] if found else []
+
+    def side_band(self, stage, ebs_prim, eqp_prim) -> dict:
+        boxes = self.equipment_boxes(stage)
         mine = self._equipment_id(eqp_prim)
         key = next((name for name in self._eqp_index
                     if name[len(EQP_PREFIX):] == mine or name == mine), None)
-        here = spots.get(key)
-        box = self._world_range(eqp_prim)
-        if here is None or box is None or box.IsEmpty():
-            return []
-        width = max(box.GetMax()[i] - box.GetMin()[i] for i in range(2))
-        reach = width * NEIGHBOUR_REACH
-        if reach <= 0:
-            return []
+        here = boxes.get(key) or self._world_range(eqp_prim)
+        if here is None or here.IsEmpty():
+            return {}
 
         sideways = self._sideways(ebs_prim)
-        band = width * NEIGHBOUR_BAND
+        inward = (-sideways[1], sideways[0])
+        my_side = self._cast(here, sideways)
+        my_deep = self._cast(here, inward)
+        reach = (my_side[1] - my_side[0]) * NEIGHBOUR_REACH
+        if reach <= 0:
+            return {}
+
         left = right = None
-        for name, spot in spots.items():
+        for name, box in boxes.items():
             if name == key:
                 continue
-            across = spot[0] - here[0]
-            along = spot[1] - here[1]
-            if across * across + along * along > reach * reach:
+            deep = self._cast(box, inward)
+            # 같은 줄인가. 깊이 구간이 겹쳐야 옆이다 — 대각선은 여기서 빠진다.
+            if deep[0] >= my_deep[1] or deep[1] <= my_deep[0]:
                 continue
-            side = across * sideways[0] + along * sideways[1]
-            depth = along * sideways[0] - across * sideways[1]
-            if abs(depth) > band:
+            side = self._cast(box, sideways)
+            if side[0] >= my_side[1]:
+                gap, hand = side[0] - my_side[1], "right"
+            elif side[1] <= my_side[0]:
+                gap, hand = my_side[0] - side[1], "left"
+            else:
+                continue                # 좌우로도 겹친다 = 옆이 아니라 겹쳐 있다
+            if gap > reach:
                 continue
-            if side >= 0:
-                if right is None or side < right[0]:
-                    right = (side, name)
-            elif left is None or -side < left[0]:
-                left = (-side, name)
-        return [self._eqp_index[found[1]] for found in (left, right) if found]
+            if hand == "right":
+                if right is None or gap < right[0]:
+                    right = (gap, name)
+            elif left is None or gap < left[0]:
+                left = (gap, name)
+
+        return {
+            "beside": [self._eqp_index[one[1]] for one in (left, right) if one],
+            "sideways": sideways, "inward": inward,
+            "side": (my_side[0] - reach, my_side[1] + reach),
+            "deep": my_deep,
+            "floor": (here.GetMin()[2], here.GetMax()[2]),
+        }
 
     def _sideways(self, ebs_prim) -> tuple:
         try:
@@ -2705,6 +2734,43 @@ class EbsSimulate:
         cylinder.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
+    def show_side_band(self, found: dict) -> int:
+        """이웃을 고른 그 구간을 바닥에 깔아 보여준다. 판정에는 안 쓴다."""
+        stage = self._get_stage()
+        self.clear_side_band()
+        if stage is None or not found:
+            return 0
+        side, deep = found["side"], found["deep"]
+        base, top = found["floor"]
+        lift = base + max((top - base) * BAND_RISE, 1e-6)
+        S, D = found["sideways"], found["inward"]
+
+        def at(u, v, z):
+            return (u * S[0] + v * D[0], u * S[1] + v * D[1], z)
+
+        corners = [at(u, v, z) for z in (base, lift)
+                   for u, v in ((side[0], deep[0]), (side[1], deep[0]),
+                                (side[1], deep[1]), (side[0], deep[1]))]
+        walls = [(0, 1, 2, 3), (7, 6, 5, 4),
+                 (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)]
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            UsdGeom.Scope.Define(stage, BAND_ROOT)
+            material = self._marker_material(stage, "band", COLOR_BAND,
+                                             BAND_OPACITY, BAND_EMISSION)
+            for i, wall in enumerate(walls):
+                self._marker_quad(stage, f"{BAND_ROOT}/wall_{i}",
+                                  [corners[c] for c in wall], material,
+                                  COLOR_BAND, BAND_OPACITY)
+        return len(walls)
+
+    def clear_side_band(self) -> None:
+        stage = self._get_stage()
+        if stage is None:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if stage.GetPrimAtPath(BAND_ROOT).IsValid():
+                stage.RemovePrim(BAND_ROOT)
+
     def clear_markers(self) -> None:
         self._verdict = {}
         stage = self._get_stage()
@@ -2828,6 +2894,7 @@ class EbsSimulate:
 
     def release_camera(self) -> None:
         self.show_equipment()
+        self.clear_side_band()
         stage = self._get_stage()
         if stage is None:
             return

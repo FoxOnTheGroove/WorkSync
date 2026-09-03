@@ -207,11 +207,19 @@ class EbsSimulateService:
         focus -> _do_focus -> side_neighbours, hide_other_equipment,
                               make_camera, _move_camera.
 
-        이웃 찾기 -> side_neighbours + NEIGHBOUR_REACH, NEIGHBOUR_BAND.
-          폭 x REACH 반경 원 안에서, EBS 좌우축(_sideways, 3면 검사와 같은 축)
-          기준 방향당 하나씩. 줄에서 벗어난 정도가 폭 x BAND 넘으면 뺀다
-          (안 그러면 대각선 장비가 이긴다).
-          위치 -> equipment_spots. 장비당 한 번 캐시, init 이 비움.
+        이웃 찾기 -> side_band + NEIGHBOUR_REACH. side_neighbours 는 그 껍데기.
+          점이 아니라 상자로 본다. 장비 월드 AABB 를 EBS 좌우축(_sideways,
+          3면 검사와 같은 축)과 그 수직축에 눕혀(_cast) 구간 두 개를 만든다.
+          같은 줄 = 깊이 구간이 겹침. 대각선은 여기서 빠진다.
+          그 다음 좌우축 간격이 가장 작은 것, 방향당 하나. 간격 한도는
+          대상의 좌우 폭 x NEIGHBOUR_REACH.
+          예전엔 pivot 점 하나로 봤다. pivot 은 장비 중심이 아니고(resolve_anchor
+          가 첫 자식을 타고 내려간 자리) 순위도 좌우 성분만 봐서, 정면 쪽
+          대각선 장비가 진짜 옆보다 자주 이겼다.
+          상자 -> equipment_boxes. 장비당 한 번 캐시, init 이 비움.
+          고른 구간은 show_side_band 가 바닥에 반투명 상자로 깔아 보여준다
+          (BAND_ROOT, COLOR_BAND, BAND_RISE). 확인용이고 판정에는 안 쓴다.
+          Clear -> release_camera 가 clear_side_band.
           기둥·벽·천장은 안 끈다 — 빈 면 거리를 재는 상대다.
         끄기/되돌리기 -> hide_other_equipment / show_equipment.
           visibility 가 아니라 Looks 아래 쉐이더의 opacity 0.
