@@ -131,11 +131,6 @@ VERDICT_HEIGHT = 0.8      # 판정 패널을 매다는 높이. EBS 바닥 0, 천
                           # 카메라가 보는 점은 상자 중앙 그대로다
 CAMERA_NEAR    = 0.01
 CAMERA_FAR     = 1.0e6
-BAND_ROOT      = "/EbsSideBand"   # 이웃을 고른 자리, 눈으로 확인용
-COLOR_BAND     = (0.2, 0.6, 1.0)
-BAND_OPACITY   = 0.12
-BAND_EMISSION  = 400.0
-BAND_RISE      = 0.15    # 낮게 깐다. 장비 높이 대비
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
@@ -172,7 +167,7 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
-OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, BAND_ROOT, CAMERA_PATH)
+OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)
 NOW = Usd.TimeCode.Default()
 LOOKS = "Looks"
@@ -356,7 +351,6 @@ class EbsSimulate:
         self.clear_markers()
         self.clear_port_lasers()
         self.clear_sweep()
-        self.clear_side_band()
         self.hide_ebs()
         self._eqp_index = {}
         self._port_map = {}
@@ -703,7 +697,6 @@ class EbsSimulate:
             beside = found.get("beside", [])
             hidden = self.hide_other_equipment(
                 [str(self._target["equipment"].GetPath())] + beside)
-            self.show_side_band(found)
         kept = [self._target["equipment"].GetPath()] + beside
         self._note(f"kept {len(kept)} ({', '.join(str(p).rsplit('/', 1)[-1] for p in kept)}), "
                    f"{hidden} made see-through")
@@ -1022,7 +1015,6 @@ class EbsSimulate:
             "sideways": sideways, "inward": inward,
             "side": (my_side[0] - reach, my_side[1] + reach),
             "deep": my_deep,
-            "floor": (here.GetMin()[2], here.GetMax()[2]),
         }
 
     def _sideways(self, ebs_prim) -> tuple:
@@ -2734,43 +2726,6 @@ class EbsSimulate:
         cylinder.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
-    def show_side_band(self, found: dict) -> int:
-        """이웃을 고른 그 구간을 바닥에 깔아 보여준다. 판정에는 안 쓴다."""
-        stage = self._get_stage()
-        self.clear_side_band()
-        if stage is None or not found:
-            return 0
-        side, deep = found["side"], found["deep"]
-        base, top = found["floor"]
-        lift = base + max((top - base) * BAND_RISE, 1e-6)
-        S, D = found["sideways"], found["inward"]
-
-        def at(u, v, z):
-            return (u * S[0] + v * D[0], u * S[1] + v * D[1], z)
-
-        corners = [at(u, v, z) for z in (base, lift)
-                   for u, v in ((side[0], deep[0]), (side[1], deep[0]),
-                                (side[1], deep[1]), (side[0], deep[1]))]
-        walls = [(0, 1, 2, 3), (7, 6, 5, 4),
-                 (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)]
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            UsdGeom.Scope.Define(stage, BAND_ROOT)
-            material = self._marker_material(stage, "band", COLOR_BAND,
-                                             BAND_OPACITY, BAND_EMISSION)
-            for i, wall in enumerate(walls):
-                self._marker_quad(stage, f"{BAND_ROOT}/wall_{i}",
-                                  [corners[c] for c in wall], material,
-                                  COLOR_BAND, BAND_OPACITY)
-        return len(walls)
-
-    def clear_side_band(self) -> None:
-        stage = self._get_stage()
-        if stage is None:
-            return
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
-            if stage.GetPrimAtPath(BAND_ROOT).IsValid():
-                stage.RemovePrim(BAND_ROOT)
-
     def clear_markers(self) -> None:
         self._verdict = {}
         stage = self._get_stage()
@@ -2894,7 +2849,6 @@ class EbsSimulate:
 
     def release_camera(self) -> None:
         self.show_equipment()
-        self.clear_side_band()
         stage = self._get_stage()
         if stage is None:
             return

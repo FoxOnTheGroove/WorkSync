@@ -217,9 +217,8 @@ class EbsSimulateService:
           가 첫 자식을 타고 내려간 자리) 순위도 좌우 성분만 봐서, 정면 쪽
           대각선 장비가 진짜 옆보다 자주 이겼다.
           상자 -> equipment_boxes. 장비당 한 번 캐시, init 이 비움.
-          고른 구간은 show_side_band 가 바닥에 반투명 상자로 깔아 보여준다
-          (BAND_ROOT, COLOR_BAND, BAND_RISE). 확인용이고 판정에는 안 쓴다.
-          Clear -> release_camera 가 clear_side_band.
+          side_band 는 고른 구간(side/deep/축)도 같이 돌려준다 — 눈으로
+          확인하고 싶으면 그걸로 그리면 된다.
           기둥·벽·천장은 안 끈다 — 빈 면 거리를 재는 상대다.
         끄기/되돌리기 -> hide_other_equipment / show_equipment.
           visibility 가 아니라 Looks 아래 쉐이더의 opacity 0.
