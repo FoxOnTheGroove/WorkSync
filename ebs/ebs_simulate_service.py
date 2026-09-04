@@ -333,7 +333,18 @@ class EbsSimulateService:
         후보 수집 -> _gather_nearby (대부분 여기서 걸러짐).
           순회는 단계당 2회: check_collision 1, measure_faces 1.
           measure_faces 는 세 면 프리즘의 합집합으로 한 번만 걷는다.
-          BBoxCache -> _bounds_cache. _do_collide 가 셋에 나눠준다.
+          시작점은 스테이지 의사 루트다 — set_search_root 는 여기 안 걸린다
+            (그건 build_index 전용). 좌우 이웃만 보지 않는다: 천장과 EQP_ 가
+            아닌 기둥·벽·덕트도 상대이기 때문. opacity 로 투명해진 장비도
+            그대로 상대다 (_is_visible 은 visibility 만 본다) — 안 그러면
+            Camera 를 눌렀냐에 따라 collide 결과가 달라진다.
+          느리면 여기가 아니라 캐시를 볼 것 -> _bounds_cache.
+            시간의 대부분은 순회가 아니라 ComputeWorldBound 첫 계산이다.
+            증거: 같은 walk 를 더 큰 상자로 도는 clearance: search 가
+            faces: search 의 50분의 1이다 (데워진 캐시를 물려받는다).
+            그래서 캐시는 인스턴스에 하나(_bounds), init 만 버린다.
+            equipment_boxes 도 같은 것을 써서 focus 때 미리 데운다.
+            스테이지를 손댔으면 Init 을 다시 눌러야 한다.
         박스 겹침 -> _overlaps. 삼각형 -> _triangle_hits_box.
         메시 읽기 -> _mesh_local (원본, 변환 없음) 과 그 위의 둘:
           _mesh_triangles     전체를 월드로. 3면 검사용.

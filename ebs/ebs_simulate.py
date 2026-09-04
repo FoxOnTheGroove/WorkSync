@@ -226,6 +226,7 @@ class EbsSimulate:
         self._rail_frame = None
         self._triangles: dict = {}
         self._eqp_boxes: dict = None
+        self._bounds = None        # 스테이지 바운드 캐시. init 에서만 버린다
         self._hidden: list = []
         self._eqp_looks: dict = {}
         self._eqp_shared: set = set()
@@ -411,6 +412,7 @@ class EbsSimulate:
     def init(self) -> dict:
         self._begin()
         self._eqp_boxes = None
+        self._bounds = None
         self._eqp_looks = {}
         self._eqp_shared = set()
         if self._gone is not None:
@@ -968,12 +970,13 @@ class EbsSimulate:
         if self._eqp_boxes is not None:
             return self._eqp_boxes
         boxes = {}
+        cache = self._bounds_cache()
         with self._stage_timer(f"measure {len(self._eqp_index)} equipment"):
             for name, path in self._eqp_index.items():
                 prim = stage.GetPrimAtPath(path)
                 if not prim or not prim.IsValid():
                     continue
-                box = self._world_range(prim)
+                box = self._world_range(prim, cache)
                 if box is not None and not box.IsEmpty():
                     boxes[name] = box
         self._eqp_boxes = boxes
@@ -1825,13 +1828,23 @@ class EbsSimulate:
         return Gf.Vec3d(*[v if v > 1e-12 else 1.0 for v in scale])
 
 
-    @staticmethod
-    def _bounds_cache():
-        return UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        )
+    def _bounds_cache(self):
+        """스테이지 바운드 캐시 하나. init 이 버리기 전까지 계속 쓴다.
+
+        collide 시간의 대부분은 순회가 아니라 ComputeWorldBound 를 처음
+        계산하는 값이다. 매번 새로 만들면 장비를 바꿔가며 열 번 눌러도 열 번
+        다 맨바닥에서 계산한다. 그 사이 플랜트는 안 움직인다.
+        EBS 는 align 마다 움직이지만 이 캐시로 재지 않는다 — _gather_nearby 는
+        EBS 를 skip 으로 빼고, EBS 상자는 _ebs_bound 가 따로 잰다.
+        스테이지를 손댔으면 Init 을 다시 누르면 된다 (색인도 그때 다시 만든다).
+        """
+        if self._bounds is None:
+            self._bounds = UsdGeom.BBoxCache(
+                Usd.TimeCode.Default(),
+                includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+                useExtentsHint=True,
+            )
+        return self._bounds
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
                         cache=None) -> dict:
@@ -2863,14 +2876,18 @@ class EbsSimulate:
             self._note(told)
         return self._payload(bool(told), told or "Run Camera first")
 
-    def _world_range(self, prim) -> "Gf.Range3d | None":
+    def _world_range(self, prim, cache=None) -> "Gf.Range3d | None":
+        # 캐시를 넘기는 쪽은 안 움직이는 것만 잰다. EBS 는 align 마다 움직이니
+        # 그냥 부른다 -- 그때는 새 캐시가 만들어져 옛 자리를 안 돌려준다.
         if prim is None or not prim.IsValid():
             return None
-        box = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        ).ComputeWorldBound(prim).ComputeAlignedRange()
+        if cache is None:
+            cache = UsdGeom.BBoxCache(
+                Usd.TimeCode.Default(),
+                includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+                useExtentsHint=True,
+            )
+        box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
         return None if box.IsEmpty() else box
 
     @staticmethod
