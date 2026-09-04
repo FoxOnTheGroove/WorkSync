@@ -24,7 +24,7 @@ class EbsSimulateService:
 
     @classmethod
     def finalize(cls):
-        """teardown -> show_equipment, EbsSimulateCamera.remove, clear_markers,
+        """teardown -> EbsSimulateCamera.remove, clear_markers,
         clear_port_lasers, clear_sweep, hide_ebs.
 
         카메라 프림을 실제로 지우는 곳은 여기뿐이다 — 세션 중에는 남긴다.
@@ -102,8 +102,7 @@ class EbsSimulateService:
         """EBS 프림 둘 다 끔. init 과 Clear 가 부른다.
 
         hide_ebs / show_ebs -> _show_ebs (세션 레이어에 visibility 직접).
-        align 이 쓴 것 하나만 다시 켠다. 장비 쪽(opacity)과 방식이 다른 것은
-        프림이 둘뿐이라서다.
+        align 이 쓴 것 하나만 다시 켠다.
         """
         return cls._simulate.hide_ebs()
 
@@ -154,11 +153,13 @@ class EbsSimulateService:
         return cls._simulate.get_selected_equipment()
 
     @classmethod
-    def align(cls):
-        """포트 위치 계산 -> EBS 배치 -> (옵션) 확인용 레이저.
+    def align(cls, equipment=""):
+        """Prepare + 포트 위치 계산 -> EBS 배치 -> (옵션) 확인용 레이저.
 
-        align -> _do_align -> compute_target, _place_ebs, _align_prims,
-                              show_ebs, show_port_lasers.
+        align -> _do_prepare -> _do_align -> compute_target, _place_ebs,
+                                _align_prims, show_ebs, show_port_lasers.
+        prepare 를 품는다 (몇 ms 다). 'Run Prepare first' 를 낼 이유가 없다.
+        UI 의 Align 버튼이 장비 칸을 그대로 넘긴다.
 
         레일 고르기 -> find_rail. 후보 인덱스 -> _rails_from.
         직선/코너 -> _rail_axis + CAD_SLACK, CAD_PER_UNIT.
@@ -173,16 +174,17 @@ class EbsSimulateService:
           LASER_ROOT. 기본으로 안 그림 (set_show_lasers).
           _port_world 를 쓰므로 snap 모드에서는 보정된 자리에 뜬다.
         """
-        return cls._simulate.align()
+        return cls._simulate.align(equipment)
 
     # -- 3단계 focus ---------------------------------------------------------
 
     @classmethod
     def focus(cls):
-        """카메라 생성 + EBS 정면 배치 + 뷰포트 전환 + 양옆 빼고 투명화.
+        """카메라 생성 + EBS 정면 배치 + 뷰포트 전환.
 
-        focus -> _do_focus -> side_band, hide_other_equipment,
-                              EbsSimulateCamera.place.
+        focus -> _do_focus -> EbsSimulateCamera.place.
+        SIM 은 collide 다음에 이걸 부른다 — 시점이 자리잡은 뒤 오버레이가
+          뜨도록. 수동으로는 3 Collide 가 만들고 4 Camera 가 켠다.
 
         이웃 찾기 -> side_band + NEIGHBOUR_REACH. side_neighbours 는 그 껍데기.
           점이 아니라 상자로 본다. 장비 월드 AABB 를 EBS 좌우축(_sideways,
@@ -197,20 +199,10 @@ class EbsSimulateService:
           side_band 는 고른 구간(side/deep/축)도 같이 돌려준다 — 눈으로
           확인하고 싶으면 그걸로 그리면 된다.
           기둥·벽·천장은 안 끈다 — 빈 면 거리를 재는 상대다.
-        끄기/되돌리기 -> hide_other_equipment / show_equipment.
-          visibility 가 아니라 Looks 아래 쉐이더의 opacity 0.
-          쉐이더 수집 -> _looks_shaders (장비당 한 번 캐시, init 이 비움).
-          저작 -> _author_opacity. 입력 이름 -> GONE.
-            문턱값 GONE_THRESHOLD 가 핵심. 0 이면 blend 라 안 사라진다.
-            Sdf 는 ChangeBlock 안에서 안전, 스키마 헬퍼는 아님. 수집을 블록
-            밖에서 먼저 끝내는 것도 같은 이유.
-          쓰는 곳 -> _gone_layer (세션 위에 얹은 전용 레이어). 되돌리기가
-            Clear() 한 번. 스펙 제거는 ChangeBlock 이 안전하지 않다.
-          인스턴스 장비는 못 쓴다 -> _eqp_shared 에 담아 개수만 알림.
-          되읽어 확인 -> _check_gone (한 줄).
-          Clear 는 release_camera -> show_equipment 로 되돌린다.
-        주의: opacity 0 은 충돌 검사에서 안 빠진다. _gather_nearby 는
-          visibility 만 본다.
+        양옆만 남기고 나머지를 opacity 0 으로 만들던 길은 없앴다 (너무 느렸다).
+          되살리려면 커밋 5c17d32 의 hide_other_equipment / show_equipment /
+          _author_opacity / _gone_layer / GONE 을 보면 된다.
+          이웃 찾기 자체는 남는다 — collide 의 3면 검사가 쓴다 (_side_roots).
         카메라는 전부 ebs_simulate_camera.EbsSimulateCamera 다. 구현부는
           _camera 로 들고 있고, 껍데기는 안 둔다 — _do_focus 와 init 이 직접
           부른다. 밖으로 나가는 것은 release_camera 하나뿐이다 (장비 되돌리기가
@@ -278,9 +270,9 @@ class EbsSimulateService:
 
     @classmethod
     def release_camera(cls):
-        """원래 카메라 복귀 + 궤도 모드 해제 + show_equipment. 프림은 남긴다.
+        """원래 카메라 복귀 + 궤도 모드 해제. 프림은 남긴다.
 
-        구현 -> EbsSimulateCamera.release. 장비 되돌리기만 구현부 몫.
+        구현 -> EbsSimulateCamera.release.
         지우는 것은 remove 뿐이고 teardown 만 부른다 — 세션 내내 같은 하나를
         쓴다. 지웠다 다시 만들면 그 사이 Kit 이 그 경로에 써 둔 것이 남는다.
         """
@@ -346,8 +338,8 @@ class EbsSimulateService:
               두고 '충돌 없음' 과 '여유 0.05 m' 가 같이 나온다.
             roots=None 이면 예전대로 한 번에 다 모은다 (밖에서 부르는 쪽).
             내부 간섭은 안 좁아진다 -> roots=[ebs] / [eqp].
-          opacity 로 투명해진 장비는 그대로 상대다 (_is_visible 은 visibility
-            만 본다) — 안 그러면 Camera 를 눌렀냐에 따라 결과가 달라진다.
+          안 보이는 프림은 빠진다 (_is_visible). 스테이지 트리에서 숨긴 것이
+            다음 판정에 바로 먹는다.
           스테이지 전체 = 상자 목록 훑기 -> _stage_boxes / _from_index.
             트리를 타고 내려가며 상자로 자르는 것을 collide 마다 하지 않는다.
             목록은 한 번 만들고 Init 까지 쓴다 (_stage_index). 파일로 안 남긴다

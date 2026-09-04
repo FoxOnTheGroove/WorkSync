@@ -53,6 +53,25 @@ class EbsSimulateOverlay:
         return overlay
 
     @classmethod
+    def build(cls, vp_name: str = None):
+        """판을 만들어 두되 아직 안 보인다. Camera 뒤에 reveal 이 켠다.
+
+        Collide 때 바로 띄우면 옛 시점에 떴다가 카메라를 따라 미끄러진다.
+        """
+        overlay = cls._get(vp_name)
+        if overlay is not None:
+            overlay.refresh(place=False)
+        return overlay
+
+    @classmethod
+    def reveal(cls, vp_name: str = None):
+        """만들어 둔 판을 지금 시점에 맞춰 놓고 켠다."""
+        for name, overlay in list(cls._instances.items()):
+            if vp_name in (None, name):
+                overlay._place()
+                overlay._start()
+
+    @classmethod
     def hide(cls, vp_name: str = None):
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
@@ -110,7 +129,7 @@ class EbsSimulateOverlay:
         self._window = window
         return True
 
-    def refresh(self) -> bool:
+    def refresh(self, place: bool = True) -> bool:
         said = EbsSimulateService.get_verdict()
         self.clear()
         if not said or self._stack is None:
@@ -124,6 +143,8 @@ class EbsSimulateOverlay:
             print(f"[ebs] could not build the overlay: {e}")
             self.clear()
             return False
+        if not place:
+            return True             # 판은 섰다. 켜는 것은 reveal 이 한다
         self._place()
         return self._start()
 

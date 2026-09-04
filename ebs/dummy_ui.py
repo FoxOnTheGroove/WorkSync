@@ -106,7 +106,6 @@ class EbsDummyUI:
         self._scale = None
         self._root_field = None
         self._rail_field = None
-        self._report_field = None
         self._eqp_field = None
         self._side_field = None
         self._ceiling_field = None
@@ -123,7 +122,6 @@ class EbsDummyUI:
                 self._ebs3_field = self._path_row("EBS 3port:")
                 self._root_field = self._path_row("Search root:")
                 self._rail_field = self._path_row("Rail root:")
-                self._report_field = self._path_row("Report CSV:")
 
                 with ui.HStack(height=24, spacing=4):
                     ui.Label("Precision:", width=90)
@@ -135,7 +133,7 @@ class EbsDummyUI:
                     # again with port 1 slid onto the equipment's pivot.
                     self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                                               "length / puls", width=126)
-                    ui.Label("Laser:", width=40)
+                    ui.Label("Debug laser:", width=76)
                     # The port lasers Align used to draw every time. They are
                     # for checking the port maths against the drawing, so they
                     # are off unless you ask.
@@ -167,17 +165,10 @@ class EbsDummyUI:
                 with ui.HStack(height=26, spacing=4):
                     ui.Button("1 Prepare", clicked_fn=self._on_prepare)
                     ui.Button("2 Align", clicked_fn=self._on_align)
-                    ui.Button("3 Camera", clicked_fn=self._on_camera)
-                    ui.Button("4 Collide", clicked_fn=self._on_collide)
+                    ui.Button("3 Collide", clicked_fn=self._on_collide)
+                    ui.Button("4 Camera", clicked_fn=self._on_camera)
                     ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
-
-                ui.Separator(height=6)
-
-                with ui.HStack(height=26, spacing=4):
-                    # Every equipment under the search root, in one go: red
-                    # where port 1 lands, green where the equipment sits.
-                    ui.Button("Port 1 sweep", clicked_fn=self._on_sweep)
 
                 self._status_label = ui.Label("Ready", height=20)
 
@@ -218,32 +209,18 @@ class EbsDummyUI:
 
     def _on_align(self):
         self._apply_settings()
-        self._render(EbsSimulateService.align())
+        self._render(EbsSimulateService.align(
+            self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.hide()
 
     def _on_camera(self):
         self._render(EbsSimulateService.focus())
+        # 시점이 옮겨간 뒤에 켠다. Collide 가 만들어 둔 것이 여기서 보인다.
+        EbsSimulateOverlay.reveal()
 
     def _on_refresh(self):
         # 돌려본 카메라를 Camera 가 놓았던 자리로. 궤도 모드는 켜진 채다.
         self._render(EbsSimulateService.refresh_camera())
-
-    def _on_sweep(self):
-        self._apply_settings()
-        result = EbsSimulateService.sweep_ports()
-        self._render(result)
-        self._write_report(result.get("rows", []))
-
-    def _write_report(self, rows: list):
-        """Put the sweep's rows on disk, and say so under the status line."""
-        path = self._report_field.model.get_value_as_string()
-        try:
-            written = SweepLog.write(path, rows)
-        except Exception as e:
-            self._set_status(f"Could not write {path}: {e}")
-            return
-        if written:
-            self._set_status(f"{len(rows)} rows written to {written}")
 
     def _on_clear_markers(self):
         EbsSimulateService.clear_markers()
@@ -257,7 +234,9 @@ class EbsDummyUI:
     def _on_collide(self):
         self._apply_settings()
         self._render(EbsSimulateService.collide())
-        EbsSimulateOverlay.show()      # the verdict over the EBS
+        # 만들어만 둔다. 옛 시점에 판이 떴다가 카메라를 따라 미끄러지는 것보다,
+        # 시점이 자리잡은 뒤 한 번에 뜨는 편이 낫다 -- Camera 가 켠다.
+        EbsSimulateOverlay.build()
 
     def _apply_settings(self):
         EbsSimulateService.set_xml_path(self._xml_field.model.get_value_as_string())

@@ -166,15 +166,6 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)
 NOW = Usd.TimeCode.Default()
-LOOKS = "Looks"
-SHADER_TYPE = "Shader"
-GONE_THRESHOLD = 0.5
-GONE_LAYER = "ebs_hidden.usda"
-GONE = (("inputs:opacity", "Float", 0.0),
-        ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
-        ("inputs:enable_opacity", "Bool", True),
-        ("inputs:opacity_constant", "Float", 0.0),
-        ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 
 FACE_LEFT    = "left"
 FACE_RIGHT   = "right"
@@ -229,10 +220,6 @@ class EbsSimulate:
         self._bounds = None        # 스테이지 바운드 캐시. init 에서만 버린다
         self._stage_index = None   # (경로, 월드 상자, 프림). 한 번 만든다
         self._ebs_box = None       # (경로, 상자). EBS 가 움직이면 버린다
-        self._hidden: list = []
-        self._eqp_looks: dict = {}
-        self._eqp_shared: set = set()
-        self._gone = None
         self._lasers: bool = False
         self._verdict: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
@@ -343,7 +330,6 @@ class EbsSimulate:
         return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
-        self.show_equipment()
         self._camera.remove(self._get_stage())
         self.clear_markers()
         self.clear_port_lasers()
@@ -419,11 +405,6 @@ class EbsSimulate:
         self._bounds = None
         self._stage_index = None
         self._ebs_box = None
-        self._eqp_looks = {}
-        self._eqp_shared = set()
-        if self._gone is not None:
-            self._gone.Clear()
-        self._hidden = []
         self._ready = False
         self._target = None
         self._aligned = False
@@ -436,6 +417,9 @@ class EbsSimulate:
 
         self.hide_ebs()
         equipment = self.build_index()
+        # 스테이지 상자 목록. 장비별이 아니라 스테이지 하나짜리라 어느 장비를
+        # 보든 같은 것을 쓴다. 기다리는 자리가 여기라서 여기서 만든다.
+        self._stage_boxes()
         ports = self.load_ports()
         self._ready = equipment > 0 and ports > 0
         self._note(f"indexed {equipment} equipment, {ports} port entries")
@@ -451,8 +435,18 @@ class EbsSimulate:
             return self._payload(False, "Run Init first")
         return self._do_prepare(equipment)
 
-    def align(self) -> dict:
+    def align(self, equipment: str = "") -> dict:
+        """Prepare 를 먼저 돌리고 배치한다. 따로 누를 필요가 없다.
+
+        prepare 는 몇 ms 다 (장비 찾기, 포트 조회, 피봇). 그것을 아끼려고
+        'Run Prepare first' 를 내는 것보다 그냥 돌리는 편이 낫다.
+        """
         self._begin()
+        if not self._ready:
+            return self._payload(False, "Run Init first")
+        made = self._do_prepare(equipment)
+        if not made["ok"]:
+            return made
         return self._do_align()
 
     def focus(self) -> dict:
@@ -656,10 +650,20 @@ class EbsSimulate:
         result = self._do_align()
         if not result["ok"]:
             return result
-        result = self._do_focus()
+        # 판정을 먼저 낸다. 카메라가 자리잡은 뒤에 오버레이가 뜨도록 —
+        # 옛 시점에 판이 떴다가 카메라를 따라 미끄러지지 않는다.
+        result = self._do_collide()
         if not result["ok"]:
             return result
-        return self._do_collide()
+        told = self._do_focus()
+        if not told["ok"]:
+            return told
+        # 판정 결과를 돌려주되, 시간과 노트는 카메라까지 담아서 준다 —
+        # collide 시점에 뜬 스냅샷은 카메라 단계를 모른다
+        result["timings"] = list(self._timings)
+        result["notes"] = list(self._notes)
+        result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
+        return result
 
 
     def _do_prepare(self, equipment: str) -> dict:
@@ -714,16 +718,6 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
         stage = self._get_stage()
-        with self._stage_timer("hide the other equipment"):
-            found = self.side_band(stage, self._target["ebs"],
-                                   self._target["equipment"])
-            beside = found.get("beside", [])
-            hidden = self.hide_other_equipment(
-                [str(self._target["equipment"].GetPath())] + beside)
-        kept = [self._target["equipment"].GetPath()] + beside
-        self._note(f"kept {len(kept)} ({', '.join(str(p).rsplit('/', 1)[-1] for p in kept)}), "
-                   f"{hidden} made see-through")
-
         ebs = self._target["ebs"]
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
@@ -1081,118 +1075,6 @@ class EbsSimulate:
         except Exception:
             pass
         return (1.0, 0.0)
-
-    def hide_other_equipment(self, keep: list) -> int:
-        stage = self._get_stage()
-        if stage is None:
-            return 0
-        self.show_equipment()
-        spared = set(keep)
-        turn_off = [path for path in self._eqp_index.values() if path not in spared]
-        if self._author_opacity(stage, turn_off, True):
-            self._hidden = turn_off
-        return len(self._hidden)
-
-    def show_equipment(self) -> None:
-        if not self._hidden:
-            return
-        stage = self._get_stage()
-        if stage is not None:
-            self._author_opacity(stage, self._hidden, False)
-        self._hidden = []
-
-    def _looks_shaders(self, stage, path: str) -> list:
-        found = self._eqp_looks.get(path)
-        if found is not None:
-            return found
-        found = []
-        looks = stage.GetPrimAtPath(path + "/" + LOOKS)
-        if looks and looks.IsValid():
-            stack = list(_children(looks))
-            while stack:
-                prim = stack.pop()
-                if prim.GetTypeName() != SHADER_TYPE:
-                    stack.extend(_children(prim))
-                    continue
-                try:
-                    shared = prim.IsInstanceProxy()
-                except Exception:
-                    shared = False
-                if shared:
-                    self._eqp_shared.add(path)
-                else:
-                    found.append(str(prim.GetPath()))
-        self._eqp_looks[path] = found
-        return found
-
-    def _gone_layer(self, stage):
-        session = stage.GetSessionLayer()
-        if self._gone is None:
-            self._gone = Sdf.Layer.CreateAnonymous(GONE_LAYER)
-        if self._gone.identifier not in session.subLayerPaths:
-            session.subLayerPaths.insert(0, self._gone.identifier)
-        return self._gone
-
-    def _author_opacity(self, stage, paths: list, hide: bool) -> bool:
-        if not paths:
-            return True
-        if not hide:
-            if self._gone is not None:
-                with self._stage_timer(f"show {len(paths)} equipment"):
-                    self._gone.Clear()
-            return True
-
-        shaders, bare = [], 0
-        with self._stage_timer(f"hide {len(paths)} equipment"):
-            for path in paths:
-                found = self._looks_shaders(stage, path)
-                if found:
-                    shaders.extend(found)
-                else:
-                    bare += 1
-            if bare:
-                self._note(f"{bare} of {len(paths)} machines have no shader we "
-                           f"can write under {LOOKS}; those are left alone"
-                           + (f" ({len(self._eqp_shared)} of them are instances)"
-                              if self._eqp_shared else ""))
-            if not shaders:
-                return False
-            layer = self._gone_layer(stage)
-            try:
-                with Sdf.ChangeBlock():
-                    for shader in shaders:
-                        spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
-                        for name, kind, value in GONE:
-                            attribute = spec.attributes.get(name)
-                            if attribute is None:
-                                attribute = Sdf.AttributeSpec(
-                                    spec, name, getattr(Sdf.ValueTypeNames, kind))
-                            attribute.default = value
-            except Exception as e:
-                self._note(f"could not set opacity on {len(shaders)} shaders ({e})")
-                return False
-        self._check_gone(stage, shaders[0])
-        return True
-
-    def _check_gone(self, stage, shader: str) -> None:
-        try:
-            prim = stage.GetPrimAtPath(shader)
-            if not prim or not prim.IsValid():
-                self._note(f"wrote the opinion but {shader} is not on the "
-                           f"stage -- nothing will look any different")
-                return
-            missed = []
-            for name, _, want in GONE:
-                attribute = prim.GetAttribute(name)
-                got = attribute.Get() if attribute else None
-                if got != want:
-                    missed.append(f"{name}={got}")
-            if missed:
-                self._note(f"{shader} did not take " + ", ".join(missed))
-            else:
-                self._note(f"see-through reads back on {shader}")
-        except Exception as e:
-            self._note(f"could not read {shader} back ({e})")
 
     def get_selected_equipment(self) -> str:
         stage = self._get_stage()
@@ -3072,7 +2954,6 @@ class EbsSimulate:
 
 
     def release_camera(self) -> None:
-        self.show_equipment()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:
