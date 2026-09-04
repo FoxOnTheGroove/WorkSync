@@ -341,19 +341,31 @@ class EbsSimulateService:
               전체로 되돌아가면 장비마다 다른 잣대가 된다.
             천장 -> 그대로 스테이지 전체. 위쪽 이웃을 찾는 방법이 없다.
               대신 상자를 천장 셀 위로만 잡아 위층 말고는 위에서 잘린다.
+              전체라고 트리를 걷지는 않는다 -> _from_index.
             두 단계가 면마다 같은 잣대를 써야 한다. 한쪽만 좁히면 같은 벽을
               두고 '충돌 없음' 과 '여유 0.05 m' 가 같이 나온다.
             roots=None 이면 예전대로 한 번에 다 모은다 (밖에서 부르는 쪽).
             내부 간섭은 안 좁아진다 -> roots=[ebs] / [eqp].
           opacity 로 투명해진 장비는 그대로 상대다 (_is_visible 은 visibility
             만 본다) — 안 그러면 Camera 를 눌렀냐에 따라 결과가 달라진다.
+          스테이지 전체 = 상자 목록 훑기 -> _stage_boxes / _from_index.
+            트리를 타고 내려가며 상자로 자르는 것을 collide 마다 하지 않는다.
+            목록은 한 번 만들고 Init 까지 쓴다 (_stage_index). 파일로 안 남긴다
+              — .ebscache.json 은 XML 의 size/mtime 으로 신선도를 보는데,
+              스테이지 상자는 레이어 조합과 세션 오버라이드에 걸려 있어서
+              그 열쇠로는 못 지킨다. 틀리면 조용히 잘못된 판정이 나온다.
+            담는 단위 -> 장비(EQP_)는 통째로, 그 밖의 지오메트리는 낱개로.
+              장비 안은 상자가 겹쳤을 때만 연다 (_gather_nearby roots=[그것]).
+            가시성은 안 굳힌다 -> 지나온 조상을 같이 담고, 물을 때 본다.
+              그래서 그룹을 숨겼다 켰다 해도 목록을 다시 안 만든다.
+            equipment_boxes 도 같은 목록에서 꺼낸다 — 스테이지를 두 번 안 걷는다.
+            만드는 값은 로그에 'stage: index' 한 줄. 첫 collide 에만 나온다.
           느리면 여기가 아니라 캐시를 볼 것 -> _bounds_cache.
             시간의 대부분은 순회가 아니라 ComputeWorldBound 첫 계산이다.
             증거: 같은 walk 를 더 큰 상자로 도는 clearance: search 가
             faces: search 의 50분의 1이다 (데워진 캐시를 물려받는다).
             그래서 캐시는 인스턴스에 하나(_bounds), init 만 버린다.
-            equipment_boxes 도 같은 것을 써서 focus 때 미리 데운다.
-            스테이지를 손댔으면 Init 을 다시 눌러야 한다.
+            스테이지를 손댔으면 Init 을 다시 눌러야 한다 (_stage_index 도).
           EBS 상자 -> _ebs_bound. collide 한 번에 다섯 군데가 부르는데 부를
             때마다 BBoxCache 를 둘 만들어 EBS 모델을 두 번 훑었다 (뒤엣것은
             extentsHint 진단). 결과를 _ebs_box 에 들고 있다가 그대로 준다.

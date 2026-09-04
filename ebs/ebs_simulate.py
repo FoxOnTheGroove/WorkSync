@@ -227,6 +227,7 @@ class EbsSimulate:
         self._triangles: dict = {}
         self._eqp_boxes: dict = None
         self._bounds = None        # 스테이지 바운드 캐시. init 에서만 버린다
+        self._stage_index = None   # (경로, 월드 상자, 프림). 한 번 만든다
         self._ebs_box = None       # (경로, 상자). EBS 가 움직이면 버린다
         self._hidden: list = []
         self._eqp_looks: dict = {}
@@ -416,6 +417,7 @@ class EbsSimulate:
         self._begin()
         self._eqp_boxes = None
         self._bounds = None
+        self._stage_index = None
         self._ebs_box = None
         self._eqp_looks = {}
         self._eqp_shared = set()
@@ -1003,16 +1005,10 @@ class EbsSimulate:
     def equipment_boxes(self, stage) -> dict:
         if self._eqp_boxes is not None:
             return self._eqp_boxes
-        boxes = {}
-        cache = self._bounds_cache()
         with self._stage_timer(f"measure {len(self._eqp_index)} equipment"):
-            for name, path in self._eqp_index.items():
-                prim = stage.GetPrimAtPath(path)
-                if not prim or not prim.IsValid():
-                    continue
-                box = self._world_range(prim, cache)
-                if box is not None and not box.IsEmpty():
-                    boxes[name] = box
+            by_path = {path: box for path, box, _, _ in self._stage_boxes()}
+            boxes = {name: by_path[path]
+                     for name, path in self._eqp_index.items() if path in by_path}
         self._eqp_boxes = boxes
         return boxes
 
@@ -2266,6 +2262,67 @@ class EbsSimulate:
         for path in paths:
             self._visible.pop(path, None)
 
+    def _stage_boxes(self, cache=None) -> list:
+        """스테이지의 상자 목록. 한 번 만들고 Init 까지 그대로 쓴다.
+
+        collide 마다 트리를 타고 내려가며 상자로 자르는 대신, 미리 눕혀 놓고
+        훑는다 — 남은 값이 그 순회였다.
+        담는 것은 장비(EQP_)는 통째로, 그 밖의 지오메트리는 낱개로. 장비 안은
+        옆에 왔을 때만 연다.
+        지나온 조상도 같이 담는다. 가시성을 여기서 굳히지 않으려고다 — 그룹을
+        통째로 숨긴 것도 묻는 그 순간에 봐야 한다 (_from_index).
+        만드는 값은 Init 이 이미 걷는 그 트리에 상자 계산을 얹는 정도다.
+        """
+        if self._stage_index is not None:
+            return self._stage_index
+        stage = self._get_stage()
+        if stage is None:
+            return []
+        cache = cache if cache is not None else self._bounds_cache()
+        index = []
+        with self._stage_timer("stage: index"):
+            stack = [(prim, ()) for prim in _children(stage.GetPseudoRoot())]
+            while stack:
+                prim, chain = stack.pop()
+                path = str(prim.GetPath())
+                if path in OURS or path.startswith(OURS_UNDER):
+                    continue
+                type_name = prim.GetTypeName()
+                if type_name in SKIP_TYPES or type_name.endswith("Light"):
+                    continue
+                box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+                if box.IsEmpty():
+                    continue
+                if (type_name in GEOMETRY_TYPES
+                        or prim.GetName().upper().startswith(EQP_PREFIX)):
+                    index.append((path, box, prim, chain))
+                    continue
+                stack.extend((kid, chain + ((prim, path),))
+                             for kid in _children(prim))
+        self._stage_index = index
+        self._note(f"stage index: {len(index)} boxes")
+        return index
+
+    def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
+        """상자 목록에서 겹치는 것만. 트리는 그 안을 열 때만 탄다."""
+        skip_exact = frozenset(skip)
+        skip_under = tuple(s + "/" for s in skip)
+        found, visited, inside = [], 0, []
+        for path, box, prim, chain in self._stage_boxes(cache):
+            if path in skip_exact or (skip_under and path.startswith(skip_under)):
+                continue
+            visited += 1
+            if not self._overlaps(box, search):
+                continue
+            if any(not self._is_visible(one, where) for one, where in chain):
+                continue                # 조상 그룹을 숨겼다
+            inside.append(prim)
+        for prim in inside:
+            got, seen = self._gather_nearby(stage, cache, search, skip, [prim])
+            found.extend(got)
+            visited += seen
+        return found, visited
+
     def _by_face(self, stage, cache, search, skip, roots, cells, margin):
         """면마다 후보를 모은다. (경로, 상자, 볼 면들) 목록과 훑은 프림 수.
 
@@ -2295,14 +2352,15 @@ class EbsSimulate:
 
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
                        roots: list = None) -> tuple:
-        # roots 가 None 이면 스테이지 전체. 빈 리스트면 아무데도 안 간다 --
-        # 옆에 아무것도 없다는 뜻이고, 그러면 후보도 없다.
+        # roots 가 None 이면 스테이지 전체 -- 트리가 아니라 상자 목록으로
+        # 간다 (_from_index). 빈 리스트면 아무데도 안 간다 = 후보 없음.
+        if roots is None:
+            return self._from_index(stage, cache, search, skip)
         found, visited = [], 0
         ours_exact = frozenset(OURS)
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
-        stack = (list(roots) if roots is not None
-                 else list(_children(stage.GetPseudoRoot())))
+        stack = list(roots)
         while stack:
             prim = stack.pop()
             path = str(prim.GetPath())
