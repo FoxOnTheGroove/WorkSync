@@ -1,5 +1,3 @@
-"""EBS 배치·충돌 판정 구현부. 공개 API 는 ebs_simulate_service.py 를 볼 것."""
-
 import array
 import io
 import json

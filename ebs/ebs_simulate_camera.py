@@ -1,5 +1,3 @@
-"""EBS 카메라: 만들기, 놓기, interest 둘레 공전. 속도·거리는 상단 상수."""
-
 import math
 
 from pxr import Usd, UsdGeom, Sdf, Gf

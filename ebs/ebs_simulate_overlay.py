@@ -1,5 +1,3 @@
-"""뷰포트에 띄우는 판정 패널. 문구와 색은 이 파일 상단 상수."""
-
 import omni.ui as ui
 
 from .ebs_simulate_camera import viewport_window
