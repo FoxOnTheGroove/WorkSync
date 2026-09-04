@@ -163,10 +163,9 @@ class EbsDummyUI:
                     ui.Button("SIM", clicked_fn=self._on_simulate)
 
                 with ui.HStack(height=26, spacing=4):
-                    ui.Button("1 Prepare", clicked_fn=self._on_prepare)
-                    ui.Button("2 Align", clicked_fn=self._on_align)
-                    ui.Button("3 Collide", clicked_fn=self._on_collide)
-                    ui.Button("4 Camera", clicked_fn=self._on_camera)
+                    ui.Button("1 Align", clicked_fn=self._on_align)
+                    ui.Button("2 Collide", clicked_fn=self._on_collide)
+                    ui.Button("3 Camera", clicked_fn=self._on_camera)
                     ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
 
@@ -199,18 +198,12 @@ class EbsDummyUI:
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.show()      # SIM runs the collide too
 
-    def _on_prepare(self):
-        self._apply_settings()
-        self._render(EbsSimulateService.prepare(
-            self._eqp_field.model.get_value_as_string()))
-        # A verdict is about where the EBS was standing. Choosing another
-        # machine, or moving it, leaves the panel saying so about nothing.
-        EbsSimulateOverlay.hide()
-
     def _on_align(self):
         self._apply_settings()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
+        # A verdict is about where the EBS was standing. Choosing another
+        # machine, or moving it, leaves the panel saying so about nothing.
         EbsSimulateOverlay.hide()
 
     def _on_camera(self):

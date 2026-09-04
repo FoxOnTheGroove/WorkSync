@@ -141,6 +141,9 @@ class EbsSimulateService:
     def prepare(cls, equipment=""):
         """장비 확정 + 포트 수 + EBS + 피봇. 빈 문자열이면 뷰포트 선택.
 
+        UI 에 버튼은 없다 — align 이 품는다. 따로 부를 일은 장비만 확인하고
+        배치는 안 하고 싶을 때뿐이다.
+
         prepare -> _do_prepare.
         장비 찾기 -> _resolve_by_name, _resolve_by_selection.
         피봇 -> resolve_anchor + ANCHOR_DEPTH, PASS_TYPES.
