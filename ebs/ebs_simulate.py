@@ -227,6 +227,19 @@ FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 1                 # 면당 셀 분할 수. 1이면 면 하나가 셀 하나
+# 카메라 단계에서 양옆 빼고 나머지 장비를 투명하게. 느려서 기본은 꺼 둔다 --
+# 켜려면 여기를 True 로. 되돌리기는 release_camera / teardown 이 한다
+FADE_OTHERS = False
+LOOKS = "Looks"
+SHADER_TYPE = "Shader"
+GONE_THRESHOLD = 0.5     # 0 이면 blend 라 안 사라진다. 컷아웃 문턱값
+GONE_LAYER = "ebs_hidden.usda"
+GONE = (("inputs:opacity", "Float", 0.0),
+        ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
+        ("inputs:enable_opacity", "Bool", True),
+        ("inputs:opacity_constant", "Float", 0.0),
+        ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
+
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
@@ -280,6 +293,10 @@ class EbsSimulate:
         self._blockers: dict = {}
         self._local: dict = {}
         self._faces: dict = {}    # 메시별 면 상자 + 로컬 격자
+        self._hidden: list = []
+        self._eqp_looks: dict = {}
+        self._eqp_shared: set = set()
+        self._gone = None
         self._boxed: dict = {}
         self._visible: dict = {}
         self._grid_shape: dict = {}
@@ -416,6 +433,7 @@ class EbsSimulate:
         return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
+        self.show_equipment()
         self._camera.remove(self._get_stage())
         self.clear_markers()
         self.clear_port_lasers()
@@ -484,6 +502,11 @@ class EbsSimulate:
     def init(self) -> dict:
         self._begin()
         self._eqp_boxes = None
+        self._eqp_looks = {}
+        self._eqp_shared = set()
+        if self._gone is not None:
+            self._gone.Clear()
+        self._hidden = []
         self._bounds = None
         self._stage_index = None
         self._ebs_box = None
@@ -794,6 +817,14 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
         stage = self._get_stage()
+        if FADE_OTHERS:
+            with self._stage_timer("hide the other equipment"):
+                found = self.side_band(stage, self._target["ebs"],
+                                       self._target["equipment"])
+                beside = found.get("beside", [])
+                hidden = self.hide_other_equipment(
+                    [str(self._target["equipment"].GetPath())] + beside)
+            self._note(f"kept {1 + len(beside)}, {hidden} made see-through")
         ebs = self._target["ebs"]
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
@@ -1073,6 +1104,118 @@ class EbsSimulate:
                      for name, path in self._eqp_index.items() if path in by_path}
         self._eqp_boxes = boxes
         return boxes
+
+    def hide_other_equipment(self, keep: list) -> int:
+        stage = self._get_stage()
+        if stage is None:
+            return 0
+        self.show_equipment()
+        spared = set(keep)
+        turn_off = [path for path in self._eqp_index.values() if path not in spared]
+        if self._author_opacity(stage, turn_off, True):
+            self._hidden = turn_off
+        return len(self._hidden)
+
+    def show_equipment(self) -> None:
+        if not self._hidden:
+            return
+        stage = self._get_stage()
+        if stage is not None:
+            self._author_opacity(stage, self._hidden, False)
+        self._hidden = []
+
+    def _looks_shaders(self, stage, path: str) -> list:
+        found = self._eqp_looks.get(path)
+        if found is not None:
+            return found
+        found = []
+        looks = stage.GetPrimAtPath(path + "/" + LOOKS)
+        if looks and looks.IsValid():
+            stack = list(_children(looks))
+            while stack:
+                prim = stack.pop()
+                if prim.GetTypeName() != SHADER_TYPE:
+                    stack.extend(_children(prim))
+                    continue
+                try:
+                    shared = prim.IsInstanceProxy()
+                except Exception:
+                    shared = False
+                if shared:
+                    self._eqp_shared.add(path)
+                else:
+                    found.append(str(prim.GetPath()))
+        self._eqp_looks[path] = found
+        return found
+
+    def _gone_layer(self, stage):
+        session = stage.GetSessionLayer()
+        if self._gone is None:
+            self._gone = Sdf.Layer.CreateAnonymous(GONE_LAYER)
+        if self._gone.identifier not in session.subLayerPaths:
+            session.subLayerPaths.insert(0, self._gone.identifier)
+        return self._gone
+
+    def _author_opacity(self, stage, paths: list, hide: bool) -> bool:
+        if not paths:
+            return True
+        if not hide:
+            if self._gone is not None:
+                with self._stage_timer(f"show {len(paths)} equipment"):
+                    self._gone.Clear()
+            return True
+
+        shaders, bare = [], 0
+        with self._stage_timer(f"hide {len(paths)} equipment"):
+            for path in paths:
+                found = self._looks_shaders(stage, path)
+                if found:
+                    shaders.extend(found)
+                else:
+                    bare += 1
+            if bare:
+                self._note(f"{bare} of {len(paths)} machines have no shader we "
+                           f"can write under {LOOKS}; those are left alone"
+                           + (f" ({len(self._eqp_shared)} of them are instances)"
+                              if self._eqp_shared else ""))
+            if not shaders:
+                return False
+            layer = self._gone_layer(stage)
+            try:
+                with Sdf.ChangeBlock():
+                    for shader in shaders:
+                        spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
+                        for name, kind, value in GONE:
+                            attribute = spec.attributes.get(name)
+                            if attribute is None:
+                                attribute = Sdf.AttributeSpec(
+                                    spec, name, getattr(Sdf.ValueTypeNames, kind))
+                            attribute.default = value
+            except Exception as e:
+                self._note(f"could not set opacity on {len(shaders)} shaders ({e})")
+                return False
+        self._check_gone(stage, shaders[0])
+        return True
+
+    def _check_gone(self, stage, shader: str) -> None:
+        try:
+            prim = stage.GetPrimAtPath(shader)
+            if not prim or not prim.IsValid():
+                self._note(f"wrote the opinion but {shader} is not on the "
+                           f"stage -- nothing will look any different")
+                return
+            missed = []
+            for name, _, want in GONE:
+                attribute = prim.GetAttribute(name)
+                got = attribute.Get() if attribute else None
+                if got != want:
+                    missed.append(f"{name}={got}")
+            if missed:
+                self._note(f"{shader} did not take " + ", ".join(missed))
+            else:
+                self._note(f"see-through reads back on {shader}")
+        except Exception as e:
+            self._note(f"could not read {shader} back ({e})")
 
     @staticmethod
     def _cast(box, way) -> tuple:
@@ -3019,6 +3162,7 @@ class EbsSimulate:
 
 
     def release_camera(self) -> None:
+        self.show_equipment()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:
