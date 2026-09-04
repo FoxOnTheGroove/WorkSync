@@ -333,11 +333,18 @@ class EbsSimulateService:
         후보 수집 -> _gather_nearby (대부분 여기서 걸러짐).
           순회는 단계당 2회: check_collision 1, measure_faces 1.
           measure_faces 는 세 면 프리즘의 합집합으로 한 번만 걷는다.
-          시작점은 스테이지 의사 루트다 — set_search_root 는 여기 안 걸린다
-            (그건 build_index 전용). 좌우 이웃만 보지 않는다: 천장과 EQP_ 가
-            아닌 기둥·벽·덕트도 상대이기 때문. opacity 로 투명해진 장비도
-            그대로 상대다 (_is_visible 은 visibility 만 본다) — 안 그러면
-            Camera 를 눌렀냐에 따라 collide 결과가 달라진다.
+          시작점 -> roots. 3면은 좌우 이웃 장비 둘만 본다 (_side_roots ->
+            side_band, Camera 가 남길 장비를 고르는 그 판단). 스테이지 전체를
+            안 훑는다 — 그 값이 collide 시간의 대부분이었다.
+            check_collision 과 measure_faces 에 같은 roots 를 넘겨야 한다.
+              한쪽만 좁히면 '충돌 없음 + 거리 0.05' 가 나온다.
+            roots=None 이 전체 순회, [] 는 후보 없음. 옆이 비면 3면도 빈다 —
+              전체로 되돌아가면 장비마다 다른 잣대가 된다.
+            빠지는 것: EQP_ 가 아닌 기둥·벽·덕트, 그리고 천장 위쪽 (위 이웃을
+              찾는 방법이 없다. 이 둘이 위로 뻗은 것만 본다).
+            내부 간섭은 안 좁아진다 -> roots=[ebs] / [eqp].
+          opacity 로 투명해진 장비는 그대로 상대다 (_is_visible 은 visibility
+            만 본다) — 안 그러면 Camera 를 눌렀냐에 따라 결과가 달라진다.
           느리면 여기가 아니라 캐시를 볼 것 -> _bounds_cache.
             시간의 대부분은 순회가 아니라 ComputeWorldBound 첫 계산이다.
             증거: 같은 walk 를 더 큰 상자로 도는 clearance: search 가

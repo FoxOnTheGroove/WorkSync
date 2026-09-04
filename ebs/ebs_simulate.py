@@ -768,6 +768,33 @@ class EbsSimulate:
             self.clear_port_lasers()
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
+    def _side_roots(self) -> list:
+        """3면 검사가 들여다볼 서브트리. 좌우 이웃 장비, 방향당 하나씩.
+
+        스테이지 전체를 훑는 대신 이 둘만 본다. 고르는 것은 side_band 로,
+        Camera 가 남길 장비를 고르는 것과 같은 판단이다 — 화면에 남은 것과
+        판정에 쓰는 것이 어긋나지 않는다.
+        기둥·벽·덕트는 EQP_ 가 아니라 여기 안 들어온다. 천장도 위쪽 이웃을
+        찾는 방법이 없어 이 둘이 위로 뻗은 것만 본다. 그걸 감수하는 대신
+        훑는 값을 안 낸다.
+        옆에 아무것도 없으면 빈 리스트다 = 후보 없음 (None 이면 전체 순회).
+        """
+        stage = self._get_stage()
+        if stage is None:
+            return []
+        found = self.side_band(stage, self._target["ebs"],
+                               self._target["equipment"])
+        beside = found.get("beside", []) if found else []
+        roots = []
+        for path in beside:
+            prim = stage.GetPrimAtPath(path)
+            if prim and prim.IsValid():
+                roots.append(prim)
+        self._note("three faces judged against "
+                   + (", ".join(str(p).rsplit("/", 1)[-1] for p in beside)
+                      if beside else "nothing -- no machine beside this one"))
+        return roots
+
     def _do_collide(self) -> dict:
         if self._target is None:
             return self._payload(False, "Run Prepare first")
@@ -777,10 +804,12 @@ class EbsSimulate:
         mark = len(self._timings)
         apart = [self._target["ebs"], self._target["equipment"]]
         bounds = self._bounds_cache()
-        cells = self.check_collision(self._target["ebs"], exclude=apart, cache=bounds)
+        roots = self._side_roots()
+        cells = self.check_collision(self._target["ebs"], exclude=apart,
+                                     cache=bounds, roots=roots)
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         distances = self.measure_faces(self._target["ebs"], cells,
-                                       exclude=apart, cache=bounds)
+                                       exclude=apart, cache=bounds, roots=roots)
         for face, found in distances.items():
             if found.get("distance") is None:
                 self._note(f"{face}: clear, nothing within "
@@ -1852,7 +1881,7 @@ class EbsSimulate:
         return self._bounds
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
-                        cache=None) -> dict:
+                        cache=None, roots: list = None) -> dict:
         stage = self._get_stage()
         if stage is None:
             return {face: [] for face in FACES}
@@ -1879,7 +1908,8 @@ class EbsSimulate:
             margin = Gf.Vec3d(depth, depth, depth)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-            candidates, visited = self._gather_nearby(stage, cache, search, skip)
+            candidates, visited = self._gather_nearby(stage, cache, search, skip,
+                                                      roots)
         coarse = len(candidates)
 
         size = local_box.GetMax() - local_box.GetMin()
@@ -2236,12 +2266,15 @@ class EbsSimulate:
             self._visible.pop(path, None)
 
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
-                       root: Usd.Prim = None) -> tuple:
+                       roots: list = None) -> tuple:
+        # roots 가 None 이면 스테이지 전체. 빈 리스트면 아무데도 안 간다 --
+        # 옆에 아무것도 없다는 뜻이고, 그러면 후보도 없다.
         found, visited = [], 0
         ours_exact = frozenset(OURS)
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
-        stack = [root] if root is not None else list(_children(stage.GetPseudoRoot()))
+        stack = (list(roots) if roots is not None
+                 else list(_children(stage.GetPseudoRoot())))
         while stack:
             prim = stack.pop()
             path = str(prim.GetPath())
@@ -2281,8 +2314,10 @@ class EbsSimulate:
             return blank
 
         with self._stage_timer("equipment: search"):
-            ours, _ = self._gather_nearby(stage, cache, world_box, [], root=ebs_prim)
-            theirs, _ = self._gather_nearby(stage, cache, world_box, [], root=eqp_prim)
+            ours, _ = self._gather_nearby(stage, cache, world_box, [],
+                                          roots=[ebs_prim])
+            theirs, _ = self._gather_nearby(stage, cache, world_box, [],
+                                            roots=[eqp_prim])
         if not ours or not theirs:
             self._note(f"no interference test: {len(ours)} EBS meshes against "
                        f"{len(theirs)} on the equipment")
@@ -2465,7 +2500,7 @@ class EbsSimulate:
         return dict(self._grid_shape)
 
     def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
-                      exclude: list = None, cache=None) -> dict:
+                      exclude: list = None, cache=None, roots: list = None) -> dict:
         stage = self._get_stage()
         if stage is None:
             return {}
@@ -2491,7 +2526,8 @@ class EbsSimulate:
             candidates = []
             if wanted:
                 whole = self._union([box for _, box, _, _, _ in wanted.values()])
-                candidates, _ = self._gather_nearby(stage, cache, whole, skip)
+                candidates, _ = self._gather_nearby(stage, cache, whole, skip,
+                                                    roots)
         if not wanted:
             return {}
 
