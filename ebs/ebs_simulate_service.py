@@ -227,6 +227,11 @@ class EbsSimulateService:
         EbsSimulateCamera._grab    좌드래그 공전 + Kit 조작 차단
         _turn / _zoom / _double    공전 / 휠 줌 / 더블클릭 중심 옮기기
         YAW_PER_PIXEL 등           속도와 줌 한계 상수
+        FADE_OTHERS                양옆 빼고 투명하게. 느려서 기본 꺼짐,
+                                   켜려면 이 상수를 True 로
+        hide_other_equipment       그 본체. 되돌리기는 show_equipment
+        _looks_shaders             Looks 아래 쉐이더 수집. 느린 자리가 여기
+        GONE_THRESHOLD             0 이면 blend 라 안 사라진다. 컷아웃 문턱값
         """
         return cls._simulate.focus()
 
@@ -243,6 +248,7 @@ class EbsSimulateService:
         """원래 카메라로 돌아가고 궤도 모드를 끄는 api. 프림은 남긴다.
 
         EbsSimulateCamera.release
+        show_equipment             투명하게 했던 것을 되돌린다 (Clear 버튼)
         """
         return cls._simulate.release_camera()
 
