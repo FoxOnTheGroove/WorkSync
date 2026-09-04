@@ -2388,8 +2388,12 @@ class EbsSimulate:
             return blank
 
         with self._stage_timer("equipment: read"):
-            mine = self._triangles_near(stage, ours, shared)
-            yours = self._triangles_near(stage, theirs, shared)
+            mine, ebs_read = self._triangles_near(stage, ours, shared)
+            yours, eqp_read = self._triangles_near(stage, theirs, shared)
+        self._note("read: " + "; ".join(
+            f"{side} {t['meshes']} mesh, {t['faces']} faces, "
+            f"{t['built']} grid built, {t['world']} from the world cache"
+            for side, t in (("EBS", ebs_read), ("equipment", eqp_read))))
         if not mine or not yours:
             self._note(f"clear of the equipment: nothing reaches the shared box "
                        f"({len(mine)} against {len(yours)} triangles)")
@@ -2407,13 +2411,21 @@ class EbsSimulate:
         hi = [max(b.GetMax()[i] for b in boxes) for i in range(3)]
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
-    def _triangles_near(self, stage, meshes: list, box: Gf.Range3d) -> list:
-        kept = []
+    def _triangles_near(self, stage, meshes: list, box: Gf.Range3d) -> tuple:
+        kept, tally = [], {"meshes": 0, "built": 0, "world": 0, "faces": 0}
         for path, mesh_box in meshes:
             if Gf.Range3d.GetIntersection(mesh_box, box).IsEmpty():
                 continue
+            tally["meshes"] += 1
+            if path in self._triangles:
+                tally["world"] += 1
+            elif path not in self._faces:
+                tally["built"] += 1
             kept.extend(self._triangles_reaching(stage, path, box))
-        return kept
+            made = self._faces.get(path)
+            if made:
+                tally["faces"] += len(made[0])
+        return kept, tally
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
         grid, origin, step, spread = self._grid_of(yours, box)
