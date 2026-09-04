@@ -227,6 +227,7 @@ class EbsSimulate:
         self._triangles: dict = {}
         self._eqp_boxes: dict = None
         self._bounds = None        # 스테이지 바운드 캐시. init 에서만 버린다
+        self._ebs_box = None       # (경로, 상자). EBS 가 움직이면 버린다
         self._hidden: list = []
         self._eqp_looks: dict = {}
         self._eqp_shared: set = set()
@@ -279,7 +280,7 @@ class EbsSimulate:
         if stage is None:
             return 0
         shown = UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
-        done = 0
+        done, touched = 0, []
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 for one in wanted:
@@ -293,9 +294,11 @@ class EbsSimulate:
                     imageable = UsdGeom.Imageable(prim)
                     if imageable:
                         imageable.CreateVisibilityAttr().Set(shown)
+                        touched.append(str(prim.GetPath()))
                         done += 1
         except Exception as e:
             self._note(f"could not set the EBS visibility ({e})")
+        self._forget_ebs(touched)
         return done
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
@@ -413,6 +416,7 @@ class EbsSimulate:
         self._begin()
         self._eqp_boxes = None
         self._bounds = None
+        self._ebs_box = None
         self._eqp_looks = {}
         self._eqp_shared = set()
         if self._gone is not None:
@@ -751,6 +755,7 @@ class EbsSimulate:
                 note = "EBS aligned to the anchor prim"
 
         self._forget_triangles(self._target["ebs"])
+        self._ebs_box = None
 
         self.show_ebs(self._target["ebs"])
 
@@ -2184,6 +2189,15 @@ class EbsSimulate:
         return all(extent[i] > OVERLAP_EPS for i in range(3))
 
     def _ebs_bound(self, prim: Usd.Prim):
+        """EBS 월드 상자. 한 collide 안에서 다섯 군데가 부른다.
+
+        BBoxCache 를 두 개 만들어 두 번 재는데, 뒤엣것은 extentsHint 가 믿을
+        만한지 보는 진단일 뿐이다. 그래서 결과를 들고 있다가 그대로 준다.
+        EBS 가 움직이거나 보였다 안 보였다 하면 _forget_ebs 가 버린다.
+        """
+        path = self._path_of(prim)
+        if self._ebs_box is not None and self._ebs_box[0] == path:
+            return self._ebs_box[1]
         exact = UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
@@ -2204,7 +2218,22 @@ class EbsSimulate:
             if span > 0 and slack > span * 0.01:
                 self._note(f"the EBS extentsHint is off by {slack:.3f}, "
                            f"using the measured bound")
+        if path:
+            self._ebs_box = (path, exact)
         return exact
+
+    @staticmethod
+    def _path_of(prim) -> str:
+        try:
+            return str(prim.GetPath()) if prim.IsValid() else ""
+        except AttributeError:
+            return ""
+
+    def _forget_ebs(self, paths=()) -> None:
+        """EBS 상자를 버린다. 옮겼거나 켜고 껐으면 지금 것이 아니다."""
+        self._ebs_box = None
+        for path in paths:
+            self._visible.pop(path, None)
 
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
                        root: Usd.Prim = None) -> tuple:

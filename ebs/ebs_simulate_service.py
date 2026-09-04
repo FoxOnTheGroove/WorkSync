@@ -345,6 +345,12 @@ class EbsSimulateService:
             그래서 캐시는 인스턴스에 하나(_bounds), init 만 버린다.
             equipment_boxes 도 같은 것을 써서 focus 때 미리 데운다.
             스테이지를 손댔으면 Init 을 다시 눌러야 한다.
+          EBS 상자 -> _ebs_bound. collide 한 번에 다섯 군데가 부르는데 부를
+            때마다 BBoxCache 를 둘 만들어 EBS 모델을 두 번 훑었다 (뒤엣것은
+            extentsHint 진단). 결과를 _ebs_box 에 들고 있다가 그대로 준다.
+            버리는 곳 -> _forget_ebs: align 이 옮긴 뒤, _show_ebs 로 켜고 끈 뒤.
+          가시성은 캐시 안 한다 (_visible 은 collide 마다 새로). 스테이지
+            트리에서 프림을 숨긴 것이 다음 판정에 바로 먹어야 한다.
         박스 겹침 -> _overlaps. 삼각형 -> _triangle_hits_box.
         메시 읽기 -> _mesh_local (원본, 변환 없음) 과 그 위의 둘:
           _mesh_triangles     전체를 월드로. 3면 검사용.
