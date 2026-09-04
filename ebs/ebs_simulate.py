@@ -363,6 +363,27 @@ class EbsSimulate:
         self._blocked = ""
         self._started = time.perf_counter()
 
+    def _report_stages(self, title: str, mark: int = 0) -> None:
+        """mark 이후에 잰 것들을 콘솔에 낸다. 이름은 '단계: 종류'.
+
+        같은 이름이 여러 번 나오면 더한다 — 한 단계의 탐색이 이른 반환 때문에
+        토막나 있어도 한 줄로 읽힌다.
+        """
+        stages = {}
+        for label, spent in self._timings[mark:]:
+            stage, _, kind = label.partition(":")
+            stage, kind = stage.strip(), kind.strip() or "took"
+            stages.setdefault(stage, {})
+            stages[stage][kind] = stages[stage].get(kind, 0.0) + spent
+        if not stages:
+            return
+        total = sum(sum(k.values()) for k in stages.values())
+        print(f"[ebs] {title}: {total:.1f} ms")
+        for stage, kinds in stages.items():
+            parts = "  ".join(f"{kind} {spent:8.1f} ms"
+                              for kind, spent in kinds.items())
+            print(f"[ebs]   {stage:<10} {parts}")
+
     def _fail(self, key: str, reason: str, short: str = ""):
         self._why = short or reason
         print(f"[ebs] {key}: {reason}")
@@ -746,13 +767,13 @@ class EbsSimulate:
         if not self._aligned:
             return self._payload(False, "Run Align first")
 
+        mark = len(self._timings)
         apart = [self._target["ebs"], self._target["equipment"]]
         bounds = self._bounds_cache()
         cells = self.check_collision(self._target["ebs"], exclude=apart, cache=bounds)
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
-        with self._stage_timer("measure clear faces"):
-            distances = self.measure_faces(self._target["ebs"], cells,
-                                           exclude=apart, cache=bounds)
+        distances = self.measure_faces(self._target["ebs"], cells,
+                                       exclude=apart, cache=bounds)
         for face, found in distances.items():
             if found.get("distance") is None:
                 self._note(f"{face}: clear, nothing within "
@@ -761,14 +782,13 @@ class EbsSimulate:
                 self._note(f"{face}: clear, nearest {found['distance']:.4f} away "
                            f"({found['prim'].rsplit('/', 1)[-1]})")
 
-        with self._stage_timer("equipment interference"):
-            try:
-                meeting = self.check_equipment(self._target["ebs"],
-                                               self._target["equipment"],
-                                               cache=bounds)
-            except Exception as e:
-                meeting = {"hit": False, "pairs": [], "tests": 0}
-                self._note(f"interference check failed: {type(e).__name__}: {e}")
+        try:
+            meeting = self.check_equipment(self._target["ebs"],
+                                           self._target["equipment"],
+                                           cache=bounds)
+        except Exception as e:
+            meeting = {"hit": False, "pairs": [], "tests": 0}
+            self._note(f"interference check failed: {type(e).__name__}: {e}")
         if meeting["hit"]:
             self._note(f"the EBS runs through the equipment at "
                        f"{len(meeting['pairs'])} place(s): "
@@ -784,17 +804,20 @@ class EbsSimulate:
                        + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
                        + (" ..." if len(paths) > 4 else ""))
 
-        try:
-            verdict = self.build_verdict(self._target["ebs"], cells,
-                                         distances, meeting["hit"])
-        except Exception as e:
-            verdict = {}
-            self._note(f"no overlay verdict: {type(e).__name__}: {e}")
+        with self._stage_timer("verdict: build"):
+            try:
+                verdict = self.build_verdict(self._target["ebs"], cells,
+                                             distances, meeting["hit"])
+            except Exception as e:
+                verdict = {}
+                self._note(f"no overlay verdict: {type(e).__name__}: {e}")
 
-        with self._stage_timer("draw markers"):
+        with self._stage_timer("markers: draw"):
             self.show_markers(self._target["ebs"], cells,
                               verdict.get("marks"))
         self._verdict = verdict
+
+        self._report_stages("collide", mark)
 
         told = ("No collision" if hit_count == 0
                 else f"{hit_count} cell(s) blocked")
@@ -1818,7 +1841,7 @@ class EbsSimulate:
         self._visible = {}
         cache = cache if cache is not None else self._bounds_cache()
 
-        with self._stage_timer("EBS bounds"):
+        with self._stage_timer("faces: search"):
             ebs_bbox = self._ebs_bound(ebs_prim)
             local_box = ebs_bbox.GetRange()
             to_world = ebs_bbox.GetMatrix()
@@ -1826,14 +1849,14 @@ class EbsSimulate:
         if local_box.IsEmpty():
             return {face: [] for face in FACES}
 
-        with self._stage_timer("build cells"):
+        with self._stage_timer("faces: search"):
             cells = {
                 face: [Gf.BBox3d(rng, to_world).ComputeAlignedRange()
                        for rng, _ in boxes]
                 for face, boxes in self._build_cells(local_box).items()
             }
 
-        with self._stage_timer("gather nearby"):
+        with self._stage_timer("faces: search"):
             depth = self._probe_depth(local_box)
             margin = Gf.Vec3d(depth, depth, depth)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
@@ -1852,7 +1875,7 @@ class EbsSimulate:
         self._note(f"visited {visited} prims, {coarse} meshes within the probe, "
                    f"skipping {skip}")
 
-        with self._stage_timer(f"cell test ({len(candidates)} candidates)"):
+        with self._stage_timer("faces: detect"):
             result = {face: [False] * len(boxes) for face, boxes in cells.items()}
             hits = {}
             self._blockers = {}
@@ -2212,7 +2235,7 @@ class EbsSimulate:
         if world_box.IsEmpty():
             return blank
 
-        with self._stage_timer("interference: gather"):
+        with self._stage_timer("equipment: search"):
             ours, _ = self._gather_nearby(stage, cache, world_box, [], root=ebs_prim)
             theirs, _ = self._gather_nearby(stage, cache, world_box, [], root=eqp_prim)
         if not ours or not theirs:
@@ -2227,7 +2250,7 @@ class EbsSimulate:
                        f"{len(theirs)} on it never share a box")
             return blank
 
-        with self._stage_timer("interference: read triangles"):
+        with self._stage_timer("equipment: search"):
             mine = self._triangles_near(stage, ours, shared)
             yours = self._triangles_near(stage, theirs, shared)
         if not mine or not yours:
@@ -2235,7 +2258,7 @@ class EbsSimulate:
                        f"({len(mine)} against {len(yours)} triangles)")
             return blank
 
-        with self._stage_timer("interference: test"):
+        with self._stage_timer("equipment: detect"):
             pairs, tests = self._meetings(mine, yours, shared)
         self._note(f"interference: {len(mine)} EBS triangles against {len(yours)} "
                    f"on the equipment, {tests} pairs tested")
@@ -2411,26 +2434,31 @@ class EbsSimulate:
         skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
         cache = cache if cache is not None else self._bounds_cache()
 
-        wanted = {}
-        for face, (axis, outward, coord, _, _) in self._face_planes.items():
-            if any(cells.get(face, [])):
-                continue
-            prism = self._face_prism(local_box, axis, outward, coord, reach)
-            wanted[face] = (prism, Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
-                            axis, outward, coord)
+        with self._stage_timer("clearance: search"):
+            wanted = {}
+            for face, (axis, outward, coord, _, _) in self._face_planes.items():
+                if any(cells.get(face, [])):
+                    continue
+                prism = self._face_prism(local_box, axis, outward, coord, reach)
+                wanted[face] = (prism,
+                                Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
+                                axis, outward, coord)
+            candidates = []
+            if wanted:
+                whole = self._union([box for _, box, _, _, _ in wanted.values()])
+                candidates, _ = self._gather_nearby(stage, cache, whole, skip)
         if not wanted:
             return {}
 
-        whole = self._union([box for _, box, _, _, _ in wanted.values()])
-        candidates, _ = self._gather_nearby(stage, cache, whole, skip)
-
-        results = {}
-        for face, (prism, world_prism, axis, outward, coord) in wanted.items():
-            near = [(path, box) for path, box in candidates
-                    if self._overlaps(box, world_prism)]
-            found = self._nearest_in_prism(stage, near, prism, to_world,
-                                           axis, outward, coord)
-            results[face] = found or {"distance": None, "prim": "", "reach": reach}
+        with self._stage_timer("clearance: detect"):
+            results = {}
+            for face, (prism, world_prism, axis, outward, coord) in wanted.items():
+                near = [(path, box) for path, box in candidates
+                        if self._overlaps(box, world_prism)]
+                found = self._nearest_in_prism(stage, near, prism, to_world,
+                                               axis, outward, coord)
+                results[face] = found or {"distance": None, "prim": "",
+                                          "reach": reach}
         return results
 
     @staticmethod

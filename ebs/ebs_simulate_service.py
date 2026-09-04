@@ -316,7 +316,18 @@ class EbsSimulateService:
           같은 평면 = 마운트, 통째로 들어간 것 = 정상. 둘 다 안 잡는다.
           이름 쌍은 MEET_LIMIT 까지. 결과 -> payload["equipment_hit"].
           터져도 노트만 남기고 3면 결과는 살린다.
-        타이밍: 'interference: gather / read triangles / test'.
+
+        단계와 시간은 collide 가 끝날 때 콘솔에 낸다 -> _report_stages.
+          단계마다 탐색(후보 모으기)과 검출(실제 판정)로 나뉜다:
+            faces      3면 충돌     search=바운드+셀+_gather_nearby, detect=셀 판정
+            clearance  빈 면 거리   search=프리즘 합집합 순회, detect=_nearest_in_prism
+            equipment  내부 간섭    search=양쪽 수집+삼각형 읽기, detect=_meetings
+            verdict    판정 조립    build
+            markers    씬에 그리기  draw
+          이름은 '단계: 종류'. 같은 이름을 여러 번 재면 한 줄로 더한다 —
+            이른 반환 때문에 토막난 탐색도 한 줄로 읽힌다.
+          단계를 늘리려면 그 이름으로 _stage_timer 를 하나 더 두면 된다.
+          겉을 감싸는 타이머는 두지 말 것 — 안쪽과 이중으로 센다.
 
         셀 분할 -> _build_cells + GRID (지금 1, 면당 셀 1개).
         후보 수집 -> _gather_nearby (대부분 여기서 걸러짐).
