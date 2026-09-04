@@ -769,14 +769,13 @@ class EbsSimulate:
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
     def _side_roots(self) -> list:
-        """3면 검사가 들여다볼 서브트리. 좌우 이웃 장비, 방향당 하나씩.
+        """좌우 면이 들여다볼 서브트리. 이웃 장비, 방향당 하나씩.
 
-        스테이지 전체를 훑는 대신 이 둘만 본다. 고르는 것은 side_band 로,
-        Camera 가 남길 장비를 고르는 것과 같은 판단이다 — 화면에 남은 것과
-        판정에 쓰는 것이 어긋나지 않는다.
-        기둥·벽·덕트는 EQP_ 가 아니라 여기 안 들어온다. 천장도 위쪽 이웃을
-        찾는 방법이 없어 이 둘이 위로 뻗은 것만 본다. 그걸 감수하는 대신
-        훑는 값을 안 낸다.
+        좌우만이다. 천장은 위쪽 이웃을 찾는 방법이 없어 그대로 스테이지를
+        훑는다 (_by_face / _reach_by_face).
+        고르는 것은 side_band 로, Camera 가 남길 장비를 고르는 것과 같은
+        판단이다 — 화면에 남은 것과 판정에 쓰는 것이 어긋나지 않는다.
+        기둥·벽·덕트는 EQP_ 가 아니라 여기 안 들어온다. 좌우에서 빠진다.
         옆에 아무것도 없으면 빈 리스트다 = 후보 없음 (None 이면 전체 순회).
         """
         stage = self._get_stage()
@@ -790,9 +789,10 @@ class EbsSimulate:
             prim = stage.GetPrimAtPath(path)
             if prim and prim.IsValid():
                 roots.append(prim)
-        self._note("three faces judged against "
+        self._note("left and right judged against "
                    + (", ".join(str(p).rsplit("/", 1)[-1] for p in beside)
-                      if beside else "nothing -- no machine beside this one"))
+                      if beside else "nothing -- no machine beside this one")
+                   + "; the ceiling still walks the stage")
         return roots
 
     def _do_collide(self) -> dict:
@@ -1908,8 +1908,8 @@ class EbsSimulate:
             margin = Gf.Vec3d(depth, depth, depth)
             search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
             skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-            candidates, visited = self._gather_nearby(stage, cache, search, skip,
-                                                      roots)
+            candidates, visited = self._by_face(stage, cache, search, skip,
+                                                roots, cells, margin)
         coarse = len(candidates)
 
         size = local_box.GetMax() - local_box.GetMin()
@@ -1932,9 +1932,10 @@ class EbsSimulate:
             flat = [(face, i, cell)
                     for face, boxes in cells.items() for i, cell in enumerate(boxes)]
 
-            for path, box in candidates:
+            for path, box, mine in candidates:
                 targets = [entry for entry in flat
-                           if not result[entry[0]][entry[1]]
+                           if entry[0] in mine
+                           and not result[entry[0]][entry[1]]
                            and self._overlaps(box, entry[2])]
                 if not targets:
                     continue
@@ -2265,6 +2266,33 @@ class EbsSimulate:
         for path in paths:
             self._visible.pop(path, None)
 
+    def _by_face(self, stage, cache, search, skip, roots, cells, margin):
+        """면마다 후보를 모은다. (경로, 상자, 볼 면들) 목록과 훑은 프림 수.
+
+        좌우는 옆 장비 서브트리만 본다 (roots). 천장은 위에 무엇이 있는지 미리
+        알 방법이 없어 스테이지를 훑되, 천장 셀 위만 본다 — 상자가 얇아 위층
+        말고는 위에서 잘린다.
+        roots 가 None 이면 예전대로 한 번에 다 모은다 (밖에서 부르는 쪽).
+        """
+        if roots is None:
+            found, visited = self._gather_nearby(stage, cache, search, skip)
+            return [(path, box, FACES) for path, box in found], visited
+
+        sides = tuple(face for face in cells if face != FACE_CEILING)
+        beside, visited = self._gather_nearby(stage, cache, search, skip, roots)
+        candidates = [(path, box, sides) for path, box in beside]
+
+        top = cells.get(FACE_CEILING) or []
+        if top:
+            whole = self._union(top)
+            above, seen = self._gather_nearby(
+                stage, cache,
+                Gf.Range3d(whole.GetMin() - margin, whole.GetMax() + margin),
+                skip)
+            visited += seen
+            candidates += [(path, box, (FACE_CEILING,)) for path, box in above]
+        return candidates, visited
+
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
                        roots: list = None) -> tuple:
         # roots 가 None 이면 스테이지 전체. 빈 리스트면 아무데도 안 간다 --
@@ -2523,24 +2551,45 @@ class EbsSimulate:
                 wanted[face] = (prism,
                                 Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
                                 axis, outward, coord)
-            candidates = []
-            if wanted:
-                whole = self._union([box for _, box, _, _, _ in wanted.values()])
-                candidates, _ = self._gather_nearby(stage, cache, whole, skip,
-                                                    roots)
+            candidates = self._reach_by_face(stage, cache, skip, roots, wanted)
         if not wanted:
             return {}
 
         with self._stage_timer("clearance: detect"):
             results = {}
             for face, (prism, world_prism, axis, outward, coord) in wanted.items():
-                near = [(path, box) for path, box in candidates
+                near = [(path, box) for path, box in candidates.get(face, ())
                         if self._overlaps(box, world_prism)]
                 found = self._nearest_in_prism(stage, near, prism, to_world,
                                                axis, outward, coord)
                 results[face] = found or {"distance": None, "prim": "",
                                           "reach": reach}
         return results
+
+    def _reach_by_face(self, stage, cache, skip, roots, wanted) -> dict:
+        """빈 면마다 거리를 잴 후보. check_collision 과 같은 잣대를 쓴다.
+
+        좌우는 옆 장비만, 천장은 스테이지 전체. 한쪽만 좁히면 같은 벽을 두고
+        '충돌 없음' 과 '여유 0.05 m' 가 같이 나온다.
+        """
+        if not wanted:
+            return {}
+        if roots is None:
+            whole = self._union([box for _, box, _, _, _ in wanted.values()])
+            found, _ = self._gather_nearby(stage, cache, whole, skip)
+            return {face: found for face in wanted}
+
+        by_face = {}
+        sides = {face: one for face, one in wanted.items() if face != FACE_CEILING}
+        if sides:
+            whole = self._union([box for _, box, _, _, _ in sides.values()])
+            found, _ = self._gather_nearby(stage, cache, whole, skip, roots)
+            by_face.update({face: found for face in sides})
+        top = wanted.get(FACE_CEILING)
+        if top is not None:
+            found, _ = self._gather_nearby(stage, cache, top[1], skip)
+            by_face[FACE_CEILING] = found
+        return by_face
 
     @staticmethod
     def _face_prism(box: Gf.Range3d, axis: int, outward: int, coord: float,
