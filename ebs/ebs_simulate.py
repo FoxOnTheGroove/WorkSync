@@ -39,6 +39,60 @@ SCALE_SNAP  = "snap"
 SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_SNAP)
 
 
+def _remote(path: str) -> bool:
+    head = path.split("://", 1)
+    return len(head) == 2 and head[0].isalpha()
+
+
+def _client():
+    import omni.client
+    return omni.client
+
+
+def _stamp_of(path: str) -> list:
+    if _remote(path):
+        client = _client()
+        result, entry = client.stat(path)
+        if result != client.Result.OK:
+            raise OSError(f"{result} on {path}")
+        when = getattr(entry, "modified_time", None)
+        moment = int(when.timestamp() * 1e9) if when is not None else 0
+        return [CACHE_VERSION, int(entry.size), moment]
+    stat = os.stat(path)
+    return [CACHE_VERSION, stat.st_size, stat.st_mtime_ns]
+
+
+def _read_bytes(path: str) -> bytes:
+    if _remote(path):
+        client = _client()
+        result, _, content = client.read_file(path)
+        if result != client.Result.OK:
+            raise OSError(f"{result} on {path}")
+        return memoryview(content).tobytes()
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def _write_text(path: str, text: str) -> None:
+    if _remote(path):
+        client = _client()
+        result = client.write_file(path, text.encode("utf-8"))
+        if result != client.Result.OK:
+            raise OSError(f"{result} on {path}")
+        return
+    spare = path + ".part"
+    try:
+        with open(spare, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(spare, path)
+    except Exception:
+        try:
+            os.remove(spare)
+        except OSError:
+            pass
+        raise
+
+
 def _plain(name: str) -> str:
     return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
 
@@ -198,6 +252,7 @@ PIVOT_ACROSS = 0.5
 class EbsSimulate:
     def __init__(self):
         self._xml_path: str = ""
+        self._usd_path: str = ""
         self._ebs_path_2port: str = ""
         self._ebs_path_3port: str = ""
         self._search_root: str = ""
@@ -242,6 +297,39 @@ class EbsSimulate:
         self._aligned: bool = False
         self._result: dict = {}
 
+
+    def set_usd_path(self, path: str) -> None:
+        path = (path or "").strip()
+        if path != self._usd_path:
+            self._ready = False
+        self._usd_path = path
+
+    def open_stage(self) -> bool:
+        if not self._usd_path:
+            return True
+        context = omni.usd.get_context()
+        now = ""
+        try:
+            now = str(context.get_stage_url() or "")
+        except Exception:
+            pass
+        if now and now.rstrip("/") == self._usd_path.rstrip("/"):
+            self._note(f"stage already open: {now}")
+            return True
+        with self._stage_timer("USD: open"):
+            try:
+                told = context.open_stage(self._usd_path)
+            except Exception as e:
+                self._note(f"could not open {self._usd_path}: {e}")
+                return False
+        ok = told[0] if isinstance(told, tuple) else told
+        if ok is False:
+            self._note(f"could not open {self._usd_path}: "
+                       + (str(told[1]) if isinstance(told, tuple) and len(told) > 1
+                          else "the stage did not open"))
+            return False
+        self._note(f"stage opened: {self._usd_path}")
+        return True
 
     def set_xml_path(self, path: str) -> None:
         path = (path or "").strip()
@@ -403,6 +491,10 @@ class EbsSimulate:
         self._verdict = {}
         self._triangles = {}
         self._local = {}
+        if not self.open_stage():
+            return self._payload(False, f"Could not open {self._usd_path}")
+        if self._get_stage() is None:
+            return self._payload(False, "No stage open - give a USD path")
         if self._camera.make(self._get_stage()):
             self._note(f"camera {CAMERA_PATH} created (the viewport switches "
                        f"to it when the camera step runs)")
@@ -1157,13 +1249,19 @@ class EbsSimulate:
         parser.CharacterDataHandler = scan.data
 
         reads = 0
-        with open(self._xml_path, "rb") as handle:
-            while True:
-                block = handle.read(READ_BLOCK)
+        if _remote(self._xml_path):
+            whole = _read_bytes(self._xml_path)
+            for at in range(0, len(whole) or 1, READ_BLOCK):
+                parser.Parse(whole[at:at + READ_BLOCK], False)
                 reads += 1
-                if not block:
-                    break
-                parser.Parse(block, False)
+        else:
+            with open(self._xml_path, "rb") as handle:
+                while True:
+                    block = handle.read(READ_BLOCK)
+                    reads += 1
+                    if not block:
+                        break
+                    parser.Parse(block, False)
         parser.Parse(b"", True)
         return reads
 
@@ -1193,8 +1291,7 @@ class EbsSimulate:
         return self._xml_path + CACHE_SUFFIX
 
     def _source_stamp(self) -> list:
-        stat = os.stat(self._xml_path)
-        return [CACHE_VERSION, stat.st_size, stat.st_mtime_ns]
+        return _stamp_of(self._xml_path)
 
     def _load_cache(self) -> bool:
         path = self._cache_path()
@@ -1203,12 +1300,9 @@ class EbsSimulate:
         except OSError as e:
             self._note(f"xml not readable: {e}")
             return False
-        if not os.path.exists(path):
-            return False
         with self._stage_timer("XML: cache read"):
             try:
-                with open(path, encoding="utf-8") as handle:
-                    blob = json.load(handle)
+                blob = json.loads(_read_bytes(path).decode("utf-8"))
                 if blob.get("stamp") != want:
                     self._note(f"xml cache stale, parsing again "
                                f"(cache {blob.get('stamp')}, source {want})")
@@ -1244,19 +1338,12 @@ class EbsSimulate:
                         "addr_cad": self._addr_cad,
                         "addr_next": self._addr_next}
                 text = json.dumps(blob)
-                spare = path + ".part"
-                with open(spare, "w", encoding="utf-8") as handle:
-                    handle.write(text)
-                os.replace(spare, path)
+                _write_text(path, text)
             except Exception as e:
                 self._note(f"xml cache not written: {e}")
-                try:
-                    os.remove(path + ".part")
-                except OSError:
-                    pass
                 return
         self._note(f"xml cache written: {path} "
-                   f"({os.path.getsize(path) / 1048576:.2f} MB)")
+                   f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
 
     def get_port_count(self, eqp_id: str) -> "int | None":
         indices = self.get_port_indices(eqp_id)

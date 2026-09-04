@@ -36,12 +36,26 @@ class EbsSimulateService:
     # -- 설정 ----------------------------------------------------------------
 
     @classmethod
+    def set_usd_path(cls, path):
+        """열 스테이지 USD 경로를 정하는 api. init 이 이 파일을 연다.
+
+        비우면 지금 열려 있는 스테이지를 그대로 쓴다.
+        omniverse:// 경로도 받는다 (open_stage 가 그대로 넘긴다).
+
+        set_usd_path   바뀌면 _ready 내려감
+        open_stage     여는 곳. 같은 경로가 이미 열려 있으면 안 연다
+        """
+        return cls._simulate.set_usd_path(path)
+
+    @classmethod
     def set_xml_path(cls, path):
-        """포트 XML 경로를 정하는 api.
+        """포트 XML 경로를 정하는 api. omniverse:// 도 받는다.
 
         set_xml_path   바뀌면 _ready 내려감
-        load_ports     파싱과 캐시. 캐시 형식 바꾸려면 여기
+        load_ports     파싱과 캐시. 캐시는 <xml> + CACHE_SUFFIX 옆자리
         _PortScan      XML 키 이름 바꾸려면 여기 (PORT_ID_KEY 등 상수)
+        _remote        로컬/원격 갈림길. 원격 IO 는 _stamp_of, _read_bytes,
+                       _write_text 셋뿐이라 다른 프로토콜도 여기만 손대면 된다
         """
         return cls._simulate.set_xml_path(path)
 
@@ -122,8 +136,12 @@ class EbsSimulateService:
 
     @classmethod
     def init(cls):
-        """스테이지와 XML 을 훑어 캐시를 만드는 api. 지오메트리는 안 읽는다.
+        """USD 를 열고, XML 을 읽고, 충돌용 캐시까지 만드는 api.
 
+        순서: open_stage -> build_index -> _stage_boxes -> load_ports.
+        지오메트리(메시 점)는 안 읽는다.
+
+        open_stage     set_usd_path 가 준 파일을 연다. 비었으면 열린 것을 씀
         build_index    EQP_ 장비 색인. 범위는 set_search_root
         _stage_boxes   스테이지 상자 목록. collide 가 이걸 훑는다.
                        느리면 여기 -- Init 값의 대부분이다

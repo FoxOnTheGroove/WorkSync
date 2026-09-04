@@ -99,6 +99,7 @@ class EbsDummyUI:
 
     def __init__(self):
         self._window = None
+        self._usd_field = None
         self._xml_field = None
         self._ebs2_field = None
         self._ebs3_field = None
@@ -117,6 +118,7 @@ class EbsDummyUI:
         self._window = ui.Window("EBS Simulate", width=470, height=400)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
+                self._usd_field  = self._path_row("Stage USD:")
                 self._xml_field  = self._path_row("Port XML:")
                 self._ebs2_field = self._path_row("EBS 2port:")
                 self._ebs3_field = self._path_row("EBS 3port:")
@@ -232,6 +234,7 @@ class EbsDummyUI:
         EbsSimulateOverlay.build()
 
     def _apply_settings(self):
+        EbsSimulateService.set_usd_path(self._usd_field.model.get_value_as_string())
         EbsSimulateService.set_xml_path(self._xml_field.model.get_value_as_string())
         EbsSimulateService.set_ebs_paths(
             self._ebs2_field.model.get_value_as_string(),
