@@ -238,6 +238,10 @@ GONE = (("inputs:opacity", "Float", 0.0),
         ("inputs:opacity_constant", "Float", 0.0),
         ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 
+CLASH_RADIUS = 0.006     # 내부 충돌 점 구슬 반지름 (대상 장비 대각선 대비)
+CLASH_DOTS   = 400       # 그 이상은 안 찍는다. 프림이 그만큼 는다
+COLOR_CLASH  = (0.95, 0.1, 0.1)
+
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
@@ -915,13 +919,14 @@ class EbsSimulate:
                                            self._target["equipment"],
                                            cache=bounds)
         except Exception as e:
-            meeting = {"hit": False, "pairs": [], "tests": 0}
+            meeting = {"hit": False, "pairs": [], "spots": [], "tests": 0}
             self._note(f"interference check failed: {type(e).__name__}: {e}")
         if meeting["hit"]:
-            a, b = meeting["pairs"][0]
-            self._note(f"the EBS runs through the equipment: "
-                       f"{a.rsplit('/', 1)[-1]} x {b.rsplit('/', 1)[-1]} "
-                       f"(stopped there, {meeting['tests']} pairs tested)")
+            names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
+            self._note(f"the EBS runs through the equipment at "
+                       f"{len(names)} place(s): " + ", ".join(names[:6])
+                       + (" ..." if len(names) > 6 else "")
+                       + f" ({meeting['tests']} pairs tested)")
         else:
             self._note(f"clear of the equipment itself "
                        f"({meeting['tests']} triangle pairs tested)")
@@ -934,14 +939,15 @@ class EbsSimulate:
         with self._stage_timer("verdict: build"):
             try:
                 verdict = self.build_verdict(self._target["ebs"], cells,
-                                             distances, meeting["hit"])
+                                             distances, meeting["hit"],
+                                             meeting.get("spots"))
             except Exception as e:
                 verdict = {}
                 self._note(f"no overlay verdict: {type(e).__name__}: {e}")
 
         with self._stage_timer("markers: draw"):
             self.show_markers(self._target["ebs"], cells,
-                              verdict.get("marks"))
+                              verdict.get("marks"), verdict.get("spots"))
         self._verdict = verdict
 
         self._report_stages("collide", mark)
@@ -969,7 +975,7 @@ class EbsSimulate:
         return parts[-1]
 
     def build_verdict(self, ebs_prim, cells: dict, distances: dict,
-                      inside: bool) -> dict:
+                      inside: bool, spots: list = None) -> dict:
         bbox = self._ebs_bound(ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
@@ -988,6 +994,7 @@ class EbsSimulate:
             "centre": (middle[0], middle[1], middle[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
             "inside": bool(inside),
+            "spots": list(spots or ()),
             "faces": blocked,
             "blocked": sum(sum(1 for c in cells.get(face, []) if c)
                            for face in FACES),
@@ -2502,7 +2509,7 @@ class EbsSimulate:
     def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
         stage = self._get_stage()
-        blank = {"hit": False, "pairs": [], "tests": 0}
+        blank = {"hit": False, "pairs": [], "spots": [], "tests": 0}
         if stage is None or eqp_prim is None or not eqp_prim.IsValid():
             return blank
 
@@ -2541,10 +2548,11 @@ class EbsSimulate:
             return blank
 
         with self._stage_timer("equipment: detect"):
-            pairs, tests = self._meetings(mine, yours, shared)
+            pairs, spots, tests = self._meetings(mine, yours, shared)
         self._note(f"interference: {len(mine)} EBS triangles against {len(yours)} "
                    f"on the equipment, {tests} pairs tested")
-        return {"hit": bool(pairs), "pairs": pairs, "tests": tests}
+        return {"hit": bool(pairs), "pairs": pairs, "spots": spots,
+                "tests": tests}
 
     @staticmethod
     def _union(boxes: list) -> Gf.Range3d:
@@ -2570,22 +2578,32 @@ class EbsSimulate:
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
         grid, origin, step, spread = self._grid_of(yours, box)
-        pairs, tests = [], 0
+        pairs, spots, known, tests = [], [], set(), 0
         for ebs_path, triangle, lo, hi in mine:
             seen = set()
             for key in self._cells_of(lo, hi, origin, step, spread):
                 seen.update(grid.get(key, ()))
             for index in seen:
                 eqp_path, other, other_lo, other_hi = yours[index]
+                if (ebs_path, eqp_path) in known:
+                    continue
                 if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
                         or lo[1] > other_hi[1] or hi[1] < other_lo[1]
                         or lo[2] > other_hi[2] or hi[2] < other_lo[2]):
                     continue
                 tests += 1
                 if self._triangles_meet(triangle, other):
+                    known.add((ebs_path, eqp_path))
                     pairs.append((ebs_path, eqp_path))
-                    return pairs, tests
-        return pairs, tests
+                    spots.append(self._midpoint(triangle, other))
+                    if len(pairs) >= CLASH_DOTS:
+                        return pairs, spots, tests
+        return pairs, spots, tests
+
+    @staticmethod
+    def _midpoint(one, other) -> tuple:
+        return tuple(sum(v[i] for v in one) / 6.0 + sum(v[i] for v in other) / 6.0
+                     for i in range(3))
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
@@ -2858,7 +2876,7 @@ class EbsSimulate:
 
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
-                     marks: list = None) -> int:
+                     marks: list = None, marks_spots: list = None) -> int:
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -2908,7 +2926,26 @@ class EbsSimulate:
                                   mark["from"], mark["to"], radius,
                                   threads[colour], colour):
                     drawn += 1
+            drawn += self._clash_dots(stage, marks_spots)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
+        return drawn
+
+    def _clash_dots(self, stage, spots) -> int:
+        if not spots:
+            return 0
+        radius = self._thread_radius() / LASER_RADIUS * CLASH_RADIUS
+        material = self._marker_material(stage, "clash", COLOR_CLASH,
+                                         BLOCKED_OPACITY, BLOCKED_EMISSION)
+        drawn = 0
+        for at, spot in enumerate(spots):
+            ball = UsdGeom.Sphere.Define(stage, f"{MARKER_ROOT}/clash_{at}")
+            ball.CreateRadiusAttr(radius)
+            ball.CreateExtentAttr([Gf.Vec3f(-radius, -radius, -radius),
+                                   Gf.Vec3f(radius, radius, radius)])
+            ball.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_CLASH)]))
+            UsdGeom.Xformable(ball).AddTranslateOp().Set(Gf.Vec3d(*spot))
+            UsdShade.MaterialBindingAPI(ball.GetPrim()).Bind(material)
+            drawn += 1
         return drawn
 
     def _thread_radius(self) -> float:
@@ -3206,7 +3243,8 @@ class EbsSimulate:
             "grid": dict(self._grid_shape),
             "distances": distances or {},
             "rows": rows or [],
-            "equipment_hit": equipment_hit or {"hit": False, "pairs": [], "tests": 0},
+            "equipment_hit": equipment_hit or {"hit": False, "pairs": [],
+                                              "spots": [], "tests": 0},
             "timings": list(self._timings),
             "notes": list(self._notes),
             "total_ms": (time.perf_counter() - self._started) * 1000.0,
