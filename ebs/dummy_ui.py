@@ -115,17 +115,19 @@ class EbsDummyUI:
     # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=470, height=400)
+        self._window = ui.Window("EBS Simulate", width=470, height=330)
         with self._window.frame:
-            with ui.VStack(spacing=6, style={"margin": 8}):
-                self._usd_field  = self._path_row("Stage USD:")
-                self._xml_field  = self._path_row("Port XML:")
-                self._ebs2_field = self._path_row("EBS 2port:")
-                self._ebs3_field = self._path_row("EBS 3port:")
-                self._root_field = self._path_row("Search root:")
-                self._rail_field = self._path_row("Rail root:")
+            with ui.VStack(spacing=5, style={"margin": 8}):
+                # 경로 칸 여섯은 한 번 채우고 안 건드린다. 저희끼리 붙여 둔다
+                with ui.VStack(spacing=1, height=0):
+                    self._usd_field  = self._path_row("Stage USD:")
+                    self._xml_field  = self._path_row("Port XML:")
+                    self._ebs2_field = self._path_row("EBS 2port:")
+                    self._ebs3_field = self._path_row("EBS 3port:")
+                    self._root_field = self._path_row("Search root:")
+                    self._rail_field = self._path_row("Rail root:")
 
-                with ui.HStack(height=24, spacing=4):
+                with ui.HStack(height=22, spacing=4):
                     ui.Label("Precision:", width=90)
                     # 'bbox' and 'mesh' are the same test, so only one is offered.
                     self._precision = ui.ComboBox(1, "box", "triangle", width=90)
@@ -143,14 +145,14 @@ class EbsDummyUI:
                     self._lasers.model.set_value(False)
                     ui.Spacer()
 
-                ui.Separator(height=6)
+                ui.Separator(height=4)
 
-                with ui.HStack(height=24, spacing=4):
+                with ui.HStack(height=22, spacing=4):
                     ui.Label("Equipment:", width=90)
                     self._eqp_field = ui.StringField()
                     ui.Button("From Sel", width=64, clicked_fn=self._on_pick_selected)
 
-                with ui.HStack(height=24, spacing=4):
+                with ui.HStack(height=22, spacing=4):
                     ui.Label("Min gap m:", width=90)
                     ui.Label("side", width=30)
                     self._side_field = ui.StringField(width=64)
@@ -174,7 +176,7 @@ class EbsDummyUI:
                 self._status_label = ui.Label("Ready", height=20)
 
     def _path_row(self, label: str):
-        with ui.HStack(height=24, spacing=4):
+        with ui.HStack(height=20, spacing=4):
             ui.Label(label, width=90)
             field = ui.StringField()
         return field
