@@ -1006,7 +1006,8 @@ class EbsSimulate:
         if self._eqp_boxes is not None:
             return self._eqp_boxes
         with self._stage_timer(f"measure {len(self._eqp_index)} equipment"):
-            by_path = {path: box for path, box, _, _ in self._stage_boxes()}
+            by_path = {path: box
+                       for path, _, _, box, _, _ in self._stage_boxes()}
             boxes = {name: by_path[path]
                      for name, path in self._eqp_index.items() if path in by_path}
         self._eqp_boxes = boxes
@@ -1925,7 +1926,10 @@ class EbsSimulate:
             self._blockers = {}
             triangle_tests = 0
             boxed_only = set()
-            flat = [(face, i, cell)
+            # 셀 상자는 여기서 한 번 float 로 편다. 안 그러면 삼각형마다
+            # 셀마다 GetMin/GetMax 가 나간다
+            flat = [(face, i, cell,
+                     tuple(cell.GetMin()), tuple(cell.GetMax()))
                     for face, boxes in cells.items() for i, cell in enumerate(boxes)]
 
             for path, box, mine in candidates:
@@ -1940,15 +1944,14 @@ class EbsSimulate:
                              if self._precision == PRECISION_TRI else None)
                 if triangles:
                     triangle_tests += len(triangles)
-                    for triangle in triangles:
+                    for triangle, lo, hi in triangles:
                         remaining = [e for e in targets if not result[e[0]][e[1]]]
                         if not remaining:
                             break
-                        lo = [min(v[i] for v in triangle) for i in range(3)]
-                        hi = [max(v[i] for v in triangle) for i in range(3)]
-                        tri_box = Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
-                        for face, i, cell in remaining:
-                            if (not Gf.Range3d.GetIntersection(tri_box, cell).IsEmpty()
+                        for face, i, cell, edge, far in remaining:
+                            if (lo[0] <= far[0] and hi[0] >= edge[0]
+                                    and lo[1] <= far[1] and hi[1] >= edge[1]
+                                    and lo[2] <= far[2] and hi[2] >= edge[2]
                                     and self._triangle_hits_box(triangle, cell)):
                                 result[face][i] = True
                                 self._blockers.setdefault(face, path)
@@ -1958,7 +1961,7 @@ class EbsSimulate:
 
                 if self._precision == PRECISION_TRI:
                     boxed_only.add(path)
-                for face, i, _ in targets:
+                for face, i, _, _, _ in targets:
                     result[face][i] = True
                     self._blockers.setdefault(face, path)
                     hits.setdefault(path.rsplit("/", 1)[-1], []).append(f"{face}[{i}]")
@@ -2015,6 +2018,11 @@ class EbsSimulate:
         return data
 
     def _mesh_triangles(self, stage, path: str) -> list:
+        """월드 삼각형 (꼭짓점 셋, 최소, 최대). 상자를 같이 담는다.
+
+        읽는 쪽이 매번 min/max 를 다시 돌리면 collide 마다 삼각형 수만큼
+        파이썬 반복이 는다. 한 번 재고 캐시에 같이 둔다.
+        """
         if path in self._triangles:
             return self._triangles[path]
         triangles = []
@@ -2027,24 +2035,31 @@ class EbsSimulate:
                 if count >= 3 and cursor + count <= len(indices):
                     fan = [world[indices[cursor + k]] for k in range(count)]
                     for k in range(1, count - 1):
-                        triangles.append((fan[0], fan[k], fan[k + 1]))
+                        triangles.append(self._with_box(
+                            (fan[0], fan[k], fan[k + 1])))
                 cursor += count
         self._triangles[path] = triangles
         return triangles
+
+    @staticmethod
+    def _with_box(triangle):
+        a, b, c = triangle
+        return (triangle,
+                (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
+                 min(a[2], b[2], c[2])),
+                (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
+                 max(a[2], b[2], c[2])))
 
     def _triangles_reaching(self, stage, path: str, box: Gf.Range3d) -> list:
         lo_box, hi_box = box.GetMin(), box.GetMax()
         cached = self._triangles.get(path)
         if cached is not None:
-            kept = []
-            for a, b, c in cached:
-                lo = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
-                      min(a[2], b[2], c[2]))
-                hi = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
-                      max(a[2], b[2], c[2]))
-                if all(lo[i] <= hi_box[i] and hi[i] >= lo_box[i] for i in range(3)):
-                    kept.append((path, (a, b, c), lo, hi))
-            return kept
+            # 상자는 이미 재 뒀다. 여기서는 견주기만 한다
+            x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
+            x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
+            return [(path, tri, lo, hi) for tri, lo, hi in cached
+                    if lo[0] <= x1 and hi[0] >= x0 and lo[1] <= y1
+                    and hi[1] >= y0 and lo[2] <= z1 and hi[2] >= z0]
 
         data = self._mesh_local(stage, path)
         if not data:
@@ -2295,7 +2310,10 @@ class EbsSimulate:
                     continue
                 if (type_name in GEOMETRY_TYPES
                         or prim.GetName().upper().startswith(EQP_PREFIX)):
-                    index.append((path, box, prim, chain))
+                    lo, hi = box.GetMin(), box.GetMax()
+                    index.append((path,
+                                  (lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]),
+                                  box, prim, chain))
                     continue
                 stack.extend((kid, chain + ((prim, path),))
                              for kid in _children(prim))
@@ -2304,15 +2322,25 @@ class EbsSimulate:
         return index
 
     def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
-        """상자 목록에서 겹치는 것만. 트리는 그 안을 열 때만 탄다."""
+        """상자 목록에서 겹치는 것만. 트리는 그 안을 열 때만 탄다.
+
+        겹침은 파이썬 float 로 본다 -- Gf.Range3d 로 물으면 항목마다 USD 를
+        세 번 부르고, 목록이 수만이면 그것이 순회보다 비싸진다.
+        """
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
+        low, high = search.GetMin(), search.GetMax()
+        lo0, lo1, lo2 = low[0], low[1], low[2]
+        hi0, hi1, hi2 = high[0], high[1], high[2]
+        eps = OVERLAP_EPS
         found, visited, inside = [], 0, []
-        for path, box, prim, chain in self._stage_boxes(cache):
+        for path, lo, hi, box, prim, chain in self._stage_boxes(cache):
             if path in skip_exact or (skip_under and path.startswith(skip_under)):
                 continue
             visited += 1
-            if not self._overlaps(box, search):
+            if (min(hi[0], hi0) - max(lo[0], lo0) <= eps
+                    or min(hi[1], hi1) - max(lo[1], lo1) <= eps
+                    or min(hi[2], hi2) - max(lo[2], lo2) <= eps):
                 continue
             if any(not self._is_visible(one, where) for one, where in chain):
                 continue                # 조상 그룹을 숨겼다
@@ -2465,8 +2493,10 @@ class EbsSimulate:
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
-        origin = box.GetMin()
-        size = [max(box.GetMax()[i] - origin[i], 1e-9) for i in range(3)]
+        # 원점은 float 로 편다 -- _cells_of 가 삼각형마다 여섯 번 인덱싱한다
+        low, high = box.GetMin(), box.GetMax()
+        origin = (low[0], low[1], low[2])
+        size = [max(high[i] - origin[i], 1e-9) for i in range(3)]
         spread = max(1, min(GRID_CELLS, int(round(len(items) ** (1.0 / 3.0)))))
         step = [size[i] / spread for i in range(3)]
         grid = {}
@@ -2687,7 +2717,7 @@ class EbsSimulate:
                 best, best_path = gap, path
                 best_at = self._box_point(local, prism, axis, outward, coord, gap)
                 continue
-            for triangle in triangles:
+            for triangle, _, _ in triangles:
                 local_tri = [inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
                 found = self._triangle_gap(local_tri, prism, axis, outward, coord)
                 if found is not None and (best is None or found[0] < best):

@@ -360,6 +360,13 @@ class EbsSimulateService:
               그래서 그룹을 숨겼다 켰다 해도 목록을 다시 안 만든다.
             equipment_boxes 도 같은 목록에서 꺼낸다 — 스테이지를 두 번 안 걷는다.
             만드는 값은 로그에 'stage: index' 한 줄. 첫 collide 에만 나온다.
+          뜨거운 반복 안에서는 Gf 객체를 만지지 말 것. 목록 훑기, 삼각형 대
+            셀, 격자 넣기 -- 다 항목마다 도는 자리라 GetMin/GetMax/
+            GetIntersection 한 번이 boost.python 을 건너간다. 미리 float
+            튜플로 펴 두고 견주기만 한다. 스텁 실측 4만 개에 167ms -> 10ms,
+            실제 Gf 는 이보다 차이가 크다.
+            펴 두는 곳: _stage_boxes (목록의 lo/hi), check_collision 의 flat
+              (셀 상자), _grid_of 의 origin, _mesh_triangles 의 삼각형 상자.
           느리면 여기가 아니라 캐시를 볼 것 -> _bounds_cache.
             시간의 대부분은 순회가 아니라 ComputeWorldBound 첫 계산이다.
             증거: 같은 walk 를 더 큰 상자로 도는 clearance: search 가
@@ -378,6 +385,9 @@ class EbsSimulateService:
         박스 겹침 -> _overlaps. 삼각형 -> _triangle_hits_box.
         메시 읽기 -> _mesh_local (원본, 변환 없음) 과 그 위의 둘:
           _mesh_triangles     전체를 월드로. 3면 검사용.
+            담는 모양은 (삼각형, 최소, 최대) -> _with_box. 상자를 같이 캐시해
+            둔다. 읽는 쪽이 매번 min/max 를 다시 돌리면 collide 마다 삼각형
+            수만큼 파이썬 반복이 는다.
           _triangles_reaching 상자를 로컬로 끌어와(_pulled_back) 거른 뒤
                               살아남은 면만 월드로. 간섭 검사용.
                               메시마다 첫 점으로 규약 확인, 어긋나면 Gf 로 물러남.
