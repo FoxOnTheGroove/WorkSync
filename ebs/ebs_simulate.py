@@ -227,7 +227,6 @@ FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 GRID = 1                 # 면당 셀 분할 수. 1이면 면 하나가 셀 하나
 GRID_CELLS = 24
-MEET_LIMIT = 4
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
 REACH_RATIO = 1.5        # 거리를 재는 범위 (EBS 최장변 대비). 넘으면 거리 없음
@@ -886,11 +885,10 @@ class EbsSimulate:
             meeting = {"hit": False, "pairs": [], "tests": 0}
             self._note(f"interference check failed: {type(e).__name__}: {e}")
         if meeting["hit"]:
-            self._note(f"the EBS runs through the equipment at "
-                       f"{len(meeting['pairs'])} place(s): "
-                       + ", ".join(f"{a.rsplit('/', 1)[-1]} x {b.rsplit('/', 1)[-1]}"
-                                   for a, b in meeting["pairs"][:4])
-                       + (" ..." if len(meeting["pairs"]) > 4 else ""))
+            a, b = meeting["pairs"][0]
+            self._note(f"the EBS runs through the equipment: "
+                       f"{a.rsplit('/', 1)[-1]} x {b.rsplit('/', 1)[-1]} "
+                       f"(stopped there, {meeting['tests']} pairs tested)")
         else:
             self._note(f"clear of the equipment itself "
                        f"({meeting['tests']} triangle pairs tested)")
@@ -2332,7 +2330,7 @@ class EbsSimulate:
                        f"{len(theirs)} on it never share a box")
             return blank
 
-        with self._stage_timer("equipment: search"):
+        with self._stage_timer("equipment: read"):
             mine = self._triangles_near(stage, ours, shared)
             yours = self._triangles_near(stage, theirs, shared)
         if not mine or not yours:
@@ -2369,14 +2367,14 @@ class EbsSimulate:
                 seen.update(grid.get(key, ()))
             for index in seen:
                 eqp_path, other, other_lo, other_hi = yours[index]
-                if any(lo[i] > other_hi[i] or hi[i] < other_lo[i] for i in range(3)):
+                if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
+                        or lo[1] > other_hi[1] or hi[1] < other_lo[1]
+                        or lo[2] > other_hi[2] or hi[2] < other_lo[2]):
                     continue
                 tests += 1
                 if self._triangles_meet(triangle, other):
-                    if (ebs_path, eqp_path) not in pairs:
-                        pairs.append((ebs_path, eqp_path))
-                    if len(pairs) >= MEET_LIMIT:
-                        return pairs, tests
+                    pairs.append((ebs_path, eqp_path))
+                    return pairs, tests
         return pairs, tests
 
     @classmethod
