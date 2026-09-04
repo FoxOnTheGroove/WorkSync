@@ -194,6 +194,10 @@ class EbsSimulateService:
         check_equipment   대상 장비와의 내부 간섭. 삼각형 대 삼각형
         _meetings         만나는 순간 멈춘다. 판정은 만났나 아닌가 하나뿐
         _triangles_near   양쪽 삼각형 읽기. 'equipment: read' 가 이 값
+        _face_grid        메시별 면 상자 + 로컬 격자. 한 번 만들고 계속 쓴다.
+                          느리면 여기 -- 칸 수는 GRID_CELLS
+        _mesh_local       점/면 인덱스. 행렬은 _to_world 가 매번 새로 잰다
+        _forget_triangles align 이 버리는 것: 월드 삼각형뿐이다
         GRID_CELLS        쌍을 줄이는 격자 칸 수
         build_verdict     오버레이가 쓸 판정. 패널 높이는 VERDICT_HEIGHT
         show_markers      씬에 그리기. 색은 COLOR_* 상수

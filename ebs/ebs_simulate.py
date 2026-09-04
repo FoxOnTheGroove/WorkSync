@@ -1,5 +1,6 @@
 """EBS 배치·충돌 판정 구현부. 공개 API 는 ebs_simulate_service.py 를 볼 것."""
 
+import array
 import io
 import json
 import math
@@ -278,6 +279,7 @@ class EbsSimulate:
                          FACE_RIGHT: MIN_GAP_SIDE}   # 면 -> 최소 여유, m
         self._blockers: dict = {}
         self._local: dict = {}
+        self._faces: dict = {}    # 메시별 면 상자 + 로컬 격자
         self._boxed: dict = {}
         self._visible: dict = {}
         self._grid_shape: dict = {}
@@ -423,6 +425,7 @@ class EbsSimulate:
         self._port_map = {}
         self._triangles = {}
         self._local = {}
+        self._faces = {}
         self._visible = {}
         self._timings = []
         self._ready = False
@@ -490,6 +493,7 @@ class EbsSimulate:
         self._verdict = {}
         self._triangles = {}
         self._local = {}
+        self._faces = {}
         if not self.open_stage():
             return self._payload(False, f"Could not open {self._usd_path}")
         if self._get_stage() is None:
@@ -1026,6 +1030,7 @@ class EbsSimulate:
         self._rail_index = None
         self._triangles = {}
         self._local = {}
+        self._faces = {}
         if stage is None:
             return 0
         visited = 0
@@ -1917,10 +1922,9 @@ class EbsSimulate:
         if prim is None or not prim.IsValid():
             return
         root = str(prim.GetPath())
-        for cache in (self._triangles, self._local):
-            for path in [p for p in cache
-                         if p == root or p.startswith(root + "/")]:
-                del cache[path]
+        for path in [p for p in self._triangles
+                     if p == root or p.startswith(root + "/")]:
+            del self._triangles[path]
 
     def _mesh_local(self, stage, path: str):
         if path in self._local:
@@ -1936,20 +1940,31 @@ class EbsSimulate:
             if points is None or counts is None or indices is None:
                 self._boxed.setdefault("no point data", []).append(path)
             else:
-                data = (points, counts, indices,
-                        UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(tc))
+                data = (points, counts, indices)
         elif prim and prim.IsValid():
             self._boxed.setdefault(f"a {prim.GetTypeName()}", []).append(path)
         self._local[path] = data
         return data
+
+    @staticmethod
+    def _to_world(stage, path: str):
+        prim = stage.GetPrimAtPath(path) if stage else None
+        if prim is None or not prim.IsValid():
+            return None
+        try:
+            return UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default())
+        except Exception:
+            return None
 
     def _mesh_triangles(self, stage, path: str) -> list:
         if path in self._triangles:
             return self._triangles[path]
         triangles = []
         data = self._mesh_local(stage, path)
-        if data:
-            points, counts, indices, to_world = data
+        to_world = self._to_world(stage, path)
+        if data and to_world is not None:
+            points, counts, indices = data
             world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
             cursor = 0
             for count in counts:
@@ -1973,25 +1988,47 @@ class EbsSimulate:
 
     def _triangles_reaching(self, stage, path: str, box: Gf.Range3d) -> list:
         lo_box, hi_box = box.GetMin(), box.GetMax()
+        x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
+        x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
+
         cached = self._triangles.get(path)
         if cached is not None:
-            x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
-            x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
             return [(path, tri, lo, hi) for tri, lo, hi in cached
                     if lo[0] <= x1 and hi[0] >= x0 and lo[1] <= y1
                     and hi[1] >= y0 and lo[2] <= z1 and hi[2] >= z0]
 
         data = self._mesh_local(stage, path)
-        if not data:
+        to_world = self._to_world(stage, path)
+        if not data or to_world is None:
             return []
-        points, counts, indices, to_world = data
         near = self._pulled_back(box, to_world)
         if near is None:
             return []
-        (lx, ly, lz), (hx, hy, hz) = near
-        a00 = a01 = a02 = a10 = a11 = a12 = a20 = a21 = a22 = 0.0
-        a30 = a31 = a32 = 0.0
-        plain = False
+        wanted = self._faces_near(path, data, near)
+        if not wanted:
+            return []
+
+        points, counts, indices = data
+        start, size = self._faces[path][0], self._faces[path][1]
+        move = self._mover(to_world, points, path)
+
+        kept = []
+        for at in wanted:
+            first, count = start[at], size[at]
+            fan = [move(points[indices[first + k]]) for k in range(count)]
+            for k in range(1, count - 1):
+                a, b, c = fan[0], fan[k], fan[k + 1]
+                low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
+                       min(a[2], b[2], c[2]))
+                high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
+                        max(a[2], b[2], c[2]))
+                if (low[0] <= x1 and high[0] >= x0 and low[1] <= y1
+                        and high[1] >= y0 and low[2] <= z1 and high[2] >= z0):
+                    kept.append((path, (a, b, c), low, high))
+        return kept
+
+    def _mover(self, to_world, points, path: str):
+        """로컬 점을 월드로. 행렬을 펼 수 있으면 파이썬 산술로 돈다."""
         try:
             r0, r1, r2, r3 = (to_world.GetRow(0), to_world.GetRow(1),
                               to_world.GetRow(2), to_world.GetRow(3))
@@ -2000,73 +2037,93 @@ class EbsSimulate:
             a20, a21, a22 = r2[0], r2[1], r2[2]
             a30, a31, a32 = r3[0], r3[1], r3[2]
             if points:
-                first = points[0]
-                x, y, z = first[0], first[1], first[2]
+                x, y, z = points[0][0], points[0][1], points[0][2]
                 mine = (x * a00 + y * a10 + z * a20 + a30,
                         x * a01 + y * a11 + z * a21 + a31,
                         x * a02 + y * a12 + z * a22 + a32)
                 theirs = to_world.Transform(Gf.Vec3d(x, y, z))
                 span = max(abs(theirs[i]) for i in range(3)) or 1.0
-                plain = all(abs(mine[i] - theirs[i]) <= span * 1e-9
-                            for i in range(3))
-                if not plain:
-                    self._boxed.setdefault("an unexpected transform", []).append(path)
+                if all(abs(mine[i] - theirs[i]) <= span * 1e-9 for i in range(3)):
+                    return lambda p: (p[0] * a00 + p[1] * a10 + p[2] * a20 + a30,
+                                      p[0] * a01 + p[1] * a11 + p[2] * a21 + a31,
+                                      p[0] * a02 + p[1] * a12 + p[2] * a22 + a32)
+                self._boxed.setdefault("an unexpected transform", []).append(path)
         except Exception:
-            plain = False
+            pass
+        return lambda p: to_world.Transform(Gf.Vec3d(p[0], p[1], p[2]))
 
-        kept, cursor, total = [], 0, len(indices)
+    def _face_grid(self, path: str, data):
+        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로.
+
+        매번 점을 다시 훑던 자리다 -- 면 20만이면 그것만 150 ms 다.
+        로컬 공간이라 EBS 를 옮겨도 다시 안 만든다 (행렬만 바뀐다).
+        """
+        made = self._faces.get(path)
+        if made is not None:
+            return made
+        points, counts, indices = data
+        start, size = array.array("i"), array.array("i")
+        lows = [array.array("d") for _ in range(3)]
+        highs = [array.array("d") for _ in range(3)]
+        cursor, total = 0, len(indices)
         for count in counts:
             end = cursor + count
             if count < 3 or end > total:
                 cursor = end
                 continue
             corner = points[indices[cursor]]
-            x0 = x1 = corner[0]
-            y0 = y1 = corner[1]
-            z0 = z1 = corner[2]
+            lo = [corner[0], corner[1], corner[2]]
+            hi = [corner[0], corner[1], corner[2]]
             for k in range(cursor + 1, end):
                 corner = points[indices[k]]
-                v = corner[0]
-                if v < x0:
-                    x0 = v
-                elif v > x1:
-                    x1 = v
-                v = corner[1]
-                if v < y0:
-                    y0 = v
-                elif v > y1:
-                    y1 = v
-                v = corner[2]
-                if v < z0:
-                    z0 = v
-                elif v > z1:
-                    z1 = v
-            if (x0 > hx or x1 < lx or y0 > hy or y1 < ly
-                    or z0 > hz or z1 < lz):
-                cursor = end
-                continue
-
-            fan = []
-            for k in range(cursor, end):
-                corner = points[indices[k]]
-                x, y, z = corner[0], corner[1], corner[2]
-                fan.append((x * a00 + y * a10 + z * a20 + a30,
-                            x * a01 + y * a11 + z * a21 + a31,
-                            x * a02 + y * a12 + z * a22 + a32)
-                           if plain else
-                           to_world.Transform(Gf.Vec3d(x, y, z)))
-            for k in range(1, count - 1):
-                a, b, c = fan[0], fan[k], fan[k + 1]
-                low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
-                       min(a[2], b[2], c[2]))
-                high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
-                        max(a[2], b[2], c[2]))
-                if (low[0] <= hi_box[0] and high[0] >= lo_box[0]
-                        and low[1] <= hi_box[1] and high[1] >= lo_box[1]
-                        and low[2] <= hi_box[2] and high[2] >= lo_box[2]):
-                    kept.append((path, (a, b, c), low, high))
+                for i in range(3):
+                    v = corner[i]
+                    if v < lo[i]:
+                        lo[i] = v
+                    elif v > hi[i]:
+                        hi[i] = v
+            start.append(cursor)
+            size.append(count)
+            for i in range(3):
+                lows[i].append(lo[i])
+                highs[i].append(hi[i])
             cursor = end
-        return kept
+
+        faces = len(start)
+        if not faces:
+            made = (start, size, lows, highs, (0.0, 0.0, 0.0),
+                    (1.0, 1.0, 1.0), 1, {})
+            self._faces[path] = made
+            return made
+        origin = tuple(min(lows[i]) for i in range(3))
+        far = tuple(max(highs[i]) for i in range(3))
+        spread = max(1, min(GRID_CELLS, int(round(faces ** (1.0 / 3.0)))))
+        step = tuple(max((far[i] - origin[i]) / spread, 1e-9) for i in range(3))
+        grid = {}
+        for at in range(faces):
+            for key in self._cells_of([lows[i][at] for i in range(3)],
+                                      [highs[i][at] for i in range(3)],
+                                      origin, step, spread):
+                grid.setdefault(key, []).append(at)
+        made = (start, size, lows, highs, origin, step, spread, grid)
+        self._faces[path] = made
+        return made
+
+    def _faces_near(self, path: str, data, near) -> list:
+        start, size, lows, highs, origin, step, spread, grid = \
+            self._face_grid(path, data)
+        if not grid:
+            return []
+        (lx, ly, lz), (hx, hy, hz) = near
+        seen = set()
+        for key in self._cells_of((lx, ly, lz), (hx, hy, hz),
+                                  origin, step, spread):
+            seen.update(grid.get(key, ()))
+        lo0, lo1, lo2 = lows
+        hi0, hi1, hi2 = highs
+        return [at for at in seen
+                if lo0[at] <= hx and hi0[at] >= lx and lo1[at] <= hy
+                and hi1[at] >= ly and lo2[at] <= hz and hi2[at] >= lz]
 
     @staticmethod
     def _pulled_back(box: Gf.Range3d, to_world):
