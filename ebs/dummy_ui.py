@@ -12,7 +12,7 @@ __all__ = ["EbsDummyUI", "SweepLog"]
 MIN_SIDE    = 0.6      # 최소 여유 입력칸의 기본값, m. 실제 기본은 구현부
 MIN_CEILING = 0.1      # (MIN_GAP_SIDE / MIN_GAP_CEILING) 이고 여기는 표시용
 
-# 테스트 씬에서 눈에 걸리는 것들. Test clear 와 INIT 끝에 끈다
+# 테스트 씬에서 눈에 걸리는 것들. INIT 끝에 끈다
 UNDER_EBS  = "root/Equipment"          # EBS 2port / 3port 프림 아래
 LOOSE_HIDE = ("/World/Group_01/Foups",)
 
@@ -121,7 +121,7 @@ class EbsDummyUI:
     # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=560, height=330)
+        self._window = ui.Window("EBS Simulate", width=470, height=330)
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 8}):
                 # 경로 칸 여섯은 한 번 채우고 안 건드린다. 저희끼리 붙여 둔다
@@ -149,8 +149,6 @@ class EbsDummyUI:
                     # are off unless you ask.
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
-                    ui.Button("Test clear", width=76,
-                              clicked_fn=self._on_test_clear)
                     ui.Spacer()
 
                 ui.Separator(height=4)
@@ -205,18 +203,11 @@ class EbsDummyUI:
         self._render(EbsSimulateService.init())
         self._test_clear()
 
-    def _on_test_clear(self):
-        hidden = self._test_clear()
-        if hidden:
-            self._set_status(f"{len(hidden)} hidden: " + ", ".join(hidden))
-        else:
-            self._set_status("Nothing to hide - none of the three are here")
-
     def _test_clear(self) -> list:
         """테스트 씬에서 눈에 걸리는 셋을 끈다. 없는 것은 넘어간다.
 
-        시뮬레이션과 상관없는 화면 정리라 service 에 안 넣는다. INIT 끝에서도
-        같은 것을 부른다.
+        시뮬레이션과 상관없는 화면 정리라 service 에 안 넣는다. INIT 이 끝에서
+        부르는 것이 유일한 호출이다.
         """
         wanted = [f"{base.rstrip('/')}/{UNDER_EBS}" for base in
                   (self._ebs2_field.model.get_value_as_string().strip(),
