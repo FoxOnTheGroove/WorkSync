@@ -1,3 +1,5 @@
+"""EBS 배치·충돌 판정 구현부. 공개 API 는 ebs_simulate_service.py 를 볼 것."""
+
 import io
 import json
 import math
@@ -125,18 +127,15 @@ GEOMETRY_TYPES = frozenset({
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
 })
 
-VERDICT_HEIGHT = 0.8      # 판정 패널을 매다는 높이. EBS 바닥 0, 천장 1.
-                          # 카메라가 보는 점은 상자 중앙 그대로다
+VERDICT_HEIGHT = 0.8      # 판정 패널 높이. EBS 바닥 0, 천장 1
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
 STATE_CLASH = "clash"     # 면이 막혔다. 거리는 없다
 STATE_TIGHT = "tight"     # 닿지는 않았는데 최소 여유보다 가깝다. 간섭
-STATE_CLEAR = "clear"     # 비었다. distance 가 있으면 그 거리, None 이면
-                          # reach 안에 아무것도 없었다는 뜻
+STATE_CLEAR = "clear"     # 비었다. distance None 이면 reach 안에 아무것도 없음
 
-# 지켜야 하는 최소 여유, m. 면마다 다르다 — 천장은 붙어도 되지만 옆은 사람이
-# 지나가야 한다. set_min_gaps 로 바꾼다.
+# 최소 여유 기본값, m. set_min_gaps 로 바꾼다
 MIN_GAP_CEILING = 0.1
 MIN_GAP_SIDE = 0.6
 
@@ -177,9 +176,7 @@ GRID_CELLS = 24
 MEET_LIMIT = 4
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
-REACH_RATIO = 1.5        # 가장 가까운 메시를 찾는 거리 (최장변 대비).
-                         # 넓힌 만큼 훑는 상자가 커지고 후보가 늘어난다 —
-                         # 'gather nearby' 참조. 넘어가면 거리 없이 여유로만 본다
+REACH_RATIO = 1.5        # 거리를 재는 범위 (EBS 최장변 대비). 넘으면 거리 없음
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"
@@ -217,9 +214,9 @@ class EbsSimulate:
         self._rail_frame = None
         self._triangles: dict = {}
         self._eqp_boxes: dict = None
-        self._bounds = None        # 스테이지 바운드 캐시. init 에서만 버린다
-        self._stage_index = None   # (경로, 월드 상자, 프림). 한 번 만든다
-        self._ebs_box = None       # (경로, 상자). EBS 가 움직이면 버린다
+        self._bounds = None
+        self._stage_index = None
+        self._ebs_box = None
         self._lasers: bool = False
         self._verdict: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
@@ -355,11 +352,6 @@ class EbsSimulate:
         self._started = time.perf_counter()
 
     def _report_stages(self, title: str, mark: int = 0) -> None:
-        """mark 이후에 잰 것들을 콘솔에 낸다. 이름은 '단계: 종류'.
-
-        같은 이름이 여러 번 나오면 더한다 — 한 단계의 탐색이 이른 반환 때문에
-        토막나 있어도 한 줄로 읽힌다.
-        """
         stages = {}
         for label, spent in self._timings[mark:]:
             stage, _, kind = label.partition(":")
@@ -417,8 +409,6 @@ class EbsSimulate:
 
         self.hide_ebs()
         equipment = self.build_index()
-        # 스테이지 상자 목록. 장비별이 아니라 스테이지 하나짜리라 어느 장비를
-        # 보든 같은 것을 쓴다. 기다리는 자리가 여기라서 여기서 만든다.
         self._stage_boxes()
         ports = self.load_ports()
         self._ready = equipment > 0 and ports > 0
@@ -436,11 +426,6 @@ class EbsSimulate:
         return self._do_prepare(equipment)
 
     def align(self, equipment: str = "") -> dict:
-        """Prepare 를 먼저 돌리고 배치한다. 따로 누를 필요가 없다.
-
-        prepare 는 몇 ms 다 (장비 찾기, 포트 조회, 피봇). 그것을 아끼려고
-        'Run Prepare first' 를 내는 것보다 그냥 돌리는 편이 낫다.
-        """
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -650,16 +635,12 @@ class EbsSimulate:
         result = self._do_align()
         if not result["ok"]:
             return result
-        # 판정을 먼저 낸다. 카메라가 자리잡은 뒤에 오버레이가 뜨도록 —
-        # 옛 시점에 판이 떴다가 카메라를 따라 미끄러지지 않는다.
         result = self._do_collide()
         if not result["ok"]:
             return result
         told = self._do_focus()
         if not told["ok"]:
             return told
-        # 판정 결과를 돌려주되, 시간과 노트는 카메라까지 담아서 준다 —
-        # collide 시점에 뜬 스냅샷은 카메라 단계를 모른다
         result["timings"] = list(self._timings)
         result["notes"] = list(self._notes)
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
@@ -765,15 +746,6 @@ class EbsSimulate:
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
     def _side_roots(self) -> list:
-        """좌우 면이 들여다볼 서브트리. 이웃 장비, 방향당 하나씩.
-
-        좌우만이다. 천장은 위쪽 이웃을 찾는 방법이 없어 그대로 스테이지를
-        훑는다 (_by_face / _reach_by_face).
-        고르는 것은 side_band 로, Camera 가 남길 장비를 고르는 것과 같은
-        판단이다 — 화면에 남은 것과 판정에 쓰는 것이 어긋나지 않는다.
-        기둥·벽·덕트는 EQP_ 가 아니라 여기 안 들어온다. 좌우에서 빠진다.
-        옆에 아무것도 없으면 빈 리스트다 = 후보 없음 (None 이면 전체 순회).
-        """
         stage = self._get_stage()
         if stage is None:
             return []
@@ -1009,7 +981,6 @@ class EbsSimulate:
 
     @staticmethod
     def _cast(box, way) -> tuple:
-        """세워진 상자를 바닥의 어느 방향으로 눕혔을 때 차지하는 구간."""
         lo, hi = box.GetMin(), box.GetMax()
         centre = (lo[0] + hi[0]) * 0.5 * way[0] + (lo[1] + hi[1]) * 0.5 * way[1]
         half = (abs(way[0]) * (hi[0] - lo[0]) + abs(way[1]) * (hi[1] - lo[1])) * 0.5
@@ -1041,7 +1012,6 @@ class EbsSimulate:
             if name == key:
                 continue
             deep = self._cast(box, inward)
-            # 같은 줄인가. 깊이 구간이 겹쳐야 옆이다 — 대각선은 여기서 빠진다.
             if deep[0] >= my_deep[1] or deep[1] <= my_deep[0]:
                 continue
             side = self._cast(box, sideways)
@@ -1050,7 +1020,7 @@ class EbsSimulate:
             elif side[1] <= my_side[0]:
                 gap, hand = my_side[0] - side[1], "left"
             else:
-                continue                # 좌우로도 겹친다 = 옆이 아니라 겹쳐 있다
+                continue
             if gap > reach:
                 continue
             if hand == "right":
@@ -1404,7 +1374,7 @@ class EbsSimulate:
         direction = 1.0 if length >= 0 else -1.0
 
         rail_local = self._local_translation(rail)
-        start = rail_local[axis] - length / 2.0     # 레일 시작 = addr 위치
+        start = rail_local[axis] - length / 2.0
         origin = [rail_local[0], rail_local[1], rail_local[2]]
         origin[axis] = start
         onward = list(origin)
@@ -1742,15 +1712,6 @@ class EbsSimulate:
 
 
     def _bounds_cache(self):
-        """스테이지 바운드 캐시 하나. init 이 버리기 전까지 계속 쓴다.
-
-        collide 시간의 대부분은 순회가 아니라 ComputeWorldBound 를 처음
-        계산하는 값이다. 매번 새로 만들면 장비를 바꿔가며 열 번 눌러도 열 번
-        다 맨바닥에서 계산한다. 그 사이 플랜트는 안 움직인다.
-        EBS 는 align 마다 움직이지만 이 캐시로 재지 않는다 — _gather_nearby 는
-        EBS 를 skip 으로 빼고, EBS 상자는 _ebs_bound 가 따로 잰다.
-        스테이지를 손댔으면 Init 을 다시 누르면 된다 (색인도 그때 다시 만든다).
-        """
         if self._bounds is None:
             self._bounds = UsdGeom.BBoxCache(
                 Usd.TimeCode.Default(),
@@ -1808,8 +1769,6 @@ class EbsSimulate:
             self._blockers = {}
             triangle_tests = 0
             boxed_only = set()
-            # 셀 상자는 여기서 한 번 float 로 편다. 안 그러면 삼각형마다
-            # 셀마다 GetMin/GetMax 가 나간다
             flat = [(face, i, cell,
                      tuple(cell.GetMin()), tuple(cell.GetMax()))
                     for face, boxes in cells.items() for i, cell in enumerate(boxes)]
@@ -1900,11 +1859,6 @@ class EbsSimulate:
         return data
 
     def _mesh_triangles(self, stage, path: str) -> list:
-        """월드 삼각형 (꼭짓점 셋, 최소, 최대). 상자를 같이 담는다.
-
-        읽는 쪽이 매번 min/max 를 다시 돌리면 collide 마다 삼각형 수만큼
-        파이썬 반복이 는다. 한 번 재고 캐시에 같이 둔다.
-        """
         if path in self._triangles:
             return self._triangles[path]
         triangles = []
@@ -1936,7 +1890,6 @@ class EbsSimulate:
         lo_box, hi_box = box.GetMin(), box.GetMax()
         cached = self._triangles.get(path)
         if cached is not None:
-            # 상자는 이미 재 뒀다. 여기서는 견주기만 한다
             x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
             x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
             return [(path, tri, lo, hi) for tri, lo, hi in cached
@@ -2113,12 +2066,6 @@ class EbsSimulate:
         return all(extent[i] > OVERLAP_EPS for i in range(3))
 
     def _ebs_bound(self, prim: Usd.Prim):
-        """EBS 월드 상자. 한 collide 안에서 다섯 군데가 부른다.
-
-        BBoxCache 를 두 개 만들어 두 번 재는데, 뒤엣것은 extentsHint 가 믿을
-        만한지 보는 진단일 뿐이다. 그래서 결과를 들고 있다가 그대로 준다.
-        EBS 가 움직이거나 보였다 안 보였다 하면 _forget_ebs 가 버린다.
-        """
         path = self._path_of(prim)
         if self._ebs_box is not None and self._ebs_box[0] == path:
             return self._ebs_box[1]
@@ -2154,22 +2101,11 @@ class EbsSimulate:
             return ""
 
     def _forget_ebs(self, paths=()) -> None:
-        """EBS 상자를 버린다. 옮겼거나 켜고 껐으면 지금 것이 아니다."""
         self._ebs_box = None
         for path in paths:
             self._visible.pop(path, None)
 
     def _stage_boxes(self, cache=None) -> list:
-        """스테이지의 상자 목록. 한 번 만들고 Init 까지 그대로 쓴다.
-
-        collide 마다 트리를 타고 내려가며 상자로 자르는 대신, 미리 눕혀 놓고
-        훑는다 — 남은 값이 그 순회였다.
-        담는 것은 장비(EQP_)는 통째로, 그 밖의 지오메트리는 낱개로. 장비 안은
-        옆에 왔을 때만 연다.
-        지나온 조상도 같이 담는다. 가시성을 여기서 굳히지 않으려고다 — 그룹을
-        통째로 숨긴 것도 묻는 그 순간에 봐야 한다 (_from_index).
-        만드는 값은 Init 이 이미 걷는 그 트리에 상자 계산을 얹는 정도다.
-        """
         if self._stage_index is not None:
             return self._stage_index
         stage = self._get_stage()
@@ -2204,11 +2140,6 @@ class EbsSimulate:
         return index
 
     def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
-        """상자 목록에서 겹치는 것만. 트리는 그 안을 열 때만 탄다.
-
-        겹침은 파이썬 float 로 본다 -- Gf.Range3d 로 물으면 항목마다 USD 를
-        세 번 부르고, 목록이 수만이면 그것이 순회보다 비싸진다.
-        """
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
         low, high = search.GetMin(), search.GetMax()
@@ -2225,7 +2156,7 @@ class EbsSimulate:
                     or min(hi[2], hi2) - max(lo[2], lo2) <= eps):
                 continue
             if any(not self._is_visible(one, where) for one, where in chain):
-                continue                # 조상 그룹을 숨겼다
+                continue
             inside.append(prim)
         for prim in inside:
             got, seen = self._gather_nearby(stage, cache, search, skip, [prim])
@@ -2234,13 +2165,6 @@ class EbsSimulate:
         return found, visited
 
     def _by_face(self, stage, cache, search, skip, roots, cells, margin):
-        """면마다 후보를 모은다. (경로, 상자, 볼 면들) 목록과 훑은 프림 수.
-
-        좌우는 옆 장비 서브트리만 본다 (roots). 천장은 위에 무엇이 있는지 미리
-        알 방법이 없어 스테이지를 훑되, 천장 셀 위만 본다 — 상자가 얇아 위층
-        말고는 위에서 잘린다.
-        roots 가 None 이면 예전대로 한 번에 다 모은다 (밖에서 부르는 쪽).
-        """
         if roots is None:
             found, visited = self._gather_nearby(stage, cache, search, skip)
             return [(path, box, FACES) for path, box in found], visited
@@ -2262,8 +2186,6 @@ class EbsSimulate:
 
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
                        roots: list = None) -> tuple:
-        # roots 가 None 이면 스테이지 전체 -- 트리가 아니라 상자 목록으로
-        # 간다 (_from_index). 빈 리스트면 아무데도 안 간다 = 후보 없음.
         if roots is None:
             return self._from_index(stage, cache, search, skip)
         found, visited = [], 0
@@ -2286,9 +2208,6 @@ class EbsSimulate:
             box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
             if box.IsEmpty() or not self._overlaps(box, search):
                 continue
-            # 상자로 먼저 자르고 나서 묻는다. 가시성은 프림마다 USD 값 해석이
-            # 걸려서, 훑는 것 전부에 물으면 상자 계산보다 비싸진다. 잘라내는
-            # 결과는 같다 -- 안 보이면 여기서도 자식으로 안 내려간다.
             if not self._is_visible(prim, path):
                 continue
             if type_name in GEOMETRY_TYPES:
@@ -2375,7 +2294,6 @@ class EbsSimulate:
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
-        # 원점은 float 로 편다 -- _cells_of 가 삼각형마다 여섯 번 인덱싱한다
         low, high = box.GetMin(), box.GetMax()
         origin = (low[0], low[1], low[2])
         size = [max(high[i] - origin[i], 1e-9) for i in range(3)]
@@ -2537,11 +2455,6 @@ class EbsSimulate:
         return results
 
     def _reach_by_face(self, stage, cache, skip, roots, wanted) -> dict:
-        """빈 면마다 거리를 잴 후보. check_collision 과 같은 잣대를 쓴다.
-
-        좌우는 옆 장비만, 천장은 스테이지 전체. 한쪽만 좁히면 같은 벽을 두고
-        '충돌 없음' 과 '여유 0.05 m' 가 같이 나온다.
-        """
         if not wanted:
             return {}
         if roots is None:
@@ -2672,8 +2585,6 @@ class EbsSimulate:
                 False: (self._marker_material(stage, "clear", COLOR_CLEAR),
                         COLOR_CLEAR, MARKER_OPACITY),
             }
-            # 최소 여유 미달도 막힌 것처럼 칠한다. 닿았느냐가 아니라 여유가
-            # 지켜졌느냐를 보는 것이라, 화면에서 둘을 나눌 이유가 없다.
             tight = {mark["face"] for mark in marks or ()
                      if mark.get("state") == STATE_TIGHT}
             for face, boxes in built.items():
@@ -2963,8 +2874,6 @@ class EbsSimulate:
         return self._payload(bool(told), told or "Run Camera first")
 
     def _world_range(self, prim, cache=None) -> "Gf.Range3d | None":
-        # 캐시를 넘기는 쪽은 안 움직이는 것만 잰다. EBS 는 align 마다 움직이니
-        # 그냥 부른다 -- 그때는 새 캐시가 만들어져 옛 자리를 안 돌려준다.
         if prim is None or not prim.IsValid():
             return None
         if cache is None:

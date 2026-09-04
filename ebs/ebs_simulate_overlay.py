@@ -1,3 +1,5 @@
+"""뷰포트에 띄우는 판정 패널. 문구와 색은 이 파일 상단 상수."""
+
 import omni.ui as ui
 
 from .ebs_simulate_camera import viewport_window
@@ -21,17 +23,14 @@ GAP   = "clearance"               # 비었을 때, 선 위
 TIGHT = "interference"            # 안 닿았는데 최소 여유 미달일 때, 같은 자리
 LEAST = "min {0:.3f} m"           # 지켜야 하는 최소 여유, 거리 아래
 
-# 선은 UI 가 아니라 씬에 그린다 (show_markers 의 _gap_line). 그래서 글자는 그
-# 선의 중점 양쪽으로 갈라 붙는다 — 한 판으로 두면 뒷판이 선을 가린다.
+# 선은 씬에 그린다 (show_markers). 글자는 그 선 중점 양쪽으로 갈라 붙는다
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 LINE_ROOM = 6                     # 선이 지나갈 자리, 판 사이 여백
 
-# 천장은 화면에서 위아래로 벌어지니 글자가 선 양옆으로 간다. 좌우 면은 가로로
-# 벌어지니 위아래로 간다.
+# 이 면들만 글자가 선 양옆으로. 나머지는 위아래로
 SIDE_BY_SIDE = ("ceiling",)
 
-# 판 자체가 색을 지고, 글자는 흰색이다. 어두운 판에 색 글자를 쓰면 플랜트를
-# 배경으로 읽기 힘들다.
+# 판이 색을 지고 글자는 흰색
 COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
 COLOR_CANNOT = 0xFF2626E6      # 빨강
 COLOR_TEXT   = 0xFFFFFFFF
@@ -54,10 +53,6 @@ class EbsSimulateOverlay:
 
     @classmethod
     def build(cls, vp_name: str = None):
-        """판을 만들어 두되 아직 안 보인다. Camera 뒤에 reveal 이 켠다.
-
-        Collide 때 바로 띄우면 옛 시점에 떴다가 카메라를 따라 미끄러진다.
-        """
         overlay = cls._get(vp_name)
         if overlay is not None:
             overlay.refresh(place=False)
@@ -65,7 +60,6 @@ class EbsSimulateOverlay:
 
     @classmethod
     def reveal(cls, vp_name: str = None):
-        """만들어 둔 판을 지금 시점에 맞춰 놓고 켠다."""
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
                 overlay._place()
@@ -98,7 +92,6 @@ class EbsSimulateOverlay:
             cls._instances[name] = overlay
         return overlay
 
-    # 뷰포트 창 찾기는 ebs_simulate_camera 가 갖고 있다. 같은 창이다.
     _window = staticmethod(viewport_window)
 
     def __init__(self, vp_name):
@@ -144,7 +137,7 @@ class EbsSimulateOverlay:
             self.clear()
             return False
         if not place:
-            return True             # 판은 섰다. 켜는 것은 reveal 이 한다
+            return True
         self._place()
         return self._start()
 
@@ -205,8 +198,6 @@ class EbsSimulateOverlay:
                          else (ABOVE, BELOW))
         self._floating(at, block([TIGHT if state == "tight" else GAP]),
                        ground, first)
-        # 잰 것이 없으면 아래 판도 없다. 재지 못했다는 것은 reach 밖이라는 뜻이고,
-        # 거기에 대고 쓸 거리도 상대도 없다.
         if gap is None:
             return
         told = [f"{gap:.3f} m"]
