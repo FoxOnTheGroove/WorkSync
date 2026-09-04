@@ -349,8 +349,11 @@ class EbsSimulateService:
             때마다 BBoxCache 를 둘 만들어 EBS 모델을 두 번 훑었다 (뒤엣것은
             extentsHint 진단). 결과를 _ebs_box 에 들고 있다가 그대로 준다.
             버리는 곳 -> _forget_ebs: align 이 옮긴 뒤, _show_ebs 로 켜고 끈 뒤.
-          가시성은 캐시 안 한다 (_visible 은 collide 마다 새로). 스테이지
-            트리에서 프림을 숨긴 것이 다음 판정에 바로 먹어야 한다.
+          가시성 -> _is_visible. 상자로 자른 다음에 묻는다. 훑는 것 전부에
+            물으면 USD 값 해석이 프림마다 걸려 상자 계산보다 비싸진다.
+            잘라내는 결과는 같다 (안 보이면 자식으로도 안 내려간다).
+            표(_visible)는 collide 마다 새로 만든다 — 스테이지 트리에서
+            숨긴 것이 다음 판정에 바로 먹어야 한다.
         박스 겹침 -> _overlaps. 삼각형 -> _triangle_hits_box.
         메시 읽기 -> _mesh_local (원본, 변환 없음) 과 그 위의 둘:
           _mesh_triangles     전체를 월드로. 3면 검사용.

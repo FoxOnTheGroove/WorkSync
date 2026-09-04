@@ -2252,12 +2252,15 @@ class EbsSimulate:
             type_name = prim.GetTypeName()
             if type_name in SKIP_TYPES or type_name.endswith("Light"):
                 continue
-            if not self._is_visible(prim, path):
-                continue
 
             visited += 1
             box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
             if box.IsEmpty() or not self._overlaps(box, search):
+                continue
+            # 상자로 먼저 자르고 나서 묻는다. 가시성은 프림마다 USD 값 해석이
+            # 걸려서, 훑는 것 전부에 물으면 상자 계산보다 비싸진다. 잘라내는
+            # 결과는 같다 -- 안 보이면 여기서도 자식으로 안 내려간다.
+            if not self._is_visible(prim, path):
                 continue
             if type_name in GEOMETRY_TYPES:
                 found.append((path, box))
