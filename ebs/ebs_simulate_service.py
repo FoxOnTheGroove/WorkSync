@@ -194,7 +194,8 @@ class EbsSimulateService:
         check_equipment   대상 장비와의 내부 간섭. 삼각형 대 삼각형
         _meetings         쌍((EBS 메시, 장비 메시))마다 한 번만 검사한다.
                           어디가 부딪혔는지는 빠짐없이, 비싼 검사는 쌍 수만큼
-        _clash_dots       그 지점에 빨간 구슬. 크기 CLASH_RADIUS, 상한 CLASH_DOTS
+        _clash_boxes      걸린 조각을 빨간 반투명 상자로 감싼다.
+                          CLASH_OPACITY / CLASH_EDGE / CLASH_SWELL / CLASH_MARKS
         _triangles_near   양쪽 삼각형 읽기. 'equipment: read' 가 이 값
         _face_grid        메시별 면 상자 + 로컬 격자. 한 번 만들고 계속 쓴다.
                           느리면 여기 -- 칸 수는 GRID_CELLS

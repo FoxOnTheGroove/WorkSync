@@ -32,7 +32,7 @@ get_result 는 화면을 안 건드린다. 값만 보려다 시점이 튀면 안
         "right":   {"state": "tight", "distance": 0.412, ...},
         "ceiling": {"state": "clash", "distance": None, ...},
       },
-      "inside": {"hit": True, "places": 7, "with": [조각 이름들], "spots": [(x,y,z), ...]},
+      "inside": {"hit": True, "places": 7, "with": [조각 이름들], "boxes": [((lo), (hi)), ...]},
       "at": {"centre": (x, y, z), "transform": [16 floats]},
       "under": {"precision": "triangle", "offset_scale": "snap",
                 "ebs_2port": ..., "ebs_3port": ..., "search_root": ...,

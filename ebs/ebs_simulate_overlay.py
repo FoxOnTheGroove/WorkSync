@@ -13,7 +13,7 @@ CANNOT = "EBS INSTALL BLOCKED"
 CLEAR  = "no collision"
 
 INNER = "internal clash"          # 무엇에 막혔는지, 한 줄에 하나
-INNER_MANY = "internal clash x {0}"   # 지점이 여럿일 때. 위치는 씬의 구슬
+INNER_MANY = "internal clash x {0}"   # 조각이 여럿일 때. 위치는 씬의 상자
 FACE_ORDER = ("left", "right", "ceiling")
 NAMELESS = "-"
 
@@ -208,8 +208,8 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _why(said: dict) -> list:
-        spots = len(said.get("spots") or ())
-        told = [INNER_MANY.format(spots) if spots > 1 else INNER] \
+        boxes = len(said.get("boxes") or ())
+        told = [INNER_MANY.format(boxes) if boxes > 1 else INNER] \
             if said.get("inside") else []
         blocked = {found["face"]: found.get("name") or NAMELESS
                    for found in (said.get("faces") or ())}
