@@ -117,11 +117,13 @@ class EbsDummyUI:
         self._side_field = None
         self._ceiling_field = None
         self._status_label = None
+        self._overlay_button = None
+        self._overlay_on = False
 
     # -- build ---------------------------------------------------------------
 
     def build_ui(self):
-        self._window = ui.Window("EBS Simulate", width=470, height=330)
+        self._window = ui.Window("EBS Simulate", width=520, height=330)
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 8}):
                 # 경로 칸 여섯은 한 번 채우고 안 건드린다. 저희끼리 붙여 둔다
@@ -178,6 +180,8 @@ class EbsDummyUI:
                     ui.Button("3 Camera", clicked_fn=self._on_camera)
                     ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
+                    self._overlay_button = ui.Button(
+                        "Col UI", width=64, clicked_fn=self._on_toggle_overlay)
 
                 self._status_label = ui.Label("Ready", height=20)
 
@@ -239,6 +243,8 @@ class EbsDummyUI:
         self._render(EbsSimulateService.simulate(
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.show()      # SIM runs the collide too
+        self._overlay_on = True
+        self._mark_overlay()
 
     def _on_align(self):
         self._apply_settings()
@@ -247,11 +253,29 @@ class EbsDummyUI:
         # A verdict is about where the EBS was standing. Choosing another
         # machine, or moving it, leaves the panel saying so about nothing.
         EbsSimulateOverlay.hide()
+        self._overlay_on = False
+        self._mark_overlay()
 
     def _on_camera(self):
         self._render(EbsSimulateService.focus())
         # 시점이 옮겨간 뒤에 켠다. Collide 가 만들어 둔 것이 여기서 보인다.
         EbsSimulateOverlay.reveal()
+        self._overlay_on = True
+        self._mark_overlay()
+
+    def _on_toggle_overlay(self):
+        """판정 오버레이를 손으로 켜고 끈다. 원래는 Camera 가 켠다."""
+        self._overlay_on = not self._overlay_on
+        if self._overlay_on:
+            EbsSimulateOverlay.show()
+        else:
+            EbsSimulateOverlay.hide()
+        self._mark_overlay()
+        self._set_status("Overlay on" if self._overlay_on else "Overlay off")
+
+    def _mark_overlay(self):
+        if self._overlay_button:
+            self._overlay_button.text = "Col UI ON" if self._overlay_on else "Col UI"
 
     def _on_refresh(self):
         # 돌려본 카메라를 Camera 가 놓았던 자리로. 궤도 모드는 켜진 채다.
@@ -264,6 +288,8 @@ class EbsDummyUI:
         EbsSimulateService.release_camera()
         EbsSimulateService.hide_ebs()
         EbsSimulateOverlay.hide()
+        self._overlay_on = False
+        self._mark_overlay()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
     def _on_collide(self):
