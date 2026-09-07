@@ -195,7 +195,9 @@ class EbsSimulateService:
 
         check_collision   3면 충돌. 대상 장비는 빠진다 (exclude)
         measure_faces     안 막힌 면의 최단 거리. 범위는 REACH_RATIO
-        check_equipment   대상 장비와의 내부 간섭. 삼각형 대 삼각형
+        check_equipment   EBS 자리를 차지하는 것과의 간섭. 삼각형 대 삼각형
+        _through_roots    무엇을 상대로 볼지. EBS 상자와 겹치는 것 전부 --
+                          대상 장비만 보면 기둥·덕트가 두 검사 사이로 샌다
         _missed           표면은 안 만났는데 EBS 상자 안에 들어와 있는 조각을
                           로그로 짚어준다. 표면 대 표면이라 열린 면으로 들어온
                           것과 삼켜진 것은 안 잡히는데, 그게 샌 것처럼 보인다

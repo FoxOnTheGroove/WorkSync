@@ -2536,8 +2536,11 @@ class EbsSimulate:
         with self._stage_timer("equipment: search"):
             ours, _ = self._gather_nearby(stage, self._moving_cache(), world_box,
                                           [], roots=[ebs_prim])
-            theirs, _ = self._gather_nearby(stage, cache, world_box, [],
-                                            roots=[eqp_prim])
+            theirs = []
+            for prim in self._through_roots(ebs_prim, eqp_prim, world_box):
+                got, _ = self._gather_nearby(stage, cache, world_box, [],
+                                             roots=[prim])
+                theirs.extend(got)
         if not ours or not theirs:
             self._note(f"no interference test: {len(ours)} EBS meshes against "
                        f"{len(theirs)} on the equipment")
@@ -2579,6 +2582,43 @@ class EbsSimulate:
                    f"on the equipment, {tests} pairs tested")
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
+
+    def _through_roots(self, ebs_prim, eqp_prim, world_box) -> list:
+        """EBS 자리를 차지하는 것을 찾을 서브트리들.
+
+        대상 장비만 보면 안 된다 — EBS 를 뚫고 지나가는 것이 기둥이나 덕트일
+        수 있고, 그건 EQP_ 가 아니라 3면 검사(좌우 이웃 장비만 본다)에도 안
+        걸린다. 그래서 두 검사 사이로 샜다.
+        후보는 상자 목록에서 EBS 상자와 겹치는 것 전부. 목록은 float 훑기라
+        싸고, 상자로 걸러 남는 것은 몇 개 안 된다.
+        """
+        roots, seen = [], set()
+        mine = self._path_of(ebs_prim)
+        under_mine = (mine + "/") if mine else None
+        if eqp_prim is not None and eqp_prim.IsValid():
+            roots.append(eqp_prim)
+            seen.add(str(eqp_prim.GetPath()))
+        low, high = world_box.GetMin(), world_box.GetMax()
+        lo0, lo1, lo2 = low[0], low[1], low[2]
+        hi0, hi1, hi2 = high[0], high[1], high[2]
+        eps = OVERLAP_EPS
+        for path, lo, hi, _, prim, chain in self._stage_boxes():
+            if path in seen or prim is None:
+                continue
+            if path == mine or (under_mine and path.startswith(under_mine)):
+                continue                # EBS 자신은 상대가 아니다
+            if (min(hi[0], hi0) - max(lo[0], lo0) <= eps
+                    or min(hi[1], hi1) - max(lo[1], lo1) <= eps
+                    or min(hi[2], hi2) - max(lo[2], lo2) <= eps):
+                continue
+            if any(not self._is_visible(one, where) for one, where in chain):
+                continue
+            seen.add(path)
+            roots.append(prim)
+        self._note(f"through check: {len(roots)} subtree(s) overlap the EBS box"
+                   + (" (" + ", ".join(str(p.GetPath()).rsplit("/", 1)[-1]
+                                       for p in roots[:6]) + ")" if roots else ""))
+        return roots
 
     def _missed(self, theirs: list, pairs: list, world_box) -> None:
         """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다.
