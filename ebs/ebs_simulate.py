@@ -2960,11 +2960,11 @@ class EbsSimulate:
                 best, best_path = gap, path
                 best_at = self._box_point(local, prism, axis, outward, coord, gap)
                 continue
-            for triangle, _, _ in triangles:
-                local_tri = [inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
-                found = self._triangle_gap(local_tri, prism, axis, outward, coord)
-                if found is not None and (best is None or found[0] < best):
-                    best, best_path, best_at = found[0], path, found[1]
+            local_tris = [[inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
+                         for triangle, _, _ in triangles]
+            found = self._flat_gap(local_tris, prism, axis, outward, coord)
+            if found is not None and (best is None or found[0] < best):
+                best, best_path, best_at = found[0], path, found[1]
         if best is None:
             return None
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
@@ -3008,6 +3008,42 @@ class EbsSimulate:
                for i in range(3) if i != axis):
             at = middle
         return best, at
+
+    @staticmethod
+    def _flat_gap(triangles, prism, axis: int, outward: int, coord: float):
+        """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, 그 면을
+        이루는 꼭짓점들을 평균 내어 중앙에서 선을 뽑는다."""
+        lo, hi = prism.GetMin(), prism.GetMax()
+        best = None
+        for triangle in triangles:
+            found = EbsSimulate._triangle_gap(triangle, prism, axis, outward, coord)
+            if found is not None and (best is None or found[0] < best):
+                best = found[0]
+        if best is None:
+            return None
+
+        seen, sums, count = set(), [0.0, 0.0, 0.0], 0
+        for triangle in triangles:
+            for vertex in triangle:
+                inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
+                             for i in range(3) if i != axis)
+                if not inside:
+                    continue
+                gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
+                if gap < 0 or abs(gap - best) > OVERLAP_EPS:
+                    continue
+                key = tuple(round(v, 9) for v in vertex)
+                if key in seen:
+                    continue
+                seen.add(key)
+                for i in range(3):
+                    sums[i] += vertex[i]
+                count += 1
+        if count == 0:
+            return None
+        point = [sums[i] / count for i in range(3)]
+        point[axis] = coord + (best if outward > 0 else -best)
+        return best, tuple(point)
 
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,

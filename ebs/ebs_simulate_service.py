@@ -195,6 +195,13 @@ class EbsSimulateService:
 
         check_collision   3면 충돌. 대상 장비는 빠진다 (exclude)
         measure_faces     안 막힌 면의 최단 거리. 범위는 REACH_RATIO
+        _nearest_in_prism 후보 중 가장 가까운 것 하나. Cube 는 _box_point
+                          (로컬 상자 중심), 메시(triangle 정밀도)는 _flat_gap
+        _flat_gap         메시 면이 삼각형 여러 개(같은 높이=한 면)여도
+                          그 삼각형들을 합쳐 면 전체의 중앙에서 선이 나오게
+                          한다. 삼각형 하나의 중점만 쓰면 조각마다 다른
+                          자리로 보인다 -- 최소 거리를 내는 꼭짓점들을 전부
+                          모아 평균, 축 좌표만 거리값으로 고정 (평균 드리프트 방지)
         check_equipment   EBS 와 대상 장비만의 내부 간섭. 삼각형 대 삼각형.
                           옆 장비는 절대 안 섞인다 -- roots=[대상 장비] 로만
                           훑는다. 옆(3면 검사용)은 _side_roots 의 몫이다
