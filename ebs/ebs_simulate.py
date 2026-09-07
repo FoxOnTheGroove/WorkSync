@@ -2593,22 +2593,50 @@ class EbsSimulate:
 
     def _boxed_pairs(self, stage, ours: list, theirs: list) -> list:
         """삼각형이 없는 프리미티브(Cube/Capsule/Cone/Cylinder/Sphere/Plane)는
-        상자 겹침으로만 판정한다. UsdGeom.Mesh 가 아니라서 _mesh_local 이
+        상자 겹침으로 판정해야 한다. UsdGeom.Mesh 가 아니라서 _mesh_local 이
         빈손을 돌려주고, 삼각형 검사(_meetings)는 그런 조각을 영영 못 잡는다.
+
+        다만 상대가 메시일 때 메시의 '전체' AABB 로 견주면 너무 성글다 --
+        EBS 처럼 속이 빈 복잡한 형상은 AABB 가 실제 표면보다 훨씬 넓어서,
+        표면과 안 닿았는데도 같은 사각 영역 안에 있다는 이유로 걸린다.
+        그래서 메시 쪽은 전체 상자가 아니라 면 격자(_face_grid, 이미 있는
+        로컬 공간 격자)로 실제 가까운 면이 있는지까지 본다 -- 정확한 삼각형
+        판정은 아니지만, "표면 근처"와 "상자 아무 데나"의 차이는 잡는다.
+        양쪽 다 프리미티브면 견줄 면이 없으니 그때만 상자 대 상자로 물러난다.
         """
-        boxed_ours = any(self._is_boxed_shape(stage, p) for p, _ in ours)
-        boxed_theirs = any(self._is_boxed_shape(stage, p) for p, _ in theirs)
-        if not boxed_ours and not boxed_theirs:
-            return []
         found = []
         for a_path, a_box in ours:
-            a_boxed = self._is_boxed_shape(stage, a_path)
+            a_mesh = not self._is_boxed_shape(stage, a_path)
             for b_path, b_box in theirs:
-                if not a_boxed and not self._is_boxed_shape(stage, b_path):
+                b_mesh = not self._is_boxed_shape(stage, b_path)
+                if a_mesh and b_mesh:
                     continue                # 둘 다 메시면 삼각형 검사가 본다
-                if self._overlaps(a_box, b_box):
+                if a_mesh:
+                    hit = self._mesh_reaches(stage, a_path, b_box)
+                elif b_mesh:
+                    hit = self._mesh_reaches(stage, b_path, a_box)
+                else:
+                    hit = self._overlaps(a_box, b_box)   # 견줄 면이 없다
+                if hit:
                     found.append((a_path, b_path))
         return found
+
+    def _mesh_reaches(self, stage, path: str, piece_box) -> bool:
+        """메시 path 의 면 중 piece_box 근처에 실제로 있는 것이 있는가.
+
+        piece_box 를 메시 로컬 공간으로 끌어와(_pulled_back) 면 격자에 묻는다
+        (_faces_near, EBS/장비 삼각형 캐시가 쓰는 그 격자). 상자 하나가 아니라
+        면 하나하나의 상자와 견주므로, 메시 전체 AABB 로 보는 것보다 훨씬
+        표면에 가깝다.
+        """
+        data = self._mesh_local(stage, path)
+        to_world = self._to_world(stage, path)
+        if not data or to_world is None:
+            return False
+        near = self._pulled_back(piece_box, to_world)
+        if near is None:
+            return False
+        return bool(self._faces_near(path, data, near))
 
     def _is_boxed_shape(self, stage, path: str) -> bool:
         """삼각형이 하나도 안 나오는 조각인가. 이미 알고 있으면(_triangles

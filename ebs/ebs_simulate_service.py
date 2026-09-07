@@ -199,7 +199,12 @@ class EbsSimulateService:
                           옆 장비는 절대 안 섞인다 -- roots=[대상 장비] 로만
                           훑는다. 옆(3면 검사용)은 _side_roots 의 몫이다
         _boxed_pairs      Cube/Capsule 같은 프리미티브는 삼각형이 없어
-                          _meetings 가 영영 못 잡는다. 상자 겹침으로 판정
+                          _meetings 가 영영 못 잡는다. 상대가 메시면
+                          _mesh_reaches (면 격자) 로, 둘 다 프리미티브면
+                          상자 대 상자로 판정
+        _mesh_reaches     메시의 전체 AABB 가 아니라 면 격자로 표면 근처인지
+                          본다. 전체 AABB 로 견주면 속이 빈 형상 안쪽에
+                          박히기만 한 조각도 잘못 걸린다
         _missed           표면은 안 만났는데 EBS 상자 안에 들어와 있는 조각을
                           로그로 짚어준다. 표면 대 표면이라 열린 면으로 들어온
                           것과 삼켜진 것은 안 잡히는데, 그게 샌 것처럼 보인다
