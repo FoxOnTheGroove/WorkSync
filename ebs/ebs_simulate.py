@@ -3011,8 +3011,9 @@ class EbsSimulate:
 
     @staticmethod
     def _flat_gap(triangles, prism, axis: int, outward: int, coord: float):
-        """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, 그 면을
-        이루는 꼭짓점들을 평균 내어 중앙에서 선을 뽑는다."""
+        """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, Cube 처럼
+        그 면 전체의 상자 중심(가로/세로 각각 min/max 의 중점)에서 선을 뽑는다.
+        꼭짓점을 평균 내면 삼각형을 어떻게 쪼갰는지에 따라 중심이 쏠린다."""
         lo, hi = prism.GetMin(), prism.GetMax()
         best = None
         for triangle in triangles:
@@ -3022,7 +3023,7 @@ class EbsSimulate:
         if best is None:
             return None
 
-        seen, sums, count = set(), [0.0, 0.0, 0.0], 0
+        mins, maxs, found_any = [None, None, None], [None, None, None], False
         for triangle in triangles:
             for vertex in triangle:
                 inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
@@ -3032,16 +3033,18 @@ class EbsSimulate:
                 gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
                 if gap < 0 or abs(gap - best) > OVERLAP_EPS:
                     continue
-                key = tuple(round(v, 9) for v in vertex)
-                if key in seen:
-                    continue
-                seen.add(key)
+                found_any = True
                 for i in range(3):
-                    sums[i] += vertex[i]
-                count += 1
-        if count == 0:
+                    if i == axis:
+                        continue
+                    mins[i] = vertex[i] if mins[i] is None else min(mins[i], vertex[i])
+                    maxs[i] = vertex[i] if maxs[i] is None else max(maxs[i], vertex[i])
+        if not found_any:
             return None
-        point = [sums[i] / count for i in range(3)]
+        point = [0.0, 0.0, 0.0]
+        for i in range(3):
+            if i != axis:
+                point[i] = min(max((mins[i] + maxs[i]) * 0.5, lo[i]), hi[i])
         point[axis] = coord + (best if outward > 0 else -best)
         return best, tuple(point)
 
