@@ -2548,6 +2548,7 @@ class EbsSimulate:
         if shared.IsEmpty():
             self._note(f"clear of the equipment: {len(ours)} EBS meshes and "
                        f"{len(theirs)} on it never share a box")
+            self._missed(theirs, [], world_box)
             return blank
 
         with self._stage_timer("equipment: read"):
@@ -2560,10 +2561,12 @@ class EbsSimulate:
         if not mine or not yours:
             self._note(f"clear of the equipment: nothing reaches the shared box "
                        f"({len(mine)} against {len(yours)} triangles)")
+            self._missed(theirs, [], world_box)
             return blank
 
         with self._stage_timer("equipment: detect"):
             pairs, tests = self._meetings(mine, yours, shared)
+        self._missed(theirs, pairs, world_box)
         where = dict(theirs)
         boxes, seen = [], set()
         for _, eqp_path in pairs:
@@ -2576,6 +2579,35 @@ class EbsSimulate:
                    f"on the equipment, {tests} pairs tested")
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
+
+    def _missed(self, theirs: list, pairs: list, world_box) -> None:
+        """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다.
+
+        표면 대 표면으로만 보기 때문에, 열린 면으로 들어오거나 통째로 삼켜진
+        조각은 안 잡힌다. 그게 눈에 안 띄면 검사가 샌 것처럼 보인다.
+        """
+        if len(pairs) >= CLASH_MARKS:
+            self._note(f"interference stopped at the {CLASH_MARKS} piece cap - "
+                       f"there may be more")
+        met = {path for _, path in pairs}
+        deep = []
+        for path, box in theirs:
+            if path in met:
+                continue
+            shared = Gf.Range3d.GetIntersection(box, world_box)
+            if shared.IsEmpty():
+                continue
+            lo, hi = box.GetMin(), box.GetMax()
+            span = [hi[i] - lo[i] for i in range(3)]
+            near, far = shared.GetMin(), shared.GetMax()
+            covered = [(far[i] - near[i]) / span[i] if span[i] > 1e-9 else 1.0
+                       for i in range(3)]
+            if min(covered) > 0.5:
+                deep.append(path.rsplit("/", 1)[-1])
+        if deep:
+            self._note(f"{len(deep)} piece(s) sit well inside the EBS box but "
+                       f"never touch its surface: " + ", ".join(deep[:6])
+                       + (" ..." if len(deep) > 6 else ""))
 
     @staticmethod
     def _union(boxes: list) -> Gf.Range3d:
