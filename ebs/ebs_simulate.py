@@ -2523,6 +2523,7 @@ class EbsSimulate:
 
     def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
+        """EBS 와 대상 장비만 본다. 옆 장비(3면 검사 몫)는 여기 들어오지 않는다."""
         stage = self._get_stage()
         blank = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
         if stage is None or eqp_prim is None or not eqp_prim.IsValid():
@@ -2536,39 +2537,48 @@ class EbsSimulate:
         with self._stage_timer("equipment: search"):
             ours, _ = self._gather_nearby(stage, self._moving_cache(), world_box,
                                           [], roots=[ebs_prim])
-            theirs = []
-            for prim in self._through_roots(ebs_prim, eqp_prim, world_box):
-                got, _ = self._gather_nearby(stage, cache, world_box, [],
-                                             roots=[prim])
-                theirs.extend(got)
+            theirs, _ = self._gather_nearby(stage, cache, world_box, [],
+                                            roots=[eqp_prim])
         if not ours or not theirs:
             self._note(f"no interference test: {len(ours)} EBS meshes against "
                        f"{len(theirs)} on the equipment")
             return blank
 
+        pairs, tests = [], 0
+        boxed = self._boxed_pairs(stage, ours, theirs)
+        pairs.extend(boxed)
+        if boxed:
+            self._note(f"{len(boxed)} pair(s) judged by box: not a mesh, so no "
+                       f"triangle to test (Cube/Capsule/etc)")
+
         shared = Gf.Range3d.GetIntersection(self._union([b for _, b in ours]),
                                             self._union([b for _, b in theirs]))
         if shared.IsEmpty():
-            self._note(f"clear of the equipment: {len(ours)} EBS meshes and "
-                       f"{len(theirs)} on it never share a box")
-            self._missed(theirs, [], world_box)
-            return blank
+            if not pairs:
+                self._note(f"clear of the equipment: {len(ours)} EBS meshes and "
+                           f"{len(theirs)} on it never share a box")
+        else:
+            with self._stage_timer("equipment: read"):
+                mine, ebs_read = self._triangles_near(stage, ours, shared)
+                yours, eqp_read = self._triangles_near(stage, theirs, shared)
+            self._note("read: " + "; ".join(
+                f"{side} {t['meshes']} mesh, {t['faces']} faces, "
+                f"{t['built']} grid built, {t['world']} from the world cache"
+                for side, t in (("EBS", ebs_read), ("equipment", eqp_read))))
+            if not mine or not yours:
+                if not pairs:
+                    self._note(f"clear of the equipment: nothing reaches the "
+                               f"shared box ({len(mine)} against {len(yours)} "
+                               f"triangles)")
+            else:
+                with self._stage_timer("equipment: detect"):
+                    mesh_pairs, tests = self._meetings(mine, yours, shared)
+                for pair in mesh_pairs:
+                    if pair not in pairs:
+                        pairs.append(pair)
+                self._note(f"interference: {len(mine)} EBS triangles against "
+                           f"{len(yours)} on the equipment, {tests} pairs tested")
 
-        with self._stage_timer("equipment: read"):
-            mine, ebs_read = self._triangles_near(stage, ours, shared)
-            yours, eqp_read = self._triangles_near(stage, theirs, shared)
-        self._note("read: " + "; ".join(
-            f"{side} {t['meshes']} mesh, {t['faces']} faces, "
-            f"{t['built']} grid built, {t['world']} from the world cache"
-            for side, t in (("EBS", ebs_read), ("equipment", eqp_read))))
-        if not mine or not yours:
-            self._note(f"clear of the equipment: nothing reaches the shared box "
-                       f"({len(mine)} against {len(yours)} triangles)")
-            self._missed(theirs, [], world_box)
-            return blank
-
-        with self._stage_timer("equipment: detect"):
-            pairs, tests = self._meetings(mine, yours, shared)
         self._missed(theirs, pairs, world_box)
         where = dict(theirs)
         boxes, seen = [], set()
@@ -2578,47 +2588,40 @@ class EbsSimulate:
             seen.add(eqp_path)
             lo, hi = where[eqp_path].GetMin(), where[eqp_path].GetMax()
             boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])))
-        self._note(f"interference: {len(mine)} EBS triangles against {len(yours)} "
-                   f"on the equipment, {tests} pairs tested")
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
 
-    def _through_roots(self, ebs_prim, eqp_prim, world_box) -> list:
-        """EBS 자리를 차지하는 것을 찾을 서브트리들.
-
-        대상 장비만 보면 안 된다 — EBS 를 뚫고 지나가는 것이 기둥이나 덕트일
-        수 있고, 그건 EQP_ 가 아니라 3면 검사(좌우 이웃 장비만 본다)에도 안
-        걸린다. 그래서 두 검사 사이로 샜다.
-        후보는 상자 목록에서 EBS 상자와 겹치는 것 전부. 목록은 float 훑기라
-        싸고, 상자로 걸러 남는 것은 몇 개 안 된다.
+    def _boxed_pairs(self, stage, ours: list, theirs: list) -> list:
+        """삼각형이 없는 프리미티브(Cube/Capsule/Cone/Cylinder/Sphere/Plane)는
+        상자 겹침으로만 판정한다. UsdGeom.Mesh 가 아니라서 _mesh_local 이
+        빈손을 돌려주고, 삼각형 검사(_meetings)는 그런 조각을 영영 못 잡는다.
         """
-        roots, seen = [], set()
-        mine = self._path_of(ebs_prim)
-        under_mine = (mine + "/") if mine else None
-        if eqp_prim is not None and eqp_prim.IsValid():
-            roots.append(eqp_prim)
-            seen.add(str(eqp_prim.GetPath()))
-        low, high = world_box.GetMin(), world_box.GetMax()
-        lo0, lo1, lo2 = low[0], low[1], low[2]
-        hi0, hi1, hi2 = high[0], high[1], high[2]
-        eps = OVERLAP_EPS
-        for path, lo, hi, _, prim, chain in self._stage_boxes():
-            if path in seen or prim is None:
-                continue
-            if path == mine or (under_mine and path.startswith(under_mine)):
-                continue                # EBS 자신은 상대가 아니다
-            if (min(hi[0], hi0) - max(lo[0], lo0) <= eps
-                    or min(hi[1], hi1) - max(lo[1], lo1) <= eps
-                    or min(hi[2], hi2) - max(lo[2], lo2) <= eps):
-                continue
-            if any(not self._is_visible(one, where) for one, where in chain):
-                continue
-            seen.add(path)
-            roots.append(prim)
-        self._note(f"through check: {len(roots)} subtree(s) overlap the EBS box"
-                   + (" (" + ", ".join(str(p.GetPath()).rsplit("/", 1)[-1]
-                                       for p in roots[:6]) + ")" if roots else ""))
-        return roots
+        boxed_ours = any(self._is_boxed_shape(stage, p) for p, _ in ours)
+        boxed_theirs = any(self._is_boxed_shape(stage, p) for p, _ in theirs)
+        if not boxed_ours and not boxed_theirs:
+            return []
+        found = []
+        for a_path, a_box in ours:
+            a_boxed = self._is_boxed_shape(stage, a_path)
+            for b_path, b_box in theirs:
+                if not a_boxed and not self._is_boxed_shape(stage, b_path):
+                    continue                # 둘 다 메시면 삼각형 검사가 본다
+                if self._overlaps(a_box, b_box):
+                    found.append((a_path, b_path))
+        return found
+
+    def _is_boxed_shape(self, stage, path: str) -> bool:
+        """삼각형이 하나도 안 나오는 조각인가. 이미 알고 있으면(_triangles
+        캐시) 그걸 믿고, 모르면 물어본다 -- 스키마를 못 물을 빌드는 메시로
+        본다(구현부 오류가 아니라 이 조각이 뭔지 모른다는 뜻일 뿐이다).
+        """
+        cached = self._triangles.get(path)
+        if cached is not None:
+            return not cached
+        try:
+            return self._mesh_local(stage, path) is None
+        except AttributeError:
+            return False
 
     def _missed(self, theirs: list, pairs: list, world_box) -> None:
         """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다.
