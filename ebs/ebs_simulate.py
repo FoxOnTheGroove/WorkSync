@@ -2622,12 +2622,14 @@ class EbsSimulate:
         return found
 
     def _mesh_reaches(self, stage, path: str, piece_box) -> bool:
-        """메시 path 의 면 중 piece_box 근처에 실제로 있는 것이 있는가.
+        """메시 path 의 표면이 piece_box 에 실제로 닿는가.
 
-        piece_box 를 메시 로컬 공간으로 끌어와(_pulled_back) 면 격자에 묻는다
-        (_faces_near, EBS/장비 삼각형 캐시가 쓰는 그 격자). 상자 하나가 아니라
-        면 하나하나의 상자와 견주므로, 메시 전체 AABB 로 보는 것보다 훨씬
-        표면에 가깝다.
+        piece_box 를 메시 로컬 공간으로 끌어와(_pulled_back) 면 격자에서
+        후보만 추린 뒤(_faces_near, 상자 대 상자라 성기다 -- 대각선 부재는
+        AABB 가 실제 면보다 훨씬 넓어서 안 닿아도 후보에 걸린다), 후보로
+        나온 면마다 부채꼴로 삼각형을 만들어 _triangle_hits_box 로 정확히
+        확인한다(3면 검사가 셀 판정에 쓰는 그 SAT 검사). 하나라도 실제로
+        닿으면 그때 잡는다 -- 격자는 후보를 줄이는 1차 필터일 뿐이다.
         """
         data = self._mesh_local(stage, path)
         to_world = self._to_world(stage, path)
@@ -2636,7 +2638,20 @@ class EbsSimulate:
         near = self._pulled_back(piece_box, to_world)
         if near is None:
             return False
-        return bool(self._faces_near(path, data, near))
+        candidates = self._faces_near(path, data, near)
+        if not candidates:
+            return False
+        points, counts, indices = data
+        start, size = self._faces[path][0], self._faces[path][1]
+        box = Gf.Range3d(Gf.Vec3d(*near[0]), Gf.Vec3d(*near[1]))
+        for at in candidates:
+            first, count = start[at], size[at]
+            fan = [points[indices[first + k]] for k in range(count)]
+            for k in range(1, count - 1):
+                triangle = (fan[0], fan[k], fan[k + 1])
+                if self._triangle_hits_box(triangle, box):
+                    return True
+        return False
 
     def _is_boxed_shape(self, stage, path: str) -> bool:
         """삼각형이 하나도 안 나오는 조각인가. 이미 알고 있으면(_triangles
