@@ -144,7 +144,11 @@ class EbsSimulateService:
         open_stage     set_usd_path 가 준 파일을 연다. 비었으면 열린 것을 씀
         build_index    EQP_ 장비 색인. 범위는 set_search_root
         _stage_boxes   스테이지 상자 목록. collide 가 이걸 훑는다.
-                       느리면 여기 -- Init 값의 대부분이다
+                       느리면 여기 -- Init 값의 대부분이다.
+                       EBS 는 안 담는다 (align 마다 움직인다)
+        _bounds_cache  공유 바운드 캐시. 안 움직이는 것만 여기로 잰다.
+                       EBS 는 _moving_cache 로 매번 새로 — 안 그러면 다음
+                       장비에서 옛 자리 상자를 읽는다
         load_ports     XML 포트 테이블. <xml>.ebscache.json 에 캐시
         _load_cache    캐시 무효 조건 (CACHE_VERSION, size, mtime)
         EbsSimulateCamera.make   카메라 프림 생성 (없을 때만)

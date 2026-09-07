@@ -1951,6 +1951,14 @@ class EbsSimulate:
         return Gf.Vec3d(*[v if v > 1e-12 else 1.0 for v in scale])
 
 
+    @staticmethod
+    def _moving_cache():
+        return UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+
     def _bounds_cache(self):
         if self._bounds is None:
             self._bounds = UsdGeom.BBoxCache(
@@ -2404,6 +2412,9 @@ class EbsSimulate:
         if stage is None:
             return []
         cache = cache if cache is not None else self._bounds_cache()
+        ours_ebs = frozenset(p for p in (self._ebs_path_2port,
+                                         self._ebs_path_3port) if p)
+        under_ebs = tuple(p + "/" for p in ours_ebs)
         index = []
         with self._stage_timer("stage: index"):
             stack = [(prim, ()) for prim in _children(stage.GetPseudoRoot())]
@@ -2411,6 +2422,8 @@ class EbsSimulate:
                 prim, chain = stack.pop()
                 path = str(prim.GetPath())
                 if path in OURS or path.startswith(OURS_UNDER):
+                    continue
+                if path in ours_ebs or path.startswith(under_ebs):
                     continue
                 type_name = prim.GetTypeName()
                 if type_name in SKIP_TYPES or type_name.endswith("Light"):
@@ -2521,8 +2534,8 @@ class EbsSimulate:
             return blank
 
         with self._stage_timer("equipment: search"):
-            ours, _ = self._gather_nearby(stage, cache, world_box, [],
-                                          roots=[ebs_prim])
+            ours, _ = self._gather_nearby(stage, self._moving_cache(), world_box,
+                                          [], roots=[ebs_prim])
             theirs, _ = self._gather_nearby(stage, cache, world_box, [],
                                             roots=[eqp_prim])
         if not ours or not theirs:
