@@ -240,9 +240,9 @@ GONE = (("inputs:opacity", "Float", 0.0),
 
 CLASH_MARKS   = 200      # 내부 충돌 상자 상한. 그 이상은 안 그린다
 CLASH_OPACITY = 0.35
-CLASH_EDGE    = 0.0018   # 상자 모서리 굵기 (대상 장비 대각선 대비)
+CLASH_MIN_THICK = 0.0018  # 상자 최소 두께 (납작한 조각도 보이게. 대상 장비 대각선 대비)
 CLASH_SWELL   = 1.02     # 조각에 딱 붙으면 z-fighting. 살짝 부풀린다
-COLOR_CLASH   = (0.95, 0.1, 0.1)
+COLOR_CLASH   = (0.95, 0.55, 0.55)   # 연한 빨강. 조각이 많이 겹쳐도 뭉개지지 않게
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
@@ -3109,11 +3109,11 @@ class EbsSimulate:
             return 0
         material = self._marker_material(stage, "clash", COLOR_CLASH,
                                          CLASH_OPACITY, BLOCKED_EMISSION)
-        width = self._thread_radius() / LASER_RADIUS * CLASH_EDGE
+        thick = self._thread_radius() / LASER_RADIUS * CLASH_MIN_THICK
         drawn = 0
         for at, (lo, hi) in enumerate(boxes):
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-            half = [max((hi[i] - lo[i]) * 0.5 * CLASH_SWELL, width) for i in range(3)]
+            half = [max((hi[i] - lo[i]) * 0.5 * CLASH_SWELL, thick) for i in range(3)]
             block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/clash_{at}")
             block.CreateSizeAttr(2.0)
             block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
@@ -3124,27 +3124,8 @@ class EbsSimulate:
             shape.AddTranslateOp().Set(Gf.Vec3d(*middle))
             shape.AddScaleOp().Set(Gf.Vec3f(*half))
             UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
-            self._clash_edges(stage, f"{MARKER_ROOT}/clash_{at}_edge",
-                              middle, half, width, material)
             drawn += 1
         return drawn
-
-    @staticmethod
-    def _clash_edges(stage, path: str, middle, half, width: float, material) -> None:
-        """상자 열두 모서리. 반투명 상자만 겹쳐 두면 뭉개져서 형태가 안 읽힌다."""
-        corner = [Gf.Vec3f(middle[0] + half[0] * x, middle[1] + half[1] * y,
-                           middle[2] + half[2] * z)
-                  for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
-        rails = ((0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4),
-                 (0, 4), (1, 5), (2, 6), (3, 7))
-        curve = UsdGeom.BasisCurves.Define(stage, path)
-        curve.CreateTypeAttr(UsdGeom.Tokens.linear)
-        curve.CreateCurveVertexCountsAttr(Vt.IntArray([2] * len(rails)))
-        curve.CreatePointsAttr(Vt.Vec3fArray(
-            [corner[at] for rail in rails for at in rail]))
-        curve.CreateWidthsAttr(Vt.FloatArray([width] * (len(rails) * 2)))
-        curve.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_CLASH)]))
-        UsdShade.MaterialBindingAPI(curve.GetPrim()).Bind(material)
 
     def _thread_radius(self) -> float:
         box = self._world_range((self._target or {}).get("equipment"))

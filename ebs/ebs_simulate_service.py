@@ -221,8 +221,9 @@ class EbsSimulateService:
                           것과 삼켜진 것은 안 잡히는데, 그게 샌 것처럼 보인다
         _meetings         쌍((EBS 메시, 장비 메시))마다 한 번만 검사한다.
                           어디가 부딪혔는지는 빠짐없이, 비싼 검사는 쌍 수만큼
-        _clash_boxes      걸린 조각을 빨간 반투명 상자로 감싼다.
-                          CLASH_OPACITY / CLASH_EDGE / CLASH_SWELL / CLASH_MARKS
+        _clash_boxes      걸린 조각을 연한 빨간 반투명 상자로 감싼다. 모서리
+                          선은 없다 -- 조각이 많이 겹치면 선이 더 뭉갬
+                          CLASH_OPACITY / COLOR_CLASH / CLASH_MIN_THICK / CLASH_SWELL / CLASH_MARKS
         _triangles_near   양쪽 삼각형 읽기. 'equipment: read' 가 이 값
         _face_grid        메시별 면 상자 + 로컬 격자. 한 번 만들고 계속 쓴다.
                           느리면 여기 -- 칸 수는 GRID_CELLS
