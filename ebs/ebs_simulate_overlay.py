@@ -1,3 +1,5 @@
+import math
+
 import omni.ui as ui
 
 from .ebs_simulate_camera import viewport_window
@@ -22,6 +24,8 @@ LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
 DEEP_WIDE = 2
+DEEP_HEAD = 10
+DEEP_TURN = 0.45
 
 SIDE_BY_SIDE = ("ceiling",)
 
@@ -221,46 +225,84 @@ class EbsSimulateOverlay:
                            1, share, (face, second))
 
     def _deep_line(self, mark: dict) -> None:
-        """파고든 면의 선은 메시에 묻히니 화면 위에 곧장 다시 긋는다"""
+        """파고든 면의 선은 메시에 묻히니 화살촉까지 화면 위에 다시 긋는다"""
         gap = mark.get("distance")
         if gap is None or gap >= 0.0:
             return
         start, end = mark.get("from"), mark.get("to")
         if not start or not end:
             return
+        look = {"color": COLOR_CANNOT, "border_width": DEEP_WIDE}
         try:
-            ends = []
-            for at in (start, end):
-                placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
-                with placer:
-                    dot = ui.Rectangle(width=1, height=1,
-                                       style={"background_color": 0x00000000})
-                ends.append((placer, dot, tuple(at)))
-            look = {"color": COLOR_CANNOT, "border_width": DEEP_WIDE}
-            try:
-                thread = ui.FreeBezierCurve(
-                    ends[0][1], ends[1][1], style=look,
-                    start_tangent_width=ui.Pixel(0),
-                    end_tangent_width=ui.Pixel(0))
-            except Exception:
-                thread = ui.FreeBezierCurve(ends[0][1], ends[1][1], style=look)
+            ends = [self._pin(), self._pin()]
+            parts = [self._thread(ends[0][1], ends[1][1], look)]
+            wings = []
+            for which in (0, 1):
+                for side in (1.0, -1.0):
+                    placer, dot = self._pin()
+                    wings.append((placer, which, side))
+                    parts.append(self._thread(ends[which][1], dot, look))
         except Exception as e:
             print(f"[ebs] could not draw the buried gap line on screen: {e}")
             return
-        thread.visible = False
-        self._threads.append((thread, ends))
+        for part in parts:
+            part.visible = False
+        self._threads.append((parts, (tuple(start), tuple(end)), ends, wings))
+
+    @staticmethod
+    def _pin():
+        """화면 아무 데나 놓을 수 있는 점 하나. 선은 이 점들을 잇는다"""
+        placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+        with placer:
+            dot = ui.Rectangle(width=1, height=1,
+                               style={"background_color": 0x00000000})
+        return placer, dot
+
+    @staticmethod
+    def _thread(one, two, look):
+        """두 점을 잇는 곧은 선. 베지어의 접선을 눕혀 직선으로 만든다"""
+        try:
+            return ui.FreeBezierCurve(one, two, style=look,
+                                      start_tangent_width=ui.Pixel(0),
+                                      end_tangent_width=ui.Pixel(0))
+        except Exception:
+            return ui.FreeBezierCurve(one, two, style=look)
+
+    @staticmethod
+    def _step(spots):
+        """두 끝을 잇는 단위 벡터와 화살촉 길이. 화면에서 길이가 0 이면 없다"""
+        dx = spots[1][0] - spots[0][0]
+        dy = spots[1][1] - spots[0][1]
+        span = (dx * dx + dy * dy) ** 0.5
+        if span <= 0.0:
+            return None
+        return (dx / span, dy / span, min(DEEP_HEAD, span / 3.0))
+
+    @staticmethod
+    def _turned(step, which, side):
+        """화살촉 날개 하나의 끝. 끝에서 선 안쪽으로 DEEP_TURN 만큼 꺾는다"""
+        into = step[2] if which == 0 else -step[2]
+        x, y = step[0] * into, step[1] * into
+        cos, sin = math.cos(DEEP_TURN * side), math.sin(DEEP_TURN * side)
+        return (x * cos - y * sin, x * sin + y * cos)
 
     def _draw_threads(self) -> None:
-        """화면 위에 그은 선의 두 끝을 이번 프레임 자리로 옮긴다"""
-        for thread, ends in self._threads:
-            spots = [self._to_screen(at) for _, _, at in ends]
-            if any(spot is None for spot in spots):
-                thread.visible = False
+        """화면 위에 그은 선과 화살촉을 이번 프레임 자리로 옮긴다"""
+        for parts, ats, ends, wings in self._threads:
+            spots = [self._to_screen(at) for at in ats]
+            step = None if None in spots else self._step(spots)
+            if step is None:
+                for part in parts:
+                    part.visible = False
                 continue
-            for (placer, _, _), spot in zip(ends, spots):
-                placer.offset_x = spot[0]
-                placer.offset_y = spot[1]
-            thread.visible = True
+            for (placer, _), spot in zip(ends, spots):
+                placer.offset_x, placer.offset_y = spot[0], spot[1]
+            for placer, which, side in wings:
+                turn = self._turned(step, which, side)
+                placer.offset_x = spots[which][0] + turn[0]
+                placer.offset_y = spots[which][1] + turn[1]
+            for part in parts:
+                part.visible = True
 
     def _start(self) -> bool:
         """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""

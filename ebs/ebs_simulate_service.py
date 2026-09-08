@@ -177,7 +177,8 @@ class EbsSimulateService:
         build_verdict  내용을 바꾸려면 여기. 판정 한 줄은 VERDICT_HEIGHT 높이,
                        내부 간섭 한 줄은 CLASH_HEIGHT 높이에 따로 매단다
         _deep_line     음수 간격 선은 메시에 묻혀 안 보이니, 오버레이가 같은 두
-                       끝을 매 프레임 투영해 화면 위에 다시 긋는다 (DEEP_WIDE)
+                       끝을 매 프레임 투영해 화면 위에 화살촉까지 다시 긋는다
+                       (DEEP_WIDE, DEEP_HEAD, DEEP_TURN)
         """
         return cls._simulate.get_verdict()
 
