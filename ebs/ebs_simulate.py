@@ -3097,6 +3097,7 @@ class EbsSimulate:
         bounded.sort(key=lambda item: item[0])
 
         best, best_path, best_at = None, "", None
+        spread, whole = None, None
         for gap, path, local in bounded:
             if best is not None and gap >= best:
                 break
@@ -3116,23 +3117,34 @@ class EbsSimulate:
                                    self._parts_of(path, local_tris))
             if found is not None and (best is None or found[0] < best):
                 best, best_path, best_at = found[0], path, found[1]
+                spread, whole = found[2], local
         if best is None:
             return None
-        self._why_here(bounded, best, best_path, best_at)
+        self._why_here(bounded, best, best_path, best_at, spread, whole)
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
-    def _why_here(self, bounded, best, path, at) -> None:
-        """임시 진단: 선이 왜 거기서 나왔나. 이긴 메시와, 비슷하게 가까운 것들"""
+    def _why_here(self, bounded, best, path, at, spread=None, whole=None) -> None:
+        """임시 진단: 선이 왜 거기서 나왔나. 잡은 면이 메시의 어디까지인가"""
         if not path:
             return
         triangles = self._triangles.get(path) or ()
         parts = len(set(self._parts.get(path, ())))
         rivals = [f"{p.rsplit('/', 1)[-1]} {g:.4f}" for g, p, _ in bounded[:5]
                   if p != path and g - best < best * 0.5 + 1e-6]
-        self._note(f"line from {path.rsplit('/', 1)[-1]}: {len(triangles)} "
-                   f"triangles in {parts} part(s), gap {best:.4f}, at "
-                   f"({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})"
-                   + (f"; just as near: {', '.join(rivals)}" if rivals else ""))
+        told = (f"line from {path.rsplit('/', 1)[-1]}: {len(triangles)} "
+                f"triangles in {parts} part(s), gap {best:.4f}, at "
+                f"({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})")
+        if spread is not None and whole is not None:
+            mins, maxs, kept = spread
+            told += f"; {kept} triangle(s) at that height, covering"
+            for i in range(3):
+                if mins[i] is None:
+                    continue
+                told += (f" [{mins[i]:.3f}..{maxs[i]:.3f}]"
+                         f" of [{whole.GetMin()[i]:.3f}..{whole.GetMax()[i]:.3f}]")
+        if rivals:
+            told += f"; just as near: {', '.join(rivals)}"
+        self._note(told)
 
     def _parts_of(self, path: str, triangles) -> list:
         """그 메시의 덩어리 표. 위상은 안 변하니 한 번 만들고 계속 쓴다"""
@@ -3266,7 +3278,7 @@ class EbsSimulate:
             if i != axis:
                 point[i] = min(max((mins[i] + maxs[i]) * 0.5, lo[i]), hi[i])
         point[axis] = coord + (best if outward > 0 else -best)
-        return best, tuple(point)
+        return best, tuple(point), (mins, maxs, len(picked))
 
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
