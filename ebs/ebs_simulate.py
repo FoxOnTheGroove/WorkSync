@@ -243,6 +243,8 @@ CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니라 절대값이라
                          # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
 COLOR_CLASH   = (0.95, 0.15, 0.15)
+CLASH_SOURCE  = "ebs:source"   # 임시 진단: 상자에 원본 메시 경로를 적어 둔다
+CLASH_REPORT  = 20       # 그중 콘솔에 찍을 줄 수 (큰 것부터)
 CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 CLASH_OPACITY 로 선다
 CLASH_PULSE_LOW  = 0.0
 CLASH_PULSE_HIGH = 1.0
@@ -2593,7 +2595,7 @@ class EbsSimulate:
                 continue
             seen.add(eqp_path)
             lo, hi = where[eqp_path].GetMin(), where[eqp_path].GetMax()
-            boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])))
+            boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]), eqp_path))
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
 
@@ -3117,10 +3119,13 @@ class EbsSimulate:
                                          CLASH_OPACITY, BLOCKED_EMISSION)
         pad = self._clash_pad(stage)
         drawn = 0
-        for at, (lo, hi) in enumerate(boxes):
+        for at, entry in enumerate(boxes):
+            lo, hi = entry[0], entry[1]
+            source = entry[2] if len(entry) > 2 else ""
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
             half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
-            block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/clash_{at}")
+            block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/"
+                                        f"{self._clash_name(at, source)}")
             block.CreateSizeAttr(2.0)
             block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
                                     Gf.Vec3f(1.0, 1.0, 1.0)])
@@ -3130,10 +3135,42 @@ class EbsSimulate:
             shape.AddTranslateOp().Set(Gf.Vec3d(*middle))
             shape.AddScaleOp().Set(Gf.Vec3f(*half))
             UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
+            if source:
+                try:
+                    block.GetPrim().CreateAttribute(
+                        CLASH_SOURCE, Sdf.ValueTypeNames.String).Set(source)
+                except Exception:
+                    pass
             drawn += 1
         if drawn:
+            self._clash_report(boxes)
             self._start_pulse(stage)
         return drawn
+
+    @staticmethod
+    def _clash_name(at: int, source: str) -> str:
+        """상자 이름에 원본 메시 이름을 붙인다 -- 스테이지 트리에서 바로 읽으라고."""
+        leaf = source.rsplit("/", 1)[-1] if source else ""
+        clean = "".join(c if c.isalnum() or c == "_" else "_" for c in leaf)
+        return f"clash_{at}_{clean}" if clean else f"clash_{at}"
+
+    @staticmethod
+    def _clash_report(boxes) -> None:
+        """임시 진단: 어느 원본 메시가 어느 상자가 되었나. 큰 것부터 -- 부풀어
+        보이는 것은 조각의 월드 AABB 라 대각선·L 자 형상일수록 크게 나온다."""
+        told = []
+        for at, entry in enumerate(boxes):
+            lo, hi = entry[0], entry[1]
+            source = entry[2] if len(entry) > 2 else "?"
+            size = tuple(round(hi[i] - lo[i], 4) for i in range(3))
+            told.append((size[0] * size[1] * size[2], at, size, source))
+        told.sort(reverse=True)
+        print(f"[ebs] clash boxes are the piece's world AABB, not its mesh "
+              f"({len(told)}), biggest first:")
+        for _, at, size, source in told[:CLASH_REPORT]:
+            print(f"[ebs]   clash_{at} {size} <- {source}")
+        if len(told) > CLASH_REPORT:
+            print(f"[ebs]   ... and {len(told) - CLASH_REPORT} more")
 
     @staticmethod
     def _clash_pad(stage) -> float:

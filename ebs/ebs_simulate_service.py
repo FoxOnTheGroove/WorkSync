@@ -223,7 +223,13 @@ class EbsSimulateService:
                           어디가 부딪혔는지는 빠짐없이, 비싼 검사는 쌍 수만큼
         _clash_boxes      걸린 조각을 빨간 반투명 상자로 감싼다. 모서리
                           선은 없다 -- 조각이 많이 겹치면 선이 더 뭉갬
+                          상자는 조각의 월드 AABB 다 -- 메시 그대로가 아니라
+                          대각선·L 자 형상은 실제보다 부풀어 보인다
                           CLASH_OPACITY / COLOR_CLASH / CLASH_MARKS
+        _clash_name       임시 진단: 상자 프림 이름에 원본 메시 이름을 붙인다
+        _clash_report     임시 진단: 어느 원본이 어느 상자가 되었나를 큰 것부터
+                          콘솔에. 부푼 놈부터 보라고. CLASH_SOURCE(전체 경로를
+                          적는 속성) / CLASH_REPORT(찍을 줄 수)
         _clash_pad        상자가 조각 밖으로 나가는 두께. 배율이 아니라 m
                           절대값(CLASH_PAD)이라 조각 크기와 무관하게 같다.
                           씬 단위 환산은 여기서 -- 1 유닛이 1 cm 인 씬도 있다
