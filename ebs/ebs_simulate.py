@@ -246,8 +246,9 @@ CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니�
                          # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
 COLOR_CLASH   = (0.95, 0.15, 0.15)
 CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 그냥 서 있는다.
-                         # 반 주기는 보이고 반 주기는 숨는다 -- 투명도를 프레임마다
-                         # 흔들면 머티리얼이 매번 다시 올라가 화면 갱신이 밀린다
+                         # 투명도를 프레임마다 흔들면 머티리얼이 매번 다시 올라가
+                         # 화면 갱신이 밀린다. 그래서 켜고 끄기만 한다
+CLASH_PULSE_ON = 0.3     # 그중 보이는 몫. 나머지는 숨어 있다 -- 꺼진 쪽에 오래 머문다
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
@@ -3153,7 +3154,8 @@ class EbsSimulate:
 
         투명도를 매 프레임 흔들면 상자에 물린 머티리얼이 프레임마다 다시
         올라가 몇 초 뒤 화면 갱신이 밀렸다. 그래서 상자 전체를 담은 스코프
-        하나의 가시성만 반 주기에 한 번 뒤집는다 -- 한 주기에 두 번 쓴다.
+        하나의 가시성만 뒤집는다 -- 한 주기에 두 번 쓴다. 보이는 몫은
+        CLASH_PULSE_ON 이고, 나머지는 숨어 있다.
         """
         self._stop_pulse()
         if CLASH_PULSE <= 0.0:
@@ -3192,7 +3194,7 @@ class EbsSimulate:
             self._stop_pulse()
             return
         phase = (time.monotonic() - self._pulse_from) / CLASH_PULSE
-        on = (phase - math.floor(phase)) < 0.5
+        on = (phase - math.floor(phase)) < CLASH_PULSE_ON
         if on is self._pulse_on:      # 바뀔 때만 쓴다. 프레임마다 쓰면 밀린다
             return
         try:
