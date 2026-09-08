@@ -242,6 +242,8 @@ CLASH_MARKS   = 200      # 내부 충돌 상자 상한. 그 이상은 안 그린
 CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니라 절대값이라
                          # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
+CLASH_MIN     = 0.03     # 상자 최소 반지름, m. 닿은 자리가 삼각형 하나면 너무
+                         # 작아 안 보인다 -- 이만큼은 키운다
 COLOR_CLASH   = (0.95, 0.15, 0.15)
 CLASH_SOURCE  = "ebs:source"   # 임시 진단: 상자에 원본 메시 경로를 적어 둔다
 CLASH_REPORT  = 20       # 그중 콘솔에 찍을 줄 수 (큰 것부터)
@@ -2552,7 +2554,7 @@ class EbsSimulate:
                        f"{len(theirs)} on the equipment")
             return blank
 
-        pairs, tests = [], 0
+        pairs, tests, spots = [], 0, {}
         boxed = self._boxed_pairs(stage, ours, theirs)
         pairs.extend(boxed)
         if boxed:
@@ -2580,7 +2582,7 @@ class EbsSimulate:
                                f"triangles)")
             else:
                 with self._stage_timer("equipment: detect"):
-                    mesh_pairs, tests = self._meetings(mine, yours, shared)
+                    mesh_pairs, tests, spots = self._meetings(mine, yours, shared)
                 for pair in mesh_pairs:
                     if pair not in pairs:
                         pairs.append(pair)
@@ -2591,10 +2593,19 @@ class EbsSimulate:
         where = dict(theirs)
         boxes, seen = [], set()
         for _, eqp_path in pairs:
-            if eqp_path in seen or eqp_path not in where:
+            if eqp_path in seen:
+                continue
+            # 닿은 자리를 안다면 그것을 쓴다. 조각 전체 상자는 멀리 떨어진
+            # 부분 둘이 한 메시일 때 그 사이 빈 곳까지 덮는다 -- 삼각형이
+            # 없는 프리미티브(Cube 등)만 제 상자로 떨어진다
+            at = spots.get(eqp_path)
+            if at is not None:
+                lo, hi = at
+            elif eqp_path in where:
+                lo, hi = where[eqp_path].GetMin(), where[eqp_path].GetMax()
+            else:
                 continue
             seen.add(eqp_path)
-            lo, hi = where[eqp_path].GetMin(), where[eqp_path].GetMax()
             boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]), eqp_path))
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
@@ -2726,8 +2737,10 @@ class EbsSimulate:
         return kept, tally
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
+        """만난 쌍과, 그때 만난 삼각형의 상자. 조각 전체가 아니라 닿은 자리다 --
+        멀리 떨어진 부분 둘이 한 메시면 전체 상자는 그 사이 빈 곳까지 덮는다."""
         grid, origin, step, spread = self._grid_of(yours, box)
-        pairs, known, tests = [], set(), 0
+        pairs, known, tests, spots = [], set(), 0, {}
         for ebs_path, triangle, lo, hi in mine:
             seen = set()
             for key in self._cells_of(lo, hi, origin, step, spread):
@@ -2744,9 +2757,22 @@ class EbsSimulate:
                 if self._triangles_meet(triangle, other):
                     known.add((ebs_path, eqp_path))
                     pairs.append((ebs_path, eqp_path))
+                    self._widen(spots, eqp_path, other_lo, other_hi)
                     if len(pairs) >= CLASH_MARKS:
-                        return pairs, tests
-        return pairs, tests
+                        return pairs, tests, spots
+        return pairs, tests, spots
+
+    @staticmethod
+    def _widen(spots: dict, path: str, lo, hi) -> None:
+        """같은 조각이 여러 번 닿으면 그 자리들을 하나로 묶는다."""
+        was = spots.get(path)
+        if was is None:
+            spots[path] = ([lo[0], lo[1], lo[2]], [hi[0], hi[1], hi[2]])
+            return
+        low, high = was
+        for i in range(3):
+            low[i] = min(low[i], lo[i])
+            high[i] = max(high[i], hi[i])
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
@@ -3118,12 +3144,13 @@ class EbsSimulate:
         material = self._marker_material(stage, "clash", COLOR_CLASH,
                                          CLASH_OPACITY, BLOCKED_EMISSION)
         pad = self._clash_pad(stage)
+        least = pad / CLASH_PAD * CLASH_MIN
         drawn = 0
         for at, entry in enumerate(boxes):
             lo, hi = entry[0], entry[1]
             source = entry[2] if len(entry) > 2 else ""
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-            half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
+            half = [max((hi[i] - lo[i]) * 0.5 + pad, least) for i in range(3)]
             block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/"
                                         f"{self._clash_name(at, source)}")
             block.CreateSizeAttr(2.0)
