@@ -23,11 +23,12 @@ LEAST = "min {0:.3f} m"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 LINE_ROOM = 6
+ROOM_HEADS = 1.5
 
 SIDE_BY_SIDE = ("ceiling",)
 
-COLOR_CAN    = 0xFF00B4E6
-COLOR_CANNOT = 0xFF2626E6
+COLOR_CAN    = 0xFF9AE7FF
+COLOR_CANNOT = 0xFF1B39FC
 COLOR_TEXT   = 0xFFFFFFFF
 TEXT_SIZE    = 22
 DETAIL_SIZE  = 15
@@ -255,15 +256,16 @@ class EbsSimulateOverlay:
                     panel.visible = False
                     continue
                 panel_w, panel_h = panel.computed_width, panel.computed_height
+                room = self._room_at(at, spot)
                 x, y = spot[0] - panel_w * 0.5, spot[1] - panel_h * 0.5
                 if anchor == ABOVE:
-                    y = spot[1] - panel_h - LINE_ROOM
+                    y = spot[1] - panel_h - room
                 elif anchor == BELOW:
-                    y = spot[1] + LINE_ROOM
+                    y = spot[1] + room
                 elif anchor == LEFT:
-                    x = spot[0] - panel_w - LINE_ROOM
+                    x = spot[0] - panel_w - room
                 elif anchor == RIGHT:
-                    x = spot[0] + LINE_ROOM
+                    x = spot[0] + room
                 if self._outside(x, y, panel_w, panel_h, width, height):
                     panel.visible = False
                     continue
@@ -273,6 +275,23 @@ class EbsSimulateOverlay:
         except Exception as e:
             print(f"[ebs] could not place the overlay: {e}")
             self.clear()
+
+    def _room_at(self, at, spot) -> float:
+        """선과 판 사이 여백. 화살촉 반지름의 ROOM_HEADS 배가 화면에서 몇 픽셀인가"""
+        try:
+            from pxr import Gf
+            from .ebs_simulate import GAP_HEAD_WIDE
+            want = GAP_HEAD_WIDE * ROOM_HEADS
+            camera = self._api.view.GetInverse()
+            side = Gf.Vec3d(camera[0][0], camera[0][1], camera[0][2])
+            side = side.GetNormalized() * want
+            other = self._to_screen([at[i] + side[i] for i in range(3)])
+        except Exception:
+            other = None
+        if other is None:
+            return LINE_ROOM
+        step = ((other[0] - spot[0]) ** 2 + (other[1] - spot[1]) ** 2) ** 0.5
+        return step if step > 0.5 else LINE_ROOM
 
     @staticmethod
     def _outside(x, y, panel_w, panel_h, width, height) -> bool:

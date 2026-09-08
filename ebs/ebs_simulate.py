@@ -3327,12 +3327,13 @@ class EbsSimulate:
                     threads[colour] = self._marker_material(
                         stage, "tight" if tight else "gap", colour,
                         GAP_OPACITY, GAP_EMISSION)
+                shaft = self._gap_shaft(mark["from"], mark["to"])
                 if self._gap_line(stage, f"{MARKER_ROOT}/{mark['face']}_gap",
-                                  mark["from"], mark["to"], GAP_RADIUS,
+                                  shaft[0], shaft[1], GAP_RADIUS,
                                   threads[colour], colour):
                     drawn += 1
-                    drawn += self._gap_heads(stage, mark["face"], mark["from"],
-                                             mark["to"], threads[colour], colour)
+                drawn += self._gap_heads(stage, mark["face"], mark["from"],
+                                         mark["to"], threads[colour], colour)
             drawn += self._clash_boxes(stage, marks_boxes)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
@@ -3443,6 +3444,17 @@ class EbsSimulate:
             lo, hi = box.GetMin(), box.GetMax()
             span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
         return max(span * LASER_RADIUS, 1e-5)
+
+    @staticmethod
+    def _gap_shaft(start, end):
+        """선은 원뿔 중점에서 시작한다. 뭉툭한 끝이 뾰족한 끝을 먹지 않게"""
+        along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        span = along.GetLength()
+        if span <= GAP_HEAD_HIGH:
+            return start, end
+        step = along.GetNormalized() * (GAP_HEAD_HIGH * 0.5)
+        return (tuple(start[i] + step[i] for i in range(3)),
+                tuple(end[i] - step[i] for i in range(3)))
 
     def _gap_heads(self, stage, face: str, start, end, material, colour) -> int:
         """선 양 끝에 원뿔을 붙여 화살표로 보이게 한다"""

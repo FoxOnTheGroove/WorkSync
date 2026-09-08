@@ -163,8 +163,9 @@ class EbsSimulateService:
                      같은 높이인 면들을 합쳐 그 중앙 (H 빔의 다리 둘처럼)
         check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭
         show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
-        _gap_line / _gap_heads  여유 선과 양 끝 화살촉. GAP_RADIUS,
-                     GAP_HEAD_HIGH, GAP_HEAD_WIDE, COLOR_GAP, COLOR_TIGHT
+        _gap_line / _gap_heads / _gap_shaft  여유 선과 양 끝 화살촉. 선은
+                     화살촉 중점에서 시작한다. GAP_RADIUS, GAP_HEAD_HIGH,
+                     GAP_HEAD_WIDE, COLOR_GAP, COLOR_TIGHT
         measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
         """
         return cls._simulate.collide()
