@@ -159,6 +159,8 @@ class EbsSimulateService:
         """EBS 좌/우/천장 충돌과 여유 거리를 잰다. 씬에 마커도 그린다.
 
         _do_collide  이 단계의 순서가 전부 여기 있다
+        _flat_gap / _mesh_parts  빈 면 거리 선이 어디서 나오나. 한 덩어리 안에서
+                     같은 높이인 면들을 합쳐 그 중앙 (H 빔의 다리 둘처럼)
         check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭
         show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
         """

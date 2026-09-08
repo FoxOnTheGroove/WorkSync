@@ -313,6 +313,7 @@ class EbsSimulate:
         self._blockers: dict = {}
         self._local: dict = {}
         self._faces: dict = {}
+        self._parts: dict = {}
         self._hidden: list = []
         self._eqp_looks: dict = {}
         self._eqp_shared: set = set()
@@ -484,6 +485,7 @@ class EbsSimulate:
         self._triangles = {}
         self._local = {}
         self._faces = {}
+        self._parts = {}
         self._visible = {}
         self._timings = []
         self._ready = False
@@ -565,6 +567,7 @@ class EbsSimulate:
         self._triangles = {}
         self._local = {}
         self._faces = {}
+        self._parts = {}
         if not self.open_stage():
             return self._payload(False, f"Could not open {self._usd_path}")
         if self._get_stage() is None:
@@ -1135,6 +1138,7 @@ class EbsSimulate:
         self._triangles = {}
         self._local = {}
         self._faces = {}
+        self._parts = {}
         if stage is None:
             return 0
         visited = 0
@@ -3108,30 +3112,46 @@ class EbsSimulate:
             local_tris = [[inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
                          for triangle, _, _ in triangles]
             found = self._flat_gap(local_tris, prism, axis, outward, coord,
-                                   self._flat_slack(local, axis))
+                                   self._flat_slack(local, axis),
+                                   self._parts_of(path, local_tris))
             if found is not None and (best is None or found[0] < best):
                 best, best_path, best_at = found[0], path, found[1]
         if best is None:
             return None
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
+    def _parts_of(self, path: str, triangles) -> list:
+        """그 메시의 덩어리 표. 위상은 안 변하니 한 번 만들고 계속 쓴다"""
+        found = self._parts.get(path)
+        if found is None or len(found) != len(triangles):
+            found = self._mesh_parts(triangles)
+            self._parts[path] = found
+        return found
+
     @staticmethod
-    def _joined(triangles, picked: dict, seed: int) -> set:
-        """seed 삼각형에서 꼭짓점을 타고 이어지는 것만 모은다 (붙어 있는 면)"""
+    def _mesh_parts(triangles) -> list:
+        """삼각형마다 몇 번째 덩어리인지. 꼭짓점을 나눠 쓰면 이어진 것으로 본다"""
         joins = {}
-        for at in picked:
-            for vertex in triangles[at]:
+        for at, triangle in enumerate(triangles):
+            for vertex in triangle:
                 joins.setdefault(tuple(round(v, 9) for v in vertex),
                                  []).append(at)
-        group, waiting = {seed}, [seed]
-        while waiting:
-            at = waiting.pop()
-            for vertex in triangles[at]:
-                for other in joins.get(tuple(round(v, 9) for v in vertex), ()):
-                    if other not in group:
-                        group.add(other)
-                        waiting.append(other)
-        return group
+        parts = [-1] * len(triangles)
+        part = 0
+        for start in range(len(triangles)):
+            if parts[start] >= 0:
+                continue
+            waiting = [start]
+            parts[start] = part
+            while waiting:
+                at = waiting.pop()
+                for vertex in triangles[at]:
+                    for other in joins.get(tuple(round(v, 9) for v in vertex), ()):
+                        if parts[other] < 0:
+                            parts[other] = part
+                            waiting.append(other)
+            part += 1
+        return parts
 
     @staticmethod
     def _flat_slack(local, axis: int) -> float:
@@ -3185,8 +3205,8 @@ class EbsSimulate:
 
     @staticmethod
     def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
-                  slack: float = OVERLAP_EPS):
-        """같은 높이로 붙어 있는 삼각형들을 한 면으로 보고 그 면의 중점을 찍는다"""
+                  slack: float = OVERLAP_EPS, parts: list = None):
+        """한 덩어리 안에서 같은 높이인 면들을 한 면으로 보고 그 중점을 찍는다"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, seed = None, -1
         for at, triangle in enumerate(triangles):
@@ -3212,10 +3232,14 @@ class EbsSimulate:
         if seed not in picked:
             return None
 
-        group = EbsSimulate._joined(triangles, picked, seed)
+        if parts is None:
+            parts = EbsSimulate._mesh_parts(triangles)
+        here = parts[seed]
         mins, maxs = [None, None, None], [None, None, None]
-        for at in group:
-            for vertex in picked[at]:
+        for at, kept in picked.items():
+            if parts[at] != here:
+                continue
+            for vertex in kept:
                 for i in range(3):
                     if i == axis:
                         continue
