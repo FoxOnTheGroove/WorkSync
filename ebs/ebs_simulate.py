@@ -242,7 +242,10 @@ CLASH_MARKS   = 200      # 내부 충돌 상자 상한. 그 이상은 안 그린
 CLASH_OPACITY = 0.35
 CLASH_MIN_THICK = 0.0018  # 상자 최소 두께 (납작한 조각도 보이게. 대상 장비 대각선 대비)
 CLASH_SWELL   = 1.02     # 조각에 딱 붙으면 z-fighting. 살짝 부풀린다
-COLOR_CLASH   = (0.95, 0.55, 0.55)   # 연한 빨강. 조각이 많이 겹쳐도 뭉개지지 않게
+COLOR_CLASH   = (0.95, 0.15, 0.15)
+CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 CLASH_OPACITY 로 선다
+CLASH_PULSE_LOW  = 0.0
+CLASH_PULSE_HIGH = 1.0
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
@@ -318,6 +321,9 @@ class EbsSimulate:
         self._target: dict = None
         self._aligned: bool = False
         self._result: dict = {}
+        self._pulse = None          # 내부 충돌 상자 깜박임 구독
+        self._pulse_inputs: tuple = ()
+        self._pulse_from: float = 0.0
 
 
     def set_usd_path(self, path: str) -> None:
@@ -3125,7 +3131,70 @@ class EbsSimulate:
             shape.AddScaleOp().Set(Gf.Vec3f(*half))
             UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
             drawn += 1
+        if drawn:
+            self._start_pulse(stage)
         return drawn
+
+    def _start_pulse(self, stage) -> bool:
+        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다."""
+        self._stop_pulse()
+        if CLASH_PULSE <= 0.0:
+            return False
+        inputs = self._pulse_inputs_of(stage)
+        if not inputs:
+            return False
+        self._pulse_inputs = inputs
+        self._pulse_from = time.monotonic()
+        try:
+            import omni.kit.app
+            self._pulse = omni.kit.app.get_app().get_update_event_stream() \
+                .create_subscription_to_pop(lambda e: self._pulse_step(),
+                                            name="ebs clash pulse")
+        except Exception as e:
+            self._pulse_inputs = ()
+            print(f"[ebs] the clash boxes will not blink: {e}")
+            return False
+        return True
+
+    @staticmethod
+    def _pulse_inputs_of(stage) -> tuple:
+        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값."""
+        looks = f"{MARKER_ROOT}/Looks/clash"
+        wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
+                  (f"{looks}/mdl", "inputs:opacity_constant", 1.0),
+                  (f"{looks}/mdl", "inputs:emissive_intensity", BLOCKED_EMISSION))
+        found = []
+        try:
+            for path, name, full in wanted:
+                prim = stage.GetPrimAtPath(path)
+                if prim is None or not prim.IsValid():
+                    continue
+                attribute = prim.GetAttribute(name)
+                if attribute:
+                    found.append((attribute, full))
+        except Exception:
+            return ()
+        return tuple(found)
+
+    def _pulse_step(self) -> None:
+        stage = self._get_stage()
+        if stage is None or not self._pulse_inputs:
+            self._stop_pulse()
+            return
+        phase = (time.monotonic() - self._pulse_from) / CLASH_PULSE
+        level = CLASH_PULSE_LOW + (CLASH_PULSE_HIGH - CLASH_PULSE_LOW) \
+            * (0.5 - 0.5 * math.cos(phase * 2.0 * math.pi))
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for attribute, full in self._pulse_inputs:
+                    attribute.Set(level * full)
+        except Exception as e:
+            print(f"[ebs] the clash boxes stopped blinking: {e}")
+            self._stop_pulse()
+
+    def _stop_pulse(self) -> None:
+        self._pulse = None
+        self._pulse_inputs = ()
 
     def _thread_radius(self) -> float:
         box = self._world_range((self._target or {}).get("equipment"))
@@ -3275,6 +3344,7 @@ class EbsSimulate:
 
     def clear_markers(self) -> None:
         self._verdict = {}
+        self._stop_pulse()
         stage = self._get_stage()
         if stage is None:
             return
