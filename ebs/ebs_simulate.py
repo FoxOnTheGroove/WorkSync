@@ -3321,12 +3321,12 @@ class EbsSimulate:
             for mark in marks or ():
                 if not mark.get("from") or not mark.get("to"):
                     continue
-                tight = mark.get("state") == STATE_TIGHT
-                colour = COLOR_TIGHT if tight else COLOR_GAP
+                warn = mark.get("state") in (STATE_TIGHT, STATE_CLASH)
+                colour = COLOR_TIGHT if warn else COLOR_GAP
                 if colour not in threads:
                     threads[colour] = self._marker_material(
-                        stage, "tight" if tight else "gap", colour,
-                        GAP_OPACITY, GAP_EMISSION)
+                        stage, "tight" if warn else "gap", colour,
+                        GAP_OPACITY, glow=False)
                 shaft = self._gap_shaft(mark["from"], mark["to"])
                 if self._gap_line(stage, f"{MARKER_ROOT}/{mark['face']}_gap",
                                   shaft[0], shaft[1], GAP_RADIUS,
@@ -3343,7 +3343,7 @@ class EbsSimulate:
         if not boxes:
             return 0
         material = self._marker_material(stage, "clash", COLOR_CLASH,
-                                         CLASH_OPACITY, BLOCKED_EMISSION)
+                                         CLASH_OPACITY, glow=False)
         pad = self._clash_pad(stage)
         drawn = 0
         for at, (lo, hi) in enumerate(boxes):
@@ -3698,23 +3698,25 @@ class EbsSimulate:
 
     @classmethod
     def _marker_material(cls, stage, name: str, color, opacity: float = MARKER_OPACITY,
-                         emission: float = MARKER_EMISSION):
-        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다"""
+                         emission: float = MARKER_EMISSION, glow: bool = True):
+        """마커용 머티리얼. glow 가 아니면 발광 대신 diffuse 로 칠한다"""
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
-        cls._preview_shader(stage, material, path, color, opacity)
-        cls._mdl_shader(stage, material, path, color, opacity, emission)
+        cls._preview_shader(stage, material, path, color, opacity, glow)
+        cls._mdl_shader(stage, material, path, color, opacity, emission, glow)
         return material
 
     @staticmethod
-    def _preview_shader(stage, material, path: str, color, opacity: float) -> None:
-        """UsdPreviewSurface 쪽. 색은 발광으로 낸다"""
+    def _preview_shader(stage, material, path: str, color, opacity: float,
+                        glow: bool = True) -> None:
+        """UsdPreviewSurface 쪽. glow 면 발광으로, 아니면 diffuse 로 낸다"""
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
+        dark = Gf.Vec3f(0.0, 0.0, 0.0)
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(0.0, 0.0, 0.0))
+            dark if glow else Gf.Vec3f(*color))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(*color))
+            Gf.Vec3f(*color) if glow else dark)
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
@@ -3726,7 +3728,7 @@ class EbsSimulate:
 
     @staticmethod
     def _mdl_shader(stage, material, path: str, color, opacity: float,
-                    emission: float) -> None:
+                    emission: float, glow: bool = True) -> None:
         """OmniPBR 쪽. RTX 가 이걸 쓴다"""
         shader = UsdShade.Shader.Define(stage, path + "/mdl")
         shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
@@ -3736,11 +3738,14 @@ class EbsSimulate:
             """셰이더 입력 하나를 만든다"""
             shader.CreateInput(name, type_name).Set(value)
 
+        dark = Gf.Vec3f(0.0, 0.0, 0.0)
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
-            Gf.Vec3f(0.0, 0.0, 0.0))
-        put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
-        put("emissive_intensity", Sdf.ValueTypeNames.Float, emission)
-        put("enable_emission", Sdf.ValueTypeNames.Bool, True)
+            dark if glow else Gf.Vec3f(*color))
+        put("emissive_color", Sdf.ValueTypeNames.Color3f,
+            Gf.Vec3f(*color) if glow else dark)
+        put("emissive_intensity", Sdf.ValueTypeNames.Float,
+            emission if glow else 0.0)
+        put("enable_emission", Sdf.ValueTypeNames.Bool, bool(glow))
         put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
