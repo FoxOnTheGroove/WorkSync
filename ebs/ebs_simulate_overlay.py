@@ -25,6 +25,7 @@ LEAST = "(min gap : {0:.2f}M)"
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
+PANEL_GAP = 0.1
 
 SIDE_BY_SIDE = ("ceiling",)
 
@@ -150,8 +151,8 @@ class EbsSimulateOverlay:
 
 
     def _floating(self, at, fill, ground, anchor=MIDDLE, step: int = 0,
-                  share: int = 1):
-        """월드 좌표에 매달 판 하나. share 장 중 step 번째로 붙어 앉는다"""
+                  share: int = 1, group=None):
+        """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다"""
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
@@ -162,7 +163,8 @@ class EbsSimulateOverlay:
                                     "border_radius": 4})
                 fill()
         panel.visible = False
-        self._marks.append((placer, panel, tuple(at), anchor, step, share))
+        self._marks.append((placer, panel, tuple(at), anchor, step,
+                            share, group))
 
     def _verdict_panel(self, said: dict) -> None:
         """세울 수 있나 없나를 말하는 가운데 판"""
@@ -207,14 +209,16 @@ class EbsSimulateOverlay:
                          else (ABOVE, BELOW))
         word = (CLASH if state == "clash" else
                 TIGHT if state == "tight" else GAP)
-        self._floating(at, block([word]), ground, first)
+        face = mark.get("face")
+        self._floating(at, block([word]), ground, first, group=(face, first))
         if gap is None:
             return
         share = 2 if least else 1
-        self._floating(at, block([SPAN.format(gap)]), ground, second, 0, share)
+        self._floating(at, block([SPAN.format(gap)]), ground, second, 0, share,
+                       (face, second))
         if least:
             self._floating(at, block([LEAST.format(least)]), ground, second,
-                           1, share)
+                           1, share, (face, second))
 
     @staticmethod
     def _why(said: dict) -> list:
@@ -248,22 +252,30 @@ class EbsSimulateOverlay:
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
-            for placer, panel, at, anchor, step, share in self._marks:
+            widest = {}
+            for _, panel, _, _, _, _, group in self._marks:
+                if group is not None:
+                    widest[group] = max(widest.get(group, 0.0),
+                                        panel.computed_width)
+            for placer, panel, at, anchor, step, share, group in self._marks:
                 spot = self._to_screen(at)
                 if spot is None:
                     panel.visible = False
                     continue
                 panel_w, panel_h = panel.computed_width, panel.computed_height
                 room = self._room_at(at, spot)
+                stack = panel_h * (1.0 + PANEL_GAP)
+                block = widest.get(group, panel_w)
+                inset = (block - panel_w) * 0.5
                 x, y = spot[0] - panel_w * 0.5, spot[1] - panel_h * 0.5
                 if anchor == ABOVE:
-                    y = spot[1] - panel_h - room - step * panel_h
+                    y = spot[1] - panel_h - room - step * stack
                 elif anchor == BELOW:
-                    y = spot[1] + room + step * panel_h
+                    y = spot[1] + room + step * stack
                 elif anchor in (LEFT, RIGHT):
-                    y += (step - (share - 1) * 0.5) * panel_h
-                    x = (spot[0] - panel_w - room if anchor == LEFT
-                         else spot[0] + room)
+                    y += (step - (share - 1) * 0.5) * stack
+                    x = (spot[0] - block - room + inset if anchor == LEFT
+                         else spot[0] + room + inset)
                 if self._outside(x, y, panel_w, panel_h, width, height):
                     panel.visible = False
                     continue
