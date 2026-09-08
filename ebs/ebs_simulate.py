@@ -3015,6 +3015,25 @@ class EbsSimulate:
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
     @staticmethod
+    def _joined(triangles, picked: dict, seed: int) -> set:
+        """seed 삼각형에서 꼭짓점을 타고 이어지는 것만 모은다. 꼭짓점을 나눠
+        쓰면 붙어 있는 것으로 본다 -- 메시는 점을 색인으로 공유한다."""
+        joins = {}
+        for at in picked:
+            for vertex in triangles[at]:
+                joins.setdefault(tuple(round(v, 9) for v in vertex),
+                                 []).append(at)
+        group, waiting = {seed}, [seed]
+        while waiting:
+            at = waiting.pop()
+            for vertex in triangles[at]:
+                for other in joins.get(tuple(round(v, 9) for v in vertex), ()):
+                    if other not in group:
+                        group.add(other)
+                        waiting.append(other)
+        return group
+
+    @staticmethod
     def _flat_slack(local, axis: int) -> float:
         """'같은 평면'으로 볼 깊이 오차. 넓은 면일수록 조금 기울어도 한 면이다."""
         span = max(local.GetMax()[i] - local.GetMin()[i]
@@ -3070,33 +3089,44 @@ class EbsSimulate:
 
         같은 높이인지는 slack 만큼 봐준다 -- 딱 떨어지는 값만 한 면으로 치면
         조금 기운 면은 가장 가까운 모서리 쪽 꼭짓점만 남아 중점이 그리로 쏠린다.
+        높이가 같아도 붙어 있는 것만 한 면이다 -- 떨어진 두 면이 우연히 같은
+        높이면, 묶었다가는 그 사이 허공에 선이 간다.
         """
         lo, hi = prism.GetMin(), prism.GetMax()
-        best = None
-        for triangle in triangles:
+        best, seed = None, -1
+        for at, triangle in enumerate(triangles):
             found = EbsSimulate._triangle_gap(triangle, prism, axis, outward, coord)
             if found is not None and (best is None or found[0] < best):
-                best = found[0]
+                best, seed = found[0], at
         if best is None:
             return None
 
-        mins, maxs, found_any = [None, None, None], [None, None, None], False
-        for triangle in triangles:
+        picked = {}
+        for at, triangle in enumerate(triangles):
+            keep = []
             for vertex in triangle:
                 inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
                              for i in range(3) if i != axis)
                 if not inside:
                     continue
                 gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
-                if gap < 0 or abs(gap - best) > slack:
-                    continue
-                found_any = True
+                if gap >= 0 and abs(gap - best) <= slack:
+                    keep.append(vertex)
+            if keep:
+                picked[at] = keep
+        if seed not in picked:
+            return None
+
+        group = EbsSimulate._joined(triangles, picked, seed)
+        mins, maxs = [None, None, None], [None, None, None]
+        for at in group:
+            for vertex in picked[at]:
                 for i in range(3):
                     if i == axis:
                         continue
                     mins[i] = vertex[i] if mins[i] is None else min(mins[i], vertex[i])
                     maxs[i] = vertex[i] if maxs[i] is None else max(maxs[i], vertex[i])
-        if not found_any:
+        if mins[0] is None and mins[1] is None and mins[2] is None:
             return None
         point = [0.0, 0.0, 0.0]
         for i in range(3):
