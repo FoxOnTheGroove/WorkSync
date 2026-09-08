@@ -2595,18 +2595,20 @@ class EbsSimulate:
         for _, eqp_path in pairs:
             if eqp_path in seen:
                 continue
-            # 닿은 자리를 안다면 그것을 쓴다. 조각 전체 상자는 멀리 떨어진
-            # 부분 둘이 한 메시일 때 그 사이 빈 곳까지 덮는다 -- 삼각형이
-            # 없는 프리미티브(Cube 등)만 제 상자로 떨어진다
+            # 닿은 자리마다 하나씩 그린다. 조각 전체 상자는 멀리 떨어진 부분
+            # 둘이 한 메시일 때 그 사이 빈 곳까지 덮고, 그 자리들을 하나로
+            # 묶어도 마찬가지다 -- 삼각형이 없는 프리미티브(Cube 등)만
+            # 제 상자로 떨어진다
             at = spots.get(eqp_path)
-            if at is not None:
-                lo, hi = at
-            elif eqp_path in where:
+            if not at:
+                if eqp_path not in where:
+                    continue
                 lo, hi = where[eqp_path].GetMin(), where[eqp_path].GetMax()
-            else:
-                continue
+                at = [(lo, hi)]
             seen.add(eqp_path)
-            boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]), eqp_path))
+            for lo, hi in at:
+                boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]),
+                              eqp_path))
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
 
@@ -2764,15 +2766,17 @@ class EbsSimulate:
 
     @staticmethod
     def _widen(spots: dict, path: str, lo, hi) -> None:
-        """같은 조각이 여러 번 닿으면 그 자리들을 하나로 묶는다."""
-        was = spots.get(path)
-        if was is None:
-            spots[path] = ([lo[0], lo[1], lo[2]], [hi[0], hi[1], hi[2]])
-            return
-        low, high = was
-        for i in range(3):
-            low[i] = min(low[i], lo[i])
-            high[i] = max(high[i], hi[i])
+        """같은 조각이 여러 번 닿으면 자리를 따로 남긴다. 겹치거나 맞닿은 것만
+        하나로 묶는다 -- 떨어진 자리 둘을 묶으면 그 사이 빈 곳까지 덮는다."""
+        here = spots.setdefault(path, [])
+        for low, high in here:
+            if all(lo[i] <= high[i] + OVERLAP_EPS
+                   and hi[i] >= low[i] - OVERLAP_EPS for i in range(3)):
+                for i in range(3):
+                    low[i] = min(low[i], lo[i])
+                    high[i] = max(high[i], hi[i])
+                return
+        here.append(([lo[0], lo[1], lo[2]], [hi[0], hi[1], hi[2]]))
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
