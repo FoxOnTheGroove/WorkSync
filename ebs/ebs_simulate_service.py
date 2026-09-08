@@ -167,6 +167,8 @@ class EbsSimulateService:
                      화살촉 중점에서 시작한다. GAP_RADIUS, GAP_HEAD_HIGH,
                      GAP_HEAD_WIDE, COLOR_GAP, COLOR_TIGHT
         measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
+        _face_marks    음수 간격 선은 메시에 묻히니 EBS 앞쪽으로 빼서 그린다
+                       (GAP_DEEP_PAD)
         """
         return cls._simulate.collide()
 
