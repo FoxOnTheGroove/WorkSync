@@ -239,6 +239,9 @@ GONE = (("inputs:opacity", "Float", 0.0),
         ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 
 CLASH_MARKS   = 200      # 내부 충돌 상자 상한. 그 이상은 안 그린다
+CLASH_SPOTS   = 6        # 조각 하나에서 표시할, 서로 떨어진 접촉 자리 수.
+                         # 붙어 있는 자리는 하나로 묶이니 이 수를 넘는 일은
+                         # 드물다 (기둥 여러 개가 한 메시일 때나 닿는다)
 CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니라 절대값이라
                          # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
@@ -2742,14 +2745,17 @@ class EbsSimulate:
         """만난 쌍과, 그때 만난 삼각형의 상자. 조각 전체가 아니라 닿은 자리다 --
         멀리 떨어진 부분 둘이 한 메시면 전체 상자는 그 사이 빈 곳까지 덮는다."""
         grid, origin, step, spread = self._grid_of(yours, box)
-        pairs, known, tests, spots = [], set(), 0, {}
+        pairs, known, tests, spots = [], {}, 0, {}
         for ebs_path, triangle, lo, hi in mine:
             seen = set()
             for key in self._cells_of(lo, hi, origin, step, spread):
                 seen.update(grid.get(key, ()))
             for index in seen:
                 eqp_path, other, other_lo, other_hi = yours[index]
-                if (ebs_path, eqp_path) in known:
+                # 한 자리를 찾았다고 그 쌍을 끊지 않는다 -- 떨어진 기둥 둘이
+                # 한 메시면 한쪽만 표시된다. 대신 자리 수를 CLASH_SPOTS 로
+                # 막는다 (검사 자체는 싸다. 비싼 것은 격자 만들기다)
+                if len(spots.get(eqp_path, ())) >= CLASH_SPOTS:
                     continue
                 if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
                         or lo[1] > other_hi[1] or hi[1] < other_lo[1]
@@ -2757,11 +2763,19 @@ class EbsSimulate:
                     continue
                 tests += 1
                 if self._triangles_meet(triangle, other):
-                    known.add((ebs_path, eqp_path))
-                    pairs.append((ebs_path, eqp_path))
-                    self._widen(spots, eqp_path, other_lo, other_hi)
-                    if len(pairs) >= CLASH_MARKS:
-                        return pairs, tests, spots
+                    key = (ebs_path, eqp_path)
+                    first = key not in known
+                    known[key] = known.get(key, 0) + 1
+                    # 삼각형 하나도 클 수 있다 -- 긴 기둥의 옆면은 두 장이
+                    # 기둥 전체를 덮는다. 두 삼각형의 상자가 겹치는 데만
+                    # 쓴다. 그게 EBS 벽을 뚫고 지나는 그 자리다
+                    self._widen(spots, eqp_path,
+                                [max(lo[i], other_lo[i]) for i in range(3)],
+                                [min(hi[i], other_hi[i]) for i in range(3)])
+                    if first:
+                        pairs.append(key)
+                        if len(pairs) >= CLASH_MARKS:
+                            return pairs, tests, spots
         return pairs, tests, spots
 
     @staticmethod
@@ -2769,14 +2783,21 @@ class EbsSimulate:
         """같은 조각이 여러 번 닿으면 자리를 따로 남긴다. 겹치거나 맞닿은 것만
         하나로 묶는다 -- 떨어진 자리 둘을 묶으면 그 사이 빈 곳까지 덮는다."""
         here = spots.setdefault(path, [])
-        for low, high in here:
-            if all(lo[i] <= high[i] + OVERLAP_EPS
-                   and hi[i] >= low[i] - OVERLAP_EPS for i in range(3)):
+        low = [lo[0], lo[1], lo[2]]
+        high = [hi[0], hi[1], hi[2]]
+        kept = []
+        for was_low, was_high in here:
+            # 자라면서 서로 닿게 된 자리도 같이 삼킨다 -- 한 번만 보고 넘기면
+            # 같은 자리에 상자가 여러 개 겹쳐 선다
+            if all(low[i] <= was_high[i] + OVERLAP_EPS
+                   and high[i] >= was_low[i] - OVERLAP_EPS for i in range(3)):
                 for i in range(3):
-                    low[i] = min(low[i], lo[i])
-                    high[i] = max(high[i], hi[i])
-                return
-        here.append(([lo[0], lo[1], lo[2]], [hi[0], hi[1], hi[2]]))
+                    low[i] = min(low[i], was_low[i])
+                    high[i] = max(high[i], was_high[i])
+            else:
+                kept.append((was_low, was_high))
+        kept.append((low, high))
+        spots[path] = kept
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
