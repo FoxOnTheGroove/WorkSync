@@ -212,8 +212,11 @@ BLOCKED_OPACITY = 0.6
 BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
 MARKER_EMISSION = 10000.0
-COLOR_GAP      = (0.9, 0.7, 0.0)
-COLOR_TIGHT    = (0.9, 0.15, 0.15)
+COLOR_GAP      = (1.0, 0.906, 0.604)
+COLOR_TIGHT    = (0.988, 0.224, 0.106)
+GAP_RADIUS     = 0.002
+GAP_HEAD_HIGH  = 0.02
+GAP_HEAD_WIDE  = 0.016
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
 SHEET_GAP      = 0.001
@@ -250,12 +253,8 @@ GONE = (("inputs:opacity", "Float", 0.0),
 
 CLASH_MARKS   = 200
 CLASH_OPACITY = 0.35
-COLOR_PLANE   = (0.15, 0.85, 0.95)   # 임시 진단: 거리를 잰 면을 이 색으로 깐다
-PLANE_OPACITY = 0.45
 CLASH_PAD     = 0.002
 COLOR_CLASH   = (0.95, 0.15, 0.15)
-CLASH_SOURCE  = "ebs:source"
-CLASH_REPORT  = 20
 CLASH_PULSE   = 2.0
 CLASH_PULSE_LOW  = 0.15
 CLASH_PULSE_HIGH = 1.0
@@ -1099,32 +1098,31 @@ class EbsSimulate:
             blank = {"face": face, "distance": None, "name": "",
                      "min_gap": least, "at": world(surface),
                      "from": None, "to": None}
-            if any(cells.get(face, [])):
-                blank["state"] = STATE_CLASH
-                blank["name"] = self.owner_name(self._blockers.get(face, ""))
-                marks.append(blank)
-                continue
-
+            hit = bool(any(cells.get(face, [])))
             found = distances.get(face) or {}
             at = found.get("at")
-            if at is None:
-                blank["state"] = STATE_CLEAR
+            reach = found.get("distance")
+            if at is None or reach is None:
+                blank["state"] = STATE_CLASH if hit else STATE_CLEAR
+                if hit:
+                    blank["name"] = self.owner_name(self._blockers.get(face, ""))
                 marks.append(blank)
                 continue
-            reach = found.get("distance", 0.0)
             start, end = list(at), list(at)
             start[axis] = coord
             end[axis] = coord + (reach if outward > 0 else -reach)
             near, far = world(start), world(end)
-            gap = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
+            span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
+            gap = -span if reach < 0 else span
             marks.append({
                 "face": face,
-                "state": STATE_TIGHT if gap < least else STATE_CLEAR,
+                "state": (STATE_CLASH if hit else
+                          STATE_TIGHT if gap < least else STATE_CLEAR),
                 "distance": gap, "min_gap": least,
-                "name": self.owner_name(found.get("prim", "")),
+                "name": self.owner_name(found.get("prim", "")
+                                        or self._blockers.get(face, "")),
                 "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
                 "from": near, "to": far,
-                "plane": [world(corner) for corner in found.get("plane") or ()],
             })
         return marks
 
@@ -2732,8 +2730,7 @@ class EbsSimulate:
                 at = (box.GetMin(), box.GetMax())
             seen.add(eqp_path)
             lo, hi = at
-            boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]),
-                          eqp_path))
+            boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])))
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
 
@@ -3013,7 +3010,7 @@ class EbsSimulate:
 
     def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
                       exclude: list = None, cache=None, roots: list = None) -> dict:
-        """안 막힌 면에서 가장 가까운 것까지의 거리"""
+        """면마다 거리. 안 막혔으면 바깥으로 여유, 막혔으면 안으로 파고든 깊이"""
         stage = self._get_stage()
         if stage is None:
             return {}
@@ -3030,23 +3027,28 @@ class EbsSimulate:
         with self._stage_timer("clearance: search"):
             wanted = {}
             for face, (axis, outward, coord, _, _) in self._face_planes.items():
-                if any(cells.get(face, [])):
-                    continue
-                prism = self._face_prism(local_box, axis, outward, coord, reach)
+                deep = bool(any(cells.get(face, [])))
+                way = -outward if deep else outward
+                span = (local_box.GetMax()[axis] - local_box.GetMin()[axis]
+                        if deep else reach)
+                prism = self._face_prism(local_box, axis, way, coord, span)
                 wanted[face] = (prism,
                                 Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
-                                axis, outward, coord)
+                                axis, outward, coord, deep)
             candidates = self._reach_by_face(stage, cache, skip, roots, wanted)
         if not wanted:
             return {}
 
         with self._stage_timer("clearance: detect"):
             results = {}
-            for face, (prism, world_prism, axis, outward, coord) in wanted.items():
+            for face, (prism, world_prism, axis, outward,
+                       coord, deep) in wanted.items():
                 near = [(path, box) for path, box in candidates.get(face, ())
                         if self._overlaps(box, world_prism)]
                 found = self._nearest_in_prism(stage, near, prism, to_world,
-                                               axis, outward, coord)
+                                               axis, outward, coord, deep)
+                if found is not None and deep:
+                    found["distance"] = -found["distance"]
                 results[face] = found or {"distance": None, "prim": "",
                                           "reach": reach}
         return results
@@ -3056,14 +3058,14 @@ class EbsSimulate:
         if not wanted:
             return {}
         if roots is None:
-            whole = self._union([box for _, box, _, _, _ in wanted.values()])
+            whole = self._union([one[1] for one in wanted.values()])
             found, _ = self._gather_nearby(stage, cache, whole, skip)
             return {face: found for face in wanted}
 
         by_face = {}
         sides = {face: one for face, one in wanted.items() if face != FACE_CEILING}
         if sides:
-            whole = self._union([box for _, box, _, _, _ in sides.values()])
+            whole = self._union([one[1] for one in sides.values()])
             found, _ = self._gather_nearby(stage, cache, whole, skip, roots)
             by_face.update({face: found for face in sides})
         top = wanted.get(FACE_CEILING)
@@ -3085,8 +3087,8 @@ class EbsSimulate:
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
     def _nearest_in_prism(self, stage, candidates, prism, to_world,
-                          axis, outward, coord):
-        """그 안에서 가장 가까운 것 하나. 상자면 중심, 메시면 면 중점"""
+                          axis, outward, coord, deep: bool = False):
+        """가장 가까운 것 하나. deep 이면 가장 깊이 파고든 것 하나"""
         if not candidates:
             return None
 
@@ -3094,79 +3096,37 @@ class EbsSimulate:
         bounded = []
         for path, box in candidates:
             local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
-            gap = self._gap_along(local, axis, outward, coord)
+            gap = self._gap_along(local, axis, outward, coord, deep)
             if gap is not None:
                 bounded.append((gap, path, local))
-        bounded.sort(key=lambda item: item[0])
+        bounded.sort(key=lambda item: item[0], reverse=deep)
 
         best, best_path, best_at = None, "", None
-        spread, whole = None, None
         for gap, path, local in bounded:
-            if best is not None and gap >= best:
+            if best is not None and (gap <= best if deep else gap >= best):
                 break
+            way = -outward if deep else outward
             if self._precision != PRECISION_TRI:
                 best, best_path = gap, path
-                best_at = self._box_point(local, prism, axis, outward, coord, gap)
+                best_at = self._box_point(local, prism, axis, way, coord, gap)
                 continue
             triangles = self._mesh_triangles(stage, path)
             if not triangles:
                 best, best_path = gap, path
-                best_at = self._box_point(local, prism, axis, outward, coord, gap)
+                best_at = self._box_point(local, prism, axis, way, coord, gap)
                 continue
             local_tris = [[inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
                          for triangle, _, _ in triangles]
             found = self._flat_gap(local_tris, prism, axis, outward, coord,
                                    self._flat_slack(local, axis),
-                                   self._parts_of(path, local_tris))
-            if found is not None and (best is None or found[0] < best):
+                                   self._parts_of(path, local_tris), deep)
+            if found is not None and (best is None
+                                      or (found[0] > best if deep
+                                          else found[0] < best)):
                 best, best_path, best_at = found[0], path, found[1]
-                spread, whole = found[2], local
         if best is None:
             return None
-        self._why_here(bounded, best, best_path, best_at, spread, whole)
-        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at,
-                "plane": self._plane_quad(spread, best_at, axis)}
-
-    @staticmethod
-    def _plane_quad(spread, at, axis: int):
-        """임시 진단: 한 면으로 잡힌 범위를 사각형 네 점으로. 없으면 None"""
-        if spread is None or at is None:
-            return None
-        mins, maxs, _ = spread
-        a, b = [i for i in range(3) if i != axis]
-        if mins[a] is None or mins[b] is None:
-            return None
-        corners = []
-        for first, second in ((mins[a], mins[b]), (maxs[a], mins[b]),
-                              (maxs[a], maxs[b]), (mins[a], maxs[b])):
-            point = [0.0, 0.0, 0.0]
-            point[axis] = at[axis]
-            point[a], point[b] = first, second
-            corners.append(tuple(point))
-        return corners
-
-    def _why_here(self, bounded, best, path, at, spread=None, whole=None) -> None:
-        """임시 진단: 선이 왜 거기서 나왔나. 잡은 면이 메시의 어디까지인가"""
-        if not path:
-            return
-        triangles = self._triangles.get(path) or ()
-        parts = len(set(self._parts.get(path, ())))
-        rivals = [f"{p.rsplit('/', 1)[-1]} {g:.4f}" for g, p, _ in bounded[:5]
-                  if p != path and g - best < best * 0.5 + 1e-6]
-        told = (f"line from {path.rsplit('/', 1)[-1]}: {len(triangles)} "
-                f"triangles in {parts} part(s), gap {best:.4f}, at "
-                f"({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})")
-        if spread is not None and whole is not None:
-            mins, maxs, kept = spread
-            told += f"; {kept} triangle(s) at that height, covering"
-            for i in range(3):
-                if mins[i] is None:
-                    continue
-                told += (f" [{mins[i]:.3f}..{maxs[i]:.3f}]"
-                         f" of [{whole.GetMin()[i]:.3f}..{whole.GetMax()[i]:.3f}]")
-        if rivals:
-            told += f"; just as near: {', '.join(rivals)}"
-        self._note(told)
+        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
     def _parts_of(self, path: str, triangles) -> list:
         """그 메시의 덩어리 표. 위상은 안 변하니 한 번 만들고 계속 쓴다"""
@@ -3222,8 +3182,13 @@ class EbsSimulate:
         return tuple(point)
 
     @staticmethod
-    def _gap_along(box, axis: int, outward: int, coord: float) -> "float | None":
-        """그 축으로 면에서 상자까지의 거리. 파고들었으면 None"""
+    def _gap_along(box, axis: int, outward: int, coord: float,
+                   deep: bool = False) -> "float | None":
+        """면에서 상자까지의 거리. deep 이면 안으로 파고든 깊이"""
+        if deep:
+            depth = (coord - box.GetMin()[axis] if outward > 0
+                     else box.GetMax()[axis] - coord)
+            return None if depth <= 0 else depth
         if outward > 0:
             gap = box.GetMin()[axis] - coord
         else:
@@ -3231,8 +3196,9 @@ class EbsSimulate:
         return None if gap < 0 else gap
 
     @staticmethod
-    def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float):
-        """삼각형 하나에서 가장 가까운 점과 거리"""
+    def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float,
+                      deep: bool = False):
+        """삼각형 하나에서 가장 가까운 점과 거리. deep 이면 가장 깊이 든 점"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, at = None, None
         for vertex in triangle:
@@ -3240,8 +3206,11 @@ class EbsSimulate:
                          for i in range(3) if i != axis)
             if not inside:
                 continue
-            gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
-            if gap >= 0 and (best is None or gap < best):
+            if deep:
+                gap = (coord - vertex[axis]) if outward > 0 else (vertex[axis] - coord)
+            else:
+                gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
+            if gap >= 0 and (best is None or (gap > best if deep else gap < best)):
                 best, at = gap, vertex
         if best is None:
             return None
@@ -3253,13 +3222,17 @@ class EbsSimulate:
 
     @staticmethod
     def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
-                  slack: float = OVERLAP_EPS, parts: list = None):
+                  slack: float = OVERLAP_EPS, parts: list = None,
+                  deep: bool = False):
         """한 덩어리 안에서 같은 높이인 면들을 한 면으로 보고 그 중점을 찍는다"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, seed = None, -1
         for at, triangle in enumerate(triangles):
-            found = EbsSimulate._triangle_gap(triangle, prism, axis, outward, coord)
-            if found is not None and (best is None or found[0] < best):
+            found = EbsSimulate._triangle_gap(triangle, prism, axis, outward,
+                                              coord, deep)
+            if found is not None and (best is None
+                                      or (found[0] > best if deep
+                                          else found[0] < best)):
                 best, seed = found[0], at
         if best is None:
             return None
@@ -3272,7 +3245,10 @@ class EbsSimulate:
                              for i in range(3) if i != axis)
                 if not inside:
                     continue
-                gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
+                if deep:
+                    gap = (coord - vertex[axis]) if outward > 0 else (vertex[axis] - coord)
+                else:
+                    gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
                 if gap >= 0 and abs(gap - best) <= slack:
                     keep.append(vertex)
             if keep:
@@ -3299,8 +3275,9 @@ class EbsSimulate:
         for i in range(3):
             if i != axis:
                 point[i] = min(max((mins[i] + maxs[i]) * 0.5, lo[i]), hi[i])
-        point[axis] = coord + (best if outward > 0 else -best)
-        return best, tuple(point), (mins, maxs, len(picked))
+        way = -outward if deep else outward
+        point[axis] = coord + (best if way > 0 else -best)
+        return best, tuple(point)
 
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
@@ -3340,7 +3317,6 @@ class EbsSimulate:
                                        material, colour, alpha)
                     drawn += 1
 
-            radius = self._thread_radius()
             threads = {}
             for mark in marks or ():
                 if not mark.get("from") or not mark.get("to"):
@@ -3352,24 +3328,14 @@ class EbsSimulate:
                         stage, "tight" if tight else "gap", colour,
                         GAP_OPACITY, GAP_EMISSION)
                 if self._gap_line(stage, f"{MARKER_ROOT}/{mark['face']}_gap",
-                                  mark["from"], mark["to"], radius,
+                                  mark["from"], mark["to"], GAP_RADIUS,
                                   threads[colour], colour):
                     drawn += 1
-                drawn += self._plane_sheet(stage, mark)
+                    drawn += self._gap_heads(stage, mark["face"], mark["from"],
+                                             mark["to"], threads[colour], colour)
             drawn += self._clash_boxes(stage, marks_boxes)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
-
-    def _plane_sheet(self, stage, mark: dict) -> int:
-        """임시 진단: 거리를 잰 그 면을 씬에 한 장 깔아 보여준다"""
-        corners = mark.get("plane")
-        if not corners or len(corners) != 4:
-            return 0
-        material = self._marker_material(stage, "plane", COLOR_PLANE,
-                                         PLANE_OPACITY, GAP_EMISSION)
-        self._marker_sheet(stage, f"{MARKER_ROOT}/{mark['face']}_plane",
-                           corners, material, COLOR_PLANE, PLANE_OPACITY)
-        return 1
 
     def _clash_boxes(self, stage, boxes) -> int:
         """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""
@@ -3379,13 +3345,10 @@ class EbsSimulate:
                                          CLASH_OPACITY, BLOCKED_EMISSION)
         pad = self._clash_pad(stage)
         drawn = 0
-        for at, entry in enumerate(boxes):
-            lo, hi = entry[0], entry[1]
-            source = entry[2] if len(entry) > 2 else ""
+        for at, (lo, hi) in enumerate(boxes):
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
             half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
-            block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/"
-                                        f"{self._clash_name(at, source)}")
+            block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/clash_{at}")
             block.CreateSizeAttr(2.0)
             block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
                                     Gf.Vec3f(1.0, 1.0, 1.0)])
@@ -3395,41 +3358,10 @@ class EbsSimulate:
             shape.AddTranslateOp().Set(Gf.Vec3d(*middle))
             shape.AddScaleOp().Set(Gf.Vec3f(*half))
             UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
-            if source:
-                try:
-                    block.GetPrim().CreateAttribute(
-                        CLASH_SOURCE, Sdf.ValueTypeNames.String).Set(source)
-                except Exception:
-                    pass
             drawn += 1
         if drawn:
-            self._clash_report(boxes)
             self._start_pulse(stage)
         return drawn
-
-    @staticmethod
-    def _clash_name(at: int, source: str) -> str:
-        """상자 이름에 원본 메시 이름을 붙인다 -- 스테이지 트리에서 바로 읽으라고."""
-        leaf = source.rsplit("/", 1)[-1] if source else ""
-        clean = "".join(c if c.isalnum() or c == "_" else "_" for c in leaf)
-        return f"clash_{at}_{clean}" if clean else f"clash_{at}"
-
-    @staticmethod
-    def _clash_report(boxes) -> None:
-        """임시 진단: 어느 원본 메시가 어느 상자가 되었나. 큰 것부터 찍는다"""
-        told = []
-        for at, entry in enumerate(boxes):
-            lo, hi = entry[0], entry[1]
-            source = entry[2] if len(entry) > 2 else "?"
-            size = tuple(round(hi[i] - lo[i], 4) for i in range(3))
-            told.append((size[0] * size[1] * size[2], at, size, source))
-        told.sort(reverse=True)
-        print(f"[ebs] clash boxes are the piece's world AABB, not its mesh "
-              f"({len(told)}), biggest first:")
-        for _, at, size, source in told[:CLASH_REPORT]:
-            print(f"[ebs]   clash_{at} {size} <- {source}")
-        if len(told) > CLASH_REPORT:
-            print(f"[ebs]   ... and {len(told) - CLASH_REPORT} more")
 
     @staticmethod
     def _clash_pad(stage) -> float:
@@ -3511,6 +3443,45 @@ class EbsSimulate:
             lo, hi = box.GetMin(), box.GetMax()
             span = math.sqrt(sum((hi[i] - lo[i]) ** 2 for i in range(3)))
         return max(span * LASER_RADIUS, 1e-5)
+
+    def _gap_heads(self, stage, face: str, start, end, material, colour) -> int:
+        """선 양 끝에 원뿔을 붙여 화살표로 보이게 한다"""
+        made = 0
+        for name, tip, back in (("a", start, end), ("b", end, start)):
+            if self._gap_head(stage, f"{MARKER_ROOT}/{face}_head_{name}",
+                              tip, back, material, colour):
+                made += 1
+        return made
+
+    @staticmethod
+    def _gap_head(stage, path: str, tip, back, material, colour) -> bool:
+        """tip 을 향해 뾰족한 원뿔 하나. tip 에서 back 쪽으로 뒤가 눕는다"""
+        along = Gf.Vec3d(*[tip[i] - back[i] for i in range(3)])
+        if along.GetLength() <= 1e-9:
+            return False
+        along = along.GetNormalized()
+        cone = UsdGeom.Cone.Define(stage, path)
+        cone.CreateAxisAttr(UsdGeom.Tokens.z)
+        cone.CreateHeightAttr(GAP_HEAD_HIGH)
+        cone.CreateRadiusAttr(GAP_HEAD_WIDE)
+        cone.CreateExtentAttr(Vt.Vec3fArray([
+            Gf.Vec3f(-GAP_HEAD_WIDE, -GAP_HEAD_WIDE, -GAP_HEAD_HIGH / 2.0),
+            Gf.Vec3f(GAP_HEAD_WIDE, GAP_HEAD_WIDE, GAP_HEAD_HIGH / 2.0)]))
+        cone.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        matrix = Gf.Matrix4d(1.0)
+        matrix.SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0), along))
+        matrix.SetTranslateOnly(
+            Gf.Vec3d(*[tip[i] - along[i] * GAP_HEAD_HIGH * 0.5
+                       for i in range(3)]))
+        UsdGeom.Xformable(cone).AddTransformOp().Set(matrix)
+        try:
+            cone.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(cone.GetPrim()).Bind(material)
+        return True
 
     @staticmethod
     def _gap_line(stage, path: str, start, end, radius: float, material,
