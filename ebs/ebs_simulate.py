@@ -3118,7 +3118,21 @@ class EbsSimulate:
                 best, best_path, best_at = found[0], path, found[1]
         if best is None:
             return None
+        self._why_here(bounded, best, best_path, best_at)
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
+
+    def _why_here(self, bounded, best, path, at) -> None:
+        """임시 진단: 선이 왜 거기서 나왔나. 이긴 메시와, 비슷하게 가까운 것들"""
+        if not path:
+            return
+        triangles = self._triangles.get(path) or ()
+        parts = len(set(self._parts.get(path, ())))
+        rivals = [f"{p.rsplit('/', 1)[-1]} {g:.4f}" for g, p, _ in bounded[:5]
+                  if p != path and g - best < best * 0.5 + 1e-6]
+        self._note(f"line from {path.rsplit('/', 1)[-1]}: {len(triangles)} "
+                   f"triangles in {parts} part(s), gap {best:.4f}, at "
+                   f"({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})"
+                   + (f"; just as near: {', '.join(rivals)}" if rivals else ""))
 
     def _parts_of(self, path: str, triangles) -> list:
         """그 메시의 덩어리 표. 위상은 안 변하니 한 번 만들고 계속 쓴다"""
