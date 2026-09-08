@@ -194,6 +194,8 @@ MIN_GAP_SIDE = 0.6
 
 
 MARKER_ROOT    = "/EbsCollisionMarkers"
+CLASH_ROOT     = MARKER_ROOT + "/clash"   # 내부 충돌 상자는 여기 모은다.
+                                          # 깜박임이 이 하나만 켜고 끈다
 MARKER_OPACITY = 0.075
 COLOR_BLOCKED  = (0.9, 0.2, 0.2)
 BLOCKED_OPACITY = 0.6
@@ -243,9 +245,9 @@ CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니라 절대값이라
                          # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
 COLOR_CLASH   = (0.95, 0.15, 0.15)
-CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 CLASH_OPACITY 로 선다
-CLASH_PULSE_LOW  = 0.0
-CLASH_PULSE_HIGH = 1.0
+CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 그냥 서 있는다.
+                         # 반 주기는 보이고 반 주기는 숨는다 -- 투명도를 프레임마다
+                         # 흔들면 머티리얼이 매번 다시 올라가 화면 갱신이 밀린다
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
@@ -322,7 +324,8 @@ class EbsSimulate:
         self._aligned: bool = False
         self._result: dict = {}
         self._pulse = None          # 내부 충돌 상자 깜박임 구독
-        self._pulse_inputs: tuple = ()
+        self._pulse_switch_at = None
+        self._pulse_on = None
         self._pulse_from: float = 0.0
 
 
@@ -3116,11 +3119,12 @@ class EbsSimulate:
         material = self._marker_material(stage, "clash", COLOR_CLASH,
                                          CLASH_OPACITY, BLOCKED_EMISSION)
         pad = self._clash_pad(stage)
+        UsdGeom.Scope.Define(stage, CLASH_ROOT)
         drawn = 0
         for at, (lo, hi) in enumerate(boxes):
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
             half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
-            block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/clash_{at}")
+            block = UsdGeom.Cube.Define(stage, f"{CLASH_ROOT}/box_{at}")
             block.CreateSizeAttr(2.0)
             block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
                                     Gf.Vec3f(1.0, 1.0, 1.0)])
@@ -3145,65 +3149,66 @@ class EbsSimulate:
         return CLASH_PAD / (per_unit or 1.0)
 
     def _start_pulse(self, stage) -> bool:
-        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다."""
+        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다.
+
+        투명도를 매 프레임 흔들면 상자에 물린 머티리얼이 프레임마다 다시
+        올라가 몇 초 뒤 화면 갱신이 밀렸다. 그래서 상자 전체를 담은 스코프
+        하나의 가시성만 반 주기에 한 번 뒤집는다 -- 한 주기에 두 번 쓴다.
+        """
         self._stop_pulse()
         if CLASH_PULSE <= 0.0:
             return False
-        inputs = self._pulse_inputs_of(stage)
-        if not inputs:
+        switch = self._pulse_switch(stage)
+        if switch is None:
             return False
-        self._pulse_inputs = inputs
+        self._pulse_switch_at = switch
         self._pulse_from = time.monotonic()
+        self._pulse_on = None
         try:
             import omni.kit.app
             self._pulse = omni.kit.app.get_app().get_update_event_stream() \
                 .create_subscription_to_pop(lambda e: self._pulse_step(),
                                             name="ebs clash pulse")
         except Exception as e:
-            self._pulse_inputs = ()
+            self._pulse_switch_at = None
             print(f"[ebs] the clash boxes will not blink: {e}")
             return False
         return True
 
     @staticmethod
-    def _pulse_inputs_of(stage) -> tuple:
-        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다 --
-        발광 세기까지 같이 흔들면 몇 초 뒤 화면 갱신이 밀린다."""
-        looks = f"{MARKER_ROOT}/Looks/clash"
-        wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
-                  (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
-        found = []
+    def _pulse_switch(stage):
+        """깜박일 때 뒤집을 것: 상자를 전부 담은 스코프의 가시성 하나."""
         try:
-            for path, name, full in wanted:
-                prim = stage.GetPrimAtPath(path)
-                if prim is None or not prim.IsValid():
-                    continue
-                attribute = prim.GetAttribute(name)
-                if attribute:
-                    found.append((attribute, full))
+            prim = stage.GetPrimAtPath(CLASH_ROOT)
+            if prim is None or not prim.IsValid():
+                return None
+            return UsdGeom.Imageable(prim).CreateVisibilityAttr()
         except Exception:
-            return ()
-        return tuple(found)
+            return None
 
     def _pulse_step(self) -> None:
         stage = self._get_stage()
-        if stage is None or not self._pulse_inputs:
+        if stage is None or self._pulse_switch_at is None:
             self._stop_pulse()
             return
         phase = (time.monotonic() - self._pulse_from) / CLASH_PULSE
-        level = CLASH_PULSE_LOW + (CLASH_PULSE_HIGH - CLASH_PULSE_LOW) \
-            * (0.5 - 0.5 * math.cos(phase * 2.0 * math.pi))
+        on = (phase - math.floor(phase)) < 0.5
+        if on is self._pulse_on:      # 바뀔 때만 쓴다. 프레임마다 쓰면 밀린다
+            return
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
-                for attribute, full in self._pulse_inputs:
-                    attribute.Set(level * full)
+                self._pulse_switch_at.Set(UsdGeom.Tokens.inherited if on
+                                          else UsdGeom.Tokens.invisible)
         except Exception as e:
             print(f"[ebs] the clash boxes stopped blinking: {e}")
             self._stop_pulse()
+            return
+        self._pulse_on = on
 
     def _stop_pulse(self) -> None:
         self._pulse = None
-        self._pulse_inputs = ()
+        self._pulse_switch_at = None
+        self._pulse_on = None
 
     def _thread_radius(self) -> float:
         box = self._world_range((self._target or {}).get("equipment"))
