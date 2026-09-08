@@ -227,16 +227,15 @@ class EbsSimulateService:
         _clash_pad        상자가 조각 밖으로 나가는 두께. 배율이 아니라 m
                           절대값(CLASH_PAD)이라 조각 크기와 무관하게 같다.
                           씬 단위 환산은 여기서 -- 1 유닛이 1 cm 인 씬도 있다
-        _start_pulse      그 상자를 CLASH_PULSE 주기로 깜박인다. 그중
-                          CLASH_PULSE_ON 몫만 보이고 나머지는 숨는다 --
-                          꺼진 쪽에 오래 머문다. 뒤집는 것은 상자를 전부
+        _start_pulse      그 상자를 CLASH_PULSE 주기로 깜박인다. 반 주기는
+                          보이고 반 주기는 숨는다. 뒤집는 것은 상자를 전부
                           담은 CLASH_ROOT 스코프의 가시성 하나뿐이고, 값이
                           바뀔 때만 쓴다 -- 한 주기에 두 번. 투명도를 프레임
                           마다 흔들었더니(발광이든 투명도든) 상자마다 물린
                           머티리얼이 매번 다시 올라가 몇 초 뒤 화면 갱신이
                           밀렸다. clear_markers 가 _stop_pulse 로 멈추고,
                           Kit 이 없으면 조용히 안 한다
-                          CLASH_PULSE / CLASH_PULSE_ON / CLASH_ROOT
+                          CLASH_PULSE / CLASH_ROOT
         _triangles_near   양쪽 삼각형 읽기. 'equipment: read' 가 이 값
         _face_grid        메시별 면 상자 + 로컬 격자. 한 번 만들고 계속 쓴다.
                           느리면 여기 -- 칸 수는 GRID_CELLS
