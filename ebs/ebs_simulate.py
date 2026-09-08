@@ -246,7 +246,7 @@ COLOR_CLASH   = (0.95, 0.15, 0.15)
 CLASH_SOURCE  = "ebs:source"   # 임시 진단: 상자에 원본 메시 경로를 적어 둔다
 CLASH_REPORT  = 20       # 그중 콘솔에 찍을 줄 수 (큰 것부터)
 CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 CLASH_OPACITY 로 선다
-CLASH_PULSE_LOW  = 0.0
+CLASH_PULSE_LOW  = 0.15  # 바닥. 0 까지 내리면 완전히 투명해지는 순간 반짝인다
 CLASH_PULSE_HIGH = 1.0
 
 GRID_CELLS = 24
