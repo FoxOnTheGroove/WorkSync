@@ -228,10 +228,11 @@ class EbsSimulateService:
                           절대값(CLASH_PAD)이라 조각 크기와 무관하게 같다.
                           씬 단위 환산은 여기서 -- 1 유닛이 1 cm 인 씬도 있다
         _start_pulse      그 상자를 CLASH_PULSE 주기로 깜박인다. 머티리얼
-                          입력 하나만 매 프레임 고쳐 상자 전부가 같이 뛴다.
-                          투명도와 함께 발광 세기도 같이 내린다 -- 안 그러면
-                          투명해져도 빛이 남아 안 사라진다. clear_markers 가
-                          _stop_pulse 로 멈춘다. Kit 이 없으면 조용히 안 함
+                          하나만 매 프레임 고쳐 상자 전부가 같이 뛴다.
+                          건드리는 것은 투명도뿐이다 -- 발광 세기까지 같이
+                          흔들었더니 몇 초 뒤 화면 갱신이 밀렸다.
+                          clear_markers 가 _stop_pulse 로 멈춘다.
+                          Kit 이 없으면 조용히 안 함
                           CLASH_PULSE / CLASH_PULSE_LOW / CLASH_PULSE_HIGH
         _triangles_near   양쪽 삼각형 읽기. 'equipment: read' 가 이 값
         _face_grid        메시별 면 상자 + 로컬 격자. 한 번 만들고 계속 쓴다.

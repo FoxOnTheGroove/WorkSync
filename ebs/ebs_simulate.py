@@ -3167,11 +3167,11 @@ class EbsSimulate:
 
     @staticmethod
     def _pulse_inputs_of(stage) -> tuple:
-        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값."""
+        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다 --
+        발광 세기까지 같이 흔들면 몇 초 뒤 화면 갱신이 밀린다."""
         looks = f"{MARKER_ROOT}/Looks/clash"
         wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
-                  (f"{looks}/mdl", "inputs:opacity_constant", 1.0),
-                  (f"{looks}/mdl", "inputs:emissive_intensity", BLOCKED_EMISSION))
+                  (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
         found = []
         try:
             for path, name, full in wanted:
