@@ -166,8 +166,6 @@ class EbsSimulateService:
         _gap_line / _gap_heads / _gap_shaft  여유 선과 양 끝 화살촉. 선은
                      화살촉 중점에서 시작한다. GAP_RADIUS, GAP_HEAD_HIGH,
                      GAP_HEAD_WIDE, COLOR_GAP, COLOR_TIGHT
-        _marker_material  glow=False 면 발광 대신 diffuse 로 칠한다 (선·화살촉·
-                     내부 충돌 상자). 3면 판만 아직 발광
         measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
         """
         return cls._simulate.collide()
