@@ -223,7 +223,10 @@ class EbsSimulateService:
                           어디가 부딪혔는지는 빠짐없이, 비싼 검사는 쌍 수만큼
         _clash_boxes      걸린 조각을 빨간 반투명 상자로 감싼다. 모서리
                           선은 없다 -- 조각이 많이 겹치면 선이 더 뭉갬
-                          CLASH_OPACITY / COLOR_CLASH / CLASH_MIN_THICK / CLASH_SWELL / CLASH_MARKS
+                          CLASH_OPACITY / COLOR_CLASH / CLASH_MARKS
+        _clash_pad        상자가 조각 밖으로 나가는 두께. 배율이 아니라 m
+                          절대값(CLASH_PAD)이라 조각 크기와 무관하게 같다.
+                          씬 단위 환산은 여기서 -- 1 유닛이 1 cm 인 씬도 있다
         _start_pulse      그 상자를 CLASH_PULSE 주기로 깜박인다. 머티리얼
                           입력 하나만 매 프레임 고쳐 상자 전부가 같이 뛴다.
                           투명도와 함께 발광 세기도 같이 내린다 -- 안 그러면

@@ -240,8 +240,8 @@ GONE = (("inputs:opacity", "Float", 0.0),
 
 CLASH_MARKS   = 200      # 내부 충돌 상자 상한. 그 이상은 안 그린다
 CLASH_OPACITY = 0.35
-CLASH_MIN_THICK = 0.0018  # 상자 최소 두께 (납작한 조각도 보이게. 대상 장비 대각선 대비)
-CLASH_SWELL   = 1.02     # 조각에 딱 붙으면 z-fighting. 살짝 부풀린다
+CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니라 절대값이라
+                         # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
 COLOR_CLASH   = (0.95, 0.15, 0.15)
 CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 CLASH_OPACITY 로 선다
 CLASH_PULSE_LOW  = 0.0
@@ -3115,11 +3115,11 @@ class EbsSimulate:
             return 0
         material = self._marker_material(stage, "clash", COLOR_CLASH,
                                          CLASH_OPACITY, BLOCKED_EMISSION)
-        thick = self._thread_radius() / LASER_RADIUS * CLASH_MIN_THICK
+        pad = self._clash_pad(stage)
         drawn = 0
         for at, (lo, hi) in enumerate(boxes):
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-            half = [max((hi[i] - lo[i]) * 0.5 * CLASH_SWELL, thick) for i in range(3)]
+            half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
             block = UsdGeom.Cube.Define(stage, f"{MARKER_ROOT}/clash_{at}")
             block.CreateSizeAttr(2.0)
             block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
@@ -3134,6 +3134,15 @@ class EbsSimulate:
         if drawn:
             self._start_pulse(stage)
         return drawn
+
+    @staticmethod
+    def _clash_pad(stage) -> float:
+        """CLASH_PAD 는 m 다. 씬 단위로 바꿔 준다 (1 유닛이 1 cm 인 씬도 있다)."""
+        try:
+            per_unit = UsdGeom.GetStageMetersPerUnit(stage)
+        except Exception:
+            per_unit = 1.0
+        return CLASH_PAD / (per_unit or 1.0)
 
     def _start_pulse(self, stage) -> bool:
         """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다."""
