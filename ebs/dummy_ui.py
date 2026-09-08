@@ -105,7 +105,7 @@ class EbsDummyUI:
         """창 하나에 경로 입력, 설정, 버튼 줄, 상태 줄을 쌓는다"""
         self._window = ui.Window("EBS Simulate", width=520, height=330)
         with self._window.frame:
-            with ui.VStack(spacing=5, style={"margin": 8}):
+            with ui.VStack(spacing=5, style={"margin": 3}):
                 with ui.VStack(spacing=1, height=0):
                     self._usd_field  = self._path_row("Stage USD:")
                     self._xml_field  = self._path_row("Port XML:")

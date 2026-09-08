@@ -1,10 +1,4 @@
-"""EBS 시뮬레이션 공개 API. 구현은 ebs_simulate.py, 카메라만 ebs_simulate_camera.py.
-
-주석은 "뭘 바꾸려면 어디를 보라"는 색인이다. 본문은 전부 한 줄 위임.
-단계: init -> align -> collide -> focus. simulate() 는 뒤 셋 연속.
-UI 버튼은 셋 (1 Align, 2 Collide, 3 Camera). prepare 는 align 이 품는다.
-상수는 각 구현부 파일 최상단. 함수마다의 설명은 그 구현부에 한 줄씩 있다.
-"""
+"""EBS 시뮬레이션 공개 API."""
 
 from .ebs_simulate import EbsSimulate
 
