@@ -30,7 +30,7 @@ COLOR_TEXT   = 0xFFFFFFFF
 COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
-PAD_X, PAD_Y = 10, 5
+PAD_X, PAD_Y = 1, 1
 
 
 class EbsSimulateOverlay:
@@ -169,7 +169,7 @@ class EbsSimulateOverlay:
             """한 줄짜리 판을 그리는 함수를 만든다"""
             def fill():
                 """판 속 글줄을 채운다"""
-                with ui.VStack(spacing=1, style={"margin_width": PAD_X,
+                with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
                              style={"font_size": size, "color": colour})
@@ -194,7 +194,7 @@ class EbsSimulateOverlay:
             """글줄 목록을 그리는 함수를 만든다"""
             def fill():
                 """판 속 글줄을 채운다"""
-                with ui.VStack(spacing=1, style={"margin_width": PAD_X,
+                with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
                         ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
