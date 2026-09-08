@@ -149,8 +149,8 @@ class EbsSimulateOverlay:
         return self._start()
 
 
-    def _floating(self, at, fill, ground, anchor=MIDDLE):
-        """월드 좌표에 매달 판 하나를 만들어 _marks 에 등록한다"""
+    def _floating(self, at, fill, ground, anchor=MIDDLE, step: int = 0):
+        """월드 좌표에 매달 판 하나. step 은 선에서 몇 번째로 떨어져 앉나"""
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
@@ -161,7 +161,7 @@ class EbsSimulateOverlay:
                                     "border_radius": 4})
                 fill()
         panel.visible = False
-        self._marks.append((placer, panel, tuple(at), anchor))
+        self._marks.append((placer, panel, tuple(at), anchor, step))
 
     def _verdict_panel(self, said: dict) -> None:
         """세울 수 있나 없나를 말하는 가운데 판"""
@@ -209,10 +209,9 @@ class EbsSimulateOverlay:
         self._floating(at, block([word]), ground, first)
         if gap is None:
             return
-        told = [SPAN.format(gap)]
+        self._floating(at, block([SPAN.format(gap)]), ground, second)
         if least:
-            told.append(LEAST.format(least))
-        self._floating(at, block(told), ground, second)
+            self._floating(at, block([LEAST.format(least)]), ground, second, 1)
 
     @staticmethod
     def _why(said: dict) -> list:
@@ -246,22 +245,24 @@ class EbsSimulateOverlay:
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
-            for placer, panel, at, anchor in self._marks:
+            for placer, panel, at, anchor, step in self._marks:
                 spot = self._to_screen(at)
                 if spot is None:
                     panel.visible = False
                     continue
                 panel_w, panel_h = panel.computed_width, panel.computed_height
                 room = self._room_at(at, spot)
+                tall = room + step * (panel_h + room)
+                wide = room + step * (panel_w + room)
                 x, y = spot[0] - panel_w * 0.5, spot[1] - panel_h * 0.5
                 if anchor == ABOVE:
-                    y = spot[1] - panel_h - room
+                    y = spot[1] - panel_h - tall
                 elif anchor == BELOW:
-                    y = spot[1] + room
+                    y = spot[1] + tall
                 elif anchor == LEFT:
-                    x = spot[0] - panel_w - room
+                    x = spot[0] - panel_w - wide
                 elif anchor == RIGHT:
-                    x = spot[0] + room
+                    x = spot[0] + wide
                 if self._outside(x, y, panel_w, panel_h, width, height):
                     panel.visible = False
                     continue
