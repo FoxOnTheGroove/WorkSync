@@ -250,6 +250,8 @@ GONE = (("inputs:opacity", "Float", 0.0),
 
 CLASH_MARKS   = 200
 CLASH_OPACITY = 0.35
+COLOR_PLANE   = (0.15, 0.85, 0.95)   # 임시 진단: 거리를 잰 면을 이 색으로 깐다
+PLANE_OPACITY = 0.45
 CLASH_PAD     = 0.002
 COLOR_CLASH   = (0.95, 0.15, 0.15)
 CLASH_SOURCE  = "ebs:source"
@@ -1122,6 +1124,7 @@ class EbsSimulate:
                 "name": self.owner_name(found.get("prim", "")),
                 "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
                 "from": near, "to": far,
+                "plane": [world(corner) for corner in found.get("plane") or ()],
             })
         return marks
 
@@ -3121,7 +3124,26 @@ class EbsSimulate:
         if best is None:
             return None
         self._why_here(bounded, best, best_path, best_at, spread, whole)
-        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
+        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at,
+                "plane": self._plane_quad(spread, best_at, axis)}
+
+    @staticmethod
+    def _plane_quad(spread, at, axis: int):
+        """임시 진단: 한 면으로 잡힌 범위를 사각형 네 점으로. 없으면 None"""
+        if spread is None or at is None:
+            return None
+        mins, maxs, _ = spread
+        a, b = [i for i in range(3) if i != axis]
+        if mins[a] is None or mins[b] is None:
+            return None
+        corners = []
+        for first, second in ((mins[a], mins[b]), (maxs[a], mins[b]),
+                              (maxs[a], maxs[b]), (mins[a], maxs[b])):
+            point = [0.0, 0.0, 0.0]
+            point[axis] = at[axis]
+            point[a], point[b] = first, second
+            corners.append(tuple(point))
+        return corners
 
     def _why_here(self, bounded, best, path, at, spread=None, whole=None) -> None:
         """임시 진단: 선이 왜 거기서 나왔나. 잡은 면이 메시의 어디까지인가"""
@@ -3333,9 +3355,21 @@ class EbsSimulate:
                                   mark["from"], mark["to"], radius,
                                   threads[colour], colour):
                     drawn += 1
+                drawn += self._plane_sheet(stage, mark)
             drawn += self._clash_boxes(stage, marks_boxes)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
+
+    def _plane_sheet(self, stage, mark: dict) -> int:
+        """임시 진단: 거리를 잰 그 면을 씬에 한 장 깔아 보여준다"""
+        corners = mark.get("plane")
+        if not corners or len(corners) != 4:
+            return 0
+        material = self._marker_material(stage, "plane", COLOR_PLANE,
+                                         PLANE_OPACITY, GAP_EMISSION)
+        self._marker_sheet(stage, f"{MARKER_ROOT}/{mark['face']}_plane",
+                           corners, material, COLOR_PLANE, PLANE_OPACITY)
+        return 1
 
     def _clash_boxes(self, stage, boxes) -> int:
         """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""
