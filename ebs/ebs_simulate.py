@@ -253,6 +253,9 @@ GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
 REACH_RATIO = 1.5        # 거리를 재는 범위 (EBS 최장변 대비). 넘으면 거리 없음
+FLAT_TOL    = 0.01       # '같은 평면'으로 볼 깊이 오차 (그 조각의 폭 대비).
+                         # 딱 떨어지는 값만 한 면으로 치면, 조금 기울거나 소수점
+                         # 오차가 있는 면은 모서리 근처 꼭짓점만 남아 중점이 쏠린다
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"
@@ -3003,12 +3006,20 @@ class EbsSimulate:
                 continue
             local_tris = [[inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
                          for triangle, _, _ in triangles]
-            found = self._flat_gap(local_tris, prism, axis, outward, coord)
+            found = self._flat_gap(local_tris, prism, axis, outward, coord,
+                                   self._flat_slack(local, axis))
             if found is not None and (best is None or found[0] < best):
                 best, best_path, best_at = found[0], path, found[1]
         if best is None:
             return None
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
+
+    @staticmethod
+    def _flat_slack(local, axis: int) -> float:
+        """'같은 평면'으로 볼 깊이 오차. 넓은 면일수록 조금 기울어도 한 면이다."""
+        span = max(local.GetMax()[i] - local.GetMin()[i]
+                   for i in range(3) if i != axis)
+        return max(span * FLAT_TOL, OVERLAP_EPS)
 
     @staticmethod
     def _box_point(local, prism, axis: int, outward: int, coord: float, gap: float):
@@ -3051,10 +3062,15 @@ class EbsSimulate:
         return best, at
 
     @staticmethod
-    def _flat_gap(triangles, prism, axis: int, outward: int, coord: float):
+    def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
+                  slack: float = OVERLAP_EPS):
         """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, Cube 처럼
         그 면 전체의 상자 중심(가로/세로 각각 min/max 의 중점)에서 선을 뽑는다.
-        꼭짓점을 평균 내면 삼각형을 어떻게 쪼갰는지에 따라 중심이 쏠린다."""
+        꼭짓점을 평균 내면 삼각형을 어떻게 쪼갰는지에 따라 중심이 쏠린다.
+
+        같은 높이인지는 slack 만큼 봐준다 -- 딱 떨어지는 값만 한 면으로 치면
+        조금 기운 면은 가장 가까운 모서리 쪽 꼭짓점만 남아 중점이 그리로 쏠린다.
+        """
         lo, hi = prism.GetMin(), prism.GetMax()
         best = None
         for triangle in triangles:
@@ -3072,7 +3088,7 @@ class EbsSimulate:
                 if not inside:
                     continue
                 gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
-                if gap < 0 or abs(gap - best) > OVERLAP_EPS:
+                if gap < 0 or abs(gap - best) > slack:
                     continue
                 found_any = True
                 for i in range(3):
