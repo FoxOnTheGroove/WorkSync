@@ -21,6 +21,7 @@ ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
+DEEP_WIDE = 2
 
 SIDE_BY_SIDE = ("ceiling",)
 
@@ -101,6 +102,7 @@ class EbsSimulateOverlay:
         self._frame = None
         self._stack = None
         self._marks = []
+        self._threads = []
         self._follow = None
 
     def _build(self, window) -> bool:
@@ -133,6 +135,7 @@ class EbsSimulateOverlay:
             with self._stack:
                 self._verdict_panel(said)
                 for mark in said.get("marks") or ():
+                    self._deep_line(mark)
                     self._face_panel(mark)
         except Exception as e:
             print(f"[ebs] could not build the overlay: {e}")
@@ -217,6 +220,48 @@ class EbsSimulateOverlay:
             self._floating(at, block([LEAST.format(least)]), ground, second,
                            1, share, (face, second))
 
+    def _deep_line(self, mark: dict) -> None:
+        """파고든 면의 선은 메시에 묻히니 화면 위에 곧장 다시 긋는다"""
+        gap = mark.get("distance")
+        if gap is None or gap >= 0.0:
+            return
+        start, end = mark.get("from"), mark.get("to")
+        if not start or not end:
+            return
+        try:
+            ends = []
+            for at in (start, end):
+                placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+                with placer:
+                    dot = ui.Rectangle(width=1, height=1,
+                                       style={"background_color": 0x00000000})
+                ends.append((placer, dot, tuple(at)))
+            look = {"color": COLOR_CANNOT, "border_width": DEEP_WIDE}
+            try:
+                thread = ui.FreeBezierCurve(
+                    ends[0][1], ends[1][1], style=look,
+                    start_tangent_width=ui.Pixel(0),
+                    end_tangent_width=ui.Pixel(0))
+            except Exception:
+                thread = ui.FreeBezierCurve(ends[0][1], ends[1][1], style=look)
+        except Exception as e:
+            print(f"[ebs] could not draw the buried gap line on screen: {e}")
+            return
+        thread.visible = False
+        self._threads.append((thread, ends))
+
+    def _draw_threads(self) -> None:
+        """화면 위에 그은 선의 두 끝을 이번 프레임 자리로 옮긴다"""
+        for thread, ends in self._threads:
+            spots = [self._to_screen(at) for _, _, at in ends]
+            if any(spot is None for spot in spots):
+                thread.visible = False
+                continue
+            for (placer, _, _), spot in zip(ends, spots):
+                placer.offset_x = spot[0]
+                placer.offset_y = spot[1]
+            thread.visible = True
+
     def _start(self) -> bool:
         """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""
         try:
@@ -231,9 +276,10 @@ class EbsSimulateOverlay:
 
     def _place(self) -> None:
         """월드 좌표를 화면 좌표로 옮겨 판을 앉힌다. 화면 밖이면 숨긴다"""
-        if not self._marks:
+        if not self._marks and not self._threads:
             return
         try:
+            self._draw_threads()
             width = self._frame.computed_width
             height = self._frame.computed_height
             widest = {}
@@ -321,6 +367,7 @@ class EbsSimulateOverlay:
         """그린 판과 카메라 추적을 놓는다"""
         self._follow = None
         self._marks = []
+        self._threads = []
         if self._stack is not None:
             try:
                 self._stack.clear()

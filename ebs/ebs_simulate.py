@@ -218,7 +218,6 @@ COLOR_TIGHT    = (0.988, 0.224, 0.106)
 GAP_RADIUS     = 0.002
 GAP_HEAD_HIGH  = 0.02
 GAP_HEAD_WIDE  = 0.016
-GAP_DEEP_PAD   = 0.05
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
 SHEET_GAP      = 0.001
@@ -1077,7 +1076,7 @@ class EbsSimulate:
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:
-        """면마다 상태·거리·선 두 끝을 만든다. 파고든 면은 앞으로 빼서 치수선처럼"""
+        """면마다 상태·거리·선 두 끝을 만든다. 최소 여유 미달도 여기서"""
         stage = self._get_stage()
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -1085,7 +1084,6 @@ class EbsSimulate:
             per_unit = 1.0
         lo, hi = local_box.GetMin(), local_box.GetMax()
         middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-        front_axis = 3 - self._up_axis()
 
         def world(point):
             """로컬 점을 월드로"""
@@ -1118,9 +1116,6 @@ class EbsSimulate:
             start, end = list(at), list(at)
             start[axis] = coord
             end[axis] = coord + (reach if outward > 0 else -reach)
-            if reach < 0:
-                out = lo[front_axis] - GAP_DEEP_PAD
-                start[front_axis] = end[front_axis] = out
             near, far = world(start), world(end)
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
@@ -2956,17 +2951,9 @@ class EbsSimulate:
         along = scale * dot(edge2, turn)
         return 0.0 <= along <= 1.0
 
-    def _up_axis(self) -> int:
-        """스테이지 위쪽 축 번호. 못 읽으면 Z"""
-        try:
-            return 1 if UsdGeom.GetStageUpAxis(
-                self._get_stage()) == UsdGeom.Tokens.y else 2
-        except Exception:
-            return 2
-
     def _build_cells(self, box: Gf.Range3d) -> dict:
         """EBS 세 면을 칸으로 쪼갠다. 칸마다 상자와 사각형"""
-        up_axis = self._up_axis()
+        up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis
         side_axis = 3 - up_axis - front_axis
         t = self._probe_depth(box)
