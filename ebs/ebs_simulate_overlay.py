@@ -19,7 +19,8 @@ NAMELESS = "-"
 CLASH = "clash"
 GAP   = "clearance"
 TIGHT = "interference"
-LEAST = "min {0:.3f} m"
+SPAN  = "{0:.2f}M"
+LEAST = "(min gap : {0:.2f}M)"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 LINE_ROOM = 6
@@ -30,6 +31,7 @@ SIDE_BY_SIDE = ("ceiling",)
 COLOR_CAN    = 0xFF9AE7FF
 COLOR_CANNOT = 0xFF1B39FC
 COLOR_TEXT   = 0xFFFFFFFF
+COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 22
 DETAIL_SIZE  = 15
 FACE_SIZE    = 15
@@ -164,6 +166,7 @@ class EbsSimulateOverlay:
     def _verdict_panel(self, said: dict) -> None:
         """세울 수 있나 없나를 말하는 가운데 판"""
         ok = bool(said.get("placeable"))
+        ink = COLOR_INK if ok else COLOR_TEXT
 
         def fill():
             """판 속 글줄을 채운다"""
@@ -171,23 +174,21 @@ class EbsSimulateOverlay:
                                              "margin_height": PAD_Y}):
                 ui.Label(CAN if ok else CANNOT, height=0,
                          alignment=ui.Alignment.CENTER,
-                         style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
+                         style={"font_size": TEXT_SIZE, "color": ink})
                 for line in self._why(said):
                     ui.Label(line, height=0, alignment=ui.Alignment.CENTER,
-                             style={"font_size": DETAIL_SIZE,
-                                    "color": COLOR_TEXT})
+                             style={"font_size": DETAIL_SIZE, "color": ink})
 
         self._floating(said.get("centre"), fill,
                        COLOR_CAN if ok else COLOR_CANNOT)
 
     def _face_panel(self, mark: dict) -> None:
-        """면 하나의 상태와 거리를 선 양옆에 갈라 붙인다"""
+        """한쪽에 상태, 다른 쪽에 거리와 최소 여유. 막힌 면도 똑같이 붙인다"""
         state = mark.get("state")
-        clash = state == "clash"
         ground = COLOR_CAN if state == "clear" else COLOR_CANNOT
+        ink = COLOR_INK if state == "clear" else COLOR_TEXT
         gap = mark.get("distance")
         least = mark.get("min_gap")
-        name = mark.get("name") or ""
 
         def block(lines):
             """글줄 목록을 그리는 함수를 만든다"""
@@ -197,25 +198,20 @@ class EbsSimulateOverlay:
                                                  "margin_height": PAD_Y}):
                     for text in lines:
                         ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
-                                 style={"font_size": FACE_SIZE,
-                                        "color": COLOR_TEXT})
+                                 style={"font_size": FACE_SIZE, "color": ink})
             return fill
 
         at = mark.get("at")
-        if clash:
-            self._floating(at, block([CLASH]), ground)
-            return
         first, second = ((LEFT, RIGHT) if mark.get("face") in SIDE_BY_SIDE
                          else (ABOVE, BELOW))
-        self._floating(at, block([TIGHT if state == "tight" else GAP]),
-                       ground, first)
+        word = (CLASH if state == "clash" else
+                TIGHT if state == "tight" else GAP)
+        self._floating(at, block([word]), ground, first)
         if gap is None:
             return
-        told = [f"{gap:.3f} m"]
+        told = [SPAN.format(gap)]
         if least:
             told.append(LEAST.format(least))
-        if name:
-            told.append(name)
         self._floating(at, block(told), ground, second)
 
     @staticmethod
