@@ -5,25 +5,24 @@ from pxr import Usd, UsdGeom, Sdf, Gf
 __all__ = ["EbsSimulateCamera", "CAMERA_PATH", "CAMERA_BACK",
            "CAMERA_NEAR", "CAMERA_FAR"]
 
-CAMERA_PATH = "/EbsCamera"     # 세션 레이어에 우리가 만드는 카메라
-CAMERA_BACK = 30.0             # interest 에서 정면으로 물러나는 거리, 스테이지 단위
-CAMERA_NEAR = 0.01             # 렌즈에 붙여 둔다. 앞을 자르지 않는다
+CAMERA_PATH = "/EbsCamera"
+CAMERA_BACK = 30.0
+CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
 
 FOCAL      = 50.0
 APERTURE_H = 20.955
 APERTURE_V = 15.2908
 
-ORBIT_FRAME = "ebs_orbit_input"   # 뷰포트를 덮어 입력을 가로채는 프레임
-YAW_PER_PIXEL   = 0.35   # 1 픽셀 끌 때 도는 각도, 도
+ORBIT_FRAME = "ebs_orbit_input"
+YAW_PER_PIXEL   = 0.35
 PITCH_PER_PIXEL = 0.35
-AXIS_LOCK  = 5      # 이만큼 끌기 전에는 축을 안 정한다. 요와 피치는 안 섞인다
+AXIS_LOCK  = 5
 
-ZOOM_PER_NOTCH = 0.88   # 휠 한 칸에 반지름이 이만큼이 된다. 위로 굴리면 가까이
-ZOOM_NEAREST   = 0.15   # 기본 거리(CAMERA_BACK) 대비 가장 가까이
-ZOOM_FURTHEST  = 8.0    # 그리고 가장 멀리
+ZOOM_PER_NOTCH = 0.88
+ZOOM_NEAREST   = 0.15
+ZOOM_FURTHEST  = 8.0
 
-# Kit 의 카메라 조작 바인딩. 비우면 Kit 이 카메라를 안 움직인다
 CAMERA_BINDINGS = "/exts/omni.kit.viewport.window/bindings/camera"
 DEFAULT_BINDINGS = {
     "PanGesture": "Any MiddleButton", "TumbleGesture": "Alt LeftButton",
@@ -31,12 +30,13 @@ DEFAULT_BINDINGS = {
     "ZoomScrollGesture": "Any", "FlightSpeedGesture": "RightButton",
     "FlightMode": "RightButton",
 }
-PITCH_LIMIT = 85.0  # 수평에서 위아래로 여기까지. 극을 넘으면 롤이 생긴다
+PITCH_LIMIT = 85.0
 
 LEFT_BUTTON, RIGHT_BUTTON, MIDDLE_BUTTON = 0, 1, 2
 
 
 def viewport_window(name: str = None):
+    """뷰포트 창을 찾는다. Kit 빌드마다 헬퍼가 달라 차례로 물어본다"""
     try:
         import omni.kit.viewport.utility as vp_util
     except Exception as e:
@@ -46,6 +46,7 @@ def viewport_window(name: str = None):
     tried = []
 
     def ask(helper_name, call):
+        """그 헬퍼가 이 빌드에 있으면 불러 보고, 실패는 적어 둔다"""
         helper = getattr(vp_util, helper_name, None)
         if helper is None:
             tried.append(f"{helper_name}: not in this build")
@@ -81,6 +82,7 @@ def viewport_window(name: str = None):
 class EbsSimulateCamera:
 
     def __init__(self):
+        """원래 카메라, 궤도 상태, 입력 가로채기 자리를 비워 둔다"""
         self._previous = None
         self._orbit = False
         self._interest = None
@@ -97,18 +99,22 @@ class EbsSimulateCamera:
 
     @property
     def previous(self):
+        """이 카메라로 바꾸기 전에 쓰던 뷰포트 카메라 경로"""
         return self._previous
 
     @property
     def orbit(self) -> bool:
+        """지금 궤도 조작을 잡고 있나"""
         return self._orbit
 
     @property
     def interest(self):
+        """궤도가 도는 중심점"""
         return self._interest
 
     @staticmethod
     def viewport():
+        """지금 활성 뷰포트 api. 없으면 None"""
         try:
             from omni.kit.viewport.utility import get_active_viewport
             return get_active_viewport()
@@ -117,12 +123,14 @@ class EbsSimulateCamera:
             return None
 
     def exists(self, stage) -> bool:
+        """우리 카메라 프림이 이미 있나"""
         if stage is None:
             return False
         prim = stage.GetPrimAtPath(CAMERA_PATH)
         return bool(prim.IsValid() and UsdGeom.Camera(prim))
 
     def make(self, stage) -> bool:
+        """세션 레이어에 카메라 프림을 만든다. 있으면 안 만든다"""
         if stage is None or self.exists(stage):
             return False
         with Usd.EditContext(stage, stage.GetSessionLayer()):
@@ -137,6 +145,7 @@ class EbsSimulateCamera:
         return True
 
     def release(self, stage) -> None:
+        """입력 가로채기를 놓고 뷰포트를 원래 카메라로 되돌린다"""
         self._drop()
         self._orbit = False
         self._interest = None
@@ -151,6 +160,7 @@ class EbsSimulateCamera:
         self._previous = None
 
     def reset(self, stage) -> str:
+        """place 때 잡아 둔 첫 자리로 카메라를 되돌린다"""
         if stage is None or self._home is None:
             return ""
         cam_prim, camera = self._camera(stage)
@@ -163,6 +173,7 @@ class EbsSimulateCamera:
         return f"camera back to {distance:.2f} in front of the EBS"
 
     def remove(self, stage) -> None:
+        """놓은 뒤 카메라 프림까지 지운다"""
         self.release(stage)
         if stage is None:
             return
@@ -171,6 +182,7 @@ class EbsSimulateCamera:
                 stage.RemovePrim(CAMERA_PATH)
 
     def place(self, stage, box, facing) -> str:
+        """EBS 앞 CAMERA_BACK 만큼 뒤에 카메라를 세우고 궤도를 연다"""
         viewport = self.viewport()
         if stage is None or viewport is None or box is None or facing is None:
             return ""
@@ -195,6 +207,7 @@ class EbsSimulateCamera:
                 f"{interest[2]:.2f}), near plane {CAMERA_NEAR:.2f}")
 
     def _camera(self, stage):
+        """카메라 프림과 스키마. 없으면 만들어서 준다"""
         if not self.exists(stage):
             self.make(stage)
         cam_prim = stage.GetPrimAtPath(CAMERA_PATH)
@@ -205,6 +218,7 @@ class EbsSimulateCamera:
         return cam_prim, camera
 
     def _take_viewport(self, viewport) -> None:
+        """뷰포트를 우리 카메라로 바꾸고 원래 것을 기억한다"""
         if str(viewport.camera_path) == CAMERA_PATH:
             return
         self._previous = str(viewport.camera_path)
@@ -215,6 +229,7 @@ class EbsSimulateCamera:
 
 
     def _grab(self) -> bool:
+        """마우스를 받을 판을 깔고 Kit 의 기본 조작을 잠근다"""
         if self._catch is not None:
             return True
         window = viewport_window()
@@ -227,6 +242,7 @@ class EbsSimulateCamera:
         return True
 
     def _silence(self, window) -> None:
+        """선택·컨텍스트 메뉴·기본 카메라 단축키를 끈다"""
         say = lambda line: print(f"[ebs] input: {line}")
         try:
             from omni.kit.viewport.utility import disable_selection
@@ -256,6 +272,7 @@ class EbsSimulateCamera:
             say(f"camera bindings NOT cleared: {type(e).__name__}: {e}")
 
     def _restore(self) -> None:
+        """꺼 뒀던 선택과 카메라 단축키를 되돌린다"""
         self._no_pick = None
         self._no_menu = None
         if self._bindings is not None:
@@ -267,6 +284,7 @@ class EbsSimulateCamera:
             self._bindings = None
 
     def _grab_sheet(self, window) -> bool:
+        """뷰포트 위에 투명한 판을 깔고 마우스 콜백을 건다"""
         try:
             import omni.ui as ui
             self._frame_ui = window.get_frame(ORBIT_FRAME)
@@ -291,6 +309,7 @@ class EbsSimulateCamera:
         return True
 
     def _drop(self) -> None:
+        """판과 구독을 놓고 꺼 둔 것들을 되돌린다"""
         self._from = self._axis = self._at = None
         self._selection = None
         self._restore()
@@ -303,6 +322,7 @@ class EbsSimulateCamera:
         self._frame_ui = None
 
     def _mute_selection(self) -> None:
+        """궤도 중에 프림이 선택되면 바로 풀도록 구독한다"""
         try:
             import omni.usd
             self._selection = (omni.usd.get_context().get_stage_event_stream()
@@ -312,6 +332,7 @@ class EbsSimulateCamera:
             print(f"[ebs] prims can still be picked while orbiting: {e}")
 
     def _stage_event(self, event) -> None:
+        """궤도 중 선택 변경이 오면 선택을 지운다"""
         if not self._orbit:
             return
         try:
@@ -326,6 +347,7 @@ class EbsSimulateCamera:
 
 
     def _pressed(self, x, y, button) -> None:
+        """왼쪽 버튼이면 드래그 시작, 아니면 무시"""
         if button != LEFT_BUTTON:
             self._from = self._axis = None
             return
@@ -333,6 +355,7 @@ class EbsSimulateCamera:
         self._at = (x, y)
 
     def _moved(self, x, y) -> None:
+        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다"""
         if self._from is None or self._at is None:
             return
         dx, dy = x - self._at[0], y - self._at[1]
@@ -340,13 +363,16 @@ class EbsSimulateCamera:
         self._drag(dx, dy)
 
     def _start_drag(self) -> None:
+        """드래그 누적을 0 으로. 회전 축은 아직 미정"""
         self._from = (0.0, 0.0)
         self._axis = None
 
     def _end_drag(self) -> None:
+        """드래그 상태를 놓는다"""
         self._from = self._axis = self._at = None
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
+        """더블클릭한 자리에 무엇이 있는지 뷰포트에 묻는다"""
         if not self._orbit or button != LEFT_BUTTON:
             return
         ndc = self._ndc(x, y)
@@ -362,6 +388,7 @@ class EbsSimulateCamera:
             print(f"[ebs] could not ask what is under the cursor: {e}")
 
     def _ndc(self, x: float, y: float):
+        """판 위 픽셀 좌표를 NDC 로. 판 밖이면 None"""
         catch = self._catch
         if catch is None:
             return None
@@ -378,6 +405,7 @@ class EbsSimulateCamera:
         return (u * 2.0 - 1.0, 1.0 - v * 2.0)
 
     def _picked(self, path, position=None, *rest) -> None:
+        """물어본 답이 오면 그 점을 궤도 중심으로 삼는다. 우리 것은 뺀다"""
         if not path or position is None:
             return
         try:
@@ -390,6 +418,7 @@ class EbsSimulateCamera:
         self._look_at(Gf.Vec3d(position[0], position[1], position[2]))
 
     def _look_at(self, target) -> None:
+        """궤도 중심만 그 점으로 옮기고 거리는 그대로 둔다"""
         hold = self._hold()
         if hold is None:
             return
@@ -397,10 +426,12 @@ class EbsSimulateCamera:
         self._settle(hold, hold[3], hold[4])
 
     def _wheel(self, notches: float = 0.0) -> None:
+        """휠을 굴린 만큼 줌"""
         if notches:
             self._zoom(notches)
 
     def _drag(self, dx: float, dy: float) -> None:
+        """먼저 움직인 쪽으로 축을 잠그고, 그 축으로만 돌린다"""
         if self._from is None or not self._orbit:
             return
         self._from = (self._from[0] + dx, self._from[1] + dy)
@@ -416,6 +447,7 @@ class EbsSimulateCamera:
 
 
     def _hold(self):
+        """지금 카메라와 중심까지의 팔(방향·길이). 못 구하면 None"""
         stage = self._stage()
         if stage is None or self._interest is None:
             return None
@@ -432,6 +464,7 @@ class EbsSimulateCamera:
         return stage, cam_prim, camera, arm, radius
 
     def _settle(self, hold, arm, radius: float) -> None:
+        """중심에서 팔 방향으로 radius 만큼 물러난 자리에 카메라를 쓴다"""
         stage, cam_prim, camera = hold[0], hold[1], hold[2]
         up = self._up(stage)
         eye = self._interest + arm.GetNormalized() * radius
@@ -441,6 +474,7 @@ class EbsSimulateCamera:
         self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, radius)
 
     def _turn(self, yaw: float = 0.0, pitch: float = 0.0) -> None:
+        """팔을 좌우(yaw)·상하(pitch)로 돌린다. 상하는 한계까지만"""
         hold = self._hold()
         if hold is None:
             return
@@ -457,6 +491,7 @@ class EbsSimulateCamera:
         self._settle(hold, arm, radius)
 
     def _zoom(self, notches: float) -> None:
+        """팔 길이를 늘이고 줄인다. 가깝고 먼 한계 안으로"""
         hold = self._hold()
         if hold is None:
             return
@@ -470,18 +505,21 @@ class EbsSimulateCamera:
 
     @staticmethod
     def _room(arm, up, pitch: float) -> float:
+        """지금 각도에서 상하로 더 돌 수 있는 몫"""
         height = Gf.Dot(arm.GetNormalized(), up)
         now = math.degrees(math.asin(max(-1.0, min(1.0, height))))
         return max(-PITCH_LIMIT, min(PITCH_LIMIT, now + pitch)) - now
 
     @staticmethod
     def _up(stage):
+        """스테이지의 위쪽 축"""
         if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y:
             return Gf.Vec3d(0.0, 1.0, 0.0)
         return Gf.Vec3d(0.0, 0.0, 1.0)
 
     @staticmethod
     def _eye(cam_prim):
+        """카메라 프림이 지금 서 있는 월드 좌표"""
         try:
             spot = UsdGeom.Xformable(cam_prim).ComputeLocalToWorldTransform(
                 Usd.TimeCode.Default()).ExtractTranslation()
@@ -491,6 +529,7 @@ class EbsSimulateCamera:
 
     @staticmethod
     def _stage():
+        """지금 열린 스테이지. 없으면 None"""
         try:
             import omni.usd
             return omni.usd.get_context().get_stage()
@@ -499,6 +538,7 @@ class EbsSimulateCamera:
 
     @staticmethod
     def _frame(stage, facing) -> tuple:
+        """EBS 가 보는 방향에서 카메라의 세 축을 만든다"""
         rot = UsdGeom.Xformable(facing).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractRotationMatrix()
         up_row = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
@@ -512,6 +552,7 @@ class EbsSimulateCamera:
     @staticmethod
     def _write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye,
                distance: float) -> None:
+        """카메라 행렬과 클리핑, 궤도 중심 거리를 세션 레이어에 쓴다"""
         matrix = Gf.Matrix4d(
             x_cam[0], x_cam[1], x_cam[2], 0.0,
             y_cam[0], y_cam[1], y_cam[2], 0.0,

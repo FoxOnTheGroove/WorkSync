@@ -7,31 +7,27 @@ __all__ = ["EbsSimulateOverlay"]
 
 FRAME_ID = "ebs_simulate_overlay"
 
-# 뷰포트 폰트에 한글이 없어 빈칸으로 나온다. 영문만 쓴다.
 CAN    = "EBS INSTALL AVAILABLE"
 CANNOT = "EBS INSTALL BLOCKED"
 CLEAR  = "no collision"
 
-INNER = "internal clash"          # 무엇에 막혔는지, 한 줄에 하나
-INNER_MANY = "internal clash x {0}"   # 조각이 여럿일 때. 위치는 씬의 상자
+INNER = "internal clash"
+INNER_MANY = "internal clash x {0}"
 FACE_ORDER = ("left", "right", "ceiling")
 NAMELESS = "-"
 
-CLASH = "clash"                   # 면 패널: 막혔을 때
-GAP   = "clearance"               # 비었을 때, 선 위
-TIGHT = "interference"            # 안 닿았는데 최소 여유 미달일 때, 같은 자리
-LEAST = "min {0:.3f} m"           # 지켜야 하는 최소 여유, 거리 아래
+CLASH = "clash"
+GAP   = "clearance"
+TIGHT = "interference"
+LEAST = "min {0:.3f} m"
 
-# 선은 씬에 그린다 (show_markers). 글자는 그 선 중점 양쪽으로 갈라 붙는다
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
-LINE_ROOM = 6                     # 선이 지나갈 자리, 판 사이 여백
+LINE_ROOM = 6
 
-# 이 면들만 글자가 선 양옆으로. 나머지는 위아래로
 SIDE_BY_SIDE = ("ceiling",)
 
-# 판이 색을 지고 글자는 흰색
-COLOR_CAN    = 0xFF00B4E6      # 짙은 황색 (ABGR)
-COLOR_CANNOT = 0xFF2626E6      # 빨강
+COLOR_CAN    = 0xFF00B4E6
+COLOR_CANNOT = 0xFF2626E6
 COLOR_TEXT   = 0xFFFFFFFF
 TEXT_SIZE    = 22
 DETAIL_SIZE  = 15
@@ -45,6 +41,7 @@ class EbsSimulateOverlay:
 
     @classmethod
     def show(cls, vp_name: str = None):
+        """뷰포트 오버레이를 띄운다. 판정을 다시 읽어 그린다"""
         overlay = cls._get(vp_name)
         if overlay is not None:
             overlay.refresh()
@@ -52,6 +49,7 @@ class EbsSimulateOverlay:
 
     @classmethod
     def build(cls, vp_name: str = None):
+        """그리기만 하고 화면 배치는 미룬다"""
         overlay = cls._get(vp_name)
         if overlay is not None:
             overlay.refresh(place=False)
@@ -59,6 +57,7 @@ class EbsSimulateOverlay:
 
     @classmethod
     def reveal(cls, vp_name: str = None):
+        """만들어 둔 판을 화면에 앉히고 카메라를 따라가게 한다"""
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
                 overlay._place()
@@ -66,12 +65,14 @@ class EbsSimulateOverlay:
 
     @classmethod
     def hide(cls, vp_name: str = None):
+        """그린 것을 지운다. 프레임은 남긴다"""
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
                 overlay.clear()
 
     @classmethod
     def destroy(cls, vp_name: str = None):
+        """프레임까지 놓고 인스턴스를 버린다"""
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
                 overlay._destroy()
@@ -79,6 +80,7 @@ class EbsSimulateOverlay:
 
     @classmethod
     def _get(cls, vp_name: str = None):
+        """뷰포트별 인스턴스 하나. 없으면 만든다"""
         window = cls._window(vp_name)
         if window is None:
             return None
@@ -94,6 +96,7 @@ class EbsSimulateOverlay:
     _window = staticmethod(viewport_window)
 
     def __init__(self, vp_name):
+        """뷰포트 하나에 붙는 오버레이 한 벌"""
         self._vp_name = vp_name
         self._window = None
         self._api = None
@@ -103,6 +106,7 @@ class EbsSimulateOverlay:
         self._follow = None
 
     def _build(self, window) -> bool:
+        """뷰포트에 프레임을 걸고 투영에 쓸 viewport api 를 잡는다"""
         try:
             self._frame = window.get_frame(FRAME_ID)
             with self._frame:
@@ -122,6 +126,7 @@ class EbsSimulateOverlay:
         return True
 
     def refresh(self, place: bool = True) -> bool:
+        """판정을 읽어 판을 새로 그린다"""
         said = EbsSimulateService.get_verdict()
         self.clear()
         if not said or self._stack is None:
@@ -142,6 +147,7 @@ class EbsSimulateOverlay:
 
 
     def _floating(self, at, fill, ground, anchor=MIDDLE):
+        """월드 좌표에 매달 판 하나를 만들어 _marks 에 등록한다"""
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
@@ -155,9 +161,11 @@ class EbsSimulateOverlay:
         self._marks.append((placer, panel, tuple(at), anchor))
 
     def _verdict_panel(self, said: dict) -> None:
+        """세울 수 있나 없나를 말하는 가운데 판"""
         ok = bool(said.get("placeable"))
 
         def fill():
+            """판 속 글줄을 채운다"""
             with ui.VStack(spacing=1, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
                 ui.Label(CAN if ok else CANNOT, height=0,
@@ -172,6 +180,7 @@ class EbsSimulateOverlay:
                        COLOR_CAN if ok else COLOR_CANNOT)
 
     def _face_panel(self, mark: dict) -> None:
+        """면 하나의 상태와 거리를 선 양옆에 갈라 붙인다"""
         state = mark.get("state")
         clash = state == "clash"
         ground = COLOR_CAN if state == "clear" else COLOR_CANNOT
@@ -180,7 +189,9 @@ class EbsSimulateOverlay:
         name = mark.get("name") or ""
 
         def block(lines):
+            """글줄 목록을 그리는 함수를 만든다"""
             def fill():
+                """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=1, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
@@ -208,6 +219,7 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _why(said: dict) -> list:
+        """못 세우는 사유 줄. 내부 간섭과 막힌 면을 적는다"""
         boxes = len(said.get("boxes") or ())
         told = [INNER_MANY.format(boxes) if boxes > 1 else INNER] \
             if said.get("inside") else []
@@ -219,6 +231,7 @@ class EbsSimulateOverlay:
 
 
     def _start(self) -> bool:
+        """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""
         try:
             import omni.kit.app
             self._follow = omni.kit.app.get_app().get_update_event_stream() \
@@ -230,6 +243,7 @@ class EbsSimulateOverlay:
         return True
 
     def _place(self) -> None:
+        """월드 좌표를 화면 좌표로 옮겨 판을 앉힌다. 화면 밖이면 숨긴다"""
         if not self._marks:
             return
         try:
@@ -262,11 +276,13 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _outside(x, y, panel_w, panel_h, width, height) -> bool:
+        """판이 프레임 밖으로 나갔나"""
         if width <= 0 or height <= 0:
             return False
         return x < 0 or y < 0 or x + panel_w > width or y + panel_h > height
 
     def _to_screen(self, point):
+        """월드 점을 화면 픽셀로. 카메라 뒤나 화면 밖이면 None"""
         from pxr import Gf
         api = self._api
         at = Gf.Vec3d(*point)
@@ -289,6 +305,7 @@ class EbsSimulateOverlay:
 
 
     def clear(self) -> None:
+        """그린 판과 카메라 추적을 놓는다"""
         self._follow = None
         self._marks = []
         if self._stack is not None:
@@ -298,6 +315,7 @@ class EbsSimulateOverlay:
                 pass
 
     def _destroy(self) -> None:
+        """프레임과 api 참조까지 전부 놓는다"""
         self.clear()
         self._stack = None
         self._frame = None

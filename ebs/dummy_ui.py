@@ -9,27 +9,16 @@ from .ebs_simulate_overlay import EbsSimulateOverlay
 
 __all__ = ["EbsDummyUI", "SweepLog"]
 
-MIN_SIDE    = 0.6      # 최소 여유 입력칸의 기본값, m. 실제 기본은 구현부
-MIN_CEILING = 0.1      # (MIN_GAP_SIDE / MIN_GAP_CEILING) 이고 여기는 표시용
+MIN_SIDE    = 0.6
+MIN_CEILING = 0.1
 
-# 테스트 씬에서 눈에 걸리는 것들. INIT 끝에 끈다
-UNDER_EBS  = "root/Equipment"          # EBS 2port / 3port 프림 아래
+UNDER_EBS  = "root/Equipment"
 LOOSE_HIDE = ("/World/Group_01/Foups",)
 
 
 class SweepLog:
-    """The sweep's rows as a spreadsheet.
+    """The sweep's rows as a spreadsheet."""
 
-    Nothing here touches USD or the simulation: a sweep hands back a row per
-    equipment, and this decides what a reader is shown - which columns, in what
-    order, and what each verdict is called in the note. That is a question
-    about the sheet, so it lives with the rest of the presentation rather than
-    in the implementation.
-    """
-
-    # A blank column between what the equipment says and what the ports say, so
-    # the two halves read apart. offset_diff is coord_diff at 100000 and the
-    # other dropped columns are not what anyone reads the table for.
     COLUMNS = ("equipment", "pivot_ok", "axis",
                "pivot_coord", "pivot_offset", "pivot_offset_puls",
                "",
@@ -37,8 +26,6 @@ class SweepLog:
                "puls_per_unit", "coord_diff", "off_axis_diff",
                "rail", "note")
 
-    # What each pivot_ok says, in the note column. The run log keeps the long
-    # version; the sheet only needs to say which bucket a row fell into.
     NOTES = {
         "TRUE": "",
         "FALSE": "depth 미달",
@@ -47,15 +34,11 @@ class SweepLog:
         "origin": "피봇이 원점",
         "shared": "다른 장비와 좌표 겹침",
     }
-    WAYS = {"axis": "수평", "across": "수직"}   # which way a pivot is out by
+    WAYS = {"axis": "수평", "across": "수직"}
 
     @classmethod
     def write(cls, path: str, rows: list) -> str:
-        """Write the table where `path` points, and say where it went.
-
-        Comma separated and BOM'd, so Excel opens it on a double click with the
-        equipment names intact. No path or no rows writes nothing.
-        """
+        """Write the table where `path` points, and say where it went."""
         path = (path or "").strip()
         if not path or not rows:
             return ""
@@ -74,8 +57,6 @@ class SweepLog:
         """One row's note: why it could not be read, or which bucket it is in."""
         state = str(row.get("pivot_ok", ""))
         why = row.get("why", "")
-        # A row that fell over, and an unreadable XML row, each say what was
-        # actually wrong; the rest say which bucket they fell into.
         if why and state in ("error", "xml-invalid"):
             return why
         if state.startswith("port"):
@@ -85,8 +66,6 @@ class SweepLog:
 
         parts = state[len("invalid:"):].split("+")
         said = []
-        # Being out along the rail and across it is the one thing said twice
-        # over, so the two go in one phrase rather than two.
         ways = [cls.WAYS[way] for way in ("axis", "across") if way in parts]
         if ways:
             said.append(f"좌표 벗어남({' && '.join(ways)})")
@@ -104,6 +83,7 @@ class EbsDummyUI:
     """Dummy UI driven only by the public API (EbsSimulateService)."""
 
     def __init__(self):
+        """위젯 참조를 담을 자리만 만든다. 실제 구성은 build_ui"""
         self._window = None
         self._usd_field = None
         self._xml_field = None
@@ -120,13 +100,12 @@ class EbsDummyUI:
         self._overlay_button = None
         self._overlay_on = False
 
-    # -- build ---------------------------------------------------------------
 
     def build_ui(self):
+        """창 하나에 경로 입력, 설정, 버튼 줄, 상태 줄을 쌓는다"""
         self._window = ui.Window("EBS Simulate", width=520, height=330)
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 8}):
-                # 경로 칸 여섯은 한 번 채우고 안 건드린다. 저희끼리 붙여 둔다
                 with ui.VStack(spacing=1, height=0):
                     self._usd_field  = self._path_row("Stage USD:")
                     self._xml_field  = self._path_row("Port XML:")
@@ -137,18 +116,11 @@ class EbsDummyUI:
 
                 with ui.HStack(height=22, spacing=4):
                     ui.Label("Precision:", width=90)
-                    # 'bbox' and 'mesh' are the same test, so only one is offered.
                     self._precision = ui.ComboBox(1, "box", "triangle", width=90)
                     ui.Label("Offset:", width=48)
-                    # How an offset becomes a distance: one scale everywhere,
-                    # each segment's length over its own distance-puls, or that
-                    # again with port 1 slid onto the equipment's pivot.
                     self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                                               "length / puls", width=126)
                     ui.Label("Debug laser:", width=76)
-                    # The port lasers Align used to draw every time. They are
-                    # for checking the port maths against the drawing, so they
-                    # are off unless you ask.
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
                     ui.Spacer()
@@ -186,14 +158,15 @@ class EbsDummyUI:
                 self._status_label = ui.Label("Ready", height=20)
 
     def _path_row(self, label: str):
+        """라벨 + 입력칸 한 줄. 만든 입력칸을 돌려준다"""
         with ui.HStack(height=20, spacing=4):
             ui.Label(label, width=90)
             field = ui.StringField()
         return field
 
-    # -- handlers ------------------------------------------------------------
 
     def _on_pick_selected(self):
+        """뷰포트 선택에서 장비 이름을 가져와 입력칸에 넣는다"""
         path = EbsSimulateService.get_selected_equipment()
         if not path:
             self._set_status("No equipment found in selection")
@@ -203,16 +176,13 @@ class EbsDummyUI:
         self._set_status(f"Selected: {name}")
 
     def _on_init(self):
+        """설정을 넘기고 init 한 뒤, 테스트용으로 거슬리는 것을 끈다"""
         self._apply_settings()
         self._render(EbsSimulateService.init())
         self._test_clear()
 
     def _test_clear(self) -> list:
-        """테스트 씬에서 눈에 걸리는 셋을 끈다. 없는 것은 넘어간다.
-
-        시뮬레이션과 상관없는 화면 정리라 service 에 안 넣는다. INIT 이 끝에서
-        부르는 것이 유일한 호출이다.
-        """
+        """테스트 씬에서 눈에 걸리는 셋을 끈다. 없는 것은 넘어간다."""
         wanted = [f"{base.rstrip('/')}/{UNDER_EBS}" for base in
                   (self._ebs2_field.model.get_value_as_string().strip(),
                    self._ebs3_field.model.get_value_as_string().strip()) if base]
@@ -239,26 +209,26 @@ class EbsDummyUI:
         return hidden
 
     def _on_simulate(self):
+        """align + collide + camera 를 잇달아 돌리고 오버레이를 켠다"""
         self._apply_settings()
         self._render(EbsSimulateService.simulate(
             self._eqp_field.model.get_value_as_string()))
-        EbsSimulateOverlay.show()      # SIM runs the collide too
+        EbsSimulateOverlay.show()
         self._overlay_on = True
         self._mark_overlay()
 
     def _on_align(self):
+        """1단계. EBS 를 놓는다. 오버레이는 끈다"""
         self._apply_settings()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
-        # A verdict is about where the EBS was standing. Choosing another
-        # machine, or moving it, leaves the panel saying so about nothing.
         EbsSimulateOverlay.hide()
         self._overlay_on = False
         self._mark_overlay()
 
     def _on_camera(self):
+        """3단계. 카메라를 잡고 오버레이를 화면에 앉힌다"""
         self._render(EbsSimulateService.focus())
-        # 시점이 옮겨간 뒤에 켠다. Collide 가 만들어 둔 것이 여기서 보인다.
         EbsSimulateOverlay.reveal()
         self._overlay_on = True
         self._mark_overlay()
@@ -274,14 +244,16 @@ class EbsDummyUI:
         self._set_status("Overlay on" if self._overlay_on else "Overlay off")
 
     def _mark_overlay(self):
+        """Col UI 버튼 글자를 켜짐/꺼짐에 맞춘다"""
         if self._overlay_button:
             self._overlay_button.text = "Col UI ON" if self._overlay_on else "Col UI"
 
     def _on_refresh(self):
-        # 돌려본 카메라를 Camera 가 놓았던 자리로. 궤도 모드는 켜진 채다.
+        """카메라만 원래 자리로 되돌린다"""
         self._render(EbsSimulateService.refresh_camera())
 
     def _on_clear_markers(self):
+        """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
         EbsSimulateService.clear_markers()
         EbsSimulateService.clear_port_lasers()
         EbsSimulateService.clear_sweep()
@@ -293,13 +265,13 @@ class EbsDummyUI:
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
     def _on_collide(self):
+        """2단계. 충돌을 재고 오버레이는 그리기만 해 둔다"""
         self._apply_settings()
         self._render(EbsSimulateService.collide())
-        # 만들어만 둔다. 옛 시점에 판이 떴다가 카메라를 따라 미끄러지는 것보다,
-        # 시점이 자리잡은 뒤 한 번에 뜨는 편이 낫다 -- Camera 가 켠다.
         EbsSimulateOverlay.build()
 
     def _apply_settings(self):
+        """입력칸과 콤보의 값을 서비스 설정으로 넘긴다"""
         EbsSimulateService.set_usd_path(self._usd_field.model.get_value_as_string())
         EbsSimulateService.set_xml_path(self._xml_field.model.get_value_as_string())
         EbsSimulateService.set_ebs_paths(
@@ -320,26 +292,26 @@ class EbsDummyUI:
 
     @staticmethod
     def _number(field, fallback: float) -> float:
+        """입력칸을 숫자로. 비었거나 이상하면 기본값"""
         try:
             return float(field.model.get_value_as_string().strip())
         except (AttributeError, TypeError, ValueError):
             return fallback
 
-    # -- display -------------------------------------------------------------
 
     def _render(self, result: dict):
-        """한 줄만 남긴다. 그 아래에 있던 그리드와 타이밍 목록은 뷰포트의
-        패널이 같은 것을 더 잘 말한다 — 노트와 타이밍은 콘솔에 그대로 간다."""
+        """결과에서 사유 한 줄만 상태 줄에 남긴다"""
         self._set_status((result or {}).get("reason", "") or "No result")
 
     def _set_status(self, text: str):
+        """상태 줄에 한 줄 적는다"""
         if self._status_label:
             self._status_label.text = text
 
-    # -- teardown ------------------------------------------------------------
 
     def destroy(self):
-        EbsSimulateOverlay.destroy()   # it holds a scene view on the viewport
+        """오버레이와 창을 닫는다"""
+        EbsSimulateOverlay.destroy()
         if self._window:
             self._window.destroy()
             self._window = None

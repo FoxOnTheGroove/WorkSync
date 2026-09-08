@@ -28,7 +28,7 @@ CACHE_SUFFIX  = ".ebscache.json"
 CACHE_VERSION = 1
 READ_BLOCK    = 8 << 20
 CAD_PER_UNIT    = 100.0 / 3.0
-CAD_SLACK       = 0.1             # 비유효축 허용 유격 (100/3이 안 나눠떨어짐)
+CAD_SLACK       = 0.1
 OFFSET_PER_UNIT = 100000.0
 RAIL_PREFIX = "rail_"
 
@@ -180,15 +180,14 @@ GEOMETRY_TYPES = frozenset({
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
 })
 
-VERDICT_HEIGHT = 0.8      # 판정 패널 높이. EBS 바닥 0, 천장 1
+VERDICT_HEIGHT = 0.8
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
-STATE_CLASH = "clash"     # 면이 막혔다. 거리는 없다
-STATE_TIGHT = "tight"     # 닿지는 않았는데 최소 여유보다 가깝다. 간섭
-STATE_CLEAR = "clear"     # 비었다. distance None 이면 reach 안에 아무것도 없음
+STATE_CLASH = "clash"
+STATE_TIGHT = "tight"
+STATE_CLEAR = "clear"
 
-# 최소 여유 기본값, m. set_min_gaps 로 바꾼다
 MIN_GAP_CEILING = 0.1
 MIN_GAP_SIDE = 0.6
 
@@ -199,12 +198,12 @@ COLOR_BLOCKED  = (0.9, 0.2, 0.2)
 BLOCKED_OPACITY = 0.6
 BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR    = (1.0, 1.0, 1.0)
-MARKER_EMISSION = 10000.0  # 마커 발광 세기
-COLOR_GAP      = (0.9, 0.7, 0.0)   # 여유를 재는 선. 패널과 같은 짙은 황색
-COLOR_TIGHT    = (0.9, 0.15, 0.15)  # 최소 여유보다 가까울 때. 간섭
+MARKER_EMISSION = 10000.0
+COLOR_GAP      = (0.9, 0.7, 0.0)
+COLOR_TIGHT    = (0.9, 0.15, 0.15)
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
-SHEET_GAP      = 0.001    # 뒷면이 앞면에서 떨어지는 거리 (대각선 대비)
+SHEET_GAP      = 0.001
 
 LASER_ROOT     = "/EbsPortLasers"
 LASER_COLOR    = (1.0, 0.05, 0.05)
@@ -224,13 +223,11 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-GRID = 1                 # 면당 셀 분할 수. 1이면 면 하나가 셀 하나
-# 카메라 단계에서 양옆 빼고 나머지 장비를 투명하게. 느려서 기본은 꺼 둔다 --
-# 켜려면 여기를 True 로. 되돌리기는 release_camera / teardown 이 한다
+GRID = 1
 FADE_OTHERS = False
 LOOKS = "Looks"
 SHADER_TYPE = "Shader"
-GONE_THRESHOLD = 0.5     # 0 이면 blend 라 안 사라진다. 컷아웃 문턱값
+GONE_THRESHOLD = 0.5
 GONE_LAYER = "ebs_hidden.usda"
 GONE = (("inputs:opacity", "Float", 0.0),
         ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
@@ -238,24 +235,21 @@ GONE = (("inputs:opacity", "Float", 0.0),
         ("inputs:opacity_constant", "Float", 0.0),
         ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 
-CLASH_MARKS   = 200      # 내부 충돌 상자 상한. 그 이상은 안 그린다
+CLASH_MARKS   = 200
 CLASH_OPACITY = 0.35
-CLASH_PAD     = 0.002    # 조각 밖으로 덮는 여유, m. 배율이 아니라 절대값이라
-                         # 조각이 크든 작든 같은 두께로 아주 살짝만 덮는다
+CLASH_PAD     = 0.002
 COLOR_CLASH   = (0.95, 0.15, 0.15)
-CLASH_SOURCE  = "ebs:source"   # 임시 진단: 상자에 원본 메시 경로를 적어 둔다
-CLASH_REPORT  = 20       # 그중 콘솔에 찍을 줄 수 (큰 것부터)
-CLASH_PULSE   = 2.0      # 깜박임 한 주기 (초). 0 이면 안 깜박이고 CLASH_OPACITY 로 선다
-CLASH_PULSE_LOW  = 0.15  # 바닥. 0 까지 내리면 완전히 투명해지는 순간 반짝인다
+CLASH_SOURCE  = "ebs:source"
+CLASH_REPORT  = 20
+CLASH_PULSE   = 2.0
+CLASH_PULSE_LOW  = 0.15
 CLASH_PULSE_HIGH = 1.0
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
 PROBE_RATIO = 0.01
-REACH_RATIO = 1.5        # 거리를 재는 범위 (EBS 최장변 대비). 넘으면 거리 없음
-FLAT_TOL    = 0.01       # '같은 평면'으로 볼 깊이 오차 (그 조각의 폭 대비).
-                         # 딱 떨어지는 값만 한 면으로 치면, 조금 기울거나 소수점
-                         # 오차가 있는 면은 모서리 근처 꼭짓점만 남아 중점이 쏠린다
+REACH_RATIO = 1.5
+FLAT_TOL    = 0.01
 PRECISION_BBOX = "bbox"
 PRECISION_MESH = "mesh"
 PRECISION_TRI  = "triangle"
@@ -270,7 +264,7 @@ PASS_TYPES  = ("Scope",)
 MIN_PORTS = 2
 MAX_PORTS = 3
 
-PIVOT_TOLERANCE = 1.0    # 포트 1에서 이만큼 넘게 떨어지면 피봇이 아님
+PIVOT_TOLERANCE = 1.0
 PIVOT_ACROSS = 0.5
 
 
@@ -301,10 +295,10 @@ class EbsSimulate:
         self._verdict: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
                          FACE_LEFT: MIN_GAP_SIDE,
-                         FACE_RIGHT: MIN_GAP_SIDE}   # 면 -> 최소 여유, m
+                         FACE_RIGHT: MIN_GAP_SIDE}
         self._blockers: dict = {}
         self._local: dict = {}
-        self._faces: dict = {}    # 메시별 면 상자 + 로컬 격자
+        self._faces: dict = {}
         self._hidden: list = []
         self._eqp_looks: dict = {}
         self._eqp_shared: set = set()
@@ -326,7 +320,7 @@ class EbsSimulate:
         self._target: dict = None
         self._aligned: bool = False
         self._result: dict = {}
-        self._pulse = None          # 내부 충돌 상자 깜박임 구독
+        self._pulse = None
         self._pulse_inputs: tuple = ()
         self._pulse_from: float = 0.0
 
@@ -2222,11 +2216,7 @@ class EbsSimulate:
         return lambda p: to_world.Transform(Gf.Vec3d(p[0], p[1], p[2]))
 
     def _face_grid(self, path: str, data):
-        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로.
-
-        매번 점을 다시 훑던 자리다 -- 면 20만이면 그것만 150 ms 다.
-        로컬 공간이라 EBS 를 옮겨도 다시 안 만든다 (행렬만 바뀐다).
-        """
+        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로."""
         made = self._faces.get(path)
         if made is not None:
             return made
@@ -2596,9 +2586,6 @@ class EbsSimulate:
         for _, eqp_path in pairs:
             if eqp_path in seen:
                 continue
-            # 걸린 조각 하나에 상자 하나. 상자는 그 메시의 점에서 직접 잰다 --
-            # ComputeWorldBound 는 extentsHint 를 믿는데, 그 값이 실제 형상보다
-            # 크게 적혀 있으면 있지도 않은 덩치가 그려진다
             at = self._mesh_box(stage, eqp_path)
             if at is None:
                 if eqp_path not in where:
@@ -2613,12 +2600,7 @@ class EbsSimulate:
                 "tests": tests}
 
     def _mesh_box(self, stage, path: str):
-        """그 메시의 점으로 직접 잰 상자. 삼각형이 없으면 None.
-
-        ComputeWorldBound 는 extentsHint 를 쓴다(_bounds_cache). 그 값이 실제
-        형상보다 크게 적혀 있는 자산이 있어서, 믿으면 있지도 않은 덩치가
-        빨갛게 그려진다. 그릴 상자만큼은 점에서 다시 잰다.
-        """
+        """그 메시의 점으로 직접 잰 상자. 삼각형이 없으면 None."""
         triangles = self._mesh_triangles(stage, path)
         if not triangles:
             return None
@@ -2634,45 +2616,26 @@ class EbsSimulate:
         return lo, hi
 
     def _boxed_pairs(self, stage, ours: list, theirs: list) -> list:
-        """삼각형이 없는 프리미티브(Cube/Capsule/Cone/Cylinder/Sphere/Plane)는
-        상자 겹침으로 판정해야 한다. UsdGeom.Mesh 가 아니라서 _mesh_local 이
-        빈손을 돌려주고, 삼각형 검사(_meetings)는 그런 조각을 영영 못 잡는다.
-
-        다만 상대가 메시일 때 메시의 '전체' AABB 로 견주면 너무 성글다 --
-        EBS 처럼 속이 빈 복잡한 형상은 AABB 가 실제 표면보다 훨씬 넓어서,
-        표면과 안 닿았는데도 같은 사각 영역 안에 있다는 이유로 걸린다.
-        그래서 메시 쪽은 전체 상자가 아니라 면 격자(_face_grid, 이미 있는
-        로컬 공간 격자)로 실제 가까운 면이 있는지까지 본다 -- 정확한 삼각형
-        판정은 아니지만, "표면 근처"와 "상자 아무 데나"의 차이는 잡는다.
-        양쪽 다 프리미티브면 견줄 면이 없으니 그때만 상자 대 상자로 물러난다.
-        """
+        """삼각형이 없는 프리미티브(Cube/Capsule/Cone/Cylinder/Sphere/Plane)는"""
         found = []
         for a_path, a_box in ours:
             a_mesh = not self._is_boxed_shape(stage, a_path)
             for b_path, b_box in theirs:
                 b_mesh = not self._is_boxed_shape(stage, b_path)
                 if a_mesh and b_mesh:
-                    continue                # 둘 다 메시면 삼각형 검사가 본다
+                    continue
                 if a_mesh:
                     hit = self._mesh_reaches(stage, a_path, b_box)
                 elif b_mesh:
                     hit = self._mesh_reaches(stage, b_path, a_box)
                 else:
-                    hit = self._overlaps(a_box, b_box)   # 견줄 면이 없다
+                    hit = self._overlaps(a_box, b_box)
                 if hit:
                     found.append((a_path, b_path))
         return found
 
     def _mesh_reaches(self, stage, path: str, piece_box) -> bool:
-        """메시 path 의 표면이 piece_box 에 실제로 닿는가.
-
-        piece_box 를 메시 로컬 공간으로 끌어와(_pulled_back) 면 격자에서
-        후보만 추린 뒤(_faces_near, 상자 대 상자라 성기다 -- 대각선 부재는
-        AABB 가 실제 면보다 훨씬 넓어서 안 닿아도 후보에 걸린다), 후보로
-        나온 면마다 부채꼴로 삼각형을 만들어 _triangle_hits_box 로 정확히
-        확인한다(3면 검사가 셀 판정에 쓰는 그 SAT 검사). 하나라도 실제로
-        닿으면 그때 잡는다 -- 격자는 후보를 줄이는 1차 필터일 뿐이다.
-        """
+        """메시 path 의 표면이 piece_box 에 실제로 닿는가."""
         data = self._mesh_local(stage, path)
         to_world = self._to_world(stage, path)
         if not data or to_world is None:
@@ -2696,10 +2659,7 @@ class EbsSimulate:
         return False
 
     def _is_boxed_shape(self, stage, path: str) -> bool:
-        """삼각형이 하나도 안 나오는 조각인가. 이미 알고 있으면(_triangles
-        캐시) 그걸 믿고, 모르면 물어본다 -- 스키마를 못 물을 빌드는 메시로
-        본다(구현부 오류가 아니라 이 조각이 뭔지 모른다는 뜻일 뿐이다).
-        """
+        """삼각형이 하나도 안 나오는 조각인가. 이미 알고 있으면(_triangles"""
         cached = self._triangles.get(path)
         if cached is not None:
             return not cached
@@ -2709,11 +2669,7 @@ class EbsSimulate:
             return False
 
     def _missed(self, theirs: list, pairs: list, world_box) -> None:
-        """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다.
-
-        표면 대 표면으로만 보기 때문에, 열린 면으로 들어오거나 통째로 삼켜진
-        조각은 안 잡힌다. 그게 눈에 안 띄면 검사가 샌 것처럼 보인다.
-        """
+        """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다."""
         if len(pairs) >= CLASH_MARKS:
             self._note(f"interference stopped at the {CLASH_MARKS} piece cap - "
                        f"there may be more")
@@ -2760,8 +2716,7 @@ class EbsSimulate:
         return kept, tally
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
-        """만난 쌍과, 그때 만난 삼각형의 상자. 조각 전체가 아니라 닿은 자리다 --
-        멀리 떨어진 부분 둘이 한 메시면 전체 상자는 그 사이 빈 곳까지 덮는다."""
+        """만난 쌍과, 그때 만난 삼각형의 상자. 조각 전체가 아니라 닿은 자리다 --"""
         grid, origin, step, spread = self._grid_of(yours, box)
         pairs, known, tests = [], set(), 0
         for ebs_path, triangle, lo, hi in mine:
@@ -3016,8 +2971,7 @@ class EbsSimulate:
 
     @staticmethod
     def _joined(triangles, picked: dict, seed: int) -> set:
-        """seed 삼각형에서 꼭짓점을 타고 이어지는 것만 모은다. 꼭짓점을 나눠
-        쓰면 붙어 있는 것으로 본다 -- 메시는 점을 색인으로 공유한다."""
+        """seed 삼각형에서 꼭짓점을 타고 이어지는 것만 모은다. 꼭짓점을 나눠"""
         joins = {}
         for at in picked:
             for vertex in triangles[at]:
@@ -3083,15 +3037,7 @@ class EbsSimulate:
     @staticmethod
     def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
                   slack: float = OVERLAP_EPS):
-        """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, Cube 처럼
-        그 면 전체의 상자 중심(가로/세로 각각 min/max 의 중점)에서 선을 뽑는다.
-        꼭짓점을 평균 내면 삼각형을 어떻게 쪼갰는지에 따라 중심이 쏠린다.
-
-        같은 높이인지는 slack 만큼 봐준다 -- 딱 떨어지는 값만 한 면으로 치면
-        조금 기운 면은 가장 가까운 모서리 쪽 꼭짓점만 남아 중점이 그리로 쏠린다.
-        높이가 같아도 붙어 있는 것만 한 면이다 -- 떨어진 두 면이 우연히 같은
-        높이면, 묶었다가는 그 사이 허공에 선이 간다.
-        """
+        """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, Cube 처럼"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, seed = None, -1
         for at, triangle in enumerate(triangles):
@@ -3235,8 +3181,7 @@ class EbsSimulate:
 
     @staticmethod
     def _clash_report(boxes) -> None:
-        """임시 진단: 어느 원본 메시가 어느 상자가 되었나. 큰 것부터 -- 부풀어
-        보이는 것은 조각의 월드 AABB 라 대각선·L 자 형상일수록 크게 나온다."""
+        """임시 진단: 어느 원본 메시가 어느 상자가 되었나. 큰 것부터 -- 부풀어"""
         told = []
         for at, entry in enumerate(boxes):
             lo, hi = entry[0], entry[1]
@@ -3283,8 +3228,7 @@ class EbsSimulate:
 
     @staticmethod
     def _pulse_inputs_of(stage) -> tuple:
-        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다 --
-        발광 세기까지 같이 흔들면 몇 초 뒤 화면 갱신이 밀린다."""
+        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다 --"""
         looks = f"{MARKER_ROOT}/Looks/clash"
         wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
                   (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
