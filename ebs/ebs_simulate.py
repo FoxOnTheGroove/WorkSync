@@ -39,16 +39,19 @@ SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_SNAP)
 
 
 def _remote(path: str) -> bool:
+    """omniverse:// 같은 원격 경로인가"""
     head = path.split("://", 1)
     return len(head) == 2 and head[0].isalpha()
 
 
 def _client():
+    """omni.client 를 그때 가서 부른다. 로컬만 쓸 때는 없어도 된다"""
     import omni.client
     return omni.client
 
 
 def _stamp_of(path: str) -> list:
+    """캐시가 아직 맞는지 볼 표식: 판본, 크기, 수정 시각"""
     if _remote(path):
         client = _client()
         result, entry = client.stat(path)
@@ -62,6 +65,7 @@ def _stamp_of(path: str) -> list:
 
 
 def _read_bytes(path: str) -> bytes:
+    """로컬이든 원격이든 파일을 통째로 읽는다"""
     if _remote(path):
         client = _client()
         result, _, content = client.read_file(path)
@@ -73,6 +77,7 @@ def _read_bytes(path: str) -> bytes:
 
 
 def _write_text(path: str, text: str) -> None:
+    """글을 쓴다. 로컬은 옆자리에 썼다가 바꿔치기해 반쪽 파일을 안 남긴다"""
     if _remote(path):
         client = _client()
         result = client.write_file(path, text.encode("utf-8"))
@@ -93,10 +98,12 @@ def _write_text(path: str, text: str) -> None:
 
 
 def _plain(name: str) -> str:
+    """XML 이름에서 네임스페이스를 떼어낸다"""
     return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
 
 
 def _as_float(text) -> "float | None":
+    """숫자로. 안 되면 None"""
     try:
         return float(str(text).strip())
     except (TypeError, ValueError):
@@ -105,6 +112,7 @@ def _as_float(text) -> "float | None":
 
 class _PortScan:
     def __init__(self):
+        """XML 을 훑으며 모은 것을 담을 자리"""
         self.addr_cad = {}
         self.addr_next = {}
         self.found = {}
@@ -113,6 +121,7 @@ class _PortScan:
         self._text = []
 
     def start(self, tag, attrib):
+        """여는 태그. 속성을 모으고 주소를 물려준다"""
         entries = {}
         for raw, value in attrib.items():
             entries[_plain(raw)] = value
@@ -126,9 +135,11 @@ class _PortScan:
         del self._text[:]
 
     def data(self, text):
+        """태그 사이 글을 모은다"""
         self._text.append(text)
 
     def end(self, tag):
+        """닫는 태그. 여기서 CAD 좌표, 다음 주소, 포트를 거둔다"""
         entries = self._groups.pop()
         addr = self._addrs.pop()
         key = entries.get("key")
@@ -156,6 +167,7 @@ class _PortScan:
                     int(port.group(2))] = (_as_float(entries.get(OFFSET_KEY)), addr)
 
     def close(self):
+        """거둔 포트 표"""
         return self.found
 
 
@@ -166,6 +178,7 @@ except Exception:
 
 
 def _children(prim):
+    """자식 프림. 인스턴스 안쪽까지 본다"""
     if _EVERY_CHILD is not None:
         try:
             return prim.GetFilteredChildren(_EVERY_CHILD)
@@ -270,6 +283,7 @@ PIVOT_ACROSS = 0.5
 
 class EbsSimulate:
     def __init__(self):
+        """설정, 색인, 캐시 자리를 전부 비워 둔다"""
         self._xml_path: str = ""
         self._usd_path: str = ""
         self._ebs_path_2port: str = ""
@@ -326,12 +340,14 @@ class EbsSimulate:
 
 
     def set_usd_path(self, path: str) -> None:
+        """열 스테이지 경로. 바뀌면 Init 을 다시 받아야 한다"""
         path = (path or "").strip()
         if path != self._usd_path:
             self._ready = False
         self._usd_path = path
 
     def open_stage(self) -> bool:
+        """그 USD 를 연다. 같은 것이 이미 열려 있으면 안 연다"""
         if not self._usd_path:
             return True
         context = omni.usd.get_context()
@@ -359,6 +375,7 @@ class EbsSimulate:
         return True
 
     def set_xml_path(self, path: str) -> None:
+        """포트 XML 경로. 바뀌면 포트 표와 Init 을 버린다"""
         path = (path or "").strip()
         if path != self._xml_path:
             self._port_map = {}
@@ -366,16 +383,20 @@ class EbsSimulate:
         self._xml_path = path
 
     def set_ebs_paths(self, path_2port: str, path_3port: str) -> None:
+        """2포트/3포트 EBS 프림 경로"""
         self._ebs_path_2port = (path_2port or "").strip()
         self._ebs_path_3port = (path_3port or "").strip()
 
     def hide_ebs(self) -> int:
+        """EBS 둘 다 화면에서 끈다"""
         return self._show_ebs([self._ebs_path_2port, self._ebs_path_3port], False)
 
     def show_ebs(self, prim) -> int:
+        """그 EBS 하나를 켠다"""
         return self._show_ebs([prim], True)
 
     def _show_ebs(self, wanted: list, visible: bool) -> int:
+        """세션 레이어에 가시성을 쓴다. 켠 것은 상자를 다시 잰다"""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -402,33 +423,40 @@ class EbsSimulate:
         return done
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
+        """면마다 지켜야 하는 최소 여유(m)"""
         self._min_gap = {FACE_CEILING: max(0.0, float(ceiling)),
                          FACE_LEFT: max(0.0, float(side)),
                          FACE_RIGHT: max(0.0, float(side))}
 
     @staticmethod
     def _probe_depth(box: Gf.Range3d) -> float:
+        """닿았다고 볼 깊이. EBS 최장변 대비 PROBE_RATIO"""
         longest = max(box.GetMax()[i] - box.GetMin()[i] for i in range(3))
         return max(longest * PROBE_RATIO, 1e-6)
 
     def set_precision(self, mode: str) -> None:
+        """충돌 판정 정밀도. 모르는 값이면 그대로 둔다"""
         if mode in (PRECISION_BBOX, PRECISION_MESH, PRECISION_TRI):
             self._precision = mode
         else:
             print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
 
     def set_offset_scale(self, mode: str) -> None:
+        """포트 offset 을 거리로 바꾸는 방식"""
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
     def set_show_lasers(self, on: bool) -> None:
+        """align 이 확인용 레이저를 그릴지"""
         self._lasers = bool(on)
 
     def set_rail_root(self, path: str) -> None:
+        """레일 프림의 부모 경로. 바뀌면 레일 색인을 버린다"""
         self._rail_index = None
         self._rail_root = (path or "").strip()
 
     def set_search_root(self, path: str) -> None:
+        """EQP_ 장비를 찾을 서브트리. 바뀌면 색인과 Init 을 버린다"""
         path = (path or "").strip()
         if path != self._search_root:
             self._eqp_index = {}
@@ -436,12 +464,15 @@ class EbsSimulate:
         self._search_root = path
 
     def get_result(self) -> dict:
+        """마지막 단계가 남긴 결과"""
         return dict(self._result)
 
     def get_timings(self) -> list:
+        """마지막 단계의 구간별 시간"""
         return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
+        """그린 것, 카메라, 색인, 캐시를 전부 놓는다"""
         self.show_equipment()
         self._camera.remove(self._get_stage())
         self.clear_markers()
@@ -462,6 +493,7 @@ class EbsSimulate:
 
 
     def _begin(self) -> None:
+        """한 단계를 시작한다. 시간과 로그를 비운다"""
         self._boxed = {}
         self._timings = []
         self._notes = []
@@ -469,6 +501,7 @@ class EbsSimulate:
         self._started = time.perf_counter()
 
     def _report_stages(self, title: str, mark: int = 0) -> None:
+        """구간별 시간을 단계로 묶어 한 줄씩 찍는다"""
         stages = {}
         for label, spent in self._timings[mark:]:
             stage, _, kind = label.partition(":")
@@ -485,22 +518,27 @@ class EbsSimulate:
             print(f"[ebs]   {stage:<10} {parts}")
 
     def _fail(self, key: str, reason: str, short: str = ""):
+        """실패 사유를 적고 None. 부른 쪽이 payload 로 감싼다"""
         self._why = short or reason
         print(f"[ebs] {key}: {reason}")
         return None
 
     def _note(self, text: str) -> None:
+        """한 줄 로그. 콘솔에도 찍고 notes 에도 남긴다"""
         self._notes.append(text)
         print(f"[ebs] {text}")
 
     def get_notes(self) -> list:
+        """이번 단계에 남긴 로그"""
         return list(self._notes)
 
     def _hush(self, loud: bool):
+        """loud 가 아니면 그 안의 print 를 삼킨다"""
         return nullcontext() if loud else redirect_stdout(io.StringIO())
 
     @contextmanager
     def _stage_timer(self, label: str):
+        """그 구간이 얼마나 걸렸는지 재서 timings 에 담는다"""
         started = time.perf_counter()
         try:
             yield
@@ -509,6 +547,7 @@ class EbsSimulate:
 
 
     def init(self) -> dict:
+        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다. 지오메트리는 안 읽는다"""
         self._begin()
         self._eqp_boxes = None
         self._eqp_looks = {}
@@ -547,12 +586,14 @@ class EbsSimulate:
         return self._payload(True, f"Ready: {equipment} equipment, {ports} port entries")
 
     def prepare(self, equipment: str = "") -> dict:
+        """장비를 확정하고 포트 수·EBS·피봇을 잡는다"""
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
         return self._do_prepare(equipment)
 
     def align(self, equipment: str = "") -> dict:
+        """prepare 를 품고, 포트 위치를 계산해 EBS 를 놓는다"""
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -562,14 +603,17 @@ class EbsSimulate:
         return self._do_align()
 
     def focus(self) -> dict:
+        """카메라를 EBS 앞에 세운다"""
         self._begin()
         return self._do_focus()
 
     def collide(self) -> dict:
+        """3면 충돌과 여유 거리를 재고 마커를 그린다"""
         self._begin()
         return self._do_collide()
 
     def sweep_ports(self) -> dict:
+        """장비 전체의 피봇과 포트 1 을 재서 표로 뽑는다 (진단용)"""
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -666,6 +710,7 @@ class EbsSimulate:
                                     if not k.startswith("_")} for row in rows])
 
     def _measure(self, to_world, axis: int, rail, port, here, addr: int) -> dict:
+        """레일 방향을 기준으로 피봇과 포트의 어긋남을 잰다"""
         origin_local, onward_local, _ = self._rail_frame
         origin = to_world.Transform(origin_local)
         onward = to_world.Transform(onward_local)
@@ -675,6 +720,7 @@ class EbsSimulate:
         across = (-along[1], along[0])
 
         def project(point, unit):
+            """그 점을 단위벡터에 투영한 길이"""
             return ((point[0] - origin[0]) * unit[0]
                     + (point[1] - origin[1]) * unit[1])
 
@@ -708,6 +754,7 @@ class EbsSimulate:
         return row
 
     def _pivot_state(self, row: dict, here, eqp_id: str) -> str:
+        """그 피봇을 믿을 수 있나. 원점·축·포트 수를 본다"""
         off = []
         if abs(row["coord_diff"]) > PIVOT_TOLERANCE:
             off.append("axis")
@@ -723,6 +770,7 @@ class EbsSimulate:
         return "TRUE"
 
     def _mark_shared(self, rows: list) -> None:
+        """같은 자리를 여러 장비가 피봇으로 쓰면 표시한다"""
         seen = {}
         for row in rows:
             if "pivot_coord" not in row:
@@ -738,6 +786,7 @@ class EbsSimulate:
                     row["pivot_ok"] = state + "+shared"
 
     def _report_spread(self, rows: list) -> None:
+        """offset_diff 의 최소·중앙·최대를 한 줄로 요약한다"""
         gaps = [r["offset_diff"] for r in rows
                 if "offset_diff" in r and r.get("pivot_ok") == "TRUE"]
         doubted = sum(1 for r in rows
@@ -753,6 +802,7 @@ class EbsSimulate:
                        f"ports than the EBS spans")
 
     def simulate(self, equipment: str = "") -> dict:
+        """prepare + align + collide + focus 를 잇달아"""
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -775,6 +825,7 @@ class EbsSimulate:
 
 
     def _do_prepare(self, equipment: str) -> dict:
+        """장비를 찾아 포트 수로 EBS 를 고르고 피봇을 잡는다"""
         self._target = None
         self._aligned = False
 
@@ -821,6 +872,7 @@ class EbsSimulate:
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
     def _do_focus(self) -> dict:
+        """EBS 상자를 담도록 카메라를 세운다"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         if not self._aligned:
@@ -845,6 +897,7 @@ class EbsSimulate:
                              else "Camera focus failed")
 
     def _do_align(self) -> dict:
+        """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         stage = self._get_stage()
@@ -881,6 +934,7 @@ class EbsSimulate:
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
 
     def _side_roots(self) -> list:
+        """좌우 판정에 쓸 옆 장비들. 고르는 것은 side_band"""
         stage = self._get_stage()
         if stage is None:
             return []
@@ -899,6 +953,7 @@ class EbsSimulate:
         return roots
 
     def _do_collide(self) -> dict:
+        """3면 충돌, 빈 면 거리, 내부 간섭을 재고 판정과 마커까지"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         if not self._aligned:
@@ -970,6 +1025,7 @@ class EbsSimulate:
         )
 
     def owner_name(self, path: str) -> str:
+        """메시 경로에서 사람이 아는 이름(장비/그룹)을 뽑는다"""
         parts = [part for part in str(path or "").split("/") if part]
         if not parts:
             return ""
@@ -983,6 +1039,7 @@ class EbsSimulate:
 
     def build_verdict(self, ebs_prim, cells: dict, distances: dict,
                       inside: bool, boxes: list = None) -> dict:
+        """오버레이가 읽을 판정 한 벌. 세울 수 있나, 왜 못 세우나"""
         bbox = self._ebs_bound(ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
@@ -1010,6 +1067,7 @@ class EbsSimulate:
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:
+        """면마다 상태·거리·선 두 끝을 만든다. 최소 여유 미달도 여기서"""
         stage = self._get_stage()
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -1019,6 +1077,7 @@ class EbsSimulate:
         middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
 
         def world(point):
+            """로컬 점을 월드로"""
             got = to_world.Transform(Gf.Vec3d(*point))
             return (got[0], got[1], got[2])
 
@@ -1064,10 +1123,12 @@ class EbsSimulate:
         return marks
 
     def get_verdict(self) -> dict:
+        """마지막 collide 가 만든 판정"""
         return dict(self._verdict)
 
 
     def build_index(self) -> int:
+        """search root 아래 EQP_ 장비 이름 -> 경로 색인"""
         stage = self._get_stage()
         self._eqp_index = {}
         self._rail_index = None
@@ -1087,6 +1148,7 @@ class EbsSimulate:
         return len(self._eqp_index)
 
     def _walk(self, stage: Usd.Stage):
+        """프림을 훑는다. PRUNE_TYPES 아래로는 안 내려간다"""
         root = None
         if self._search_root:
             root = stage.GetPrimAtPath(self._search_root)
@@ -1107,6 +1169,7 @@ class EbsSimulate:
             stack.extend(_children(prim))
 
     def equipment_boxes(self, stage) -> dict:
+        """장비 이름 -> 월드 상자. 상자 목록에서 꺼내 쓴다"""
         if self._eqp_boxes is not None:
             return self._eqp_boxes
         with self._stage_timer(f"measure {len(self._eqp_index)} equipment"):
@@ -1118,6 +1181,7 @@ class EbsSimulate:
         return boxes
 
     def hide_other_equipment(self, keep: list) -> int:
+        """남길 것만 빼고 나머지 장비를 투명하게 (FADE_OTHERS)"""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -1129,6 +1193,7 @@ class EbsSimulate:
         return len(self._hidden)
 
     def show_equipment(self) -> None:
+        """투명하게 만든 것을 되돌린다"""
         if not self._hidden:
             return
         stage = self._get_stage()
@@ -1137,6 +1202,7 @@ class EbsSimulate:
         self._hidden = []
 
     def _looks_shaders(self, stage, path: str) -> list:
+        """그 장비가 쓰는 Looks 아래 셰이더들"""
         found = self._eqp_looks.get(path)
         if found is not None:
             return found
@@ -1161,6 +1227,7 @@ class EbsSimulate:
         return found
 
     def _gone_layer(self, stage):
+        """투명 처리를 담는 전용 레이어. 되돌리기가 Clear 한 번이다"""
         session = stage.GetSessionLayer()
         if self._gone is None:
             self._gone = Sdf.Layer.CreateAnonymous(GONE_LAYER)
@@ -1169,6 +1236,7 @@ class EbsSimulate:
         return self._gone
 
     def _author_opacity(self, stage, paths: list, hide: bool) -> bool:
+        """셰이더에 투명 값을 쓴다. 같이 쓰는 머티리얼은 건너뛴다"""
         if not paths:
             return True
         if not hide:
@@ -1210,6 +1278,7 @@ class EbsSimulate:
         return True
 
     def _check_gone(self, stage, shader: str) -> None:
+        """정말 투명해졌는지 몇 개만 다시 읽어 본다"""
         try:
             prim = stage.GetPrimAtPath(shader)
             if not prim or not prim.IsValid():
@@ -1231,16 +1300,19 @@ class EbsSimulate:
 
     @staticmethod
     def _cast(box, way) -> tuple:
+        """그 타입으로 속성 값을 만든다"""
         lo, hi = box.GetMin(), box.GetMax()
         centre = (lo[0] + hi[0]) * 0.5 * way[0] + (lo[1] + hi[1]) * 0.5 * way[1]
         half = (abs(way[0]) * (hi[0] - lo[0]) + abs(way[1]) * (hi[1] - lo[1])) * 0.5
         return (centre - half, centre + half)
 
     def side_neighbours(self, stage, ebs_prim, eqp_prim) -> list:
+        """EBS 좌우에 있는 장비 경로"""
         found = self.side_band(stage, ebs_prim, eqp_prim)
         return found["beside"] if found else []
 
     def side_band(self, stage, ebs_prim, eqp_prim) -> dict:
+        """EBS 를 기준으로 좌우 띠 안에 드는 장비를 고른다"""
         boxes = self.equipment_boxes(stage)
         mine = self._equipment_id(eqp_prim)
         key = next((name for name in self._eqp_index
@@ -1287,6 +1359,7 @@ class EbsSimulate:
         }
 
     def _sideways(self, ebs_prim) -> tuple:
+        """그 상자가 EBS 의 좌우 어느 쪽에 얼마나 걸치나"""
         try:
             row = self._ebs_bound(ebs_prim).GetMatrix().GetRow(0)
             length = math.sqrt(row[0] ** 2 + row[1] ** 2)
@@ -1297,11 +1370,13 @@ class EbsSimulate:
         return (1.0, 0.0)
 
     def get_selected_equipment(self) -> str:
+        """뷰포트 선택에서 장비 경로 하나"""
         stage = self._get_stage()
         prim = self._resolve_by_selection(stage) if stage else None
         return str(prim.GetPath()) if prim else ""
 
     def _resolve_by_selection(self, stage: Usd.Stage) -> "Usd.Prim | None":
+        """선택된 프림에서 위로 올라가며 EQP_ 장비를 찾는다"""
         paths = omni.usd.get_context().get_selection().get_selected_prim_paths()
         for path in paths:
             prim = stage.GetPrimAtPath(path)
@@ -1312,6 +1387,7 @@ class EbsSimulate:
         return None
 
     def _resolve_by_name(self, stage: Usd.Stage, text: str) -> "Usd.Prim | None":
+        """이름으로 장비를 찾는다. EQP_ 접두는 없어도 붙인다"""
         text = text.strip()
         if text.startswith("/"):
             prim = stage.GetPrimAtPath(text)
@@ -1349,11 +1425,13 @@ class EbsSimulate:
 
     @staticmethod
     def _equipment_id(prim: Usd.Prim) -> str:
+        """프림 이름에서 EQP_ 를 뗀 장비 번호"""
         name = prim.GetName()
         return name[len(EQP_PREFIX):] if name.upper().startswith(EQP_PREFIX) else name
 
     @staticmethod
     def resolve_anchor(prim: Usd.Prim, depth: int = ANCHOR_DEPTH):
+        """피봇으로 쓸 프림. ANCHOR_DEPTH 만큼 내려가 본다"""
         current, level = prim, 0
         while level < depth:
             children = _children(current) if current and current.IsValid() else []
@@ -1368,6 +1446,7 @@ class EbsSimulate:
 
 
     def load_ports(self) -> int:
+        """포트 XML 을 읽는다. 캐시가 맞으면 캐시로"""
         self._port_map = {}
         self._port_offsets = {}
         self._port_addr = {}
@@ -1387,6 +1466,7 @@ class EbsSimulate:
         return len(self._port_map)
 
     def _scan_xml(self) -> "dict | None":
+        """XML 을 파싱해 포트·주소·CAD 좌표를 거둔다"""
         scan = _PortScan()
         try:
             with self._stage_timer("XML: parse"):
@@ -1400,6 +1480,7 @@ class EbsSimulate:
         return scan.found
 
     def _feed_parser(self, scan: "_PortScan") -> int:
+        """파일을 조각으로 읽어 파서에 흘린다"""
         parser = expat.ParserCreate()
         parser.buffer_text = True
         parser.StartElementHandler = scan.start
@@ -1424,6 +1505,7 @@ class EbsSimulate:
         return reads
 
     def _collect_ports(self, found: dict) -> None:
+        """거둔 것을 장비별 포트 표로 정리한다"""
         spanning, gapped = [], []
         for key, by_index in found.items():
             indices = sorted(by_index)
@@ -1446,12 +1528,15 @@ class EbsSimulate:
 
 
     def _cache_path(self) -> str:
+        """그 XML 옆에 둘 캐시 파일 경로"""
         return self._xml_path + CACHE_SUFFIX
 
     def _source_stamp(self) -> list:
+        """지금 XML 의 표식. 캐시와 견줄 값"""
         return _stamp_of(self._xml_path)
 
     def _load_cache(self) -> bool:
+        """캐시를 읽는다. 판본이나 표식이 다르면 버린다"""
         path = self._cache_path()
         try:
             want = self._source_stamp()
@@ -1485,6 +1570,7 @@ class EbsSimulate:
         return True
 
     def _save_cache(self) -> None:
+        """포트 표를 캐시로 남긴다"""
         path = self._cache_path()
         with self._stage_timer("XML: cache write"):
             try:
@@ -1504,14 +1590,17 @@ class EbsSimulate:
                    f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
 
     def get_port_count(self, eqp_id: str) -> "int | None":
+        """그 장비의 포트 수"""
         indices = self.get_port_indices(eqp_id)
         return len(indices) if indices else None
 
     def get_port_indices(self, eqp_id: str) -> list:
+        """그 장비의 포트 번호들"""
         return list(self._port_map.get(eqp_id.upper(), []))
 
 
     def find_rail(self, stage: Usd.Stage, addr_number: int, prefer=()):
+        """그 장비가 붙는 레일. 직선인지 코너인지도 함께"""
         prefix = f"{RAIL_PREFIX}{addr_number}_"
         found = self._rails_from(stage, addr_number)
         if not found:
@@ -1550,6 +1639,7 @@ class EbsSimulate:
         return straight[0]
 
     def _rails_from(self, stage: Usd.Stage, addr_number: int) -> list:
+        """rail_<a>_<b> 프림을 훑어 구간 색인을 만든다"""
         if self._rail_index is None:
             self._rail_index = {}
             root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
@@ -1571,6 +1661,7 @@ class EbsSimulate:
         return self._rail_index.get(addr_number, [])
 
     def _rail_axis(self, addr_a: int, addr_b: int) -> "int | None":
+        """그 레일이 X 로 뻗나 Y 로 뻗나"""
         cad_a, cad_b = self._addr_cad.get(addr_a), self._addr_cad.get(addr_b)
         if cad_a is None or cad_b is None:
             return None
@@ -1585,6 +1676,7 @@ class EbsSimulate:
         return moves[0]
 
     def _addr_step(self, addr: int, axis: int):
+        """그 주소 구간의 길이와 puls. offset 환산에 쓴다"""
         cad = self._addr_cad.get(addr)
         if cad is None:
             return None
@@ -1597,6 +1689,7 @@ class EbsSimulate:
         return None
 
     def compute_port_points(self, stage: Usd.Stage, eqp_id: str):
+        """포트 번호마다 월드 좌표를 만든다"""
         key = eqp_id.upper()
         self._why = ""
         addr_a = self._port_addr.get(key)
@@ -1658,6 +1751,7 @@ class EbsSimulate:
 
     def _coords_by_offset(self, key: str, axis: int, direction: float,
                           start: float, addr_a: int) -> "dict | None":
+        """offset 을 OFFSET_PER_UNIT 로 나눠 거리로"""
         offsets = self._rebase_offsets(key, addr_a, axis, direction)
         spacing = self._port_spacing(key, offsets)
         if spacing is None:
@@ -1679,6 +1773,7 @@ class EbsSimulate:
 
     def _coords_by_puls(self, key: str, axis: int, direction: float,
                         start: float, addr_a: int) -> "dict | None":
+        """구간 길이와 distance-puls 로 거리로"""
         offsets = self._port_offsets.get(key, {})
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(addr_a)
@@ -1722,6 +1817,7 @@ class EbsSimulate:
 
     def _rebase_offsets(self, key: str, base_addr: int, axis: int,
                         direction: float) -> dict:
+        """포트 offset 을 그 장비 기준으로 다시 잡는다"""
         offsets = dict(self._port_offsets.get(key, {}))
         addr_of = self._port_addr_of.get(key, {})
         base_cad = self._addr_cad.get(base_addr)
@@ -1745,6 +1841,7 @@ class EbsSimulate:
         return offsets
 
     def _port_spacing(self, key: str, offsets: dict) -> "float | None":
+        """포트 사이 간격. 간격이 안 맞으면 알린다"""
         gaps = [offsets[i] - offsets[i + 1]
                 for i in sorted(offsets) if i + 1 in offsets]
         if 1 not in offsets or not gaps:
@@ -1761,6 +1858,7 @@ class EbsSimulate:
         return spacing
 
     def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
+        """EBS 를 놓을 목표점. snap 보정까지"""
         self._port_world = {}
         found = self.compute_port_points(stage, eqp_id)
         if found is None:
@@ -1794,6 +1892,7 @@ class EbsSimulate:
 
     def _snap_shift(self, to_world, axis: int, rail, spots: dict, here,
                     eqp_id: str) -> tuple:
+        """포트 1 을 피봇에 얹도록 밀어 주는 몫"""
         if self._offset_scale != SCALE_SNAP:
             return (0.0, 0.0)
         if 1 not in spots or self._rail_frame is None:
@@ -1814,6 +1913,7 @@ class EbsSimulate:
 
     @staticmethod
     def _local_translation(prim: Usd.Prim) -> Gf.Vec3d:
+        """그 프림이 부모 안에서 놓인 자리"""
         xformable = UsdGeom.Xformable(prim)
         if not xformable:
             return Gf.Vec3d(0.0, 0.0, 0.0)
@@ -1822,6 +1922,7 @@ class EbsSimulate:
 
     @staticmethod
     def _parent_world(prim: Usd.Prim) -> Gf.Matrix4d:
+        """부모까지의 월드 행렬. 없으면 단위행렬"""
         parent = prim.GetParent() if prim else None
         if parent and parent.IsValid() and UsdGeom.Xformable(parent):
             return UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(
@@ -1831,6 +1932,7 @@ class EbsSimulate:
 
     def _place_ebs(self, ebs_prim: Usd.Prim, world_position: Gf.Vec3d,
                    anchor: Usd.Prim) -> bool:
+        """EBS 를 그 월드 좌표에 놓는다. 회전은 피봇에서 가져온다"""
         stage = self._get_stage()
         xformable = UsdGeom.Xformable(ebs_prim)
         if stage is None or not xformable:
@@ -1847,6 +1949,7 @@ class EbsSimulate:
         return self._write_transform(stage, xformable, rotation, scale, local)
 
     def _align_prims(self, ebs_prim: Usd.Prim, anchor_prim: Usd.Prim) -> bool:
+        """포트를 못 쓸 때. EBS 를 피봇 프림에 통째로 맞춘다"""
         stage = self._get_stage()
         if stage is None or not anchor_prim.IsValid():
             return False
@@ -1865,6 +1968,7 @@ class EbsSimulate:
                                      target_local.ExtractTranslation())
 
     def _write_transform(self, stage, xformable, rotation, scale, translation) -> bool:
+        """쓸 수 있는 xformOp 를 찾아 회전·크기·이동을 쓴다"""
         ops = {op.GetOpName(): op for op in xformable.GetOrderedXformOps()}
 
         with Usd.EditContext(stage, stage.GetSessionLayer()):
@@ -1889,6 +1993,7 @@ class EbsSimulate:
                 return bool(api and api.SetTranslate(Gf.Vec3d(translation)))
 
     def _set_rotation(self, ops: dict, rotation) -> bool:
+        """orient 나 rotateXYZ 중 있는 것에 회전을 쓴다"""
         matrix = self._compose(rotation, Gf.Vec3d(1.0, 1.0, 1.0),
                                Gf.Vec3d(0.0, 0.0, 0.0))
         orient = ops.get("xformOp:orient")
@@ -1913,6 +2018,7 @@ class EbsSimulate:
 
     @staticmethod
     def _compose(rotation, scale, translation) -> Gf.Matrix4d:
+        """회전·크기·이동을 4x4 한 장으로"""
         return Gf.Matrix4d(
             rotation[0][0] * scale[0], rotation[0][1] * scale[0], rotation[0][2] * scale[0], 0.0,
             rotation[1][0] * scale[1], rotation[1][1] * scale[1], rotation[1][2] * scale[1], 0.0,
@@ -1922,6 +2028,7 @@ class EbsSimulate:
 
     @staticmethod
     def _euler(rotation, order: str = "XYZ") -> tuple:
+        """회전 행렬을 그 순서의 오일러 각으로"""
         axes = {"X": 0, "Y": 1, "Z": 2}
         a, b, c = (axes[ch] for ch in order)
         m = [[rotation[i][j] for j in range(3)] for i in range(3)]
@@ -1945,12 +2052,14 @@ class EbsSimulate:
 
     @staticmethod
     def _normalized_rows(matrix: Gf.Matrix4d) -> list:
+        """행렬에서 크기를 뺀 회전 세 축"""
         rows = matrix.ExtractRotationMatrix()
         return [Gf.Vec3d(rows[i][0], rows[i][1], rows[i][2]).GetNormalized()
                 for i in range(3)]
 
     @staticmethod
     def _extract_scale(matrix: Gf.Matrix4d) -> Gf.Vec3d:
+        """행렬의 축 길이 = 크기. 0 이면 1 로 본다"""
         rows = matrix.ExtractRotationMatrix()
         scale = [Gf.Vec3d(rows[i][0], rows[i][1], rows[i][2]).GetLength() for i in range(3)]
         return Gf.Vec3d(*[v if v > 1e-12 else 1.0 for v in scale])
@@ -1958,6 +2067,7 @@ class EbsSimulate:
 
     @staticmethod
     def _moving_cache():
+        """매번 새로 만드는 바운드 캐시. 움직이는 EBS 전용"""
         return UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
@@ -1965,6 +2075,7 @@ class EbsSimulate:
         )
 
     def _bounds_cache(self):
+        """공유 바운드 캐시. 안 움직이는 것만 이걸로 잰다"""
         if self._bounds is None:
             self._bounds = UsdGeom.BBoxCache(
                 Usd.TimeCode.Default(),
@@ -1975,6 +2086,7 @@ class EbsSimulate:
 
     def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
                         cache=None, roots: list = None) -> dict:
+        """EBS 좌/우/천장 세 면의 칸마다 닿았나 본다"""
         stage = self._get_stage()
         if stage is None:
             return {face: [] for face in FACES}
@@ -2082,6 +2194,7 @@ class EbsSimulate:
         return result
 
     def _forget_triangles(self, prim: Usd.Prim) -> None:
+        """그 프림의 월드 삼각형 캐시를 버린다. align 이 부른다"""
         if prim is None or not prim.IsValid():
             return
         root = str(prim.GetPath())
@@ -2090,6 +2203,7 @@ class EbsSimulate:
             del self._triangles[path]
 
     def _mesh_local(self, stage, path: str):
+        """메시의 점과 면 색인. 메시가 아니면 None"""
         if path in self._local:
             return self._local[path]
         prim = stage.GetPrimAtPath(path) if stage else None
@@ -2111,6 +2225,7 @@ class EbsSimulate:
 
     @staticmethod
     def _to_world(stage, path: str):
+        """그 프림의 로컬->월드 행렬"""
         prim = stage.GetPrimAtPath(path) if stage else None
         if prim is None or not prim.IsValid():
             return None
@@ -2121,6 +2236,7 @@ class EbsSimulate:
             return None
 
     def _mesh_triangles(self, stage, path: str) -> list:
+        """그 메시의 월드 삼각형 전부. 한 번 만들고 캐시한다"""
         if path in self._triangles:
             return self._triangles[path]
         triangles = []
@@ -2142,6 +2258,7 @@ class EbsSimulate:
 
     @staticmethod
     def _with_box(triangle):
+        """삼각형에 제 상자를 붙여 둔다. 나중 비교가 싸진다"""
         a, b, c = triangle
         return (triangle,
                 (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
@@ -2150,6 +2267,7 @@ class EbsSimulate:
                  max(a[2], b[2], c[2])))
 
     def _triangles_reaching(self, stage, path: str, box: Gf.Range3d) -> list:
+        """그 상자에 닿는 삼각형만. 면 격자로 먼저 거른다"""
         lo_box, hi_box = box.GetMin(), box.GetMax()
         x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
         x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
@@ -2269,6 +2387,7 @@ class EbsSimulate:
         return made
 
     def _faces_near(self, path: str, data, near) -> list:
+        """면 격자에서 그 상자 근처 면 번호들 (1차 필터)"""
         start, size, lows, highs, origin, step, spread, grid = \
             self._face_grid(path, data)
         if not grid:
@@ -2286,6 +2405,7 @@ class EbsSimulate:
 
     @staticmethod
     def _pulled_back(box: Gf.Range3d, to_world):
+        """월드 상자를 메시 로컬로 끌어온다"""
         try:
             inverse = to_world.GetInverse()
         except Exception:
@@ -2299,6 +2419,7 @@ class EbsSimulate:
 
     @staticmethod
     def _attr_value(attr, tc):
+        """속성 값. 없으면 빈 목록"""
         if not attr or not attr.IsValid():
             return None
         value = attr.Get(tc)
@@ -2310,6 +2431,7 @@ class EbsSimulate:
 
     @staticmethod
     def _triangle_hits_box(triangle, box: Gf.Range3d) -> bool:
+        """삼각형과 상자가 실제로 겹치나 (분리축 정리)"""
         lo, hi = box.GetMin(), box.GetMax()
         centre = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
         half = [(hi[i] - lo[i]) * 0.5 for i in range(3)]
@@ -2346,6 +2468,7 @@ class EbsSimulate:
         return True
 
     def _is_visible(self, prim, path: str) -> bool:
+        """그 프림이 화면에 보이나. collide 마다 다시 푼다"""
         known = self._visible.get(path)
         if known is not None:
             return known
@@ -2360,6 +2483,7 @@ class EbsSimulate:
 
     @staticmethod
     def _overlaps(a: Gf.Range3d, b: Gf.Range3d) -> bool:
+        """두 상자가 겹치나"""
         overlap = Gf.Range3d.GetIntersection(a, b)
         if overlap.IsEmpty():
             return False
@@ -2367,6 +2491,7 @@ class EbsSimulate:
         return all(extent[i] > OVERLAP_EPS for i in range(3))
 
     def _ebs_bound(self, prim: Usd.Prim):
+        """EBS 의 월드 상자. collide 한 번에 한 번만 잰다"""
         path = self._path_of(prim)
         if self._ebs_box is not None and self._ebs_box[0] == path:
             return self._ebs_box[1]
@@ -2396,17 +2521,20 @@ class EbsSimulate:
 
     @staticmethod
     def _path_of(prim) -> str:
+        """프림이든 문자열이든 경로 문자열로"""
         try:
             return str(prim.GetPath()) if prim.IsValid() else ""
         except AttributeError:
             return ""
 
     def _forget_ebs(self, paths=()) -> None:
+        """EBS 상자 캐시를 버린다. 옮겼거나 켜고 껐을 때"""
         self._ebs_box = None
         for path in paths:
             self._visible.pop(path, None)
 
     def _stage_boxes(self, cache=None) -> list:
+        """스테이지의 상자 목록. Init 에 한 번 만든다. EBS 는 뺀다"""
         if self._stage_index is not None:
             return self._stage_index
         stage = self._get_stage()
@@ -2446,6 +2574,7 @@ class EbsSimulate:
         return index
 
     def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
+        """그 상자 목록에서 검색 상자에 걸리는 것만 꺼낸다"""
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
         low, high = search.GetMin(), search.GetMax()
@@ -2471,6 +2600,7 @@ class EbsSimulate:
         return found, visited
 
     def _by_face(self, stage, cache, search, skip, roots, cells, margin):
+        """면마다 후보를 나눠 담는다"""
         if roots is None:
             found, visited = self._gather_nearby(stage, cache, search, skip)
             return [(path, box, FACES) for path, box in found], visited
@@ -2492,6 +2622,7 @@ class EbsSimulate:
 
     def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
                        roots: list = None) -> tuple:
+        """검색 상자 근처의 메시들. roots 를 주면 그 아래만 훑는다"""
         if roots is None:
             return self._from_index(stage, cache, search, skip)
         found, visited = [], 0
@@ -2616,7 +2747,7 @@ class EbsSimulate:
         return lo, hi
 
     def _boxed_pairs(self, stage, ours: list, theirs: list) -> list:
-        """삼각형이 없는 프리미티브(Cube/Capsule/Cone/Cylinder/Sphere/Plane)는"""
+        """삼각형이 없는 프리미티브는 상자 겹침으로 판정한다. 상대가 메시면 면 격자로"""
         found = []
         for a_path, a_box in ours:
             a_mesh = not self._is_boxed_shape(stage, a_path)
@@ -2659,7 +2790,7 @@ class EbsSimulate:
         return False
 
     def _is_boxed_shape(self, stage, path: str) -> bool:
-        """삼각형이 하나도 안 나오는 조각인가. 이미 알고 있으면(_triangles"""
+        """삼각형이 하나도 안 나오는 조각인가. 캐시를 먼저 믿고 모르면 물어본다"""
         cached = self._triangles.get(path)
         if cached is not None:
             return not cached
@@ -2695,11 +2826,13 @@ class EbsSimulate:
 
     @staticmethod
     def _union(boxes: list) -> Gf.Range3d:
+        """상자 여러 개를 하나로 감싼다"""
         lo = [min(b.GetMin()[i] for b in boxes) for i in range(3)]
         hi = [max(b.GetMax()[i] for b in boxes) for i in range(3)]
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
     def _triangles_near(self, stage, meshes: list, box: Gf.Range3d) -> tuple:
+        """양쪽에서 그 상자에 닿는 삼각형만 읽어 온다"""
         kept, tally = [], {"meshes": 0, "built": 0, "world": 0, "faces": 0}
         for path, mesh_box in meshes:
             if Gf.Range3d.GetIntersection(mesh_box, box).IsEmpty():
@@ -2716,7 +2849,7 @@ class EbsSimulate:
         return kept, tally
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
-        """만난 쌍과, 그때 만난 삼각형의 상자. 조각 전체가 아니라 닿은 자리다 --"""
+        """만난 쌍들. 쌍마다 한 번만 검사하고 나머지 삼각형은 건너뛴다"""
         grid, origin, step, spread = self._grid_of(yours, box)
         pairs, known, tests = [], set(), 0
         for ebs_path, triangle, lo, hi in mine:
@@ -2741,6 +2874,7 @@ class EbsSimulate:
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
+        """삼각형들을 칸에 나눠 담은 격자. 후보를 줄이는 데 쓴다"""
         low, high = box.GetMin(), box.GetMax()
         origin = (low[0], low[1], low[2])
         size = [max(high[i] - origin[i], 1e-9) for i in range(3)]
@@ -2754,6 +2888,7 @@ class EbsSimulate:
 
     @staticmethod
     def _cells_of(lo, hi, origin, step, spread):
+        """그 상자가 걸치는 격자 칸들"""
         spans = []
         for i in range(3):
             first = int((lo[i] - origin[i]) / step[i])
@@ -2764,6 +2899,7 @@ class EbsSimulate:
 
     @classmethod
     def _triangles_meet(cls, a, b) -> bool:
+        """두 삼각형이 실제로 만나나. 모서리를 상대 면에 쏜다"""
         for edge in ((a[0], a[1]), (a[1], a[2]), (a[2], a[0])):
             if cls._segment_hits_triangle(edge[0], edge[1], b):
                 return True
@@ -2774,17 +2910,20 @@ class EbsSimulate:
 
     @staticmethod
     def _segment_hits_triangle(start, end, triangle) -> bool:
+        """선분이 삼각형을 뚫나"""
         v0, v1, v2 = triangle
         direction = [end[i] - start[i] for i in range(3)]
         edge1 = [v1[i] - v0[i] for i in range(3)]
         edge2 = [v2[i] - v0[i] for i in range(3)]
 
         def cross(p, q):
+            """외적"""
             return [p[1] * q[2] - p[2] * q[1],
                     p[2] * q[0] - p[0] * q[2],
                     p[0] * q[1] - p[1] * q[0]]
 
         def dot(p, q):
+            """내적"""
             return p[0] * q[0] + p[1] * q[1] + p[2] * q[2]
 
         pitch = cross(direction, edge2)
@@ -2804,6 +2943,7 @@ class EbsSimulate:
         return 0.0 <= along <= 1.0
 
     def _build_cells(self, box: Gf.Range3d) -> dict:
+        """EBS 세 면을 칸으로 쪼갠다. 칸마다 상자와 사각형"""
         up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis
         side_axis = 3 - up_axis - front_axis
@@ -2819,6 +2959,7 @@ class EbsSimulate:
         faces = {}
 
         def make(fixed_axis, outward, row_axis, col_axis):
+            """한 면을 칸으로 나눈다"""
             rows, cols = divisions[row_axis], divisions[col_axis]
             out = []
             row_lo, row_hi = lo[row_axis], hi[row_axis]
@@ -2860,10 +3001,12 @@ class EbsSimulate:
         return cells
 
     def get_grid_shape(self) -> dict:
+        """면마다 칸이 몇 줄 몇 칸인지"""
         return dict(self._grid_shape)
 
     def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
                       exclude: list = None, cache=None, roots: list = None) -> dict:
+        """안 막힌 면에서 가장 가까운 것까지의 거리"""
         stage = self._get_stage()
         if stage is None:
             return {}
@@ -2902,6 +3045,7 @@ class EbsSimulate:
         return results
 
     def _reach_by_face(self, stage, cache, skip, roots, wanted) -> dict:
+        """면마다 거리 잴 후보를 모은다. 천장만 스테이지 전체"""
         if not wanted:
             return {}
         if roots is None:
@@ -2924,6 +3068,7 @@ class EbsSimulate:
     @staticmethod
     def _face_prism(box: Gf.Range3d, axis: int, outward: int, coord: float,
                     reach: float) -> Gf.Range3d:
+        """그 면에서 바깥으로 reach 만큼 뻗은 직육면체"""
         lo = [box.GetMin()[i] for i in range(3)]
         hi = [box.GetMax()[i] for i in range(3)]
         if outward > 0:
@@ -2934,6 +3079,7 @@ class EbsSimulate:
 
     def _nearest_in_prism(self, stage, candidates, prism, to_world,
                           axis, outward, coord):
+        """그 안에서 가장 가까운 것 하나. 상자면 중심, 메시면 면 중점"""
         if not candidates:
             return None
 
@@ -2971,7 +3117,7 @@ class EbsSimulate:
 
     @staticmethod
     def _joined(triangles, picked: dict, seed: int) -> set:
-        """seed 삼각형에서 꼭짓점을 타고 이어지는 것만 모은다. 꼭짓점을 나눠"""
+        """seed 삼각형에서 꼭짓점을 타고 이어지는 것만 모은다 (붙어 있는 면)"""
         joins = {}
         for at in picked:
             for vertex in triangles[at]:
@@ -2996,6 +3142,7 @@ class EbsSimulate:
 
     @staticmethod
     def _box_point(local, prism, axis: int, outward: int, coord: float, gap: float):
+        """그 상자의 중심에서 선을 뽑는다. 프리즘 안으로 눌러 담는다"""
         lo, hi = prism.GetMin(), prism.GetMax()
         point = [0.0, 0.0, 0.0]
         point[axis] = coord + (gap if outward > 0 else -gap)
@@ -3008,6 +3155,7 @@ class EbsSimulate:
 
     @staticmethod
     def _gap_along(box, axis: int, outward: int, coord: float) -> "float | None":
+        """그 축으로 면에서 상자까지의 거리. 파고들었으면 None"""
         if outward > 0:
             gap = box.GetMin()[axis] - coord
         else:
@@ -3016,6 +3164,7 @@ class EbsSimulate:
 
     @staticmethod
     def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float):
+        """삼각형 하나에서 가장 가까운 점과 거리"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, at = None, None
         for vertex in triangle:
@@ -3037,7 +3186,7 @@ class EbsSimulate:
     @staticmethod
     def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
                   slack: float = OVERLAP_EPS):
-        """삼각형 여러 개가 같은 높이(수평)면 하나의 면으로 보고, Cube 처럼"""
+        """같은 높이로 붙어 있는 삼각형들을 한 면으로 보고 그 면의 중점을 찍는다"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, seed = None, -1
         for at, triangle in enumerate(triangles):
@@ -3084,6 +3233,7 @@ class EbsSimulate:
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
                      marks: list = None, marks_boxes: list = None) -> int:
+        """3면 판, 여유 선, 내부 충돌 상자를 씬에 그린다"""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -3138,6 +3288,7 @@ class EbsSimulate:
         return drawn
 
     def _clash_boxes(self, stage, boxes) -> int:
+        """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""
         if not boxes:
             return 0
         material = self._marker_material(stage, "clash", COLOR_CLASH,
@@ -3181,7 +3332,7 @@ class EbsSimulate:
 
     @staticmethod
     def _clash_report(boxes) -> None:
-        """임시 진단: 어느 원본 메시가 어느 상자가 되었나. 큰 것부터 -- 부풀어"""
+        """임시 진단: 어느 원본 메시가 어느 상자가 되었나. 큰 것부터 찍는다"""
         told = []
         for at, entry in enumerate(boxes):
             lo, hi = entry[0], entry[1]
@@ -3228,7 +3379,7 @@ class EbsSimulate:
 
     @staticmethod
     def _pulse_inputs_of(stage) -> tuple:
-        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다 --"""
+        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다"""
         looks = f"{MARKER_ROOT}/Looks/clash"
         wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
                   (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
@@ -3246,6 +3397,7 @@ class EbsSimulate:
         return tuple(found)
 
     def _pulse_step(self) -> None:
+        """한 프레임 몫. 지금 시각으로 투명도를 정해 머티리얼에 쓴다"""
         stage = self._get_stage()
         if stage is None or not self._pulse_inputs:
             self._stop_pulse()
@@ -3262,10 +3414,12 @@ class EbsSimulate:
             self._stop_pulse()
 
     def _stop_pulse(self) -> None:
+        """깜박임 구독을 놓는다"""
         self._pulse = None
         self._pulse_inputs = ()
 
     def _thread_radius(self) -> float:
+        """선 굵기. 대상 장비 대각선 대비 LASER_RADIUS"""
         box = self._world_range((self._target or {}).get("equipment"))
         if box is None:
             span = 1.0
@@ -3277,6 +3431,7 @@ class EbsSimulate:
     @staticmethod
     def _gap_line(stage, path: str, start, end, radius: float, material,
                   colour=COLOR_GAP) -> bool:
+        """두 점 사이에 실린더 하나. 길이가 0 이면 안 그린다"""
         direction = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         height = direction.GetLength()
         if height <= 1e-9:
@@ -3305,6 +3460,7 @@ class EbsSimulate:
         return True
 
     def show_port_lasers(self, points: dict = None) -> int:
+        """포트 자리에 확인용 세로 레이저를 세운다"""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -3334,6 +3490,7 @@ class EbsSimulate:
         return drawn
 
     def show_sweep(self, spots: dict) -> int:
+        """sweep_ports 가 잰 자리를 씬에 표시한다 (진단용)"""
         stage = self._get_stage()
         if stage is None:
             return 0
@@ -3379,10 +3536,12 @@ class EbsSimulate:
 
     @staticmethod
     def _prim_name(text: str) -> str:
+        """프림 이름에 못 쓰는 글자를 _ 로 바꾼다"""
         cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in text)
         return cleaned if cleaned[:1].isalpha() or cleaned[:1] == "_" else "_" + cleaned
 
     def clear_sweep(self) -> None:
+        """sweep 이 그린 것을 지운다"""
         stage = self._get_stage()
         if stage is None:
             return
@@ -3391,6 +3550,7 @@ class EbsSimulate:
                 stage.RemovePrim(SWEEP_ROOT)
 
     def clear_port_lasers(self) -> None:
+        """포트 레이저를 지운다"""
         stage = self._get_stage()
         if stage is None:
             return
@@ -3401,6 +3561,7 @@ class EbsSimulate:
     @staticmethod
     def _laser_cylinder(stage, path: str, centre, radius: float, height: float,
                         colour) -> None:
+        """레이저 실린더 하나"""
         cylinder = UsdGeom.Cylinder.Define(stage, path)
         cylinder.CreateAxisAttr(UsdGeom.Tokens.z)
         cylinder.CreateHeightAttr(height)
@@ -3412,6 +3573,7 @@ class EbsSimulate:
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
     def clear_markers(self) -> None:
+        """마커 뿌리를 통째로 지우고 판정과 깜박임도 놓는다"""
         self._verdict = {}
         self._stop_pulse()
         stage = self._get_stage()
@@ -3423,6 +3585,7 @@ class EbsSimulate:
 
     @staticmethod
     def _face_normal(points: list) -> tuple:
+        """그 사각형의 법선"""
         a, b, c = points[0], points[1], points[2]
         u = [b[i] - a[i] for i in range(3)]
         v = [c[i] - a[i] for i in range(3)]
@@ -3435,6 +3598,7 @@ class EbsSimulate:
     @classmethod
     def _marker_sheet(cls, stage, path: str, points: list, material, color,
                       opacity: float = MARKER_OPACITY) -> None:
+        """면 판 한 장. 발광이 양면이 안 돼서 앞뒤 두 장을 겹친다"""
         normal = cls._face_normal(points)
         diagonal = math.sqrt(sum((points[2][i] - points[0][i]) ** 2
                                  for i in range(3)))
@@ -3448,6 +3612,7 @@ class EbsSimulate:
     @staticmethod
     def _marker_quad(stage, path: str, points: list, material, color,
                      opacity: float = MARKER_OPACITY, flip: bool = False) -> None:
+        """사각형 메시 한 장"""
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
@@ -3467,6 +3632,7 @@ class EbsSimulate:
     @classmethod
     def _marker_material(cls, stage, name: str, color, opacity: float = MARKER_OPACITY,
                          emission: float = MARKER_EMISSION):
+        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다"""
         path = f"{MARKER_ROOT}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
         cls._preview_shader(stage, material, path, color, opacity)
@@ -3475,6 +3641,7 @@ class EbsSimulate:
 
     @staticmethod
     def _preview_shader(stage, material, path: str, color, opacity: float) -> None:
+        """UsdPreviewSurface 쪽. 색은 발광으로 낸다"""
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
@@ -3493,11 +3660,13 @@ class EbsSimulate:
     @staticmethod
     def _mdl_shader(stage, material, path: str, color, opacity: float,
                     emission: float) -> None:
+        """OmniPBR 쪽. RTX 가 이걸 쓴다"""
         shader = UsdShade.Shader.Define(stage, path + "/mdl")
         shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
         shader.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
 
         def put(name, type_name, value):
+            """셰이더 입력 하나를 만든다"""
             shader.CreateInput(name, type_name).Set(value)
 
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
@@ -3515,16 +3684,19 @@ class EbsSimulate:
 
 
     def release_camera(self) -> None:
+        """카메라를 놓고 투명하게 만든 장비를 되돌린다"""
         self.show_equipment()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:
+        """카메라를 처음 잡은 자리로"""
         told = self._camera.reset(self._get_stage())
         if told:
             self._note(told)
         return self._payload(bool(told), told or "Run Camera first")
 
     def _world_range(self, prim, cache=None) -> "Gf.Range3d | None":
+        """그 프림의 월드 상자"""
         if prim is None or not prim.IsValid():
             return None
         if cache is None:
@@ -3538,12 +3710,14 @@ class EbsSimulate:
 
     @staticmethod
     def _get_stage() -> "Usd.Stage | None":
+        """지금 열린 스테이지"""
         return omni.usd.get_context().get_stage()
 
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
                  equipment=None, eqp_id: str = "", port_count=None,
                  distances: dict = None, rows: list = None,
                  equipment_hit: dict = None) -> dict:
+        """단계 하나의 결과 한 벌. 성공 여부, 사유, 시간, 로그"""
         target = self._target or {}
         equipment = equipment or target.get("equipment")
         ebs = target.get("ebs")
