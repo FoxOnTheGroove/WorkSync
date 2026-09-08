@@ -174,7 +174,8 @@ class EbsSimulateService:
     def get_verdict(cls):
         """마지막 판정을 오버레이용으로 꺼낸다.
 
-        build_verdict  내용을 바꾸려면 여기. 패널 높이는 VERDICT_HEIGHT
+        build_verdict  내용을 바꾸려면 여기. 판정 한 줄은 VERDICT_HEIGHT 높이,
+                       내부 간섭 한 줄은 CLASH_HEIGHT 높이에 따로 매단다
         """
         return cls._simulate.get_verdict()
 

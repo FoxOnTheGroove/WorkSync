@@ -9,12 +9,7 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CAN    = "EBS INSTALL AVAILABLE"
 CANNOT = "EBS INSTALL BLOCKED"
-CLEAR  = "no collision"
-
-INNER = "internal clash"
-INNER_MANY = "internal clash x {0}"
-FACE_ORDER = ("left", "right", "ceiling")
-NAMELESS = "-"
+INNER  = "internal clash"
 
 CLASH = "clash"
 GAP   = "clearance"
@@ -33,9 +28,8 @@ COLOR_CAN    = 0xFF9AE7FF
 COLOR_CANNOT = 0xFF1B39FC
 COLOR_TEXT   = 0xFFFFFFFF
 COLOR_INK    = 0xFF000000
-TEXT_SIZE    = 22
-DETAIL_SIZE  = 15
-FACE_SIZE    = 15
+TEXT_SIZE    = 19
+FACE_SIZE    = 17
 PAD_X, PAD_Y = 10, 5
 
 
@@ -167,23 +161,26 @@ class EbsSimulateOverlay:
                             share, group))
 
     def _verdict_panel(self, said: dict) -> None:
-        """세울 수 있나 없나를 말하는 가운데 판"""
+        """세울 수 있나 없나 한 줄. 내부 간섭이면 그 아래에 한 줄 더"""
         ok = bool(said.get("placeable"))
         ink = COLOR_INK if ok else COLOR_TEXT
 
-        def fill():
-            """판 속 글줄을 채운다"""
-            with ui.VStack(spacing=1, style={"margin_width": PAD_X,
-                                             "margin_height": PAD_Y}):
-                ui.Label(CAN if ok else CANNOT, height=0,
-                         alignment=ui.Alignment.CENTER,
-                         style={"font_size": TEXT_SIZE, "color": ink})
-                for line in self._why(said):
-                    ui.Label(line, height=0, alignment=ui.Alignment.CENTER,
-                             style={"font_size": DETAIL_SIZE, "color": ink})
+        def one(text, colour, size):
+            """한 줄짜리 판을 그리는 함수를 만든다"""
+            def fill():
+                """판 속 글줄을 채운다"""
+                with ui.VStack(spacing=1, style={"margin_width": PAD_X,
+                                                 "margin_height": PAD_Y}):
+                    ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
+                             style={"font_size": size, "color": colour})
+            return fill
 
-        self._floating(said.get("centre"), fill,
+        self._floating(said.get("centre"), one(CAN if ok else CANNOT, ink,
+                                               TEXT_SIZE),
                        COLOR_CAN if ok else COLOR_CANNOT)
+        if said.get("inside"):
+            self._floating(said.get("inside_at"),
+                           one(INNER, COLOR_TEXT, TEXT_SIZE), COLOR_CANNOT)
 
     def _face_panel(self, mark: dict) -> None:
         """한쪽에 상태, 다른 쪽에 거리와 최소 여유. 막힌 면도 똑같이 붙인다"""
@@ -219,19 +216,6 @@ class EbsSimulateOverlay:
         if least:
             self._floating(at, block([LEAST.format(least)]), ground, second,
                            1, share, (face, second))
-
-    @staticmethod
-    def _why(said: dict) -> list:
-        """못 세우는 사유 줄. 내부 간섭과 막힌 면을 적는다"""
-        boxes = len(said.get("boxes") or ())
-        told = [INNER_MANY.format(boxes) if boxes > 1 else INNER] \
-            if said.get("inside") else []
-        blocked = {found["face"]: found.get("name") or NAMELESS
-                   for found in (said.get("faces") or ())}
-        told += [f"{face} : {blocked[face]}"
-                 for face in FACE_ORDER if face in blocked]
-        return told or [CLEAR]
-
 
     def _start(self) -> bool:
         """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""

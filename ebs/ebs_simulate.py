@@ -194,6 +194,7 @@ GEOMETRY_TYPES = frozenset({
 })
 
 VERDICT_HEIGHT = 0.8
+CLASH_HEIGHT   = 0.45
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 
@@ -1051,8 +1052,11 @@ class EbsSimulate:
         lo, hi = local_box.GetMin(), local_box.GetMax()
         spot = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
         up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
-        spot[up_axis] = lo[up_axis] + (hi[up_axis] - lo[up_axis]) * VERDICT_HEIGHT
+        tall = hi[up_axis] - lo[up_axis]
+        spot[up_axis] = lo[up_axis] + tall * VERDICT_HEIGHT
         middle = to_world.Transform(Gf.Vec3d(*spot))
+        spot[up_axis] = lo[up_axis] + tall * CLASH_HEIGHT
+        lower = to_world.Transform(Gf.Vec3d(*spot))
         marks = self._face_marks(local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
@@ -1060,6 +1064,7 @@ class EbsSimulate:
         return {
             "marks": marks,
             "centre": (middle[0], middle[1], middle[2]),
+            "inside_at": (lower[0], lower[1], lower[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
             "inside": bool(inside),
             "boxes": list(boxes or ()),
