@@ -3213,13 +3213,15 @@ class EbsSimulate:
             if self._precision != PRECISION_TRI:
                 patch += self._box_patch(local, prism, axis, plane)
                 continue
-            slack = max(self._flat_slack(local, axis), LEAD_TOL)
+            slack = max(min(self._flat_slack(local, axis),
+                            self._flat_slack(prism, axis)), LEAD_TOL)
             for triangle, _, _ in self._mesh_triangles(stage, path) or ():
                 here = [inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
                 if any(abs(v[axis] - plane) > slack for v in here):
                     continue
-                if not any(all(lo[i] - OVERLAP_EPS <= v[i] <= hi[i] + OVERLAP_EPS
-                               for i in range(3) if i != axis) for v in here):
+                if any(max(v[i] for v in here) < lo[i] - OVERLAP_EPS
+                       or min(v[i] for v in here) > hi[i] + OVERLAP_EPS
+                       for i in range(3) if i != axis):
                     continue
                 patch.append(tuple(tuple(v) for v in here))
         return patch
