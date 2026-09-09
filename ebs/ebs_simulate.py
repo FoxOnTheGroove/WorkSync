@@ -233,10 +233,9 @@ FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 LEAD_FACES  = FACES
 
 RESULT_ORDER  = (FACE_LEFT, FACE_RIGHT, FACE_CEILING)
-RESULT_WORDS  = {FACE_LEFT: "좌", FACE_RIGHT: "우", FACE_CEILING: "상단"}
-RESULT_INSIDE = "내부"
-RESULT_ROOMY  = "여유"
-RESULT_TIGHT  = "간섭"
+RESULT_INSIDE = "inside"
+RESULT_ROOMY  = STATE_CLEAR
+RESULT_TIGHT  = STATE_TIGHT
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
@@ -1058,8 +1057,7 @@ class EbsSimulate:
             tight = (bool(one.get("hit"))
                      or (gap is not None and gap < self._min_gap.get(face, 0.0)))
             snug = snug or tight
-            words.append(f"{RESULT_WORDS[face]} "
-                         f"{RESULT_TIGHT if tight else RESULT_ROOMY}")
+            words.append(f"{face} {RESULT_TIGHT if tight else RESULT_ROOMY}")
         if found:
             words.append(f"{RESULT_INSIDE} "
                          f"{RESULT_TIGHT if found['inside_hit'] else RESULT_ROOMY}")

@@ -194,8 +194,8 @@ class EbsSimulateService:
     def get_result(cls, equipment=""):
         """그 장비를 마지막으로 collide 한 결과. 화면은 안 건드린다.
 
-        장비명, 포트 수, 좌/우/상단/내부 한 줄 요약, 3면의 간격과 상대,
-        내부에 걸린 메시 목록, 설치 가능 여부. 기록이 없어도 키는 다 있다
+        장비명, 포트 수, 한 줄 요약("left clear / right tight / ..."), 3면의
+        간격과 상대, 내부에 걸린 메시 목록, 설치 가능 여부. 없어도 키는 다 있다
         _keep_result  collide 가 장비 이름으로 적어 둔다. Init 까지 남는다.
                       간격은 적어 둔 그대로, 여유/간섭은 지금 잣대로 읽는다
         """
