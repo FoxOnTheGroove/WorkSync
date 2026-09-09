@@ -188,6 +188,10 @@ def _children(prim):
 
 SKIP_TYPES = frozenset({"Material", "Shader", "NodeGraph", "GeomSubset", "Camera"})
 
+CUBE_TYPE = "Cube"
+CUBE_QUADS = ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1),
+              (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3))
+
 GEOMETRY_TYPES = frozenset({
     "Mesh", "Points", "BasisCurves", "NurbsCurves",
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
@@ -2402,9 +2406,26 @@ class EbsSimulate:
             else:
                 data = (points, counts, indices)
         elif prim and prim.IsValid():
-            self._boxed.setdefault(f"a {prim.GetTypeName()}", []).append(path)
+            data = self._cube_local(prim)
+            if data is None:
+                self._boxed.setdefault(f"a {prim.GetTypeName()}",
+                                       []).append(path)
         self._local[path] = data
         return data
+
+    @staticmethod
+    def _cube_local(prim):
+        """Cube 프림의 점과 면. 비스듬히 놓인 것을 상자로 뭉개지 않으려고"""
+        if str(prim.GetTypeName()) != CUBE_TYPE:
+            return None
+        try:
+            size = UsdGeom.Cube(prim).GetSizeAttr().Get(NOW)
+        except Exception:
+            size = None
+        half = (float(size) if size else 2.0) * 0.5
+        points = [(x * half, y * half, z * half)
+                  for x in (-1.0, 1.0) for y in (-1.0, 1.0) for z in (-1.0, 1.0)]
+        return points, [4] * 6, [i for quad in CUBE_QUADS for i in quad]
 
     @staticmethod
     def _to_world(stage, path: str):

@@ -162,7 +162,9 @@ class EbsSimulateService:
         check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭.
                      막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
         _flat_gap / _mesh_parts  한 덩어리 안에서 같은 높이인 면들을 합쳐 그 중앙
-                     (H 빔의 다리 둘처럼). 점을 못 읽는 프림은 상자로 잰다
+                     (H 빔의 다리 둘처럼)
+        _mesh_local / _cube_local  삼각형을 어디서 얻나. Cube 는 제 크기로 만들어
+                     비스듬해도 정확하다. 그래도 못 얻으면 상자로 잰다 (_boxed 로 보고)
         _face_marks  세 면 다 앞 모서리 중점에서 면에 수직으로 긋는다. 메시에 안
                      묻히는 자리다 (LEAD_FACES, LEAD_FRONT)
         _lead_path   잰 자리를 가리키는 안내선. 뒤로 갔다가 한 번만 꺾는다. 꺾는
