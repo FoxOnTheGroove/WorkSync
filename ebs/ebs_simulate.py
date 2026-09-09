@@ -234,8 +234,6 @@ LEAD_FACES  = FACES
 
 RESULT_ORDER  = (FACE_LEFT, FACE_RIGHT, FACE_CEILING)
 RESULT_INSIDE = "inside"
-RESULT_ROOMY  = STATE_CLEAR
-RESULT_TIGHT  = STATE_TIGHT
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
@@ -337,7 +335,10 @@ class EbsSimulate:
 
 
     def set_usd_path(self, path: str) -> None:
-        """열 스테이지 경로. 바뀌면 Init 을 다시 받아야 한다"""
+        """열 스테이지 경로. 바뀌면 Init 을 다시 받아야 한다
+
+        open_stage  여는 곳. 같은 경로가 이미 열려 있으면 안 연다
+        """
         path = (path or "").strip()
         if path != self._usd_path:
             self._ready = False
@@ -372,7 +373,11 @@ class EbsSimulate:
         return True
 
     def set_xml_path(self, path: str) -> None:
-        """포트 XML 경로. 바뀌면 포트 표와 Init 을 버린다"""
+        """포트 XML 경로. 바뀌면 포트 표와 Init 을 버린다
+
+        load_ports  파싱과 캐시 (<xml> + CACHE_SUFFIX 옆자리). 키 이름은 _PortScan
+        _remote     원격 IO 는 _stamp_of / _read_bytes / _write_text 셋뿐이다
+        """
         path = (path or "").strip()
         if path != self._xml_path:
             self._port_map = {}
@@ -380,12 +385,18 @@ class EbsSimulate:
         self._xml_path = path
 
     def set_ebs_paths(self, path_2port: str, path_3port: str) -> None:
-        """2포트/3포트 EBS 프림 경로"""
+        """2포트/3포트 EBS 프림 경로
+
+        _do_prepare  포트 수로 둘 중 하나를 고르는 규칙
+        """
         self._ebs_path_2port = (path_2port or "").strip()
         self._ebs_path_3port = (path_3port or "").strip()
 
     def hide_ebs(self) -> int:
-        """EBS 둘 다 화면에서 끈다"""
+        """EBS 둘 다 화면에서 끈다
+
+        _show_ebs  끄고 켜는 곳. align 이 쓴 것 하나만 다시 켠다
+        """
         return self._show_ebs([self._ebs_path_2port, self._ebs_path_3port], False)
 
     def show_ebs(self, prim) -> int:
@@ -420,7 +431,10 @@ class EbsSimulate:
         return done
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
-        """면마다 지켜야 하는 최소 여유(m)"""
+        """면마다 지켜야 하는 최소 여유(m)
+
+        _face_marks  미달 판정과 색. 기본값은 MIN_GAP_SIDE / MIN_GAP_CEILING
+        """
         self._min_gap = {FACE_CEILING: max(0.0, float(ceiling)),
                          FACE_LEFT: max(0.0, float(side)),
                          FACE_RIGHT: max(0.0, float(side))}
@@ -432,28 +446,45 @@ class EbsSimulate:
         return max(longest * PROBE_RATIO, 1e-6)
 
     def set_precision(self, mode: str) -> None:
-        """충돌 판정 정밀도. 모르는 값이면 그대로 둔다"""
+        """충돌 판정 정밀도. 모르는 값이면 그대로 둔다
+
+        check_collision     bbox<->triangle 전환 지점 (PRECISION_TRI 비교)
+        _nearest_in_prism   빈 면 거리 쪽의 같은 전환
+        """
         if mode in (PRECISION_BBOX, PRECISION_MESH, PRECISION_TRI):
             self._precision = mode
         else:
             print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
 
     def set_offset_scale(self, mode: str) -> None:
-        """포트 offset 을 거리로 바꾸는 방식"""
+        """포트 offset 을 거리로 바꾸는 방식
+
+        _coords_by_offset / _coords_by_puls / _snap_shift  세 방식의 본체
+        SCALE_MODES  모드를 늘리려면 여기 + dummy_ui 콤보
+        """
         mode = (mode or "").strip().lower()
         self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
     def set_show_lasers(self, on: bool) -> None:
-        """align 이 확인용 레이저를 그릴지"""
+        """align 이 확인용 레이저를 그릴지
+
+        show_port_lasers  그리는 곳. 굵기·색은 LASER_RADIUS, LASER_COLOR
+        """
         self._lasers = bool(on)
 
     def set_rail_root(self, path: str) -> None:
-        """레일 프림의 부모 경로. 바뀌면 레일 색인을 버린다"""
+        """레일 프림의 부모 경로. 바뀌면 레일 색인을 버린다
+
+        _rails_from  레일 인덱스. 첫 align 때 만든다 (RAIL_PREFIX)
+        """
         self._rail_index = None
         self._rail_root = (path or "").strip()
 
     def set_search_root(self, path: str) -> None:
-        """EQP_ 장비를 찾을 서브트리. 바뀌면 색인과 Init 을 버린다"""
+        """EQP_ 장비를 찾을 서브트리. 바뀌면 색인과 Init 을 버린다
+
+        _walk  순회 범위와 가지치기. init 이 느리면 여기부터 (PRUNE_TYPES)
+        """
         path = (path or "").strip()
         if path != self._search_root:
             self._eqp_index = {}
@@ -469,7 +500,10 @@ class EbsSimulate:
         return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
-        """그린 것, 카메라, 색인, 캐시를 전부 놓는다"""
+        """그린 것, 카메라, 색인, 캐시를 전부 놓는다
+
+        teardown  카메라 프림을 실제로 지우는 유일한 곳
+        """
         self.show_equipment()
         self._camera.remove(self._get_stage())
         self.clear_markers()
@@ -545,7 +579,11 @@ class EbsSimulate:
 
 
     def init(self) -> dict:
-        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다. 지오메트리는 안 읽는다"""
+        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다. 지오메트리는 안 읽는다
+
+        _stage_boxes   스테이지 상자 목록. Init 값의 대부분이다. EBS 는 안 담는다
+        _bounds_cache  공유 바운드 캐시. 움직이는 EBS 는 _moving_cache 로 따로
+        """
         self._begin()
         self._eqp_boxes = None
         self._eqp_looks = {}
@@ -586,14 +624,23 @@ class EbsSimulate:
         return self._payload(True, f"Ready: {equipment} equipment, {ports} port entries")
 
     def prepare(self, equipment: str = "") -> dict:
-        """장비를 확정하고 포트 수·EBS·피봇을 잡는다"""
+        """장비를 확정하고 포트 수·EBS·피봇을 잡는다
+
+        _resolve_by_name / _resolve_by_selection  찾는 두 길
+        resolve_anchor  피봇을 어디로 볼지. 깊이는 ANCHOR_DEPTH
+        """
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
         return self._do_prepare(equipment)
 
     def align(self, equipment: str = "") -> dict:
-        """prepare 를 품고, 포트 위치를 계산해 EBS 를 놓는다"""
+        """prepare 를 품고, 포트 위치를 계산해 EBS 를 놓는다
+
+        compute_port_points / compute_target  포트 좌표와 놓을 목표점 (snap 보정 포함)
+        find_rail  레일 고르기. 직선/코너 판정은 _rail_axis. 유격은 CAD_SLACK
+        _place_ebs  이동. 회전·스케일은 _align_prims 와 _write_transform
+        """
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -603,17 +650,46 @@ class EbsSimulate:
         return self._do_align()
 
     def focus(self) -> dict:
-        """카메라를 EBS 앞에 세운다"""
+        """카메라를 EBS 앞에 세운다
+
+        EbsSimulateCamera.place  놓는 곳. 거리는 CAMERA_BACK
+        _grab / _turn / _zoom / _double  좌드래그 공전, 휠 줌, 더블클릭 중심 옮기기
+        FADE_OTHERS  양옆 빼고 투명하게. 느려서 기본 꺼짐 (hide_other_equipment)
+        """
         self._begin()
         return self._do_focus()
 
     def collide(self) -> dict:
-        """3면 충돌과 여유 거리를 재고 마커를 그린다"""
+        """3면 충돌과 여유 거리를 재고 마커를 그린다
+
+        _do_collide  이 단계의 순서가 전부 여기 있다
+        check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭.
+                     막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
+        _flat_gap / _mesh_parts  한 덩어리 안에서 같은 높이인 면들을 합쳐 그 중앙
+                     (H 빔의 다리 둘처럼)
+        _mesh_local / _cube_local  삼각형을 어디서 얻나. Cube 는 제 크기로 만들어
+                     비스듬해도 정확하다. 그래도 못 얻으면 상자로 잰다 (_boxed 로 보고)
+        _face_marks  세 면 다 앞 모서리 중점에서 면에 수직으로 긋는다. 메시에 안
+                     묻히는 자리다 (LEAD_FACES, LEAD_FRONT)
+        _lead_path   잰 자리를 가리키는 안내선. 뒤로 갔다가 한 번만 꺾는다. 꺾는
+                     축은 잰 축도 앞뒤 축도 아닌 나머지 -- 좌우는 위아래, 천장은 옆
+        _lead_patch / _sliced / _stop_at  갈 길 언저리(LEAD_ROOM)를 스테이지 전체에서
+                     훑어 그 깊이에서 자르고 (평평하면 면, 걸치면 단면 선, 점이
+                     없으면 상자), 아무 데나 처음 닿으면 멈춘다 (LEAD_TOL, LEAD_PATCH)
+        EbsSimulateMarks  씬에 그리는 것은 전부 ebs_simulate_overlay 에 있다.
+                     판, 선, 화살촉, 안내선, 눈금, 충돌 상자, 깜박임과 그 상수들
+                     (GAP_*, LEAD_OVER, COLOR_*)
+        show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
+        """
         self._begin()
         return self._do_collide()
 
     def sweep_ports(self) -> dict:
-        """장비 전체의 피봇과 포트 1 을 재서 표로 뽑는다 (진단용)"""
+        """장비 전체의 피봇과 포트 1 을 재서 표로 뽑는다 (진단용)
+
+        sweep_ports  판정 기준은 PIVOT_TOLERANCE, PIVOT_ACROSS
+        show_sweep   그리기. 색은 SWEEP_COLOR_*
+        """
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -802,7 +878,10 @@ class EbsSimulate:
                        f"ports than the EBS spans")
 
     def simulate(self, equipment: str = "") -> dict:
-        """prepare + align + collide + focus 를 잇달아"""
+        """prepare + align + collide + focus 를 잇달아
+
+        simulate  순서를 바꾸려면 여기. 오버레이는 focus 뒤에 뜬다
+        """
         self._begin()
         if not self._ready:
             return self._payload(False, "Run Init first")
@@ -1045,7 +1124,18 @@ class EbsSimulate:
         }
 
     def get_result(self, equipment: str = "") -> dict:
-        """그 장비의 마지막 판정. 없어도 모양은 같다. 여유/간섭은 지금 잣대로"""
+        """그 장비의 마지막 판정. 화면은 안 건드린다
+
+        equipment, port_count, reason, faces, inside, placeable 여섯. 적어 둔
+                     것이 없어도 키는 다 있고 값만 빈다
+        reason       면마다 clear / tight / clash 한 줄. 닿았으면 clash, 안
+                     닿아도 최소 여유 미달이면 tight. 내부는 clear / clash
+        faces        면마다 잰 간격(m)과 상대 이름. RESULT_ORDER 순서
+        placeable    세 면이 다 clear 이고 내부도 안 걸려야 참
+        _keep_result  collide 가 장비 이름으로 적어 둔다. 지우는 곳은 Init 하나.
+                     간격은 적어 둔 그대로, 상태는 지금 최소 여유로 읽는다
+        get_results / list_results  통째로, 또는 이름만
+        """
         found = self._results.get(self._result_key(equipment)) or {}
         faces, words, snug = {}, [], False
         for face in RESULT_ORDER:
@@ -1054,13 +1144,15 @@ class EbsSimulate:
             faces[face] = {"gap": gap, "name": one.get("name") or ""}
             if not found:
                 continue
-            tight = (bool(one.get("hit"))
-                     or (gap is not None and gap < self._min_gap.get(face, 0.0)))
-            snug = snug or tight
-            words.append(f"{face} {RESULT_TIGHT if tight else RESULT_ROOMY}")
+            state = (STATE_CLASH if one.get("hit") else
+                     STATE_TIGHT
+                     if gap is not None and gap < self._min_gap.get(face, 0.0)
+                     else STATE_CLEAR)
+            snug = snug or state != STATE_CLEAR
+            words.append(f"{face} {state}")
         if found:
             words.append(f"{RESULT_INSIDE} "
-                         f"{RESULT_TIGHT if found['inside_hit'] else RESULT_ROOMY}")
+                         f"{STATE_CLASH if found['inside_hit'] else STATE_CLEAR}")
         return {
             "equipment": found.get("equipment") or "",
             "port_count": found.get("port_count") or 0,
@@ -1069,6 +1161,10 @@ class EbsSimulate:
             "inside": list(found.get("inside") or ()),
             "placeable": bool(found) and not found["inside_hit"] and not snug,
         }
+
+    def get_results(self) -> dict:
+        """적어 둔 판정 전부. 장비 이름 -> get_result 한 벌"""
+        return {name: self.get_result(name) for name in self.list_results()}
 
     def list_results(self) -> list:
         """판정을 적어 둔 장비 이름 전부"""
@@ -1307,7 +1403,13 @@ class EbsSimulate:
         return low
 
     def get_verdict(self) -> dict:
-        """마지막 collide 가 만든 판정"""
+        """마지막 collide 가 만든 판정
+
+        build_verdict    내용을 바꾸려면 여기
+        _verdict_panel   못 세울 때만 한 줄 띄운다 (VERDICT_HEIGHT). 세울 수 있으면
+                     중앙에 아무것도 안 띄운다. 내부 간섭 한 줄은 CLASH_HEIGHT
+                     높이에 따로. 글은 ebs_simulate_overlay 맨 위에 모여 있다
+        """
         return dict(self._verdict)
 
 
@@ -1555,7 +1657,10 @@ class EbsSimulate:
         return (1.0, 0.0)
 
     def get_selected_equipment(self) -> str:
-        """뷰포트 선택에서 장비 경로 하나"""
+        """뷰포트 선택에서 장비 경로 하나
+
+        _resolve_by_selection
+        """
         stage = self._get_stage()
         prim = self._resolve_by_selection(stage) if stage else None
         return str(prim.GetPath()) if prim else ""
@@ -3732,12 +3837,19 @@ class EbsSimulate:
 
 
     def release_camera(self) -> None:
-        """카메라를 놓고 투명하게 만든 장비를 되돌린다"""
+        """카메라를 놓고 투명하게 만든 장비를 되돌린다
+
+        EbsSimulateCamera.release
+        show_equipment  투명하게 했던 것을 되돌린다 (Clear 버튼)
+        """
         self.show_equipment()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:
-        """카메라를 처음 잡은 자리로"""
+        """카메라를 처음 잡은 자리로
+
+        EbsSimulateCamera.reset  place 가 적어둔 _home 을 다시 쓴다
+        """
         told = self._camera.reset(self._get_stage())
         if told:
             self._note(told)

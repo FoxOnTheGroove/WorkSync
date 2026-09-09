@@ -442,23 +442,29 @@ class EbsSimulateMarks:
         return drawn
 
     def _lead_line(self, stage, mark: dict, threads: dict) -> int:
-        """선 끝에서 잰 자리까지, 축을 따라 꺾어 가는 흰 안내선"""
+        """선 끝에서 멈춘 자리까지 흰 안내선 한 줄. 꺾는 자리는 건너뛴다"""
         lead = mark.get("lead")
         if not lead:
             return 0
         if COLOR_LEAD not in threads:
             threads[COLOR_LEAD] = self._material(
                 stage, "lead", COLOR_LEAD, GAP_OPACITY, GAP_EMISSION)
-        drawn = 0
-        spot = mark["to"]
-        for at, step in enumerate(lead):
-            one, two = self._stretched(spot, step, LEAD_OVER)
-            if self._gap_line(stage,
-                              f"{self._root}/{mark['face']}_lead_{at}",
-                              one, two, LEAD_RADIUS, threads[COLOR_LEAD],
-                              COLOR_LEAD):
-                drawn += 1
-            spot = step
+        one, two = self._stretched(mark["to"], lead[-1], LEAD_OVER)
+        drawn = int(self._gap_line(stage, f"{self._root}/{mark['face']}_lead_0",
+                                   one, two, LEAD_RADIUS, threads[COLOR_LEAD],
+                                   COLOR_LEAD))
+        # 꺾어 가며 마디마다 긋던 것. 멈출 자리를 고르는 _lead_path 는 그대로라
+        # 아래를 되살리면 다시 꺾어 그린다 (마디마다 프림 하나)
+        # drawn = 0
+        # spot = mark["to"]
+        # for at, step in enumerate(lead):
+        #     one, two = self._stretched(spot, step, LEAD_OVER)
+        #     if self._gap_line(stage,
+        #                       f"{self._root}/{mark['face']}_lead_{at}",
+        #                       one, two, LEAD_RADIUS, threads[COLOR_LEAD],
+        #                       COLOR_LEAD):
+        #         drawn += 1
+        #     spot = step
         return drawn + self._lead_tick(stage, mark, threads[COLOR_LEAD])
 
     def _lead_tick(self, stage, mark: dict, material) -> int:
