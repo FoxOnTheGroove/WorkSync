@@ -226,7 +226,7 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
-LEAD_FACES  = (FACE_LEFT, FACE_RIGHT)
+LEAD_FACES  = FACES
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
@@ -1060,8 +1060,7 @@ class EbsSimulate:
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:
-        """면마다 상태·거리·선 두 끝을 만든다. 좌우는 앞 모서리 중점에서 긋고
-        실제로 잰 지점은 lead 로 남긴다"""
+        """면마다 상태·거리·선 두 끝. 선은 앞 모서리 중점에서, 잰 자리는 안내선으로"""
         stage = self._get_stage()
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -1112,11 +1111,12 @@ class EbsSimulate:
                 start[axis] = coord
                 end = list(start)
                 end[axis] = coord + (reach if outward > 0 else -reach)
+                turn_axis = 3 - axis - front_axis
                 corner = list(end)
                 corner[front_axis] = spot[front_axis]
-                patch = self._lead_patch(face, [end, corner, spot], to_world,
+                patch = self._lead_patch([end, corner, spot], to_world,
                                          axis, end[axis])
-                walk = self._lead_path(end, spot, up_axis, front_axis,
+                walk = self._lead_path(end, spot, turn_axis, front_axis,
                                        axis, patch)
                 lead = [world(point) for point in walk]
                 tick = self._tick_way(end, axis, world)
@@ -1145,7 +1145,7 @@ class EbsSimulate:
 
     @staticmethod
     def _note_lead(face: str, patch, walk, spot) -> None:
-        """안내선이 어디서 멈췄나. 콘솔로만"""
+        """안내선이 무엇을 보고 어디서 멈췄나. 콘솔로만"""
         if not walk:
             where = "the arrow was already touching"
         elif all(abs(walk[-1][i] - spot[i]) <= LEAD_TOL for i in range(3)):
@@ -1153,16 +1153,17 @@ class EbsSimulate:
         else:
             where = ("stopped at ("
                      + ", ".join(f"{v:.3f}" for v in walk[-1]) + ")")
-        print(f"[ebs] {face} lead: {len(walk)} legs, {where}")
+        print(f"[ebs] {face} lead: {len(patch or ())} shapes in the way, "
+              f"{len(walk)} legs, {where}")
 
     @staticmethod
-    def _lead_path(end, spot, up_axis: int, front_axis: int, axis: int,
+    def _lead_path(end, spot, turn_axis: int, front_axis: int, axis: int,
                    patch) -> list:
-        """선 끝에서 잰 자리로. 도중에 같은 깊이의 메시를 만나면 거기서 멈춘다"""
+        """선 끝에서 잰 자리로. 가다가 아무 메시에나 닿으면 거기서 멈춘다"""
         corner = list(end)
         corner[front_axis] = spot[front_axis]
         legs = [corner]
-        if abs(spot[up_axis] - corner[up_axis]) > LEAD_TOL:
+        if abs(spot[turn_axis] - corner[turn_axis]) > LEAD_TOL:
             legs.append(list(spot))
         path, here = [], list(end)
         for leg in legs:
@@ -3239,10 +3240,8 @@ class EbsSimulate:
             return None
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
-    def _lead_patch(self, face: str, walk, to_world, axis: int,
-                    plane: float) -> list:
-        """안내선이 지나는 자리의 메시를 그 깊이에서 잘라 둔다. 거리를 잰 상대만이
-        아니라 그 언저리에 있는 것은 전부 본다 -- 닿기만 하면 멈춰야 하니까"""
+    def _lead_patch(self, walk, to_world, axis: int, plane: float) -> list:
+        """안내선이 지날 자리 언저리의 메시를 스테이지 전체에서 훑어 잘라 둔다"""
         stage = self._get_stage()
         if stage is None or not walk:
             return []
@@ -3262,24 +3261,11 @@ class EbsSimulate:
             if (local.GetMin()[axis] - LEAD_TOL <= plane
                     <= local.GetMax()[axis] + LEAD_TOL):
                 across.append((path, local))
-        patch = self._same_patch(stage, across, room, inverse, axis, plane)
-        reads = sum(len(self._mesh_triangles(stage, path) or ())
-                    for path, _ in across)
-        world = Gf.BBox3d(room, to_world).ComputeAlignedRange()
-        print(f"[ebs] {face} lead: path room "
-              f"({', '.join(f'{v:.2f}' for v in world.GetMin())}) .. "
-              f"({', '.join(f'{v:.2f}' for v in world.GetMax())}), "
-              f"{len(found)} prims near, {len(across)} reach the gap plane "
-              f"(local {plane:.3f} on axis {axis}), {reads} triangles, "
-              f"{len(patch)} shapes")
-        return patch
+        return self._same_patch(stage, across, room, inverse, axis, plane)
 
     def _same_patch(self, stage, nearby, room, inverse, axis: int,
                     plane: float) -> list:
-        """그 깊이에서 잘라낸 모양들. 평평한 것은 면, 걸친 것은 단면 선.
-
-        점을 못 읽는 것(Cube 같은 프림, 점이 없는 메시)은 거리 재기와 똑같이
-        상자로 본다. 안 그러면 아예 없는 물건이 된다."""
+        """그 깊이에서 잘라낸 모양들. 평평하면 면, 걸치면 단면 선, 점이 없으면 상자"""
         lo, hi = room.GetMin(), room.GetMax()
         u, v = [i for i in range(3) if i != axis]
         patch = []

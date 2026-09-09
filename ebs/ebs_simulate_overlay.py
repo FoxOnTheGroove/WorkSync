@@ -15,15 +15,14 @@ STATE_CLASH = "clash"
 
 FRAME_ID = "ebs_simulate_overlay"
 
-CAN    = "EBS INSTALL AVAILABLE"
-CANNOT = "EBS INSTALL BLOCKED"
-INNER  = "internal clash"
+CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
+INNER  = "내부 장비와 충돌"
 
-CLASH = "clash"
-GAP   = "clearance"
-TIGHT = "interference"
+CLASH = "충돌"
+GAP   = "여유"
+TIGHT = "간섭"
 SPAN  = "{0:.2f}M"
-LEAST = "(min gap : {0:.2f}M)"
+LEAST = "(최소간격 : {0:.2f}M)"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 LINE_ROOM = 6
@@ -196,26 +195,23 @@ class EbsSimulateOverlay:
                             share, group))
 
     def _verdict_panel(self, said: dict) -> None:
-        """세울 수 있나 없나 한 줄. 내부 간섭이면 그 아래에 한 줄 더"""
-        ok = bool(said.get("placeable"))
-        ink = COLOR_INK if ok else COLOR_TEXT
+        """못 세울 때만 한 줄. 내부 간섭이면 그 아래에 한 줄 더. 세울 수 있으면 없다"""
+        if said.get("placeable"):
+            return
 
-        def one(text, colour, size):
+        def one(text):
             """한 줄짜리 판을 그리는 함수를 만든다"""
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
-                             style={"font_size": size, "color": colour})
+                             style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
             return fill
 
-        self._floating(said.get("centre"), one(CAN if ok else CANNOT, ink,
-                                               TEXT_SIZE),
-                       COLOR_CAN if ok else COLOR_CANNOT)
+        self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT)
         if said.get("inside"):
-            self._floating(said.get("inside_at"),
-                           one(INNER, COLOR_TEXT, TEXT_SIZE), COLOR_CANNOT)
+            self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT)
 
     def _face_panel(self, mark: dict) -> None:
         """한쪽에 상태, 다른 쪽에 거리와 최소 여유. 막힌 면도 똑같이 붙인다"""

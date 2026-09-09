@@ -159,28 +159,21 @@ class EbsSimulateService:
         """EBS 좌/우/천장 충돌과 여유 거리를 잰다. 씬에 마커도 그린다.
 
         _do_collide  이 단계의 순서가 전부 여기 있다
+        check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭.
+                     막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
+        _flat_gap / _mesh_parts  한 덩어리 안에서 같은 높이인 면들을 합쳐 그 중앙
+                     (H 빔의 다리 둘처럼). 점을 못 읽는 프림은 상자로 잰다
+        _face_marks  세 면 다 앞 모서리 중점에서 면에 수직으로 긋는다. 메시에 안
+                     묻히는 자리다 (LEAD_FACES, LEAD_FRONT)
+        _lead_path   잰 자리를 가리키는 안내선. 뒤로 갔다가 한 번만 꺾는다. 꺾는
+                     축은 잰 축도 앞뒤 축도 아닌 나머지 -- 좌우는 위아래, 천장은 옆
+        _lead_patch / _sliced / _stop_at  갈 길 언저리(LEAD_ROOM)를 스테이지 전체에서
+                     훑어 그 깊이에서 자르고 (평평하면 면, 걸치면 단면 선, 점이
+                     없으면 상자), 아무 데나 처음 닿으면 멈춘다 (LEAD_TOL, LEAD_PATCH)
         EbsSimulateMarks  씬에 그리는 것은 전부 ebs_simulate_overlay 에 있다.
-                     판, 선, 화살촉, 안내선, 충돌 상자, 깜박임과 그 상수들
-        _flat_gap / _mesh_parts  빈 면 거리 선이 어디서 나오나. 한 덩어리 안에서
-                     같은 높이인 면들을 합쳐 그 중앙 (H 빔의 다리 둘처럼)
-        check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭
+                     판, 선, 화살촉, 안내선, 눈금, 충돌 상자, 깜박임과 그 상수들
+                     (GAP_*, LEAD_OVER, COLOR_*)
         show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
-        _gap_lines   여유 선과 양 끝 화살촉. 선은 화살촉 중점에서 시작한다
-                     (GAP_RADIUS, GAP_HEAD_*, COLOR_GAP / COLOR_TIGHT)
-        measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
-        _face_marks    좌우 선은 메시에 안 묻히게 면 앞 모서리 중점에서 긋는다
-                       (LEAD_FACES, LEAD_FRONT)
-        _lead_path     잰 자리로 가는 안내선 길. 뒤로 갔다가 한 번만 꺾는데,
-                       가는 도중 아무 메시에나 닿으면 거기서 멈춘다
-        _lead_patch    부딪힐 것 고르기. 거리를 잰 상대만이 아니라 제 갈 길
-                       언저리(LEAD_ROOM)를 스테이지 전체에서 훑는다. 몇 개를
-                       보고 몇 개가 남았는지 콘솔에 한 줄씩 적는다
-        _same_patch / _sliced  안내선은 그 깊이 평면 위에만 있으니, 그 메시들을
-                       평면에서 잘라 둔다. 평평한 것은 면, 걸친 것은 단면 선
-        _stop_at / _enter / _cross  선분이 그중 무엇에든 처음 닿는 자리를 푼다
-                       (LEAD_TOL, LEAD_PATCH). 멈춘 자리에는 _lead_tick 이 짧은
-                       눈금 하나. 왜 거기서 멈췄나는 _note_lead 가 콘솔에 적는다
-        _lead_line     그 길을 흰 선으로. 양 끝을 LEAD_OVER 만큼 삐져나오게 긋는다
         """
         return cls._simulate.collide()
 
@@ -188,8 +181,10 @@ class EbsSimulateService:
     def get_verdict(cls):
         """마지막 판정을 오버레이용으로 꺼낸다.
 
-        build_verdict  내용을 바꾸려면 여기. 판정 한 줄은 VERDICT_HEIGHT 높이,
-                       내부 간섭 한 줄은 CLASH_HEIGHT 높이에 따로 매단다
+        build_verdict    내용을 바꾸려면 여기
+        _verdict_panel   못 세울 때만 한 줄 띄운다 (VERDICT_HEIGHT). 세울 수 있으면
+                         중앙에 아무것도 안 띄운다. 내부 간섭 한 줄은 CLASH_HEIGHT
+                         높이에 따로. 글은 ebs_simulate_overlay 맨 위에 모여 있다
         """
         return cls._simulate.get_verdict()
 
