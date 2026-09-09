@@ -84,7 +84,7 @@ class EbsDummyUI:
     """Dummy UI driven only by the public API (EbsSimulateService)."""
 
     def __init__(self):
-        """위젯 참조를 담을 자리만 만든다. 실제 구성은 build_ui"""
+        """위젯 참조 자리만. 구성은 build_ui"""
         self._window = None
         self._usd_field = None
         self._xml_field = None
@@ -160,7 +160,7 @@ class EbsDummyUI:
                 self._status_label = ui.Label("Ready", height=20)
 
     def _path_row(self, label: str):
-        """라벨 + 입력칸 한 줄. 만든 입력칸을 돌려준다"""
+        """라벨 + 입력칸 한 줄"""
         with ui.HStack(height=20, spacing=4):
             ui.Label(label, width=90)
             field = ui.StringField()
@@ -184,7 +184,7 @@ class EbsDummyUI:
         self._test_clear()
 
     def _test_clear(self) -> list:
-        """테스트 씬에서 눈에 걸리는 셋을 끈다. 없는 것은 넘어간다."""
+        """테스트 씬에서 눈에 걸리는 셋을 끈다"""
         wanted = [f"{base.rstrip('/')}/{UNDER_EBS}" for base in
                   (self._ebs2_field.model.get_value_as_string().strip(),
                    self._ebs3_field.model.get_value_as_string().strip()) if base]
@@ -249,7 +249,7 @@ class EbsDummyUI:
         self._mark_overlay()
 
     def _on_toggle_overlay(self):
-        """판정 오버레이를 손으로 켜고 끈다. 원래는 Camera 가 켠다."""
+        """판정 오버레이를 손으로 켜고 끈다"""
         self._overlay_on = not self._overlay_on
         if self._overlay_on:
             EbsSimulateOverlay.show()

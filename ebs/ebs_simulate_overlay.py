@@ -485,7 +485,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _stretched(start, end, over: float):
-        """두 점을 잇되 양 끝을 over 만큼 더 뻗는다. 어디서 어디까지인지 보이게"""
+        """두 점을 잇되 양 끝을 over 만큼 더 뻗는다"""
         along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         if along.GetLength() <= 1e-9:
             return start, end
@@ -521,7 +521,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _clash_pad(stage) -> float:
-        """CLASH_PAD 는 m 다. 씬 단위로 바꿔 준다 (1 유닛이 1 cm 인 씬도 있다)."""
+        """CLASH_PAD 는 m 다. 씬 단위로 바꿔 준다"""
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
         except Exception:
@@ -530,7 +530,7 @@ class EbsSimulateMarks:
 
 
     def _start_pulse(self, stage) -> bool:
-        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다."""
+        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다"""
         self._stop_pulse()
         if CLASH_PULSE <= 0.0:
             return False
@@ -552,7 +552,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _pulse_inputs_of(stage, root: str) -> tuple:
-        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다"""
+        """깜박일 때 건드릴 속성과 1.0 일 때의 값. 투명도만 건드린다"""
         looks = f"{root}/Looks/clash"
         wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
                   (f"{looks}/mdl", "inputs:opacity_constant", 1.0))

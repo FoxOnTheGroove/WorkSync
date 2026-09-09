@@ -45,7 +45,7 @@ def _remote(path: str) -> bool:
 
 
 def _client():
-    """omni.client 를 그때 가서 부른다. 로컬만 쓸 때는 없어도 된다"""
+    """omni.client 를 그때 가서 부른다"""
     import omni.client
     return omni.client
 
@@ -663,22 +663,15 @@ class EbsSimulate:
         """3면 충돌과 여유 거리를 재고 마커를 그린다
 
         _do_collide  이 단계의 순서가 전부 여기 있다
-        check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭.
-                     막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
-        _flat_gap / _mesh_parts  한 덩어리 안에서 같은 높이인 면들을 합쳐 그 중앙
-                     (H 빔의 다리 둘처럼)
-        _mesh_local / _cube_local  삼각형을 어디서 얻나. Cube 는 제 크기로 만들어
-                     비스듬해도 정확하다. 그래도 못 얻으면 상자로 잰다 (_boxed 로 보고)
-        _face_marks  세 면 다 앞 모서리 중점에서 면에 수직으로 긋는다. 메시에 안
-                     묻히는 자리다 (LEAD_FACES, LEAD_FRONT)
-        _lead_path   잰 자리를 가리키는 안내선. 뒤로 갔다가 한 번만 꺾는다. 꺾는
-                     축은 잰 축도 앞뒤 축도 아닌 나머지 -- 좌우는 위아래, 천장은 옆
-        _lead_patch / _sliced / _stop_at  갈 길 언저리(LEAD_ROOM)를 스테이지 전체에서
-                     훑어 그 깊이에서 자르고 (평평하면 면, 걸치면 단면 선, 점이
-                     없으면 상자), 아무 데나 처음 닿으면 멈춘다 (LEAD_TOL, LEAD_PATCH)
-        EbsSimulateMarks  씬에 그리는 것은 전부 ebs_simulate_overlay 에 있다.
-                     판, 선, 화살촉, 안내선, 눈금, 충돌 상자, 깜박임과 그 상수들
-                     (GAP_*, LEAD_OVER, COLOR_*)
+        check_collision / measure_faces / check_equipment  3면, 빈 면 거리,
+                     내부 간섭. 막힌 면은 파고든 깊이를 음수로 준다
+        _flat_gap / _mesh_parts  같은 덩어리의 같은 높이인 면들을 합쳐 그 중앙
+        _mesh_local / _cube_local  삼각형을 어디서 얻나. 못 얻으면 상자 (_boxed)
+        _face_marks / _lead_path  선은 앞 모서리 중점에서, 안내선은 뒤로 갔다가
+                     한 번 꺾어 잰 자리로 (LEAD_FACES, LEAD_FRONT)
+        _lead_patch / _sliced / _stop_at  안내선이 무엇에 닿으면 멈추나
+                     (LEAD_ROOM, LEAD_TOL, LEAD_PATCH)
+        EbsSimulateMarks  씬에 그리는 것은 전부 ebs_simulate_overlay 에
         show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
         """
         self._begin()
@@ -1126,14 +1119,13 @@ class EbsSimulate:
     def get_result(self, equipment: str = "") -> dict:
         """그 장비의 마지막 판정. 화면은 안 건드린다
 
-        equipment, port_count, reason, faces, inside, placeable 여섯. 적어 둔
-                     것이 없어도 키는 다 있고 값만 빈다
-        reason       면마다 clear / tight / clash 한 줄. 닿았으면 clash, 안
-                     닿아도 최소 여유 미달이면 tight. 내부는 clear / clash
-        faces        면마다 잰 간격(m)과 상대 이름. RESULT_ORDER 순서
+        equipment, port_count, reason, faces, inside, placeable 여섯.
+                     기록이 없어도 키는 다 있다
+        reason       면마다 clear / tight / clash. 닿았으면 clash, 안 닿아도
+                     최소 여유 미달이면 tight. 내부는 clear / clash
+        faces        면마다 잰 간격(m)과 상대 이름 (RESULT_ORDER 순서)
         placeable    세 면이 다 clear 이고 내부도 안 걸려야 참
-        _keep_result  collide 가 장비 이름으로 적어 둔다. 지우는 곳은 Init 하나.
-                     간격은 적어 둔 그대로, 상태는 지금 최소 여유로 읽는다
+        _keep_result  collide 가 적어 두는 곳. 지우는 곳은 Init 하나
         get_results / list_results  통째로, 또는 이름만
         """
         found = self._results.get(self._result_key(equipment)) or {}
@@ -1309,7 +1301,7 @@ class EbsSimulate:
 
     @staticmethod
     def _note_lead(face: str, patch, walk, spot) -> None:
-        """안내선이 무엇을 보고 어디서 멈췄나. 콘솔로만"""
+        """안내선이 어디서 멈췄나. 콘솔로만"""
         if not walk:
             where = "the arrow was already touching"
         elif all(abs(walk[-1][i] - spot[i]) <= LEAD_TOL for i in range(3)):
@@ -1405,10 +1397,9 @@ class EbsSimulate:
     def get_verdict(self) -> dict:
         """마지막 collide 가 만든 판정
 
-        build_verdict    내용을 바꾸려면 여기
-        _verdict_panel   못 세울 때만 한 줄 띄운다 (VERDICT_HEIGHT). 세울 수 있으면
-                     중앙에 아무것도 안 띄운다. 내부 간섭 한 줄은 CLASH_HEIGHT
-                     높이에 따로. 글은 ebs_simulate_overlay 맨 위에 모여 있다
+        build_verdict   내용을 바꾸려면 여기
+        _verdict_panel  못 세울 때만 한 줄 (VERDICT_HEIGHT), 내부 간섭은 그
+                     아래 한 줄 (CLASH_HEIGHT). 글은 오버레이 맨 위에
         """
         return dict(self._verdict)
 
@@ -1514,7 +1505,7 @@ class EbsSimulate:
         return found
 
     def _gone_layer(self, stage):
-        """투명 처리를 담는 전용 레이어. 되돌리기가 Clear 한 번이다"""
+        """투명 처리를 담는 전용 레이어"""
         session = stage.GetSessionLayer()
         if self._gone is None:
             self._gone = Sdf.Layer.CreateAnonymous(GONE_LAYER)
@@ -2518,7 +2509,7 @@ class EbsSimulate:
 
     @staticmethod
     def _cube_local(prim):
-        """Cube 프림의 점과 면. 비스듬히 놓인 것을 상자로 뭉개지 않으려고"""
+        """Cube 프림의 점과 면. size 로 만들어 프림의 변환이 그대로 실린다"""
         if str(prim.GetTypeName()) != CUBE_TYPE:
             return None
         try:
@@ -2565,7 +2556,7 @@ class EbsSimulate:
 
     @staticmethod
     def _with_box(triangle):
-        """삼각형에 제 상자를 붙여 둔다. 나중 비교가 싸진다"""
+        """삼각형에 제 상자를 붙여 둔다"""
         a, b, c = triangle
         return (triangle,
                 (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
@@ -2616,7 +2607,7 @@ class EbsSimulate:
         return kept
 
     def _mover(self, to_world, points, path: str):
-        """로컬 점을 월드로. 행렬을 펼 수 있으면 파이썬 산술로 돈다."""
+        """로컬 점을 월드로. 행렬을 펼 수 있으면 파이썬 산술로 돈다"""
         try:
             r0, r1, r2, r3 = (to_world.GetRow(0), to_world.GetRow(1),
                               to_world.GetRow(2), to_world.GetRow(3))
@@ -2641,7 +2632,7 @@ class EbsSimulate:
         return lambda p: to_world.Transform(Gf.Vec3d(p[0], p[1], p[2]))
 
     def _face_grid(self, path: str, data):
-        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로."""
+        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로"""
         made = self._faces.get(path)
         if made is not None:
             return made
@@ -2962,7 +2953,7 @@ class EbsSimulate:
 
     def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
-        """EBS 와 대상 장비만 본다. 옆 장비(3면 검사 몫)는 여기 들어오지 않는다."""
+        """EBS 와 대상 장비만 본다. 옆 장비(3면 검사 몫)는 여기 들어오지 않는다"""
         stage = self._get_stage()
         blank = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
         if stage is None or eqp_prim is None or not eqp_prim.IsValid():
@@ -3037,7 +3028,7 @@ class EbsSimulate:
                 "tests": tests}
 
     def _mesh_box(self, stage, path: str):
-        """그 메시의 점으로 직접 잰 상자. 삼각형이 없으면 None."""
+        """그 메시의 점으로 직접 잰 상자. 삼각형이 없으면 None"""
         triangles = self._mesh_triangles(stage, path)
         if not triangles:
             return None
@@ -3072,7 +3063,7 @@ class EbsSimulate:
         return found
 
     def _mesh_reaches(self, stage, path: str, piece_box) -> bool:
-        """메시 path 의 표면이 piece_box 에 실제로 닿는가."""
+        """메시 path 의 표면이 piece_box 에 실제로 닿는가"""
         data = self._mesh_local(stage, path)
         to_world = self._to_world(stage, path)
         if not data or to_world is None:
@@ -3106,7 +3097,7 @@ class EbsSimulate:
             return False
 
     def _missed(self, theirs: list, pairs: list, world_box) -> None:
-        """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다."""
+        """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다"""
         if len(pairs) >= CLASH_MARKS:
             self._note(f"interference stopped at the {CLASH_MARKS} piece cap - "
                        f"there may be more")
@@ -3519,7 +3510,7 @@ class EbsSimulate:
                 (corners[0], corners[2], corners[3])]
 
     def _parts_of(self, path: str, triangles) -> list:
-        """그 메시의 덩어리 표. 위상은 안 변하니 한 번 만들고 계속 쓴다"""
+        """그 메시의 덩어리 표. 한 번 만들고 캐시한다"""
         found = self._parts.get(path)
         if found is None or len(found) != len(triangles):
             found = self._mesh_parts(triangles)
@@ -3553,7 +3544,7 @@ class EbsSimulate:
 
     @staticmethod
     def _flat_slack(local, axis: int) -> float:
-        """'같은 평면'으로 볼 깊이 오차. 넓은 면일수록 조금 기울어도 한 면이다."""
+        """'같은 평면'으로 볼 깊이 오차. 넓은 면일수록 조금 기울어도 한 면이다"""
         span = max(local.GetMax()[i] - local.GetMin()[i]
                    for i in range(3) if i != axis)
         return max(span * FLAT_TOL, OVERLAP_EPS)
@@ -3683,7 +3674,7 @@ class EbsSimulate:
 
     def _face_sheets(self, local_box, to_world, cells: dict,
                      marks: list) -> list:
-        """면 판마다 (이름, 월드 네 점, 막혔나). 어느 칸이 막혔나가 여기서 정해진다"""
+        """면 판마다 (이름, 월드 네 점, 막혔나)"""
         built = self._build_cells(local_box)
         tight = {mark["face"] for mark in marks or ()
                  if mark.get("state") == STATE_TIGHT}
