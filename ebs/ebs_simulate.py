@@ -1087,7 +1087,7 @@ class EbsSimulate:
             least = self._min_gap.get(face, 0.0)
             blank = {"face": face, "distance": None, "name": "",
                      "min_gap": least, "at": world(surface),
-                     "from": None, "to": None, "lead": None}
+                     "from": None, "to": None, "lead": None, "spot": None}
             hit = bool(any(cells.get(face, [])))
             found = distances.get(face) or {}
             at = found.get("at")
@@ -1101,9 +1101,9 @@ class EbsSimulate:
             start, end = list(at), list(at)
             start[axis] = coord
             end[axis] = coord + (reach if outward > 0 else -reach)
+            spot = list(end)
             lead = None
             if face in LEAD_FACES:
-                spot = list(end)
                 start = list(middle)
                 start[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
                 start[axis] = coord
@@ -1123,30 +1123,37 @@ class EbsSimulate:
                 "name": self.owner_name(found.get("prim", "")
                                         or self._blockers.get(face, "")),
                 "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
-                "from": near, "to": far, "lead": lead,
+                "from": near, "to": far, "lead": lead, "spot": world(spot),
             })
         return marks
 
     @staticmethod
     def _lead_path(end, spot, up_axis: int, front_axis: int, span) -> list:
-        """선 끝에서 잰 자리까지 축을 따라 꺾어 가는 길. 한 번만 꺾는다"""
+        """선 끝에서 잰 자리까지 축을 따라 꺾어 가는 길. 같은 면에 닿으면 거기서 끝"""
+        if EbsSimulate._same_gap(span, end):
+            return []
         corner = list(end)
         corner[front_axis] = spot[front_axis]
         if abs(spot[up_axis] - corner[up_axis]) <= LEAD_TOL:
             return [spot]
-        if EbsSimulate._same_gap(span, corner, up_axis):
+        if EbsSimulate._same_gap(span, corner):
             return [corner]
         return [corner, spot]
 
     @staticmethod
-    def _same_gap(span, point, up_axis: int) -> bool:
+    def _same_gap(span, point) -> bool:
         """그 자리도 같은 면 위인가. 그렇다면 잰 값이 같아 거기서 멈춰도 된다"""
         if not span:
             return False
-        low, high = span[0][up_axis], span[1][up_axis]
-        if low is None or high is None:
-            return False
-        return low - LEAD_TOL <= point[up_axis] <= high + LEAD_TOL
+        mins, maxs = span
+        seen = False
+        for i in range(3):
+            if mins[i] is None or maxs[i] is None:
+                continue
+            seen = True
+            if not mins[i] - LEAD_TOL <= point[i] <= maxs[i] + LEAD_TOL:
+                return False
+        return seen
 
     def get_verdict(self) -> dict:
         """마지막 collide 가 만든 판정"""
