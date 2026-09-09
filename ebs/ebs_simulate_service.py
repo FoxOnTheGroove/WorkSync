@@ -171,9 +171,11 @@ class EbsSimulateService:
         _face_marks    좌우 선은 메시에 안 묻히게 면 앞 모서리 중점에서 긋는다
                        (LEAD_FACES, LEAD_FRONT)
         _lead_path     잰 자리로 가는 안내선 길. 뒤로 갔다가 한 번만 꺾는데,
-                       가는 도중 잰 것과 같은 깊이의 메시를 만나면 거기서 멈춘다
-        _same_patch / _stop_at / _enter  그 깊이에 있는 삼각형을 모아 두고, 선분이
-                       처음 닿는 자리를 푼다 (LEAD_TOL, LEAD_PATCH)
+                       가는 도중 아무 메시에나 닿으면 거기서 멈춘다
+        _same_patch / _sliced  안내선은 그 깊이 평면 위에만 있으니, 가까운 메시를
+                       그 평면에서 잘라 둔다. 평평한 것은 면, 걸친 것은 단면 선
+        _stop_at / _enter / _cross  선분이 그중 무엇에든 처음 닿는 자리를 푼다
+                       (LEAD_TOL, LEAD_PATCH)
         _lead_line     그 길을 흰 선으로. 양 끝을 LEAD_OVER 만큼 삐져나오게 긋는다
         """
         return cls._simulate.collide()

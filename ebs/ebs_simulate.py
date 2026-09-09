@@ -1151,20 +1151,37 @@ class EbsSimulate:
 
     @staticmethod
     def _stop_at(one, two, axis: int, patch):
-        """선분이 그 삼각형들에 처음 닿는 자리. 안 닿으면 None"""
+        """선분이 그 모양들에 처음 닿는 자리. 아무 데도 안 닿으면 None"""
         if not patch:
             return None
         u, v = [i for i in range(3) if i != axis]
         flat_one, flat_two = (one[u], one[v]), (two[u], two[v])
         best = None
-        for triangle in patch:
-            flat = [(corner[u], corner[v]) for corner in triangle]
-            hit = EbsSimulate._enter(flat_one, flat_two, flat)
+        for shape in patch:
+            hit = (EbsSimulate._enter(flat_one, flat_two, shape)
+                   if len(shape) == 3
+                   else EbsSimulate._cross(flat_one, flat_two, shape))
             if hit is not None and (best is None or hit < best):
                 best = hit
         if best is None:
             return None
         return [one[i] + (two[i] - one[i]) * best for i in range(3)]
+
+    @staticmethod
+    def _cross(one, two, edge):
+        """두 선분이 만나는 t. 안 만나면 None"""
+        rx, ry = two[0] - one[0], two[1] - one[1]
+        sx, sy = edge[1][0] - edge[0][0], edge[1][1] - edge[0][1]
+        turn = rx * sy - ry * sx
+        if abs(turn) <= 1e-12:
+            return None
+        dx, dy = edge[0][0] - one[0], edge[0][1] - one[1]
+        along = (dx * sy - dy * sx) / turn
+        across = (dx * ry - dy * rx) / turn
+        if (-OVERLAP_EPS <= along <= 1.0 + OVERLAP_EPS
+                and -OVERLAP_EPS <= across <= 1.0 + OVERLAP_EPS):
+            return min(max(along, 0.0), 1.0)
+        return None
 
     @staticmethod
     def _enter(one, two, triangle):
@@ -3113,7 +3130,8 @@ class EbsSimulate:
                 near = [(path, box) for path, box in candidates.get(face, ())
                         if self._overlaps(box, world_prism)]
                 found = self._nearest_in_prism(stage, near, prism, to_world,
-                                               axis, outward, coord, deep)
+                                               axis, outward, coord, deep,
+                                               face in LEAD_FACES)
                 if found is not None and deep:
                     found["distance"] = -found["distance"]
                 results[face] = found or {"distance": None, "prim": "",
@@ -3154,7 +3172,8 @@ class EbsSimulate:
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
     def _nearest_in_prism(self, stage, candidates, prism, to_world,
-                          axis, outward, coord, deep: bool = False):
+                          axis, outward, coord, deep: bool = False,
+                          lead: bool = False):
         """가장 가까운 것 하나. deep 이면 가장 깊이 파고든 것 하나"""
         if not candidates:
             return None
@@ -3197,51 +3216,72 @@ class EbsSimulate:
         plane = coord + (best if way > 0 else -best)
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at,
                 "patch": self._same_patch(stage, bounded, prism, inverse,
-                                          axis, plane)}
+                                          axis, plane) if lead else []}
 
     def _same_patch(self, stage, bounded, prism, inverse, axis: int,
                     plane: float) -> list:
-        """잰 것과 같은 깊이에 있는 삼각형들. 안내선이 여기 닿으면 멈춘다"""
+        """안내선이 지나다 닿을 것들. 그 깊이에서 잘라낸 면과 단면 선"""
         lo, hi = prism.GetMin(), prism.GetMax()
+        u, v = [i for i in range(3) if i != axis]
         patch = []
         for _, path, local in bounded:
+            if len(patch) >= LEAD_PATCH:
+                break
             if not (local.GetMin()[axis] - LEAD_TOL <= plane
                     <= local.GetMax()[axis] + LEAD_TOL):
                 continue
-            if len(patch) >= LEAD_PATCH:
-                break
             if self._precision != PRECISION_TRI:
-                patch += self._box_patch(local, prism, axis, plane)
+                patch += self._box_patch(local, prism, u, v)
                 continue
             slack = max(min(self._flat_slack(local, axis),
                             self._flat_slack(prism, axis)), LEAD_TOL)
             for triangle, _, _ in self._mesh_triangles(stage, path) or ():
-                here = [inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
-                if any(abs(v[axis] - plane) > slack for v in here):
+                if len(patch) >= LEAD_PATCH:
+                    break
+                here = [inverse.Transform(Gf.Vec3d(*w)) for w in triangle]
+                if any(max(w[i] for w in here) < lo[i] - OVERLAP_EPS
+                       or min(w[i] for w in here) > hi[i] + OVERLAP_EPS
+                       for i in (u, v)):
                     continue
-                if any(max(v[i] for v in here) < lo[i] - OVERLAP_EPS
-                       or min(v[i] for v in here) > hi[i] + OVERLAP_EPS
-                       for i in range(3) if i != axis):
-                    continue
-                patch.append(tuple(tuple(v) for v in here))
+                shape = self._sliced(here, axis, plane, slack, u, v)
+                if shape:
+                    patch.append(shape)
         return patch
 
     @staticmethod
-    def _box_patch(local, prism, axis: int, plane: float) -> list:
-        """상자로만 잴 때의 면. 그 상자의 옆넓이를 삼각형 둘로"""
-        lo = [max(local.GetMin()[i], prism.GetMin()[i]) for i in range(3)]
-        hi = [min(local.GetMax()[i], prism.GetMax()[i]) for i in range(3)]
-        if any(lo[i] > hi[i] for i in range(3) if i != axis):
+    def _sliced(triangle, axis: int, plane: float, slack: float, u: int, v: int):
+        """그 삼각형을 깊이 plane 에서 자른 모양. 평평하면 면, 가로지르면 선"""
+        if all(abs(w[axis] - plane) <= slack for w in triangle):
+            return tuple((w[u], w[v]) for w in triangle)
+        cut = []
+        for at in range(3):
+            a, b = triangle[at], triangle[(at + 1) % 3]
+            step = b[axis] - a[axis]
+            if abs(step) <= 1e-12:
+                continue
+            hit = (plane - a[axis]) / step
+            if 0.0 <= hit <= 1.0:
+                cut.append((a[u] + (b[u] - a[u]) * hit,
+                            a[v] + (b[v] - a[v]) * hit))
+        best = None
+        for at in range(len(cut)):
+            for other in range(at + 1, len(cut)):
+                span = ((cut[at][0] - cut[other][0]) ** 2
+                        + (cut[at][1] - cut[other][1]) ** 2)
+                if best is None or span > best[0]:
+                    best = (span, cut[at], cut[other])
+        if best is None or best[0] <= 1e-18:
+            return None
+        return best[1], best[2]
+
+    @staticmethod
+    def _box_patch(local, prism, u: int, v: int) -> list:
+        """상자로만 잴 때는 그 상자의 옆넓이를 면으로 본다"""
+        lo = [max(local.GetMin()[i], prism.GetMin()[i]) for i in (u, v)]
+        hi = [min(local.GetMax()[i], prism.GetMax()[i]) for i in (u, v)]
+        if lo[0] > hi[0] or lo[1] > hi[1]:
             return []
-        corners = []
-        for low_u, low_v in ((True, True), (False, True), (False, False),
-                             (True, False)):
-            point = [0.0, 0.0, 0.0]
-            point[axis] = plane
-            u, v = [i for i in range(3) if i != axis]
-            point[u] = lo[u] if low_u else hi[u]
-            point[v] = lo[v] if low_v else hi[v]
-            corners.append(tuple(point))
+        corners = ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))
         return [(corners[0], corners[1], corners[2]),
                 (corners[0], corners[2], corners[3])]
 
