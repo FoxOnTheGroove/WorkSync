@@ -170,9 +170,10 @@ class EbsSimulateService:
         measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
         _face_marks    좌우 선은 메시에 안 묻히게 면 앞 모서리 중점에서 긋는다
                        (LEAD_FACES, LEAD_FRONT)
-        _lead_path     잰 자리로 가는 안내선 길. 화살촉이 이미 그 면 위면 아예
-                       안 그리고, 아니면 뒤로 갔다가 한 번만 꺾는다. 어디서
-                       멈출지는 _same_gap 이 면의 폭으로 본다 (LEAD_TOL)
+        _lead_path     잰 자리로 가는 안내선 길. 뒤로 갔다가 한 번만 꺾는데,
+                       가는 도중 잰 것과 같은 깊이의 메시를 만나면 거기서 멈춘다
+        _same_patch / _stop_at / _enter  그 깊이에 있는 삼각형을 모아 두고, 선분이
+                       처음 닿는 자리를 푼다 (LEAD_TOL, LEAD_PATCH)
         _lead_line     그 길을 흰 선으로. 양 끝을 LEAD_OVER 만큼 삐져나오게 긋는다
         """
         return cls._simulate.collide()
