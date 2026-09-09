@@ -1,4 +1,5 @@
 import csv
+import pprint
 
 import omni.ui as ui
 import omni.usd
@@ -145,6 +146,7 @@ class EbsDummyUI:
                 with ui.HStack(height=28, spacing=4):
                     ui.Button("INIT", width=70, clicked_fn=self._on_init)
                     ui.Button("SIM", clicked_fn=self._on_simulate)
+                    ui.Button("Get", width=56, clicked_fn=self._on_get_result)
 
                 with ui.HStack(height=26, spacing=4):
                     ui.Button("1 Align", clicked_fn=self._on_align)
@@ -216,6 +218,19 @@ class EbsDummyUI:
         EbsSimulateOverlay.show()
         self._overlay_on = True
         self._mark_overlay()
+
+    def _on_get_result(self):
+        """입력칸의 장비 이름으로 적어 둔 판정을 꺼내 콘솔에 찍는다"""
+        name = self._eqp_field.model.get_value_as_string().strip()
+        found = EbsSimulateService.get_result(name)
+        print(f"[ebs] get_result({name!r}):")
+        print(pprint.pformat(found, width=100, sort_dicts=False))
+        if found:
+            self._set_status(f"{found['equipment']}: {found['reason']}")
+            return
+        known = EbsSimulateService.list_results()
+        self._set_status(f"No result for {name!r}. Have: "
+                         + (", ".join(known) if known else "nothing yet"))
 
     def _on_align(self):
         """1단계. EBS 를 놓는다. 오버레이는 끈다"""

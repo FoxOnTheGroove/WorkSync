@@ -295,6 +295,7 @@ class EbsSimulate:
         self._ebs_box = None
         self._lasers: bool = False
         self._verdict: dict = {}
+        self._results: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
                          FACE_LEFT: MIN_GAP_SIDE,
                          FACE_RIGHT: MIN_GAP_SIDE}
@@ -450,8 +451,8 @@ class EbsSimulate:
             self._ready = False
         self._search_root = path
 
-    def get_result(self) -> dict:
-        """마지막 단계가 남긴 결과"""
+    def get_payload(self) -> dict:
+        """마지막 단계가 남긴 결과. 장비별 판정 기록은 get_result 쪽"""
         return dict(self._result)
 
     def get_timings(self) -> list:
@@ -550,6 +551,7 @@ class EbsSimulate:
         self._target = None
         self._aligned = False
         self._verdict = {}
+        self._results = {}
         self._triangles = {}
         self._local = {}
         self._faces = {}
@@ -1007,11 +1009,70 @@ class EbsSimulate:
                 else f"{hit_count} cell(s) blocked")
         if meeting["hit"]:
             told += ", and through the equipment"
+        self._keep_result(verdict, meeting, hit_count, told)
         return self._payload(
             True, told,
             cells=cells, hit_count=hit_count, distances=distances,
             equipment_hit=meeting,
         )
+
+    def _keep_result(self, verdict: dict, meeting: dict, blocked: int,
+                     reason: str) -> None:
+        """이번 판정을 장비 이름으로 적어 둔다. 거리는 사실이라 그대로 담는다"""
+        target = self._target or {}
+        name = (target.get("equipment").GetName()
+                if target.get("equipment") is not None else "")
+        if not name:
+            return
+        pairs = meeting.get("pairs") or ()
+        self._results[name.upper()] = {
+            "equipment": name,
+            "equipment_path": self._path_of(target.get("equipment")),
+            "port_count": target.get("port_count"),
+            "ebs": self._path_of(target.get("ebs")),
+            "reason": reason,
+            "blocked": blocked,
+            "faces": {mark["face"]: {"hit": mark["state"] == STATE_CLASH,
+                                     "distance": mark["distance"],
+                                     "name": mark["name"], "at": mark["at"]}
+                      for mark in verdict.get("marks") or ()},
+            "inside": {"hit": bool(meeting.get("hit")), "places": len(pairs),
+                       "with": [b.rsplit("/", 1)[-1] for _, b in pairs],
+                       "boxes": list(meeting.get("boxes") or ())},
+            "at": {"centre": verdict.get("centre"), "span": verdict.get("span")},
+            "under": {"precision": self._precision,
+                      "offset_scale": self._offset_scale,
+                      "ebs_2port": self._ebs_path_2port,
+                      "ebs_3port": self._ebs_path_3port,
+                      "search_root": self._search_root},
+            "when": time.time(),
+        }
+
+    def get_result(self, equipment: str = "") -> dict:
+        """그 장비의 마지막 판정. 상태와 최소 여유는 지금 잣대로 다시 읽는다"""
+        found = self._results.get(self._result_key(equipment))
+        if not found:
+            return {}
+        faces = {}
+        for face, one in found["faces"].items():
+            least = self._min_gap.get(face, 0.0)
+            gap = one["distance"]
+            faces[face] = dict(one, min_gap=least, state=(
+                STATE_CLASH if one["hit"] else
+                STATE_TIGHT if gap is not None and gap < least else STATE_CLEAR))
+        return dict(found, faces=faces,
+                    placeable=not found["inside"]["hit"] and not found["blocked"])
+
+    def list_results(self) -> list:
+        """판정을 적어 둔 장비 이름 전부"""
+        return sorted(one["equipment"] for one in self._results.values())
+
+    def _result_key(self, equipment: str) -> str:
+        """기록에서 찾을 이름. 경로를 줘도, EQP_ 접두가 없어도 찾는다"""
+        name = str(equipment or "").strip().rstrip("/").rsplit("/", 1)[-1].upper()
+        if not name or name in self._results:
+            return name
+        return EQP_PREFIX + name
 
     def owner_name(self, path: str) -> str:
         """메시 경로에서 사람이 아는 이름(장비/그룹)을 뽑는다"""

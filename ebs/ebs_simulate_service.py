@@ -188,6 +188,21 @@ class EbsSimulateService:
         """
         return cls._simulate.get_verdict()
 
+    @classmethod
+    def get_result(cls, equipment=""):
+        """그 장비를 마지막으로 collide 한 결과. 화면은 안 건드린다. 없으면 {}.
+
+        _keep_result  collide 가 장비 이름으로 적어 둔다. Init 까지 남는다
+        get_result    거리는 적어 둔 그대로, state 와 min_gap 과 placeable 은
+                      지금의 최소 여유로 다시 읽는다 (설계는 RESULT_STORE.md)
+        """
+        return cls._simulate.get_result(equipment)
+
+    @classmethod
+    def list_results(cls):
+        """판정을 적어 둔 장비 이름 전부."""
+        return cls._simulate.list_results()
+
     # -- 3단계 camera --------------------------------------------------------
 
     @classmethod
