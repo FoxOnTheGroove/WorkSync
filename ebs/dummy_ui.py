@@ -225,7 +225,7 @@ class EbsDummyUI:
         found = EbsSimulateService.get_result(name)
         print(f"[ebs] get_result({name!r}):")
         print(pprint.pformat(found, width=100, sort_dicts=False))
-        if found:
+        if found["equipment"]:
             self._set_status(f"{found['equipment']}: {found['reason']}")
             return
         known = EbsSimulateService.list_results()

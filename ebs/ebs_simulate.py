@@ -227,6 +227,12 @@ FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 LEAD_FACES  = FACES
+
+RESULT_ORDER  = (FACE_LEFT, FACE_RIGHT, FACE_CEILING)
+RESULT_WORDS  = {FACE_LEFT: "좌", FACE_RIGHT: "우", FACE_CEILING: "상단"}
+RESULT_INSIDE = "내부"
+RESULT_ROOMY  = "여유"
+RESULT_TIGHT  = "간섭"
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
@@ -1009,59 +1015,58 @@ class EbsSimulate:
                 else f"{hit_count} cell(s) blocked")
         if meeting["hit"]:
             told += ", and through the equipment"
-        self._keep_result(verdict, meeting, hit_count, told)
+        self._keep_result(verdict, meeting, hit_count)
         return self._payload(
             True, told,
             cells=cells, hit_count=hit_count, distances=distances,
             equipment_hit=meeting,
         )
 
-    def _keep_result(self, verdict: dict, meeting: dict, blocked: int,
-                     reason: str) -> None:
+    def _keep_result(self, verdict: dict, meeting: dict, blocked: int) -> None:
         """이번 판정을 장비 이름으로 적어 둔다. 거리는 사실이라 그대로 담는다"""
         target = self._target or {}
-        name = (target.get("equipment").GetName()
-                if target.get("equipment") is not None else "")
+        prim = target.get("equipment")
+        name = prim.GetName() if prim is not None else ""
         if not name:
             return
         pairs = meeting.get("pairs") or ()
         self._results[name.upper()] = {
             "equipment": name,
-            "equipment_path": self._path_of(target.get("equipment")),
-            "port_count": target.get("port_count"),
-            "ebs": self._path_of(target.get("ebs")),
-            "reason": reason,
+            "port_count": target.get("port_count") or 0,
             "blocked": blocked,
+            "inside_hit": bool(meeting.get("hit")),
+            "inside": [b.rsplit("/", 1)[-1] for _, b in pairs],
             "faces": {mark["face"]: {"hit": mark["state"] == STATE_CLASH,
-                                     "distance": mark["distance"],
-                                     "name": mark["name"], "at": mark["at"]}
+                                     "gap": mark["distance"],
+                                     "name": mark["name"]}
                       for mark in verdict.get("marks") or ()},
-            "inside": {"hit": bool(meeting.get("hit")), "places": len(pairs),
-                       "with": [b.rsplit("/", 1)[-1] for _, b in pairs],
-                       "boxes": list(meeting.get("boxes") or ())},
-            "at": {"centre": verdict.get("centre"), "span": verdict.get("span")},
-            "under": {"precision": self._precision,
-                      "offset_scale": self._offset_scale,
-                      "ebs_2port": self._ebs_path_2port,
-                      "ebs_3port": self._ebs_path_3port,
-                      "search_root": self._search_root},
-            "when": time.time(),
         }
 
     def get_result(self, equipment: str = "") -> dict:
-        """그 장비의 마지막 판정. 상태와 최소 여유는 지금 잣대로 다시 읽는다"""
-        found = self._results.get(self._result_key(equipment))
-        if not found:
-            return {}
-        faces = {}
-        for face, one in found["faces"].items():
-            least = self._min_gap.get(face, 0.0)
-            gap = one["distance"]
-            faces[face] = dict(one, min_gap=least, state=(
-                STATE_CLASH if one["hit"] else
-                STATE_TIGHT if gap is not None and gap < least else STATE_CLEAR))
-        return dict(found, faces=faces,
-                    placeable=not found["inside"]["hit"] and not found["blocked"])
+        """그 장비의 마지막 판정. 없어도 모양은 같다. 여유/간섭은 지금 잣대로"""
+        found = self._results.get(self._result_key(equipment)) or {}
+        faces, words = {}, []
+        for face in RESULT_ORDER:
+            one = (found.get("faces") or {}).get(face) or {}
+            gap = one.get("gap")
+            faces[face] = {"gap": gap, "name": one.get("name") or ""}
+            if found:
+                tight = (bool(one.get("hit"))
+                         or (gap is not None and gap < self._min_gap.get(face, 0.0)))
+                words.append(f"{RESULT_WORDS[face]} "
+                             f"{RESULT_TIGHT if tight else RESULT_ROOMY}")
+        if found:
+            words.append(f"{RESULT_INSIDE} "
+                         f"{RESULT_TIGHT if found['inside_hit'] else RESULT_ROOMY}")
+        return {
+            "equipment": found.get("equipment") or "",
+            "port_count": found.get("port_count") or 0,
+            "reason": " / ".join(words),
+            "faces": faces,
+            "inside": list(found.get("inside") or ()),
+            "placeable": bool(found) and not found["inside_hit"]
+            and not found["blocked"],
+        }
 
     def list_results(self) -> list:
         """판정을 적어 둔 장비 이름 전부"""
