@@ -240,6 +240,11 @@ FACE_RIGHT   = "right"
 FACE_CEILING = "ceiling"
 FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
+LEAD_FACES  = (FACE_LEFT, FACE_RIGHT)
+LEAD_FRONT  = -1
+LEAD_RADIUS = 0.001
+COLOR_LEAD  = (1.0, 1.0, 1.0)
+
 GRID = 1
 FADE_OTHERS = False
 LOOKS = "Looks"
@@ -1076,7 +1081,8 @@ class EbsSimulate:
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:
-        """면마다 상태·거리·선 두 끝을 만든다. 최소 여유 미달도 여기서"""
+        """면마다 상태·거리·선 두 끝을 만든다. 좌우는 앞 모서리 중점에서 긋고
+        실제로 잰 지점은 lead 로 남긴다"""
         stage = self._get_stage()
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -1084,6 +1090,7 @@ class EbsSimulate:
             per_unit = 1.0
         lo, hi = local_box.GetMin(), local_box.GetMax()
         middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+        front_axis = 3 - (self._face_planes.get(FACE_CEILING) or (2,))[0]
 
         def world(point):
             """로컬 점을 월드로"""
@@ -1102,7 +1109,7 @@ class EbsSimulate:
             least = self._min_gap.get(face, 0.0)
             blank = {"face": face, "distance": None, "name": "",
                      "min_gap": least, "at": world(surface),
-                     "from": None, "to": None}
+                     "from": None, "to": None, "lead": None}
             hit = bool(any(cells.get(face, [])))
             found = distances.get(face) or {}
             at = found.get("at")
@@ -1116,6 +1123,14 @@ class EbsSimulate:
             start, end = list(at), list(at)
             start[axis] = coord
             end[axis] = coord + (reach if outward > 0 else -reach)
+            lead = None
+            if face in LEAD_FACES:
+                lead = world(end)
+                start = list(middle)
+                start[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
+                start[axis] = coord
+                end = list(start)
+                end[axis] = coord + (abs(reach) if outward > 0 else -abs(reach))
             near, far = world(start), world(end)
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
@@ -1127,7 +1142,7 @@ class EbsSimulate:
                 "name": self.owner_name(found.get("prim", "")
                                         or self._blockers.get(face, "")),
                 "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
-                "from": near, "to": far,
+                "from": near, "to": far, "lead": lead,
             })
         return marks
 
@@ -3339,9 +3354,22 @@ class EbsSimulate:
                     drawn += 1
                 drawn += self._gap_heads(stage, mark["face"], mark["from"],
                                          mark["to"], threads[colour], colour)
+                drawn += self._lead_line(stage, mark, threads)
             drawn += self._clash_boxes(stage, marks_boxes)
         print(f"[ebs] drew {drawn} collision markers under {MARKER_ROOT}")
         return drawn
+
+    def _lead_line(self, stage, mark: dict, threads: dict) -> int:
+        """선 끝에서 실제로 잰 지점까지 가는 흰 안내선"""
+        lead = mark.get("lead")
+        if not lead:
+            return 0
+        if COLOR_LEAD not in threads:
+            threads[COLOR_LEAD] = self._marker_material(
+                stage, "lead", COLOR_LEAD, GAP_OPACITY, GAP_EMISSION)
+        return int(self._gap_line(stage, f"{MARKER_ROOT}/{mark['face']}_lead",
+                                  mark["to"], lead, LEAD_RADIUS,
+                                  threads[COLOR_LEAD], COLOR_LEAD))
 
     def _clash_boxes(self, stage, boxes) -> int:
         """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""
