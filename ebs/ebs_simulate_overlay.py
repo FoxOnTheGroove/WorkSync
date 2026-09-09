@@ -1,9 +1,17 @@
+import math
+import time
+
 import omni.ui as ui
+from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 
 from .ebs_simulate_camera import viewport_window
 from .ebs_simulate_service import EbsSimulateService
 
-__all__ = ["EbsSimulateOverlay"]
+__all__ = ["EbsSimulateOverlay", "EbsSimulateMarks"]
+
+STATE_CLEAR = "clear"
+STATE_TIGHT = "tight"
+STATE_CLASH = "clash"
 
 FRAME_ID = "ebs_simulate_overlay"
 
@@ -31,6 +39,32 @@ COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
 PAD_X, PAD_Y = 1, 1
+
+MARKER_OPACITY  = 0.075
+MARKER_EMISSION = 10000.0
+COLOR_BLOCKED   = (0.9, 0.2, 0.2)
+BLOCKED_OPACITY = 0.6
+BLOCKED_EMISSION = 1000.0
+COLOR_CLEAR     = (1.0, 1.0, 1.0)
+SHEET_GAP       = 0.001
+
+COLOR_GAP      = (1.0, 0.906, 0.604)
+COLOR_TIGHT    = (0.988, 0.224, 0.106)
+GAP_RADIUS     = 0.002
+GAP_HEAD_HIGH  = 0.02
+GAP_HEAD_WIDE  = 0.016
+GAP_OPACITY    = 1.0
+GAP_EMISSION   = 3000.0
+
+LEAD_RADIUS = 0.001
+COLOR_LEAD  = (1.0, 1.0, 1.0)
+
+CLASH_OPACITY = 0.35
+CLASH_PAD     = 0.002
+COLOR_CLASH   = (0.95, 0.15, 0.15)
+CLASH_PULSE   = 2.0
+CLASH_PULSE_LOW  = 0.15
+CLASH_PULSE_HIGH = 1.0
 
 
 class EbsSimulateOverlay:
@@ -185,8 +219,8 @@ class EbsSimulateOverlay:
     def _face_panel(self, mark: dict) -> None:
         """한쪽에 상태, 다른 쪽에 거리와 최소 여유. 막힌 면도 똑같이 붙인다"""
         state = mark.get("state")
-        ground = COLOR_CAN if state == "clear" else COLOR_CANNOT
-        ink = COLOR_INK if state == "clear" else COLOR_TEXT
+        ground = COLOR_CAN if state == STATE_CLEAR else COLOR_CANNOT
+        ink = COLOR_INK if state == STATE_CLEAR else COLOR_TEXT
         gap = mark.get("distance")
         least = mark.get("min_gap")
 
@@ -204,8 +238,8 @@ class EbsSimulateOverlay:
         at = mark.get("at")
         first, second = ((LEFT, RIGHT) if mark.get("face") in SIDE_BY_SIDE
                          else (ABOVE, BELOW))
-        word = (CLASH if state == "clash" else
-                TIGHT if state == "tight" else GAP)
+        word = (CLASH if state == STATE_CLASH else
+                TIGHT if state == STATE_TIGHT else GAP)
         face = mark.get("face")
         self._floating(at, block([word]), ground, first, group=(face, first))
         if gap is None:
@@ -273,8 +307,6 @@ class EbsSimulateOverlay:
     def _room_at(self, at, spot) -> float:
         """선과 판 사이 여백. 화살촉 반지름의 ROOM_HEADS 배가 화면에서 몇 픽셀인가"""
         try:
-            from pxr import Gf
-            from .ebs_simulate import GAP_HEAD_WIDE
             want = GAP_HEAD_WIDE * ROOM_HEADS
             camera = self._api.view.GetInverse()
             side = Gf.Vec3d(camera[0][0], camera[0][1], camera[0][2])
@@ -296,7 +328,6 @@ class EbsSimulateOverlay:
 
     def _to_screen(self, point):
         """월드 점을 화면 픽셀로. 카메라 뒤나 화면 밖이면 None"""
-        from pxr import Gf
         api = self._api
         at = Gf.Vec3d(*point)
         view = api.view
@@ -334,3 +365,372 @@ class EbsSimulateOverlay:
         self._frame = None
         self._api = None
         self._window = None
+
+
+class EbsSimulateMarks:
+    """collide 가 씬에 그리는 것 전부. 3면 판, 여유 선, 화살촉, 안내선, 충돌 상자"""
+
+    def __init__(self, stage_of, root: str):
+        """스테이지를 주는 함수와, 그린 것을 담을 뿌리 경로"""
+        self._stage_of = stage_of
+        self._root = root
+        self._pulse = None
+        self._pulse_inputs: tuple = ()
+        self._pulse_from: float = 0.0
+
+    def draw(self, sheets: list, marks: list = None, boxes: list = None) -> int:
+        """판정 한 벌을 씬에 그린다. 그리기 전에 먼저 지운다"""
+        stage = self._stage_of()
+        if stage is None:
+            return 0
+        self.clear()
+        drawn = 0
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            UsdGeom.Scope.Define(stage, self._root)
+            drawn += self._sheets(stage, sheets)
+            drawn += self._gap_lines(stage, marks)
+            drawn += self._clash_boxes(stage, boxes)
+        print(f"[ebs] drew {drawn} collision markers under {self._root}")
+        return drawn
+
+    def clear(self) -> None:
+        """뿌리를 통째로 지우고 깜박임도 놓는다"""
+        self._stop_pulse()
+        stage = self._stage_of()
+        if stage is None:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if stage.GetPrimAtPath(self._root).IsValid():
+                stage.RemovePrim(self._root)
+
+
+    def _sheets(self, stage, sheets: list) -> int:
+        """3면을 칸마다 한 장씩. 막힌 칸은 빨강, 아니면 흰색"""
+        looks = {
+            True: (self._material(stage, "blocked", COLOR_BLOCKED,
+                                  BLOCKED_OPACITY, BLOCKED_EMISSION),
+                   COLOR_BLOCKED, BLOCKED_OPACITY),
+            False: (self._material(stage, "clear", COLOR_CLEAR),
+                    COLOR_CLEAR, MARKER_OPACITY),
+        }
+        drawn = 0
+        for name, points, blocked in sheets or ():
+            material, colour, alpha = looks[bool(blocked)]
+            self._sheet(stage, f"{self._root}/{name}", points, material,
+                        colour, alpha)
+            drawn += 1
+        return drawn
+
+    def _gap_lines(self, stage, marks: list) -> int:
+        """면마다 여유 선 하나, 양 끝 화살촉, 그리고 잰 자리로 가는 안내선"""
+        threads = {}
+        drawn = 0
+        for mark in marks or ():
+            if not mark.get("from") or not mark.get("to"):
+                continue
+            warn = mark.get("state") in (STATE_TIGHT, STATE_CLASH)
+            colour = COLOR_TIGHT if warn else COLOR_GAP
+            if colour not in threads:
+                threads[colour] = self._material(
+                    stage, "tight" if warn else "gap", colour,
+                    GAP_OPACITY, GAP_EMISSION)
+            shaft = self._gap_shaft(mark["from"], mark["to"])
+            if self._gap_line(stage, f"{self._root}/{mark['face']}_gap",
+                              shaft[0], shaft[1], GAP_RADIUS,
+                              threads[colour], colour):
+                drawn += 1
+            drawn += self._gap_heads(stage, mark["face"], mark["from"],
+                                     mark["to"], threads[colour], colour)
+            drawn += self._lead_line(stage, mark, threads)
+        return drawn
+
+    def _lead_line(self, stage, mark: dict, threads: dict) -> int:
+        """선 끝에서 실제로 잰 지점까지 가는 흰 안내선"""
+        lead = mark.get("lead")
+        if not lead:
+            return 0
+        if COLOR_LEAD not in threads:
+            threads[COLOR_LEAD] = self._material(
+                stage, "lead", COLOR_LEAD, GAP_OPACITY, GAP_EMISSION)
+        return int(self._gap_line(stage, f"{self._root}/{mark['face']}_lead",
+                                  mark["to"], lead, LEAD_RADIUS,
+                                  threads[COLOR_LEAD], COLOR_LEAD))
+
+    def _clash_boxes(self, stage, boxes) -> int:
+        """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""
+        if not boxes:
+            return 0
+        material = self._material(stage, "clash", COLOR_CLASH,
+                                  CLASH_OPACITY, BLOCKED_EMISSION)
+        pad = self._clash_pad(stage)
+        drawn = 0
+        for at, (lo, hi) in enumerate(boxes):
+            middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+            half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
+            block = UsdGeom.Cube.Define(stage, f"{self._root}/clash_{at}")
+            block.CreateSizeAttr(2.0)
+            block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
+                                    Gf.Vec3f(1.0, 1.0, 1.0)])
+            block.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_CLASH)]))
+            block.CreateDisplayOpacityAttr(Vt.FloatArray([CLASH_OPACITY]))
+            shape = UsdGeom.Xformable(block)
+            shape.AddTranslateOp().Set(Gf.Vec3d(*middle))
+            shape.AddScaleOp().Set(Gf.Vec3f(*half))
+            UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
+            drawn += 1
+        if drawn:
+            self._start_pulse(stage)
+        return drawn
+
+    @staticmethod
+    def _clash_pad(stage) -> float:
+        """CLASH_PAD 는 m 다. 씬 단위로 바꿔 준다 (1 유닛이 1 cm 인 씬도 있다)."""
+        try:
+            per_unit = UsdGeom.GetStageMetersPerUnit(stage)
+        except Exception:
+            per_unit = 1.0
+        return CLASH_PAD / (per_unit or 1.0)
+
+
+    def _start_pulse(self, stage) -> bool:
+        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다."""
+        self._stop_pulse()
+        if CLASH_PULSE <= 0.0:
+            return False
+        inputs = self._pulse_inputs_of(stage, self._root)
+        if not inputs:
+            return False
+        self._pulse_inputs = inputs
+        self._pulse_from = time.monotonic()
+        try:
+            import omni.kit.app
+            self._pulse = omni.kit.app.get_app().get_update_event_stream() \
+                .create_subscription_to_pop(lambda e: self._pulse_step(),
+                                            name="ebs clash pulse")
+        except Exception as e:
+            self._pulse_inputs = ()
+            print(f"[ebs] the clash boxes will not blink: {e}")
+            return False
+        return True
+
+    @staticmethod
+    def _pulse_inputs_of(stage, root: str) -> tuple:
+        """깜박일 때 매 프레임 건드릴 속성과, 1.0 일 때의 값. 투명도만 건드린다"""
+        looks = f"{root}/Looks/clash"
+        wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
+                  (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
+        found = []
+        try:
+            for path, name, full in wanted:
+                prim = stage.GetPrimAtPath(path)
+                if prim is None or not prim.IsValid():
+                    continue
+                attribute = prim.GetAttribute(name)
+                if attribute:
+                    found.append((attribute, full))
+        except Exception:
+            return ()
+        return tuple(found)
+
+    def _pulse_step(self) -> None:
+        """한 프레임 몫. 지금 시각으로 투명도를 정해 머티리얼에 쓴다"""
+        stage = self._stage_of()
+        if stage is None or not self._pulse_inputs:
+            self._stop_pulse()
+            return
+        phase = (time.monotonic() - self._pulse_from) / CLASH_PULSE
+        level = CLASH_PULSE_LOW + (CLASH_PULSE_HIGH - CLASH_PULSE_LOW) \
+            * (0.5 - 0.5 * math.cos(phase * 2.0 * math.pi))
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for attribute, full in self._pulse_inputs:
+                    attribute.Set(level * full)
+        except Exception as e:
+            print(f"[ebs] the clash boxes stopped blinking: {e}")
+            self._stop_pulse()
+
+    def _stop_pulse(self) -> None:
+        """깜박임 구독을 놓는다"""
+        self._pulse = None
+        self._pulse_inputs = ()
+
+
+    @staticmethod
+    def _gap_shaft(start, end):
+        """선은 원뿔 중점에서 시작한다. 뭉툭한 끝이 뾰족한 끝을 먹지 않게"""
+        along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        span = along.GetLength()
+        if span <= GAP_HEAD_HIGH:
+            return start, end
+        step = along.GetNormalized() * (GAP_HEAD_HIGH * 0.5)
+        return (tuple(start[i] + step[i] for i in range(3)),
+                tuple(end[i] - step[i] for i in range(3)))
+
+    def _gap_heads(self, stage, face: str, start, end, material, colour) -> int:
+        """선 양 끝에 원뿔을 붙여 화살표로 보이게 한다"""
+        made = 0
+        for name, tip, back in (("a", start, end), ("b", end, start)):
+            if self._gap_head(stage, f"{self._root}/{face}_head_{name}",
+                              tip, back, material, colour):
+                made += 1
+        return made
+
+    @staticmethod
+    def _gap_head(stage, path: str, tip, back, material, colour) -> bool:
+        """tip 을 향해 뾰족한 원뿔 하나. tip 에서 back 쪽으로 뒤가 눕는다"""
+        along = Gf.Vec3d(*[tip[i] - back[i] for i in range(3)])
+        if along.GetLength() <= 1e-9:
+            return False
+        along = along.GetNormalized()
+        cone = UsdGeom.Cone.Define(stage, path)
+        cone.CreateAxisAttr(UsdGeom.Tokens.z)
+        cone.CreateHeightAttr(GAP_HEAD_HIGH)
+        cone.CreateRadiusAttr(GAP_HEAD_WIDE)
+        cone.CreateExtentAttr(Vt.Vec3fArray([
+            Gf.Vec3f(-GAP_HEAD_WIDE, -GAP_HEAD_WIDE, -GAP_HEAD_HIGH / 2.0),
+            Gf.Vec3f(GAP_HEAD_WIDE, GAP_HEAD_WIDE, GAP_HEAD_HIGH / 2.0)]))
+        cone.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        matrix = Gf.Matrix4d(1.0)
+        matrix.SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0), along))
+        matrix.SetTranslateOnly(
+            Gf.Vec3d(*[tip[i] - along[i] * GAP_HEAD_HIGH * 0.5
+                       for i in range(3)]))
+        UsdGeom.Xformable(cone).AddTransformOp().Set(matrix)
+        try:
+            cone.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(cone.GetPrim()).Bind(material)
+        return True
+
+    @staticmethod
+    def _gap_line(stage, path: str, start, end, radius: float, material,
+                  colour=COLOR_GAP) -> bool:
+        """두 점 사이에 실린더 하나. 길이가 0 이면 안 그린다"""
+        direction = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        height = direction.GetLength()
+        if height <= 1e-9:
+            return False
+        rod = UsdGeom.Cylinder.Define(stage, path)
+        rod.CreateAxisAttr(UsdGeom.Tokens.z)
+        rod.CreateHeightAttr(height)
+        rod.CreateRadiusAttr(radius)
+        rod.CreateExtentAttr(Vt.Vec3fArray([
+            Gf.Vec3f(-radius, -radius, -height / 2.0),
+            Gf.Vec3f(radius, radius, height / 2.0)]))
+        rod.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        matrix = Gf.Matrix4d(1.0)
+        matrix.SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0),
+                                     direction.GetNormalized()))
+        matrix.SetTranslateOnly(
+            Gf.Vec3d(*[(start[i] + end[i]) * 0.5 for i in range(3)]))
+        UsdGeom.Xformable(rod).AddTransformOp().Set(matrix)
+        try:
+            rod.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(rod.GetPrim()).Bind(material)
+        return True
+
+
+    @staticmethod
+    def _face_normal(points: list) -> tuple:
+        """그 사각형의 법선"""
+        a, b, c = points[0], points[1], points[2]
+        u = [b[i] - a[i] for i in range(3)]
+        v = [c[i] - a[i] for i in range(3)]
+        n = (u[1] * v[2] - u[2] * v[1],
+             u[2] * v[0] - u[0] * v[2],
+             u[0] * v[1] - u[1] * v[0])
+        length = math.sqrt(sum(value * value for value in n))
+        return tuple(value / length for value in n) if length else (0.0, 0.0, 1.0)
+
+    @classmethod
+    def _sheet(cls, stage, path: str, points: list, material, color,
+               opacity: float = MARKER_OPACITY) -> None:
+        """면 판 한 장. 발광이 양면이 안 돼서 앞뒤 두 장을 겹친다"""
+        normal = cls._face_normal(points)
+        diagonal = math.sqrt(sum((points[2][i] - points[0][i]) ** 2
+                                 for i in range(3)))
+        gap = max(diagonal * SHEET_GAP, 1e-9)
+        behind = [tuple(corner[i] - normal[i] * gap for i in range(3))
+                  for corner in points]
+        cls._quad(stage, path, points, material, color, opacity)
+        cls._quad(stage, path + "_back", behind, material, color, opacity,
+                  flip=True)
+
+    @staticmethod
+    def _quad(stage, path: str, points: list, material, color,
+              opacity: float = MARKER_OPACITY, flip: bool = False) -> None:
+        """사각형 메시 한 장"""
+        mesh = UsdGeom.Mesh.Define(stage, path)
+        mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
+        mesh.CreateFaceVertexIndicesAttr(
+            Vt.IntArray([3, 2, 1, 0] if flip else [0, 1, 2, 3]))
+        mesh.CreateDoubleSidedAttr(True)
+        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
+        mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
+        try:
+            mesh.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+
+    def _material(self, stage, name: str, color, opacity: float = MARKER_OPACITY,
+                  emission: float = MARKER_EMISSION):
+        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다"""
+        path = f"{self._root}/Looks/{name}"
+        material = UsdShade.Material.Define(stage, path)
+        self._preview_shader(stage, material, path, color, opacity)
+        self._mdl_shader(stage, material, path, color, opacity, emission)
+        return material
+
+    @staticmethod
+    def _preview_shader(stage, material, path: str, color, opacity: float) -> None:
+        """UsdPreviewSurface 쪽. 색은 발광으로 낸다"""
+        shader = UsdShade.Shader.Define(stage, path + "/shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(0.0, 0.0, 0.0))
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(*color))
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        shader.CreateInput("specularColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(0.0, 0.0, 0.0))
+        shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(),
+                                                       "surface")
+
+    @staticmethod
+    def _mdl_shader(stage, material, path: str, color, opacity: float,
+                    emission: float) -> None:
+        """OmniPBR 쪽. RTX 가 이걸 쓴다"""
+        shader = UsdShade.Shader.Define(stage, path + "/mdl")
+        shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
+        shader.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
+
+        def put(name, type_name, value):
+            """셰이더 입력 하나를 만든다"""
+            shader.CreateInput(name, type_name).Set(value)
+
+        put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
+            Gf.Vec3f(0.0, 0.0, 0.0))
+        put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
+        put("emissive_intensity", Sdf.ValueTypeNames.Float, emission)
+        put("enable_emission", Sdf.ValueTypeNames.Bool, True)
+        put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
+        put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
+        put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
+        put("metallic_constant", Sdf.ValueTypeNames.Float, 0.0)
+        put("specular_level", Sdf.ValueTypeNames.Float, 0.0)
+        material.CreateSurfaceOutput("mdl").ConnectToSource(
+            shader.ConnectableAPI(), "out")

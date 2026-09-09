@@ -159,17 +159,18 @@ class EbsSimulateService:
         """EBS 좌/우/천장 충돌과 여유 거리를 잰다. 씬에 마커도 그린다.
 
         _do_collide  이 단계의 순서가 전부 여기 있다
+        EbsSimulateMarks  씬에 그리는 것은 전부 ebs_simulate_overlay 에 있다.
+                     판, 선, 화살촉, 안내선, 충돌 상자, 깜박임과 그 상수들
         _flat_gap / _mesh_parts  빈 면 거리 선이 어디서 나오나. 한 덩어리 안에서
                      같은 높이인 면들을 합쳐 그 중앙 (H 빔의 다리 둘처럼)
         check_collision / measure_faces / check_equipment  3면, 빈 면 거리, 내부 간섭
         show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
-        _gap_line / _gap_heads / _gap_shaft  여유 선과 양 끝 화살촉. 선은
-                     화살촉 중점에서 시작한다. GAP_RADIUS, GAP_HEAD_HIGH,
-                     GAP_HEAD_WIDE, COLOR_GAP, COLOR_TIGHT
+        _gap_lines   여유 선과 양 끝 화살촉. 선은 화살촉 중점에서 시작한다
+                     (GAP_RADIUS, GAP_HEAD_*, COLOR_GAP / COLOR_TIGHT)
         measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
-        _face_marks    좌우 선은 메시에 안 묻히게 면 앞 모서리 중점에서 긋고,
-                       실제로 잰 자리는 _lead_line 이 흰 선으로 가리킨다
-                       (LEAD_FACES, LEAD_FRONT, LEAD_RADIUS, COLOR_LEAD)
+        _face_marks    좌우 선은 메시에 안 묻히게 면 앞 모서리 중점에서 긋는다
+                       (LEAD_FACES, LEAD_FRONT). 실제로 잰 자리는 mark 의 lead
+                       에 남고 _lead_line 이 흰 선으로 가리킨다
         """
         return cls._simulate.collide()
 
