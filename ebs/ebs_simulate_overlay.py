@@ -463,7 +463,23 @@ class EbsSimulateMarks:
                               COLOR_LEAD):
                 drawn += 1
             spot = step
-        return drawn
+        return drawn + self._lead_tick(stage, mark, threads[COLOR_LEAD])
+
+    def _lead_tick(self, stage, mark: dict, material) -> int:
+        """멈춘 자리에 짧은 눈금 하나. 안내선과 직각으로, 삐져나온 길이의 두 배"""
+        way = mark.get("tick")
+        spot = (mark.get("lead") or [None])[-1]
+        if not way or not spot:
+            return 0
+        span = sum(v * v for v in way) ** 0.5
+        if span <= 1e-9:
+            return 0
+        step = [v / span * LEAD_OVER for v in way]
+        return int(self._gap_line(
+            stage, f"{self._root}/{mark['face']}_tick",
+            tuple(spot[i] - step[i] for i in range(3)),
+            tuple(spot[i] + step[i] for i in range(3)),
+            LEAD_RADIUS, material, COLOR_LEAD))
 
     @staticmethod
     def _stretched(start, end, over: float):

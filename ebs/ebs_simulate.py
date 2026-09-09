@@ -1088,7 +1088,8 @@ class EbsSimulate:
             least = self._min_gap.get(face, 0.0)
             blank = {"face": face, "distance": None, "name": "",
                      "min_gap": least, "at": world(surface),
-                     "from": None, "to": None, "lead": None, "spot": None}
+                     "from": None, "to": None, "lead": None, "spot": None,
+                     "tick": None}
             hit = bool(any(cells.get(face, [])))
             found = distances.get(face) or {}
             at = found.get("at")
@@ -1103,21 +1104,23 @@ class EbsSimulate:
             start[axis] = coord
             end[axis] = coord + (reach if outward > 0 else -reach)
             spot = list(end)
-            lead = None
+            lead, tick = None, None
             if face in LEAD_FACES:
                 start = list(middle)
                 start[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
                 start[axis] = coord
                 end = list(start)
                 end[axis] = coord + (reach if outward > 0 else -reach)
-                lead = [world(point) for point in
-                        self._lead_path(end, spot, up_axis, front_axis, axis,
-                                        found.get("patch"))]
+                walk = self._lead_path(end, spot, up_axis, front_axis,
+                                       axis, found.get("patch"))
+                lead = [world(point) for point in walk]
+                tick = self._tick_way(end, axis, world)
+                self._note_lead(face, found.get("patch"), walk, spot)
             near, far = world(start), world(end)
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
             marks.append({
-                "face": face,
+                "face": face, "tick": tick,
                 "state": (STATE_CLASH if hit else
                           STATE_TIGHT if gap < least else STATE_CLEAR),
                 "distance": gap, "min_gap": least,
@@ -1127,6 +1130,27 @@ class EbsSimulate:
                 "from": near, "to": far, "lead": lead, "spot": world(spot),
             })
         return marks
+
+    @staticmethod
+    def _tick_way(end, axis: int, world):
+        """멈춘 자리에 그을 눈금의 방향. 면에 수직, 장비 기준 좌우"""
+        ahead = [end[i] + (1.0 if i == axis else 0.0) for i in range(3)]
+        here, there = world(end), world(ahead)
+        return tuple(there[i] - here[i] for i in range(3))
+
+    @staticmethod
+    def _note_lead(face: str, patch, walk, spot) -> None:
+        """안내선이 무엇을 보고 어디서 멈췄나. 콘솔로만"""
+        shapes = len(patch or ())
+        if not walk:
+            where = "the arrow was already touching"
+        elif all(abs(walk[-1][i] - spot[i]) <= LEAD_TOL for i in range(3)):
+            where = "ran all the way to the spot"
+        else:
+            where = ("stopped at ("
+                     + ", ".join(f"{v:.3f}" for v in walk[-1]) + ")")
+        print(f"[ebs] {face} lead: {shapes} shapes across the gap plane, "
+              f"{len(walk)} legs, {where}")
 
     @staticmethod
     def _lead_path(end, spot, up_axis: int, front_axis: int, axis: int,
@@ -3179,9 +3203,10 @@ class EbsSimulate:
             return None
 
         inverse = to_world.GetInverse()
-        bounded = []
+        bounded, nearby = [], []
         for path, box in candidates:
             local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
+            nearby.append((path, local))
             gap = self._gap_along(local, axis, outward, coord, deep)
             if gap is not None:
                 bounded.append((gap, path, local))
@@ -3215,16 +3240,19 @@ class EbsSimulate:
         way = -outward if deep else outward
         plane = coord + (best if way > 0 else -best)
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at,
-                "patch": self._same_patch(stage, bounded, prism, inverse,
+                "patch": self._same_patch(stage, nearby, prism, inverse,
                                           axis, plane) if lead else []}
 
-    def _same_patch(self, stage, bounded, prism, inverse, axis: int,
+    def _same_patch(self, stage, nearby, prism, inverse, axis: int,
                     plane: float) -> list:
-        """안내선이 지나다 닿을 것들. 그 깊이에서 잘라낸 면과 단면 선"""
+        """안내선이 지나다 닿을 것들. 그 깊이에서 잘라낸 면과 단면 선.
+
+        거리를 재는 쪽은 면보다 앞에서 시작하는 상자를 걸러내지만, 여기서는
+        그것까지 다 본다. 닿기만 하면 멈춰야 하니까."""
         lo, hi = prism.GetMin(), prism.GetMax()
         u, v = [i for i in range(3) if i != axis]
         patch = []
-        for _, path, local in bounded:
+        for path, local in nearby:
             if len(patch) >= LEAD_PATCH:
                 break
             if not (local.GetMin()[axis] - LEAD_TOL <= plane

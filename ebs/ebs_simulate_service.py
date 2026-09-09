@@ -175,7 +175,8 @@ class EbsSimulateService:
         _same_patch / _sliced  안내선은 그 깊이 평면 위에만 있으니, 가까운 메시를
                        그 평면에서 잘라 둔다. 평평한 것은 면, 걸친 것은 단면 선
         _stop_at / _enter / _cross  선분이 그중 무엇에든 처음 닿는 자리를 푼다
-                       (LEAD_TOL, LEAD_PATCH)
+                       (LEAD_TOL, LEAD_PATCH). 멈춘 자리에는 _lead_tick 이 짧은
+                       눈금 하나. 왜 거기서 멈췄나는 _note_lead 가 콘솔에 적는다
         _lead_line     그 길을 흰 선으로. 양 끝을 LEAD_OVER 만큼 삐져나오게 긋는다
         """
         return cls._simulate.collide()
