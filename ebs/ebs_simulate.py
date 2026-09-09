@@ -228,6 +228,7 @@ FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
 
 LEAD_FACES  = (FACE_LEFT, FACE_RIGHT)
 LEAD_FRONT  = -1
+LEAD_TOL    = 0.001
 
 GRID = 1
 FADE_OTHERS = False
@@ -1066,7 +1067,8 @@ class EbsSimulate:
             per_unit = 1.0
         lo, hi = local_box.GetMin(), local_box.GetMax()
         middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-        front_axis = 3 - (self._face_planes.get(FACE_CEILING) or (2,))[0]
+        up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
+        front_axis = 3 - up_axis
 
         def world(point):
             """로컬 점을 월드로"""
@@ -1101,12 +1103,15 @@ class EbsSimulate:
             end[axis] = coord + (reach if outward > 0 else -reach)
             lead = None
             if face in LEAD_FACES:
-                lead = world(end)
+                spot = list(end)
                 start = list(middle)
                 start[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
                 start[axis] = coord
                 end = list(start)
                 end[axis] = coord + (reach if outward > 0 else -reach)
+                lead = [world(point) for point in
+                        self._lead_path(end, spot, up_axis, front_axis,
+                                        found.get("span"))]
             near, far = world(start), world(end)
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
@@ -1121,6 +1126,27 @@ class EbsSimulate:
                 "from": near, "to": far, "lead": lead,
             })
         return marks
+
+    @staticmethod
+    def _lead_path(end, spot, up_axis: int, front_axis: int, span) -> list:
+        """선 끝에서 잰 자리까지 축을 따라 꺾어 가는 길. 한 번만 꺾는다"""
+        corner = list(end)
+        corner[front_axis] = spot[front_axis]
+        if abs(spot[up_axis] - corner[up_axis]) <= LEAD_TOL:
+            return [spot]
+        if EbsSimulate._same_gap(span, corner, up_axis):
+            return [corner]
+        return [corner, spot]
+
+    @staticmethod
+    def _same_gap(span, point, up_axis: int) -> bool:
+        """그 자리도 같은 면 위인가. 그렇다면 잰 값이 같아 거기서 멈춰도 된다"""
+        if not span:
+            return False
+        low, high = span[0][up_axis], span[1][up_axis]
+        if low is None or high is None:
+            return False
+        return low - LEAD_TOL <= point[up_axis] <= high + LEAD_TOL
 
     def get_verdict(self) -> dict:
         """마지막 collide 가 만든 판정"""
@@ -3097,7 +3123,7 @@ class EbsSimulate:
                 bounded.append((gap, path, local))
         bounded.sort(key=lambda item: item[0], reverse=deep)
 
-        best, best_path, best_at = None, "", None
+        best, best_path, best_at, best_span = None, "", None, None
         for gap, path, local in bounded:
             if best is not None and (gap <= best if deep else gap >= best):
                 break
@@ -3105,11 +3131,13 @@ class EbsSimulate:
             if self._precision != PRECISION_TRI:
                 best, best_path = gap, path
                 best_at = self._box_point(local, prism, axis, way, coord, gap)
+                best_span = self._box_span(local, axis)
                 continue
             triangles = self._mesh_triangles(stage, path)
             if not triangles:
                 best, best_path = gap, path
                 best_at = self._box_point(local, prism, axis, way, coord, gap)
+                best_span = self._box_span(local, axis)
                 continue
             local_tris = [[inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
                          for triangle, _, _ in triangles]
@@ -3119,10 +3147,19 @@ class EbsSimulate:
             if found is not None and (best is None
                                       or (found[0] > best if deep
                                           else found[0] < best)):
-                best, best_path, best_at = found[0], path, found[1]
+                best, best_path = found[0], path
+                best_at, best_span = found[1], found[2]
         if best is None:
             return None
-        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
+        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at,
+                "span": best_span}
+
+    @staticmethod
+    def _box_span(local, axis: int):
+        """상자로 잰 경우의 면 폭. 삼각형으로 잰 _flat_gap 과 같은 모양으로"""
+        mins = [None if i == axis else local.GetMin()[i] for i in range(3)]
+        maxs = [None if i == axis else local.GetMax()[i] for i in range(3)]
+        return tuple(mins), tuple(maxs)
 
     def _parts_of(self, path: str, triangles) -> list:
         """그 메시의 덩어리 표. 위상은 안 변하니 한 번 만들고 계속 쓴다"""
@@ -3220,7 +3257,7 @@ class EbsSimulate:
     def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
                   slack: float = OVERLAP_EPS, parts: list = None,
                   deep: bool = False):
-        """한 덩어리 안에서 같은 높이인 면들을 한 면으로 보고 그 중점을 찍는다"""
+        """한 덩어리 안에서 같은 높이인 면들을 한 면으로 보고, 그 중점과 면의 폭"""
         lo, hi = prism.GetMin(), prism.GetMax()
         best, seed = None, -1
         for at, triangle in enumerate(triangles):
@@ -3273,7 +3310,7 @@ class EbsSimulate:
                 point[i] = min(max((mins[i] + maxs[i]) * 0.5, lo[i]), hi[i])
         way = -outward if deep else outward
         point[axis] = coord + (best if way > 0 else -best)
-        return best, tuple(point)
+        return best, tuple(point), (tuple(mins), tuple(maxs))
 
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,

@@ -57,6 +57,7 @@ GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
 
 LEAD_RADIUS = 0.001
+LEAD_OVER   = 0.01
 COLOR_LEAD  = (1.0, 1.0, 1.0)
 
 CLASH_OPACITY = 0.35
@@ -445,16 +446,34 @@ class EbsSimulateMarks:
         return drawn
 
     def _lead_line(self, stage, mark: dict, threads: dict) -> int:
-        """선 끝에서 실제로 잰 지점까지 가는 흰 안내선"""
+        """선 끝에서 잰 자리까지, 축을 따라 꺾어 가는 흰 안내선"""
         lead = mark.get("lead")
         if not lead:
             return 0
         if COLOR_LEAD not in threads:
             threads[COLOR_LEAD] = self._material(
                 stage, "lead", COLOR_LEAD, GAP_OPACITY, GAP_EMISSION)
-        return int(self._gap_line(stage, f"{self._root}/{mark['face']}_lead",
-                                  mark["to"], lead, LEAD_RADIUS,
-                                  threads[COLOR_LEAD], COLOR_LEAD))
+        drawn = 0
+        spot = mark["to"]
+        for at, step in enumerate(lead):
+            one, two = self._stretched(spot, step, LEAD_OVER)
+            if self._gap_line(stage,
+                              f"{self._root}/{mark['face']}_lead_{at}",
+                              one, two, LEAD_RADIUS, threads[COLOR_LEAD],
+                              COLOR_LEAD):
+                drawn += 1
+            spot = step
+        return drawn
+
+    @staticmethod
+    def _stretched(start, end, over: float):
+        """두 점을 잇되 양 끝을 over 만큼 더 뻗는다. 어디서 어디까지인지 보이게"""
+        along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        if along.GetLength() <= 1e-9:
+            return start, end
+        step = along.GetNormalized() * over
+        return (tuple(start[i] - step[i] for i in range(3)),
+                tuple(end[i] + step[i] for i in range(3)))
 
     def _clash_boxes(self, stage, boxes) -> int:
         """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""

@@ -169,8 +169,10 @@ class EbsSimulateService:
                      (GAP_RADIUS, GAP_HEAD_*, COLOR_GAP / COLOR_TIGHT)
         measure_faces  막힌 면은 안쪽으로 파고든 깊이를 재서 음수로 준다
         _face_marks    좌우 선은 메시에 안 묻히게 면 앞 모서리 중점에서 긋는다
-                       (LEAD_FACES, LEAD_FRONT). 실제로 잰 자리는 mark 의 lead
-                       에 남고 _lead_line 이 흰 선으로 가리킨다
+                       (LEAD_FACES, LEAD_FRONT)
+        _lead_path     잰 자리로 가는 안내선 길. 뒤로 갔다가 한 번만 꺾는다.
+                       그 자리도 같은 면이면 (_same_gap, LEAD_TOL) 안 꺾고 멈춘다
+        _lead_line     그 길을 흰 선으로. 양 끝을 LEAD_OVER 만큼 삐져나오게 긋는다
         """
         return cls._simulate.collide()
 
