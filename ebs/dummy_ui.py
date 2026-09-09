@@ -315,11 +315,11 @@ class EbsDummyUI:
 
 
     def _render(self, result: dict):
-        """결과에서 사유 한 줄만 상태 줄에 남긴다"""
+        """결과에서 reason 만 상태 줄로. 나머지는 콘솔이 받는다"""
         self._set_status((result or {}).get("reason", "") or "No result")
 
     def _set_status(self, text: str):
-        """상태 줄에 한 줄 적는다"""
+        """상태 줄. 아직 안 만들었으면 넘어간다"""
         if self._status_label:
             self._status_label.text = text
 

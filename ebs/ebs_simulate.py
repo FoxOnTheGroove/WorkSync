@@ -533,7 +533,7 @@ class EbsSimulate:
         self._started = time.perf_counter()
 
     def _report_stages(self, title: str, mark: int = 0) -> None:
-        """구간별 시간을 단계로 묶어 한 줄씩 찍는다"""
+        """구간별 시간을 단계로 묶어 콘솔에"""
         stages = {}
         for label, spent in self._timings[mark:]:
             stage, _, kind = label.partition(":")
@@ -556,7 +556,7 @@ class EbsSimulate:
         return None
 
     def _note(self, text: str) -> None:
-        """한 줄 로그. 콘솔에도 찍고 notes 에도 남긴다"""
+        """콘솔에 찍고 notes 에도 남긴다"""
         self._notes.append(text)
         print(f"[ebs] {text}")
 
@@ -855,7 +855,7 @@ class EbsSimulate:
                     row["pivot_ok"] = state + "+shared"
 
     def _report_spread(self, rows: list) -> None:
-        """offset_diff 의 최소·중앙·최대를 한 줄로 요약한다"""
+        """offset_diff 의 최소·중앙·최대"""
         gaps = [r["offset_diff"] for r in rows
                 if "offset_diff" in r and r.get("pivot_ok") == "TRUE"]
         doubted = sum(1 for r in rows
@@ -1155,7 +1155,7 @@ class EbsSimulate:
         }
 
     def get_results(self) -> dict:
-        """적어 둔 판정 전부. 장비 이름 -> get_result 한 벌"""
+        """적어 둔 판정 전부. 장비 이름 -> get_result"""
         return {name: self.get_result(name) for name in self.list_results()}
 
     def list_results(self) -> list:
@@ -3809,7 +3809,7 @@ class EbsSimulate:
     @staticmethod
     def _laser_cylinder(stage, path: str, centre, radius: float, height: float,
                         colour) -> None:
-        """레이저 실린더 하나"""
+        """포트 레이저와 스윕이 같이 쓰는 실린더"""
         cylinder = UsdGeom.Cylinder.Define(stage, path)
         cylinder.CreateAxisAttr(UsdGeom.Tokens.z)
         cylinder.CreateHeightAttr(height)

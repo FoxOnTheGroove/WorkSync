@@ -128,7 +128,7 @@ class EbsSimulateOverlay:
     _window = staticmethod(viewport_window)
 
     def __init__(self, vp_name):
-        """뷰포트 하나에 붙는 오버레이 한 벌"""
+        """뷰포트마다 하나. _get 이 만들어 들고 있는다"""
         self._vp_name = vp_name
         self._window = None
         self._api = None
@@ -200,7 +200,7 @@ class EbsSimulateOverlay:
             return
 
         def one(text):
-            """한 줄짜리 판을 그리는 함수를 만든다"""
+            """_floating 에 넘길 그리기 함수"""
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
@@ -222,7 +222,7 @@ class EbsSimulateOverlay:
         least = mark.get("min_gap")
 
         def block(lines):
-            """글줄 목록을 그리는 함수를 만든다"""
+            """_floating 에 넘길 그리기 함수"""
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
@@ -703,7 +703,7 @@ class EbsSimulateMarks:
     @staticmethod
     def _quad(stage, path: str, points: list, material, color,
               opacity: float = MARKER_OPACITY, flip: bool = False) -> None:
-        """사각형 메시 한 장"""
+        """사각형 메시 한 장. 양면이고 그림자는 안 만든다"""
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in points]))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
