@@ -1114,8 +1114,8 @@ class EbsSimulate:
                 end[axis] = coord + (reach if outward > 0 else -reach)
                 corner = list(end)
                 corner[front_axis] = spot[front_axis]
-                patch = self._lead_patch([end, corner, spot], to_world, axis,
-                                         end[axis])
+                patch = self._lead_patch(face, [end, corner, spot], to_world,
+                                         axis, end[axis])
                 walk = self._lead_path(end, spot, up_axis, front_axis,
                                        axis, patch)
                 lead = [world(point) for point in walk]
@@ -1145,8 +1145,7 @@ class EbsSimulate:
 
     @staticmethod
     def _note_lead(face: str, patch, walk, spot) -> None:
-        """안내선이 무엇을 보고 어디서 멈췄나. 콘솔로만"""
-        shapes = len(patch or ())
+        """안내선이 어디서 멈췄나. 콘솔로만"""
         if not walk:
             where = "the arrow was already touching"
         elif all(abs(walk[-1][i] - spot[i]) <= LEAD_TOL for i in range(3)):
@@ -1154,8 +1153,7 @@ class EbsSimulate:
         else:
             where = ("stopped at ("
                      + ", ".join(f"{v:.3f}" for v in walk[-1]) + ")")
-        print(f"[ebs] {face} lead: {shapes} shapes across the gap plane, "
-              f"{len(walk)} legs, {where}")
+        print(f"[ebs] {face} lead: {len(walk)} legs, {where}")
 
     @staticmethod
     def _lead_path(end, spot, up_axis: int, front_axis: int, axis: int,
@@ -3241,7 +3239,8 @@ class EbsSimulate:
             return None
         return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
-    def _lead_patch(self, walk, to_world, axis: int, plane: float) -> list:
+    def _lead_patch(self, face: str, walk, to_world, axis: int,
+                    plane: float) -> list:
         """안내선이 지나는 자리의 메시를 그 깊이에서 잘라 둔다. 거리를 잰 상대만이
         아니라 그 언저리에 있는 것은 전부 본다 -- 닿기만 하면 멈춰야 하니까"""
         stage = self._get_stage()
@@ -3257,28 +3256,43 @@ class EbsSimulate:
             stage, self._bounds_cache(),
             Gf.BBox3d(room, to_world).ComputeAlignedRange(), skip)
         inverse = to_world.GetInverse()
-        nearby = [(path, Gf.BBox3d(box, inverse).ComputeAlignedRange())
-                  for path, box in found]
-        return self._same_patch(stage, nearby, room, inverse, axis, plane)
+        across = []
+        for path, box in found:
+            local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
+            if (local.GetMin()[axis] - LEAD_TOL <= plane
+                    <= local.GetMax()[axis] + LEAD_TOL):
+                across.append((path, local))
+        patch = self._same_patch(stage, across, room, inverse, axis, plane)
+        reads = sum(len(self._mesh_triangles(stage, path) or ())
+                    for path, _ in across)
+        world = Gf.BBox3d(room, to_world).ComputeAlignedRange()
+        print(f"[ebs] {face} lead: path room "
+              f"({', '.join(f'{v:.2f}' for v in world.GetMin())}) .. "
+              f"({', '.join(f'{v:.2f}' for v in world.GetMax())}), "
+              f"{len(found)} prims near, {len(across)} reach the gap plane "
+              f"(local {plane:.3f} on axis {axis}), {reads} triangles, "
+              f"{len(patch)} shapes")
+        return patch
 
     def _same_patch(self, stage, nearby, room, inverse, axis: int,
                     plane: float) -> list:
-        """그 깊이에서 잘라낸 모양들. 평평한 것은 면, 걸친 것은 단면 선"""
+        """그 깊이에서 잘라낸 모양들. 평평한 것은 면, 걸친 것은 단면 선.
+
+        점을 못 읽는 것(Cube 같은 프림, 점이 없는 메시)은 거리 재기와 똑같이
+        상자로 본다. 안 그러면 아예 없는 물건이 된다."""
         lo, hi = room.GetMin(), room.GetMax()
         u, v = [i for i in range(3) if i != axis]
         patch = []
         for path, local in nearby:
             if len(patch) >= LEAD_PATCH:
                 break
-            if not (local.GetMin()[axis] - LEAD_TOL <= plane
-                    <= local.GetMax()[axis] + LEAD_TOL):
-                continue
-            if self._precision != PRECISION_TRI:
+            triangles = self._mesh_triangles(stage, path) or ()
+            if self._precision != PRECISION_TRI or not triangles:
                 patch += self._box_patch(local, room, u, v)
                 continue
             slack = max(min(self._flat_slack(local, axis),
                             self._flat_slack(room, axis)), LEAD_TOL)
-            for triangle, _, _ in self._mesh_triangles(stage, path) or ():
+            for triangle, _, _ in triangles:
                 if len(patch) >= LEAD_PATCH:
                     break
                 here = [inverse.Transform(Gf.Vec3d(*w)) for w in triangle]
