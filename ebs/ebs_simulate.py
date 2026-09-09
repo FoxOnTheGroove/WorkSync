@@ -230,6 +230,7 @@ LEAD_FACES  = (FACE_LEFT, FACE_RIGHT)
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
+LEAD_ROOM   = 0.05
 
 GRID = 1
 FADE_OTHERS = False
@@ -1111,11 +1112,15 @@ class EbsSimulate:
                 start[axis] = coord
                 end = list(start)
                 end[axis] = coord + (reach if outward > 0 else -reach)
+                corner = list(end)
+                corner[front_axis] = spot[front_axis]
+                patch = self._lead_patch([end, corner, spot], to_world, axis,
+                                         end[axis])
                 walk = self._lead_path(end, spot, up_axis, front_axis,
-                                       axis, found.get("patch"))
+                                       axis, patch)
                 lead = [world(point) for point in walk]
                 tick = self._tick_way(end, axis, world)
-                self._note_lead(face, found.get("patch"), walk, spot)
+                self._note_lead(face, patch, walk, spot)
             near, far = world(start), world(end)
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
@@ -3154,8 +3159,7 @@ class EbsSimulate:
                 near = [(path, box) for path, box in candidates.get(face, ())
                         if self._overlaps(box, world_prism)]
                 found = self._nearest_in_prism(stage, near, prism, to_world,
-                                               axis, outward, coord, deep,
-                                               face in LEAD_FACES)
+                                               axis, outward, coord, deep)
                 if found is not None and deep:
                     found["distance"] = -found["distance"]
                 results[face] = found or {"distance": None, "prim": "",
@@ -3196,17 +3200,15 @@ class EbsSimulate:
         return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
 
     def _nearest_in_prism(self, stage, candidates, prism, to_world,
-                          axis, outward, coord, deep: bool = False,
-                          lead: bool = False):
+                          axis, outward, coord, deep: bool = False):
         """가장 가까운 것 하나. deep 이면 가장 깊이 파고든 것 하나"""
         if not candidates:
             return None
 
         inverse = to_world.GetInverse()
-        bounded, nearby = [], []
+        bounded = []
         for path, box in candidates:
             local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
-            nearby.append((path, local))
             gap = self._gap_along(local, axis, outward, coord, deep)
             if gap is not None:
                 bounded.append((gap, path, local))
@@ -3237,19 +3239,32 @@ class EbsSimulate:
                 best, best_path, best_at = found[0], path, found[1]
         if best is None:
             return None
-        way = -outward if deep else outward
-        plane = coord + (best if way > 0 else -best)
-        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at,
-                "patch": self._same_patch(stage, nearby, prism, inverse,
-                                          axis, plane) if lead else []}
+        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
 
-    def _same_patch(self, stage, nearby, prism, inverse, axis: int,
+    def _lead_patch(self, walk, to_world, axis: int, plane: float) -> list:
+        """안내선이 지나는 자리의 메시를 그 깊이에서 잘라 둔다. 거리를 잰 상대만이
+        아니라 그 언저리에 있는 것은 전부 본다 -- 닿기만 하면 멈춰야 하니까"""
+        stage = self._get_stage()
+        if stage is None or not walk:
+            return []
+        lo = [min(point[i] for point in walk) - LEAD_ROOM for i in range(3)]
+        hi = [max(point[i] for point in walk) + LEAD_ROOM for i in range(3)]
+        room = Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
+        skip = [str(prim.GetPath()) for prim in
+                (self._target.get("ebs"), self._target.get("equipment"))
+                if prim is not None and prim.IsValid()]
+        found, _ = self._gather_nearby(
+            stage, self._bounds_cache(),
+            Gf.BBox3d(room, to_world).ComputeAlignedRange(), skip)
+        inverse = to_world.GetInverse()
+        nearby = [(path, Gf.BBox3d(box, inverse).ComputeAlignedRange())
+                  for path, box in found]
+        return self._same_patch(stage, nearby, room, inverse, axis, plane)
+
+    def _same_patch(self, stage, nearby, room, inverse, axis: int,
                     plane: float) -> list:
-        """안내선이 지나다 닿을 것들. 그 깊이에서 잘라낸 면과 단면 선.
-
-        거리를 재는 쪽은 면보다 앞에서 시작하는 상자를 걸러내지만, 여기서는
-        그것까지 다 본다. 닿기만 하면 멈춰야 하니까."""
-        lo, hi = prism.GetMin(), prism.GetMax()
+        """그 깊이에서 잘라낸 모양들. 평평한 것은 면, 걸친 것은 단면 선"""
+        lo, hi = room.GetMin(), room.GetMax()
         u, v = [i for i in range(3) if i != axis]
         patch = []
         for path, local in nearby:
@@ -3259,10 +3274,10 @@ class EbsSimulate:
                     <= local.GetMax()[axis] + LEAD_TOL):
                 continue
             if self._precision != PRECISION_TRI:
-                patch += self._box_patch(local, prism, u, v)
+                patch += self._box_patch(local, room, u, v)
                 continue
             slack = max(min(self._flat_slack(local, axis),
-                            self._flat_slack(prism, axis)), LEAD_TOL)
+                            self._flat_slack(room, axis)), LEAD_TOL)
             for triangle, _, _ in self._mesh_triangles(stage, path) or ():
                 if len(patch) >= LEAD_PATCH:
                     break
@@ -3303,10 +3318,10 @@ class EbsSimulate:
         return best[1], best[2]
 
     @staticmethod
-    def _box_patch(local, prism, u: int, v: int) -> list:
+    def _box_patch(local, room, u: int, v: int) -> list:
         """상자로만 잴 때는 그 상자의 옆넓이를 면으로 본다"""
-        lo = [max(local.GetMin()[i], prism.GetMin()[i]) for i in (u, v)]
-        hi = [min(local.GetMax()[i], prism.GetMax()[i]) for i in (u, v)]
+        lo = [max(local.GetMin()[i], room.GetMin()[i]) for i in (u, v)]
+        hi = [min(local.GetMax()[i], room.GetMax()[i]) for i in (u, v)]
         if lo[0] > hi[0] or lo[1] > hi[1]:
             return []
         corners = ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))

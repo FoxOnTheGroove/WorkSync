@@ -172,8 +172,10 @@ class EbsSimulateService:
                        (LEAD_FACES, LEAD_FRONT)
         _lead_path     잰 자리로 가는 안내선 길. 뒤로 갔다가 한 번만 꺾는데,
                        가는 도중 아무 메시에나 닿으면 거기서 멈춘다
-        _same_patch / _sliced  안내선은 그 깊이 평면 위에만 있으니, 가까운 메시를
-                       그 평면에서 잘라 둔다. 평평한 것은 면, 걸친 것은 단면 선
+        _lead_patch    부딪힐 것 고르기. 거리를 잰 상대만이 아니라 제 갈 길
+                       언저리(LEAD_ROOM)를 스테이지 전체에서 훑는다
+        _same_patch / _sliced  안내선은 그 깊이 평면 위에만 있으니, 그 메시들을
+                       평면에서 잘라 둔다. 평평한 것은 면, 걸친 것은 단면 선
         _stop_at / _enter / _cross  선분이 그중 무엇에든 처음 닿는 자리를 푼다
                        (LEAD_TOL, LEAD_PATCH). 멈춘 자리에는 _lead_tick 이 짧은
                        눈금 하나. 왜 거기서 멈췄나는 _note_lead 가 콘솔에 적는다
