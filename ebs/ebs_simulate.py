@@ -1015,14 +1015,14 @@ class EbsSimulate:
                 else f"{hit_count} cell(s) blocked")
         if meeting["hit"]:
             told += ", and through the equipment"
-        self._keep_result(verdict, meeting, hit_count)
+        self._keep_result(verdict, meeting)
         return self._payload(
             True, told,
             cells=cells, hit_count=hit_count, distances=distances,
             equipment_hit=meeting,
         )
 
-    def _keep_result(self, verdict: dict, meeting: dict, blocked: int) -> None:
+    def _keep_result(self, verdict: dict, meeting: dict) -> None:
         """이번 판정을 장비 이름으로 적어 둔다. 거리는 사실이라 그대로 담는다"""
         target = self._target or {}
         prim = target.get("equipment")
@@ -1033,7 +1033,6 @@ class EbsSimulate:
         self._results[name.upper()] = {
             "equipment": name,
             "port_count": target.get("port_count") or 0,
-            "blocked": blocked,
             "inside_hit": bool(meeting.get("hit")),
             "inside": [b.rsplit("/", 1)[-1] for _, b in pairs],
             "faces": {mark["face"]: {"hit": mark["state"] == STATE_CLASH,
@@ -1045,16 +1044,18 @@ class EbsSimulate:
     def get_result(self, equipment: str = "") -> dict:
         """그 장비의 마지막 판정. 없어도 모양은 같다. 여유/간섭은 지금 잣대로"""
         found = self._results.get(self._result_key(equipment)) or {}
-        faces, words = {}, []
+        faces, words, snug = {}, [], False
         for face in RESULT_ORDER:
             one = (found.get("faces") or {}).get(face) or {}
             gap = one.get("gap")
             faces[face] = {"gap": gap, "name": one.get("name") or ""}
-            if found:
-                tight = (bool(one.get("hit"))
-                         or (gap is not None and gap < self._min_gap.get(face, 0.0)))
-                words.append(f"{RESULT_WORDS[face]} "
-                             f"{RESULT_TIGHT if tight else RESULT_ROOMY}")
+            if not found:
+                continue
+            tight = (bool(one.get("hit"))
+                     or (gap is not None and gap < self._min_gap.get(face, 0.0)))
+            snug = snug or tight
+            words.append(f"{RESULT_WORDS[face]} "
+                         f"{RESULT_TIGHT if tight else RESULT_ROOMY}")
         if found:
             words.append(f"{RESULT_INSIDE} "
                          f"{RESULT_TIGHT if found['inside_hit'] else RESULT_ROOMY}")
@@ -1064,8 +1065,7 @@ class EbsSimulate:
             "reason": " / ".join(words),
             "faces": faces,
             "inside": list(found.get("inside") or ()),
-            "placeable": bool(found) and not found["inside_hit"]
-            and not found["blocked"],
+            "placeable": bool(found) and not found["inside_hit"] and not snug,
         }
 
     def list_results(self) -> list:
