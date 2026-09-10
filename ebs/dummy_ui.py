@@ -178,10 +178,6 @@ class EbsDummyUI:
                 field.model.set_value(value)
         return field
 
-    def usd_path(self) -> str:
-        """입력칸에 적힌 스테이지 USD 경로. 비었으면 지금 열린 것을 쓴다는 뜻"""
-        return self._usd_field.model.get_value_as_string().strip()
-
     def auto_init(self) -> dict:
         """버튼 없이 도는 init. 입력칸의 사전값을 그대로 쓴다"""
         self._apply_settings()
