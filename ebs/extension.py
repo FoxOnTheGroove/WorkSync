@@ -18,8 +18,36 @@ class EbsExtension(omni.ext.IExt):
         self._ui.build_ui()
         self._raise = None
         self._frames = 0
+        self._stage = None
         self._watch_layout()
+        self._watch_stage()
+
+    def _watch_stage(self):
+        """스테이지가 준비되면 init 을 한 번 누른다"""
+        try:
+            import omni.kit.app
+            self._stage = omni.kit.app.get_app().get_update_event_stream() \
+                .create_subscription_to_pop(lambda e: self._stage_step(),
+                                            name="ebs auto init")
+        except Exception as e:
+            print(f"[ebs] no auto init, press INIT: {e}")
+
+    def _stage_step(self):
+        """다 들어온 프레임에 init 을 돌리고 그만 본다"""
+        if not self._stage_ready():
+            return
+        self._stage = None
         self._ui.auto_init()
+
+    @staticmethod
+    def _stage_ready() -> bool:
+        """스테이지가 열렸고 파일도 다 들어왔나"""
+        import omni.usd
+        context = omni.usd.get_context()
+        if context.get_stage() is None:
+            return False
+        _, loaded, total = context.get_stage_loading_status()
+        return loaded >= total
 
     def _watch_layout(self):
         """레이아웃이 창을 감추나 매 프레임 지켜본다"""
@@ -46,6 +74,7 @@ class EbsExtension(omni.ext.IExt):
         """익스텐션 종료"""
         print("[ebs] shutdown")
         self._raise = None
+        self._stage = None
         if self._ui:
             self._ui.destroy()
             self._ui = None
