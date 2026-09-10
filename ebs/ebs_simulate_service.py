@@ -108,6 +108,16 @@ class EbsSimulateService:
         return cls._simulate.collide()
 
     @classmethod
+    async def collide_async(cls):
+        """collide 를 프레임에 나눠 돌린다. 도는 동안 화면이 안 멈춘다"""
+        return await cls._simulate.collide_async()
+
+    @classmethod
+    def get_progress(cls):
+        """지금 도는 단계가 얼마나 왔나. 0.00 에서 100.00"""
+        return cls._simulate.get_progress()
+
+    @classmethod
     def get_verdict(cls):
         """마지막 판정을 오버레이용으로 꺼낸다"""
         return cls._simulate.get_verdict()
@@ -167,6 +177,11 @@ class EbsSimulateService:
         return cls._simulate.simulate(equipment)
 
     # -- 검증용 스윕 (단계와 무관) -------------------------------------------
+
+    @classmethod
+    async def simulate_async(cls, equipment=""):
+        """simulate 인데 collide 만 프레임에 나눠 돈다. UI 의 SIM"""
+        return await cls._simulate.simulate_async(equipment)
 
     @classmethod
     def sweep_ports(cls):

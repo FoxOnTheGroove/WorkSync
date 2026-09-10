@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import pprint
 
@@ -100,6 +101,7 @@ class EbsDummyUI:
         self._status_label = None
         self._overlay_button = None
         self._overlay_on = False
+        self._task = None
 
 
     def build_ui(self):
@@ -211,10 +213,14 @@ class EbsDummyUI:
         return hidden
 
     def _on_simulate(self):
-        """align + collide + camera 를 잇달아 돌리고 오버레이를 켠다"""
+        """align + collide + camera. collide 가 길어 프레임에 나눠 돈다"""
         self._apply_settings()
-        self._render(EbsSimulateService.simulate(
-            self._eqp_field.model.get_value_as_string()))
+        self._start(self._simulate_task())
+
+    async def _simulate_task(self):
+        """도는 동안 진행률을 적고, 끝나면 오버레이를 켠다"""
+        self._render(await self._watched(EbsSimulateService.simulate_async(
+            self._eqp_field.model.get_value_as_string())))
         EbsSimulateOverlay.show()
         self._overlay_on = True
         self._mark_overlay()
@@ -282,8 +288,29 @@ class EbsDummyUI:
     def _on_collide(self):
         """2단계. 충돌을 재고 오버레이는 그리기만 해 둔다"""
         self._apply_settings()
-        self._render(EbsSimulateService.collide())
+        self._start(self._collide_task())
+
+    async def _collide_task(self):
+        """도는 동안 진행률을 적는다"""
+        self._render(await self._watched(EbsSimulateService.collide_async()))
         EbsSimulateOverlay.build()
+
+    def _start(self, work):
+        """코루틴 하나를 띄운다. 이미 도는 것이 있으면 무시한다"""
+        if self._task is not None and not self._task.done():
+            self._set_status("Busy")
+            return
+        self._task = asyncio.ensure_future(work)
+
+    async def _watched(self, work):
+        """일이 도는 동안 진행률을 상태 줄에 적는다"""
+        import omni.kit.app
+        task = asyncio.ensure_future(work)
+        while not task.done():
+            self._set_status(
+                f"Working {EbsSimulateService.get_progress():.2f}%")
+            await omni.kit.app.get_app().next_update_async()
+        return task.result()
 
     def _apply_settings(self):
         """입력칸과 콤보의 값을 서비스 설정으로 넘긴다"""

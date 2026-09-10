@@ -234,6 +234,9 @@ LEAD_FACES  = FACES
 
 RESULT_ORDER  = (FACE_LEFT, FACE_RIGHT, FACE_CEILING)
 RESULT_INSIDE = "inside"
+
+COLLIDE_STEPS = (("sides", 2.0), ("faces", 55.0), ("clearance", 18.0),
+                 ("equipment", 15.0), ("verdict", 2.0), ("markers", 8.0))
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
@@ -302,6 +305,7 @@ class EbsSimulate:
         self._ebs_box = None
         self._lasers: bool = False
         self._verdict: dict = {}
+        self._progress: float = 0.0
         self._results: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
                          FACE_LEFT: MIN_GAP_SIDE,
@@ -527,6 +531,7 @@ class EbsSimulate:
     def _begin(self, step: str = "") -> None:
         """한 단계를 시작한다. 시간과 로그를 비운다"""
         self._step = step
+        self._progress = 0.0
         self._boxed = {}
         self._timings = []
         self._notes = []
@@ -890,6 +895,31 @@ class EbsSimulate:
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
         return self._done(result)
 
+    async def simulate_async(self, equipment: str = "") -> dict:
+        """simulate 인데 collide 만 프레임에 나눠 돈다. 나머지는 짧다"""
+        import omni.kit.app
+        self._begin("simulate")
+        if not self._ready:
+            return self._done(self._payload(False, "Run Init first"))
+        result = self._do_prepare(equipment)
+        if not result["ok"]:
+            return self._done(result)
+        result = self._do_align()
+        if not result["ok"]:
+            return self._done(result)
+        for _ in self._collide_steps():
+            await omni.kit.app.get_app().next_update_async()
+        result = self._result
+        if not result["ok"]:
+            return self._done(result)
+        told = self._do_focus()
+        if not told["ok"]:
+            return self._done(told)
+        result["timings"] = list(self._timings)
+        result["notes"] = list(self._notes)
+        result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
+        return self._done(result)
+
 
     def _do_prepare(self, equipment: str) -> dict:
         """장비를 찾아 포트 수로 EBS 를 고르고 피봇을 잡는다"""
@@ -1021,18 +1051,58 @@ class EbsSimulate:
 
     def _do_collide(self) -> dict:
         """3면 충돌, 빈 면 거리, 내부 간섭을 재고 판정과 마커까지"""
-        if self._target is None:
-            return self._payload(False, "Run Prepare first")
-        if not self._aligned:
-            return self._payload(False, "Run Align first")
+        for _ in self._collide_steps():
+            pass
+        return self._result
 
-        mark = len(self._timings)
+    async def collide_async(self) -> dict:
+        """collide 를 프레임마다 한 단계씩. 도는 동안 화면이 안 멈춘다"""
+        import omni.kit.app
+        self._begin("collide")
+        for _ in self._collide_steps():
+            await omni.kit.app.get_app().next_update_async()
+        return self._done(self._result)
+
+    def get_progress(self) -> float:
+        """지금 단계가 얼마나 왔나. 0.0 에서 100.0
+
+        COLLIDE_STEPS  단계마다 몫이 얼마인가. 합이 100
+        _collide_steps  단계 사이에서 멈춘다. 그 틈에 collide_async 가 프레임을
+                     넘기고, 그동안 이걸 물어보면 된다
+        _reached     한 단계가 끝날 때 올린다. 단계 안에서는 안 올라간다
+        """
+        return self._progress
+
+    def _reached(self, step: str) -> None:
+        """그 단계까지 끝났다고 적는다. COLLIDE_STEPS 가 몫을 정한다"""
+        done = 0.0
+        for name, weight in COLLIDE_STEPS:
+            done += weight
+            if name == step:
+                break
+        self._progress = min(done, 100.0)
+
+    def _collide_steps(self):
+        """collide 를 단계로 쪼갠 것. 단계마다 진행률을 올리고 한 번 멈춘다"""
+        if self._target is None:
+            self._payload(False, "Run Prepare first")
+            return
+        if not self._aligned:
+            self._payload(False, "Run Align first")
+            return
+
         apart = [self._target["ebs"], self._target["equipment"]]
         bounds = self._bounds_cache()
         roots = self._side_roots()
+        self._reached("sides")
+        yield
+
         cells = self.check_collision(self._target["ebs"], exclude=apart,
                                      cache=bounds, roots=roots)
         hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+        self._reached("faces")
+        yield
+
         distances = self.measure_faces(self._target["ebs"], cells,
                                        exclude=apart, cache=bounds, roots=roots)
         for face, found in distances.items():
@@ -1042,6 +1112,8 @@ class EbsSimulate:
             else:
                 self._note(f"{face}: clear, nearest {found['distance']:.4f} away "
                            f"({found['prim'].rsplit('/', 1)[-1]})")
+        self._reached("clearance")
+        yield
 
         try:
             meeting = self.check_equipment(self._target["ebs"],
@@ -1059,11 +1131,12 @@ class EbsSimulate:
         else:
             self._note(f"clear of the equipment itself "
                        f"({meeting['tests']} triangle pairs tested)")
-
         for why, paths in sorted(self._boxed.items()):
             self._note(f"{len(paths)} judged by box, {why}: "
                        + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
                        + (" ..." if len(paths) > 4 else ""))
+        self._reached("equipment")
+        yield
 
         with self._stage_timer("verdict: build"):
             try:
@@ -1073,6 +1146,8 @@ class EbsSimulate:
             except Exception as e:
                 verdict = {}
                 self._note(f"no overlay verdict: {type(e).__name__}: {e}")
+        self._reached("verdict")
+        yield
 
         with self._stage_timer("markers: draw"):
             self.show_markers(self._target["ebs"], cells,
@@ -1087,11 +1162,12 @@ class EbsSimulate:
                     else f"{hit_count} cell(s) blocked")
             if meeting["hit"]:
                 told += ", and through the equipment"
-        return self._payload(
+        self._payload(
             True, told,
             cells=cells, hit_count=hit_count, distances=distances,
             equipment_hit=meeting,
         )
+        self._reached("markers")
 
     def _keep_result(self, verdict: dict, meeting: dict) -> str:
         """이번 판정을 장비 이름으로 적어 두고 그 이름을 준다"""
