@@ -1,5 +1,3 @@
-import time
-
 import omni.ext
 import omni.ui as ui
 
@@ -8,7 +6,6 @@ from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
 RAISE_FRAMES = 120
-INIT_HOLD = 1.0
 
 
 class EbsExtension(omni.ext.IExt):
@@ -22,37 +19,39 @@ class EbsExtension(omni.ext.IExt):
         self._raise = None
         self._frames = 0
         self._stage = None
-        self._inited = 0.0
+        self._inited = False
         self._watch_stage()
         self._watch_layout()
 
     def _watch_stage(self):
-        """스테이지가 열릴 때마다 init 이 다시 돌게 걸어 둔다"""
+        """켤 때 한 번. 스테이지가 아직이면 처음 열릴 때까지만 기다린다"""
         try:
             import omni.usd
+            if self._auto_init():
+                return
             self._stage = omni.usd.get_context().get_stage_event_stream() \
                 .create_subscription_to_pop(self._stage_step,
                                             name="ebs auto init")
-            self._auto_init()
         except Exception as e:
             print(f"[ebs] no auto init, press INIT: {e}")
 
     def _stage_step(self, event):
-        """스테이지를 다 읽은 순간에만 받는다"""
+        """스테이지를 다 읽었으면 그때 한 번 돌고 그만 본다"""
         import omni.usd
-        if event.type == int(omni.usd.StageEventType.ASSETS_LOADED):
-            self._auto_init()
+        if (event.type == int(omni.usd.StageEventType.ASSETS_LOADED)
+                and self._auto_init()):
+            self._stage = None
 
-    def _auto_init(self):
-        """열려 있는 스테이지로 init 을 돌린다. 방금 돌았으면 넘어간다"""
+    def _auto_init(self) -> bool:
+        """스테이지가 있으면 init 을 돌린다. 돌았으면 True. 두 번은 안 돈다"""
         import omni.usd
+        if self._inited:
+            return True
         if omni.usd.get_context().get_stage() is None and not self._ui.usd_path():
-            return
-        now = time.monotonic()
-        if now - self._inited < INIT_HOLD:
-            return
-        self._inited = now
+            return False
+        self._inited = True
         print(f"[ebs] auto init: {self._ui.auto_init().get('reason', '')}")
+        return True
 
     def _watch_layout(self):
         """레이아웃이 창을 감추나 매 프레임 지켜본다"""
