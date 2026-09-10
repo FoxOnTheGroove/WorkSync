@@ -165,6 +165,7 @@ class EbsDummyUI:
                     ui.Button("1 Align", clicked_fn=self._on_align)
                     ui.Button("2 Collide", clicked_fn=self._on_collide)
                     ui.Button("3 Camera", clicked_fn=self._on_camera)
+                    ui.Button("Tmp Cam", width=64, clicked_fn=self._on_tmp_cam)
                     ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
                     self._overlay_button = ui.Button(
@@ -278,6 +279,13 @@ class EbsDummyUI:
     def _on_camera(self):
         """3단계. 카메라를 잡고 오버레이를 화면에 앉힌다"""
         self._render(EbsSimulateService.focus())
+        EbsSimulateOverlay.reveal()
+        self._overlay_on = True
+        self._mark_overlay()
+
+    def _on_tmp_cam(self):
+        """카메라 동작이 아직이라, SIM 이 쓰는 임시 정면 맞추기"""
+        self._render(EbsSimulateService.tmp_cam())
         EbsSimulateOverlay.reveal()
         self._overlay_on = True
         self._mark_overlay()

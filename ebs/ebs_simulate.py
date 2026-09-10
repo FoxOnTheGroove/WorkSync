@@ -668,6 +668,15 @@ class EbsSimulate:
         self._begin("focus")
         return self._done(self._do_focus())
 
+    def tmp_cam(self) -> dict:
+        """EBS 정면에 카메라를 맞춘다. 카메라 동작이 아직이라 임시로 쓴다
+
+        EbsSimulateCamera.frame  맞추는 곳. 거리는 EBS 상자가 화면에 담기게
+        focus  본래 3단계. 궤도까지 잡는 쪽은 이쪽이다
+        """
+        self._begin("tmp cam")
+        return self._done(self._do_tmp_cam())
+
     def collide(self) -> dict:
         """3면 충돌과 여유 거리를 재고 마커를 그린다
 
@@ -896,7 +905,7 @@ class EbsSimulate:
         result = self._do_collide()
         if not result["ok"]:
             return result
-        told = self._do_focus()
+        told = self._do_tmp_cam()
         if not told["ok"]:
             return told
         result["timings"] = list(self._timings)
@@ -921,7 +930,7 @@ class EbsSimulate:
         result = self._result
         if not result["ok"]:
             return self._done(result)
-        told = self._do_focus()
+        told = self._do_tmp_cam()
         if not told["ok"]:
             return self._done(told)
         result["timings"] = list(self._timings)
@@ -1001,6 +1010,23 @@ class EbsSimulate:
             self._note(told)
         return self._payload(bool(told), "Camera on the EBS" if told
                              else "Camera focus failed")
+
+    def _do_tmp_cam(self) -> dict:
+        """EBS 상자가 화면에 담기도록 정면에서 맞춘다. 궤도는 안 잡는다"""
+        if self._target is None:
+            return self._payload(False, "Run Prepare first")
+        if not self._aligned:
+            return self._payload(False, "Run Align first")
+        ebs = self._target["ebs"]
+        anchor = self._target["anchor"]
+        facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
+        with self._stage_timer("tmp cam"):
+            told = self._camera.frame(self._get_stage(), self._world_range(ebs),
+                                      facing)
+        if told:
+            self._note(told)
+        return self._payload(bool(told), "Camera on the EBS front" if told
+                             else "Tmp cam failed")
 
     def _do_align(self) -> dict:
         """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다"""

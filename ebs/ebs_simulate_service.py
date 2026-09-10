@@ -155,6 +155,11 @@ class EbsSimulateService:
         return cls._simulate.focus()
 
     @classmethod
+    def tmp_cam(cls):
+        """EBS 정면에 카메라를 맞춘다. 궤도는 안 잡는다"""
+        return cls._simulate.tmp_cam()
+
+    @classmethod
     def refresh_camera(cls):
         """카메라를 Camera 가 놓았던 자리로 되돌린다. 궤도 모드는 유지"""
         return cls._simulate.refresh_camera()

@@ -19,6 +19,9 @@ YAW_PER_PIXEL   = 0.35
 PITCH_PER_PIXEL = 0.35
 AXIS_LOCK  = 5
 
+FRAME_MARGIN = 1.15
+FRAME_LEAST  = 0.5
+
 ZOOM_PER_NOTCH = 0.88
 ZOOM_NEAREST   = 0.15
 ZOOM_FURTHEST  = 8.0
@@ -205,6 +208,57 @@ class EbsSimulateCamera:
         return (f"camera {distance:.2f} back from the EBS centre, "
                 f"orbiting ({interest[0]:.2f}, {interest[1]:.2f}, "
                 f"{interest[2]:.2f}), near plane {CAMERA_NEAR:.2f}")
+
+    def frame(self, stage, box, facing) -> str:
+        """EBS 정면에서 상자가 화면에 담기게 세운다. F 키를 누른 것처럼
+
+        place 와 달리 궤도를 안 잡는다. Kit 기본 조작이 그대로 살아 있다
+        """
+        viewport = self.viewport()
+        if stage is None or viewport is None or box is None or facing is None:
+            return ""
+        cam_prim, camera = self._camera(stage)
+        if camera is None:
+            return ""
+        self._drop()
+        self._orbit = False
+        self._take_viewport(viewport)
+
+        x_cam, y_cam, z_cam = self._frame(stage, facing)
+        low, high = box.GetMin(), box.GetMax()
+        interest = Gf.Vec3d(*[(low[i] + high[i]) * 0.5 for i in range(3)])
+        distance = self._fit(box, viewport, x_cam, y_cam, z_cam)
+        eye = interest + z_cam * distance
+        self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, distance)
+        self._interest = interest
+        self._home = (x_cam, y_cam, z_cam, eye, distance, interest)
+        return f"tmp cam {distance:.2f} in front of the EBS centre"
+
+    @classmethod
+    def _fit(cls, box, viewport, x_cam, y_cam, z_cam) -> float:
+        """상자가 화면에 다 들어오는 거리. 가로세로 중 더 멀리 서야 하는 쪽"""
+        low, high = box.GetMin(), box.GetMax()
+        half = [(high[i] - low[i]) * 0.5 for i in range(3)]
+        wide_ap, tall_ap = cls._aperture(viewport)
+        wide = cls._reach(x_cam, half) * FRAME_MARGIN / (wide_ap * 0.5 / FOCAL)
+        tall = cls._reach(y_cam, half) * FRAME_MARGIN / (tall_ap * 0.5 / FOCAL)
+        return max(wide, tall, FRAME_LEAST) + cls._reach(z_cam, half)
+
+    @staticmethod
+    def _reach(axis, half) -> float:
+        """상자를 그 축에 비췄을 때의 반지름"""
+        return sum(abs(axis[i]) * half[i] for i in range(3))
+
+    @staticmethod
+    def _aperture(viewport) -> tuple:
+        """이 뷰포트에서 실제로 보이는 가로·세로 조리개. 세로는 화면비를 따른다"""
+        try:
+            width, height = viewport.resolution
+            if width > 0 and height > 0:
+                return APERTURE_H, APERTURE_H * float(height) / float(width)
+        except Exception:
+            pass
+        return APERTURE_H, APERTURE_V
 
     def _camera(self, stage):
         """카메라 프림과 스키마. 없으면 만들어서 준다"""
