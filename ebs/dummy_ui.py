@@ -13,6 +13,8 @@ __all__ = ["EbsDummyUI", "SweepLog"]
 MIN_SIDE    = 0.6
 MIN_CEILING = 0.1
 
+DOCK_NEXT = ("Property", "Stage", "Layer", "Content")
+
 PRESET = {"usd": "", "xml": "", "ebs2": "", "ebs3": "", "root": "", "rail": ""}
 
 VIEW_PATHS = (("Ceiling:", ""),
@@ -99,6 +101,7 @@ class EbsDummyUI:
         self._root_field = None
         self._rail_field = None
         self._views = {}
+        self._docked = False
         self._eqp_field = None
         self._side_field = None
         self._ceiling_field = None
@@ -186,30 +189,42 @@ class EbsDummyUI:
         return result
 
     def _view_row(self, label: str, value: str = ""):
-        """경로 한 줄 뒤에 Set 버튼과 보임 체크박스를 붙인다"""
+        """경로 한 줄 뒤에 보임 체크박스를 붙인다"""
         with ui.HStack(height=20, spacing=4):
             ui.Label(label, width=90)
             field = ui.StringField()
             if value:
                 field.model.set_value(value)
-            ui.Button("Set", width=40,
-                      clicked_fn=lambda f=field: self._on_set_view(f))
             box = ui.CheckBox(width=20)
             box.model.set_value(True)
+            box.model.add_value_changed_fn(
+                lambda model, f=field: self._on_view_changed(f, model))
         self._views[id(field)] = box
         return field
 
-    def _on_set_view(self, field):
-        """그 줄의 경로를 체크박스가 가리키는 대로 켜거나 끈다"""
+    def _on_view_changed(self, field, model):
+        """체크가 바뀐 그 자리에서 그 경로를 켜거나 끈다"""
         path = field.model.get_value_as_string().strip()
         if not path:
             self._set_status("Path is empty")
             return
-        box = self._views.get(id(field))
-        on = box is None or box.model.get_value_as_bool()
+        on = model.get_value_as_bool()
         touched = EbsSimulateService.set_visible(path, on)
         self._set_status(f"{path}: {'visible' if on else 'hidden'} ({touched})")
 
+    def dock_right(self) -> bool:
+        """우측 패널에 붙인다. 붙을 창이 아직 없으면 False"""
+        if self._docked:
+            return True
+        for title in DOCK_NEXT:
+            other = ui.Workspace.get_window(title)
+            if other is None or self._window is None:
+                continue
+            self._window.dock_in(other, ui.DockPosition.SAME)
+            self._window.focus()
+            self._docked = True
+            return True
+        return False
 
     def _on_pick_selected(self):
         """뷰포트 선택에서 장비 이름을 가져와 입력칸에 넣는다"""

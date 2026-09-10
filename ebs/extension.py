@@ -5,7 +5,7 @@ from .ebs_simulate_service import EbsSimulateService
 from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
-RAISE_FRAMES = 120
+RAISE_FRAMES = 300
 
 
 class EbsExtension(omni.ext.IExt):
@@ -18,6 +18,7 @@ class EbsExtension(omni.ext.IExt):
         self._ui.build_ui()
         self._raise = None
         self._frames = 0
+        self._shown = False
         self._stage = None
         self._watch_layout()
         self._watch_stage()
@@ -60,14 +61,14 @@ class EbsExtension(omni.ext.IExt):
             print(f"[ebs] the layout may hide the window: {e}")
 
     def _raise_step(self):
-        """감춰졌으면 한 번 되살리고 그만 본다"""
+        """감춰졌으면 한 번 되살리고, 우측에 붙으면 그만 본다"""
         self._frames += 1
         window = ui.Workspace.get_window(WINDOW_TITLE)
-        if window is not None and not window.visible:
+        if window is not None and not window.visible and not self._shown:
             window.visible = True
+            self._shown = True
             print("[ebs] the layout hid the window, showing it again")
-            self._raise = None
-        elif self._frames >= RAISE_FRAMES:
+        if self._ui.dock_right() or self._frames >= RAISE_FRAMES:
             self._raise = None
 
     def on_shutdown(self):
