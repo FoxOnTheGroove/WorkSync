@@ -13,6 +13,8 @@ __all__ = ["EbsDummyUI", "SweepLog"]
 MIN_SIDE    = 0.6
 MIN_CEILING = 0.1
 
+PRESET = {"usd": "", "xml": "", "ebs2": "", "ebs3": "", "root": "", "rail": ""}
+
 VIEW_PATHS = (("Ceiling:", ""),
               ("Floor:", ""),
               ("Structure:", ""),
@@ -113,12 +115,12 @@ class EbsDummyUI:
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 3}):
                 with ui.VStack(spacing=1, height=0):
-                    self._usd_field  = self._path_row("Stage USD:")
-                    self._xml_field  = self._path_row("Port XML:")
-                    self._ebs2_field = self._path_row("EBS 2port:")
-                    self._ebs3_field = self._path_row("EBS 3port:")
-                    self._root_field = self._path_row("Search root:")
-                    self._rail_field = self._view_row("Rail root:")
+                    self._usd_field  = self._path_row("Stage USD:", PRESET["usd"])
+                    self._xml_field  = self._path_row("Port XML:", PRESET["xml"])
+                    self._ebs2_field = self._path_row("EBS 2port:", PRESET["ebs2"])
+                    self._ebs3_field = self._path_row("EBS 3port:", PRESET["ebs3"])
+                    self._root_field = self._path_row("Search root:", PRESET["root"])
+                    self._rail_field = self._view_row("Rail root:", PRESET["rail"])
                     for label, value in VIEW_PATHS:
                         self._view_row(label, value)
 
@@ -167,12 +169,25 @@ class EbsDummyUI:
 
                 self._status_label = ui.Label("Ready", height=20)
 
-    def _path_row(self, label: str):
+    def _path_row(self, label: str, value: str = ""):
         """라벨 + 입력칸 한 줄"""
         with ui.HStack(height=20, spacing=4):
             ui.Label(label, width=90)
             field = ui.StringField()
+            if value:
+                field.model.set_value(value)
         return field
+
+    def usd_path(self) -> str:
+        """입력칸에 적힌 스테이지 USD 경로. 비었으면 지금 열린 것을 쓴다는 뜻"""
+        return self._usd_field.model.get_value_as_string().strip()
+
+    def auto_init(self) -> dict:
+        """버튼 없이 도는 init. 입력칸의 사전값을 그대로 쓴다"""
+        self._apply_settings()
+        result = EbsSimulateService.init()
+        self._render(result)
+        return result
 
     def _view_row(self, label: str, value: str = ""):
         """경로 한 줄 뒤에 Set 버튼과 보임 체크박스를 붙인다"""
@@ -212,8 +227,7 @@ class EbsDummyUI:
 
     def _on_init(self):
         """설정을 넘기고 init 한다. 보임은 건드리지 않는다"""
-        self._apply_settings()
-        self._render(EbsSimulateService.init())
+        self.auto_init()
 
     def _on_simulate(self):
         """align + collide + camera. collide 가 길어 프레임에 나눠 돈다"""
