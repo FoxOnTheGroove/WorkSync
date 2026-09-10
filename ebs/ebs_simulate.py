@@ -407,6 +407,10 @@ class EbsSimulate:
         """
         return self._show_ebs([self._ebs_path_2port, self._ebs_path_3port], False)
 
+    def set_visible(self, path: str, on: bool) -> int:
+        """그 프림 하나를 켜고 끈다. 세션 레이어에만 쓴다"""
+        return self._show_ebs([path], bool(on))
+
     def show_ebs(self, prim) -> int:
         """그 EBS 하나를 켠다"""
         return self._show_ebs([prim], True)

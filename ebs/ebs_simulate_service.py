@@ -72,6 +72,11 @@ class EbsSimulateService:
         return cls._simulate.hide_ebs()
 
     @classmethod
+    def set_visible(cls, path, on):
+        """그 프림 하나를 켜고 끈다. 몇 개를 건드렸는지 돌려준다"""
+        return cls._simulate.set_visible(path, on)
+
+    @classmethod
     def set_rail_root(cls, path):
         """rail_<a>_<b> 레일 프림의 부모 경로"""
         return cls._simulate.set_rail_root(path)

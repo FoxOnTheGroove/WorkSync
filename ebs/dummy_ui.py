@@ -4,8 +4,6 @@ import pprint
 import time
 
 import omni.ui as ui
-import omni.usd
-from pxr import Usd, UsdGeom
 
 from .ebs_simulate_service import EbsSimulateService
 from .ebs_simulate_overlay import EbsSimulateOverlay
@@ -15,8 +13,12 @@ __all__ = ["EbsDummyUI", "SweepLog"]
 MIN_SIDE    = 0.6
 MIN_CEILING = 0.1
 
-UNDER_EBS  = "root/Equipment"
-LOOSE_HIDE = ("/World/Group_01/Foups",)
+VIEW_PATHS = (("Ceiling:", ""),
+              ("Floor:", ""),
+              ("Structure:", ""),
+              ("Other 1:", "/World/Group_01/Foups"),
+              ("Other 2:", ""),
+              ("Other 3:", ""))
 
 
 class SweepLog:
@@ -92,10 +94,9 @@ class EbsDummyUI:
         self._xml_field = None
         self._ebs2_field = None
         self._ebs3_field = None
-        self._precision = None
-        self._scale = None
         self._root_field = None
         self._rail_field = None
+        self._views = {}
         self._eqp_field = None
         self._side_field = None
         self._ceiling_field = None
@@ -107,7 +108,8 @@ class EbsDummyUI:
 
     def build_ui(self):
         """창 하나에 경로 입력, 설정, 버튼 줄, 상태 줄을 쌓는다"""
-        self._window = ui.Window("EBS Simulate", width=520, height=330)
+        self._window = ui.Window("EBS Simulate", width=520, height=470,
+                                 dockPreference=ui.DockPreference.RIGHT_BOTTOM)
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 3}):
                 with ui.VStack(spacing=1, height=0):
@@ -116,14 +118,17 @@ class EbsDummyUI:
                     self._ebs2_field = self._path_row("EBS 2port:")
                     self._ebs3_field = self._path_row("EBS 3port:")
                     self._root_field = self._path_row("Search root:")
-                    self._rail_field = self._path_row("Rail root:")
+                    self._rail_field = self._view_row("Rail root:")
+                    for label, value in VIEW_PATHS:
+                        self._view_row(label, value)
 
                 with ui.HStack(height=22, spacing=4):
-                    ui.Label("Precision:", width=90)
-                    self._precision = ui.ComboBox(1, "box", "triangle", width=90)
-                    ui.Label("Offset:", width=48)
-                    self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
-                                              "length / puls", width=126)
+                    # 잠시 접어 둔 것. 서비스는 triangle + snap 으로 돈다
+                    # ui.Label("Precision:", width=90)
+                    # self._precision = ui.ComboBox(1, "box", "triangle", width=90)
+                    # ui.Label("Offset:", width=48)
+                    # self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
+                    #                           "length / puls", width=126)
                     ui.Label("Debug laser:", width=76)
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
@@ -169,6 +174,31 @@ class EbsDummyUI:
             field = ui.StringField()
         return field
 
+    def _view_row(self, label: str, value: str = ""):
+        """경로 한 줄 뒤에 Set 버튼과 보임 체크박스를 붙인다"""
+        with ui.HStack(height=20, spacing=4):
+            ui.Label(label, width=90)
+            field = ui.StringField()
+            if value:
+                field.model.set_value(value)
+            ui.Button("Set", width=40,
+                      clicked_fn=lambda f=field: self._on_set_view(f))
+            box = ui.CheckBox(width=20)
+            box.model.set_value(True)
+        self._views[id(field)] = box
+        return field
+
+    def _on_set_view(self, field):
+        """그 줄의 경로를 체크박스가 가리키는 대로 켜거나 끈다"""
+        path = field.model.get_value_as_string().strip()
+        if not path:
+            self._set_status("Path is empty")
+            return
+        box = self._views.get(id(field))
+        on = box is None or box.model.get_value_as_bool()
+        touched = EbsSimulateService.set_visible(path, on)
+        self._set_status(f"{path}: {'visible' if on else 'hidden'} ({touched})")
+
 
     def _on_pick_selected(self):
         """뷰포트 선택에서 장비 이름을 가져와 입력칸에 넣는다"""
@@ -181,37 +211,9 @@ class EbsDummyUI:
         self._set_status(f"Selected: {name}")
 
     def _on_init(self):
-        """설정을 넘기고 init 한 뒤, 테스트용으로 거슬리는 것을 끈다"""
+        """설정을 넘기고 init 한다. 보임은 건드리지 않는다"""
         self._apply_settings()
         self._render(EbsSimulateService.init())
-        self._test_clear()
-
-    def _test_clear(self) -> list:
-        """테스트 씬에서 눈에 걸리는 셋을 끈다"""
-        wanted = [f"{base.rstrip('/')}/{UNDER_EBS}" for base in
-                  (self._ebs2_field.model.get_value_as_string().strip(),
-                   self._ebs3_field.model.get_value_as_string().strip()) if base]
-        wanted += list(LOOSE_HIDE)
-
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            return []
-        hidden = []
-        try:
-            with Usd.EditContext(stage, stage.GetSessionLayer()):
-                for path in wanted:
-                    prim = stage.GetPrimAtPath(path)
-                    if not prim or not prim.IsValid():
-                        continue
-                    imageable = UsdGeom.Imageable(prim)
-                    if not imageable:
-                        continue
-                    imageable.CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
-                    hidden.append(path)
-        except Exception as e:
-            print(f"[ebs] test clear failed: {e}")
-        print(f"[ebs] test clear: {len(hidden)} of {len(wanted)} hidden")
-        return hidden
 
     def _on_simulate(self):
         """align + collide + camera. collide 가 길어 프레임에 나눠 돈다"""
@@ -325,12 +327,13 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
         EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
-        modes = ("mesh", "triangle")
-        index = self._precision.model.get_item_value_model().get_value_as_int()
-        EbsSimulateService.set_precision(modes[max(0, min(index, 1))])
-        scales = ("snap", "fixed", "puls")
-        index = self._scale.model.get_item_value_model().get_value_as_int()
-        EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
+        # 콤보를 접어 둔 동안은 서비스 기본값을 그대로 쓴다
+        # modes = ("mesh", "triangle")
+        # index = self._precision.model.get_item_value_model().get_value_as_int()
+        # EbsSimulateService.set_precision(modes[max(0, min(index, 1))])
+        # scales = ("snap", "fixed", "puls")
+        # index = self._scale.model.get_item_value_model().get_value_as_int()
+        # EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
         EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))
