@@ -387,7 +387,6 @@ class EbsSimulateMarks:
             drawn += self._sheets(stage, sheets)
             drawn += self._gap_lines(stage, marks)
             drawn += self._clash_boxes(stage, boxes)
-        print(f"[ebs] drew {drawn} collision markers under {self._root}")
         return drawn
 
     def clear(self) -> None:

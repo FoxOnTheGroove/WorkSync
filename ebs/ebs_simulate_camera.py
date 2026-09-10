@@ -243,7 +243,11 @@ class EbsSimulateCamera:
 
     def _silence(self, window) -> None:
         """선택·컨텍스트 메뉴·기본 카메라 단축키를 끈다"""
-        say = lambda line: print(f"[ebs] input: {line}")
+        def say(line):
+            """못 끈 것만 알린다"""
+            if "NOT" in line:
+                print(f"[ebs] input: {line}")
+
         try:
             from omni.kit.viewport.utility import disable_selection
             self._no_pick = disable_selection(window, disable_click=True)

@@ -118,6 +118,11 @@ class EbsSimulateService:
         return cls._simulate.get_result(equipment)
 
     @classmethod
+    def get_notes(cls):
+        """마지막 단계가 남긴 자세한 기록. 콘솔에는 한 줄만 찍힌다"""
+        return cls._simulate.get_notes()
+
+    @classmethod
     def get_results(cls):
         """적어 둔 판정 전부를 장비 이름 -> 한 벌 로"""
         return cls._simulate.get_results()

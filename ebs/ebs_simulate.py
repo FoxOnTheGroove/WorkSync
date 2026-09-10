@@ -524,30 +524,22 @@ class EbsSimulate:
         self._result = {}
 
 
-    def _begin(self) -> None:
+    def _begin(self, step: str = "") -> None:
         """한 단계를 시작한다. 시간과 로그를 비운다"""
+        self._step = step
         self._boxed = {}
         self._timings = []
         self._notes = []
         self._blocked = ""
         self._started = time.perf_counter()
 
-    def _report_stages(self, title: str, mark: int = 0) -> None:
-        """구간별 시간을 단계로 묶어 콘솔에"""
-        stages = {}
-        for label, spent in self._timings[mark:]:
-            stage, _, kind = label.partition(":")
-            stage, kind = stage.strip(), kind.strip() or "took"
-            stages.setdefault(stage, {})
-            stages[stage][kind] = stages[stage].get(kind, 0.0) + spent
-        if not stages:
-            return
-        total = sum(sum(k.values()) for k in stages.values())
-        print(f"[ebs] {title}: {total:.1f} ms")
-        for stage, kinds in stages.items():
-            parts = "  ".join(f"{kind} {spent:8.1f} ms"
-                              for kind, spent in kinds.items())
-            print(f"[ebs]   {stage:<10} {parts}")
+    def _done(self, payload: dict) -> dict:
+        """단계 하나에 한 줄. 무엇을 했고 얼마나 걸렸나"""
+        spent = time.perf_counter() - self._started
+        state = "done" if payload.get("ok") else "failed"
+        print(f"[ebs] {self._step or 'step'} {state} in {spent:.2f}s"
+              f" - {payload.get('reason', '')}")
+        return payload
 
     def _fail(self, key: str, reason: str, short: str = ""):
         """실패 사유를 적고 None. 부른 쪽이 payload 로 감싼다"""
@@ -556,12 +548,15 @@ class EbsSimulate:
         return None
 
     def _note(self, text: str) -> None:
-        """콘솔에 찍고 notes 에도 남긴다"""
+        """notes 에 남긴다. 콘솔은 단계마다 _done 한 줄뿐"""
         self._notes.append(text)
-        print(f"[ebs] {text}")
 
     def get_notes(self) -> list:
-        """이번 단계에 남긴 로그"""
+        """이번 단계에 남긴 자세한 기록
+
+        _note   콘솔에 안 찍는다. 단계마다 _done 이 한 줄만 찍는다
+        _done   무엇을 했고 얼마나 걸렸나. 자세한 것은 여기로
+        """
         return list(self._notes)
 
     def _hush(self, loud: bool):
@@ -584,7 +579,7 @@ class EbsSimulate:
         _stage_boxes   스테이지 상자 목록. Init 값의 대부분이다. EBS 는 안 담는다
         _bounds_cache  공유 바운드 캐시. 움직이는 EBS 는 _moving_cache 로 따로
         """
-        self._begin()
+        self._begin("init")
         self._eqp_boxes = None
         self._eqp_looks = {}
         self._eqp_shared = set()
@@ -629,10 +624,10 @@ class EbsSimulate:
         _resolve_by_name / _resolve_by_selection  찾는 두 길
         resolve_anchor  피봇을 어디로 볼지. 깊이는 ANCHOR_DEPTH
         """
-        self._begin()
+        self._begin("prepare")
         if not self._ready:
-            return self._payload(False, "Run Init first")
-        return self._do_prepare(equipment)
+            return self._done(self._payload(False, "Run Init first"))
+        return self._done(self._do_prepare(equipment))
 
     def align(self, equipment: str = "") -> dict:
         """prepare 를 품고, 포트 위치를 계산해 EBS 를 놓는다
@@ -641,13 +636,13 @@ class EbsSimulate:
         find_rail  레일 고르기. 직선/코너 판정은 _rail_axis. 유격은 CAD_SLACK
         _place_ebs  이동. 회전·스케일은 _align_prims 와 _write_transform
         """
-        self._begin()
+        self._begin("align")
         if not self._ready:
-            return self._payload(False, "Run Init first")
+            return self._done(self._payload(False, "Run Init first"))
         made = self._do_prepare(equipment)
         if not made["ok"]:
-            return made
-        return self._do_align()
+            return self._done(made)
+        return self._done(self._do_align())
 
     def focus(self) -> dict:
         """카메라를 EBS 앞에 세운다
@@ -656,8 +651,8 @@ class EbsSimulate:
         _grab / _turn / _zoom / _double  좌드래그 공전, 휠 줌, 더블클릭 중심 옮기기
         FADE_OTHERS  양옆 빼고 투명하게. 느려서 기본 꺼짐 (hide_other_equipment)
         """
-        self._begin()
-        return self._do_focus()
+        self._begin("focus")
+        return self._done(self._do_focus())
 
     def collide(self) -> dict:
         """3면 충돌과 여유 거리를 재고 마커를 그린다
@@ -674,8 +669,8 @@ class EbsSimulate:
         EbsSimulateMarks  씬에 그리는 것은 전부 ebs_simulate_overlay 에
         show_markers / build_verdict  씬에 그리기와 오버레이가 읽을 판정
         """
-        self._begin()
-        return self._do_collide()
+        self._begin("collide")
+        return self._done(self._do_collide())
 
     def sweep_ports(self) -> dict:
         """장비 전체의 피봇과 포트 1 을 재서 표로 뽑는다 (진단용)
@@ -683,7 +678,7 @@ class EbsSimulate:
         sweep_ports  판정 기준은 PIVOT_TOLERANCE, PIVOT_ACROSS
         show_sweep   그리기. 색은 SWEEP_COLOR_*
         """
-        self._begin()
+        self._begin("sweep")
         if not self._ready:
             return self._payload(False, "Run Init first")
         stage = self._get_stage()
@@ -875,7 +870,7 @@ class EbsSimulate:
 
         simulate  순서를 바꾸려면 여기. 오버레이는 focus 뒤에 뜬다
         """
-        self._begin()
+        self._begin("simulate")
         if not self._ready:
             return self._payload(False, "Run Init first")
         result = self._do_prepare(equipment)
@@ -893,7 +888,7 @@ class EbsSimulate:
         result["timings"] = list(self._timings)
         result["notes"] = list(self._notes)
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
-        return result
+        return self._done(result)
 
 
     def _do_prepare(self, equipment: str) -> dict:
@@ -932,7 +927,7 @@ class EbsSimulate:
         with self._stage_timer("resolve anchor"):
             anchor, reached = self.resolve_anchor(eqp_prim)
         if not reached:
-            print(f"[ebs] {eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
+            self._note(f"{eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
                   f"working off the equipment prim")
         self._target = {
             "equipment": eqp_prim,
@@ -986,7 +981,7 @@ class EbsSimulate:
                 self.clear_port_lasers()
                 return self._payload(False, self._blocked)
             else:
-                print("[ebs] port geometry unavailable, falling back to the anchor prim")
+                self._note("port geometry unavailable, falling back to the anchor prim")
                 self._port_world = {}
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
@@ -1084,26 +1079,27 @@ class EbsSimulate:
                               verdict.get("marks"), verdict.get("boxes"))
         self._verdict = verdict
 
-        self._report_stages("collide", mark)
-
-        told = ("No collision" if hit_count == 0
-                else f"{hit_count} cell(s) blocked")
-        if meeting["hit"]:
-            told += ", and through the equipment"
-        self._keep_result(verdict, meeting)
+        name = self._keep_result(verdict, meeting)
+        if verdict:
+            told = self.get_result(name)["reason"]
+        else:
+            told = ("No collision" if hit_count == 0
+                    else f"{hit_count} cell(s) blocked")
+            if meeting["hit"]:
+                told += ", and through the equipment"
         return self._payload(
             True, told,
             cells=cells, hit_count=hit_count, distances=distances,
             equipment_hit=meeting,
         )
 
-    def _keep_result(self, verdict: dict, meeting: dict) -> None:
-        """이번 판정을 장비 이름으로 적어 둔다. 거리는 사실이라 그대로 담는다"""
+    def _keep_result(self, verdict: dict, meeting: dict) -> str:
+        """이번 판정을 장비 이름으로 적어 두고 그 이름을 준다"""
         target = self._target or {}
         prim = target.get("equipment")
         name = prim.GetName() if prim is not None else ""
         if not name:
-            return
+            return ""
         pairs = meeting.get("pairs") or ()
         self._results[name.upper()] = {
             "equipment": name,
@@ -1115,6 +1111,7 @@ class EbsSimulate:
                                      "name": mark["name"]}
                       for mark in verdict.get("marks") or ()},
         }
+        return name
 
     def get_result(self, equipment: str = "") -> dict:
         """그 장비의 마지막 판정. 화면은 안 건드린다
@@ -1276,7 +1273,6 @@ class EbsSimulate:
                                        axis, patch)
                 lead = [world(point) for point in walk]
                 tick = self._tick_way(end, axis, world)
-                self._note_lead(face, patch, walk, spot)
             near, far = world(start), world(end)
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
@@ -1298,19 +1294,6 @@ class EbsSimulate:
         ahead = [end[i] + (1.0 if i == axis else 0.0) for i in range(3)]
         here, there = world(end), world(ahead)
         return tuple(there[i] - here[i] for i in range(3))
-
-    @staticmethod
-    def _note_lead(face: str, patch, walk, spot) -> None:
-        """안내선이 어디서 멈췄나. 콘솔로만"""
-        if not walk:
-            where = "the arrow was already touching"
-        elif all(abs(walk[-1][i] - spot[i]) <= LEAD_TOL for i in range(3)):
-            where = "ran all the way to the spot"
-        else:
-            where = ("stopped at ("
-                     + ", ".join(f"{v:.3f}" for v in walk[-1]) + ")")
-        print(f"[ebs] {face} lead: {len(patch or ())} shapes in the way, "
-              f"{len(walk)} legs, {where}")
 
     @staticmethod
     def _lead_path(end, spot, turn_axis: int, front_axis: int, axis: int,
@@ -1431,7 +1414,7 @@ class EbsSimulate:
         if self._search_root:
             root = stage.GetPrimAtPath(self._search_root)
             if not root.IsValid():
-                print(f"[ebs] search root not found, scanning the whole stage: "
+                self._note(f"search root not found, scanning the whole stage: "
                       f"{self._search_root}")
                 root = None
         stack = list(_children(root or stage.GetPseudoRoot()))
@@ -1891,31 +1874,31 @@ class EbsSimulate:
         for prim, neighbour in found:
             axis = self._rail_axis(addr_number, neighbour)
             if axis is None:
-                print(f"[ebs]   skipping {prim.GetName()}: not a straight rail "
+                self._note(f"  skipping {prim.GetName()}: not a straight rail "
                       f"along one cad axis")
                 continue
             straight.append((prim, neighbour, axis))
         if not straight:
-            print(f"[ebs] {prefix}*: no straight rail among "
+            self._note(f"{prefix}*: no straight rail among "
                   f"{[p.GetName() for p, _ in found]}")
             return None, None, None
 
         if len(straight) > 1 and prefer:
             for prim, neighbour, axis in straight:
                 if neighbour in prefer:
-                    print(f"[ebs]   {prim.GetName()} chosen: it ends at addr "
+                    self._note(f"  {prim.GetName()} chosen: it ends at addr "
                           f"{neighbour}, where a port sits")
                     return prim, neighbour, axis
             base_cad = self._addr_cad.get(addr_number)
             for prim, neighbour, axis in straight:
                 if any(abs(self._addr_cad[a][axis] - base_cad[axis]) > 1e-6
                        for a in prefer if a in self._addr_cad):
-                    print(f"[ebs]   {prim.GetName()} chosen: it runs along the axis "
+                    self._note(f"  {prim.GetName()} chosen: it runs along the axis "
                           f"the spilled ports differ on")
                     return prim, neighbour, axis
 
         if len(straight) > 1:
-            print(f"[ebs] {prefix}*: several straight rails "
+            self._note(f"{prefix}*: several straight rails "
                   f"{[(p.GetName(), n) for p, n, _ in straight]}, taking the first")
         return straight[0]
 
@@ -1928,7 +1911,7 @@ class EbsSimulate:
                 source = _children(root)
             else:
                 if self._rail_root:
-                    print(f"[ebs] no rails under {self._rail_root}, scanning the stage")
+                    self._note(f"no rails under {self._rail_root}, scanning the stage")
                 source = (p for p, _ in self._walk(stage))
             for prim in source:
                 parts = prim.GetName().lower().split("_")
@@ -1938,7 +1921,7 @@ class EbsSimulate:
                     continue
                 self._rail_index.setdefault(int(parts[1]), []).append(
                     (prim, int(parts[2])))
-            print(f"[ebs] indexed rails leaving {len(self._rail_index)} addrs")
+            self._note(f"indexed rails leaving {len(self._rail_index)} addrs")
         return self._rail_index.get(addr_number, [])
 
     def _rail_axis(self, addr_a: int, addr_b: int) -> "int | None":
@@ -1952,7 +1935,7 @@ class EbsSimulate:
             return None
         held = 1 - moves[0]
         if abs(span[held]) > 1e-6:
-            print(f"[ebs]   addr {addr_a} -> {addr_b} wanders {span[held]:+.4f} cad "
+            self._note(f"  addr {addr_a} -> {addr_b} wanders {span[held]:+.4f} cad "
                   f"on {'XY'[held]}, within {CAD_SLACK:g}: held at addr {addr_a}")
         return moves[0]
 
@@ -2001,13 +1984,13 @@ class EbsSimulate:
         self._rail_frame = (Gf.Vec3d(*origin), Gf.Vec3d(*onward), axis)
 
         name = "XY"[axis]
-        print(f"[ebs] {key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
-        print(f"[ebs]   cad {cad_a} -> {cad_b}, span ({span[0]:+.3f}, {span[1]:+.3f})"
+        self._note(f"{key}: addr {addr_a} -> rail {rail.GetName()} (neighbour {addr_b})")
+        self._note(f"  cad {cad_a} -> {cad_b}, span ({span[0]:+.3f}, {span[1]:+.3f})"
               f" -> runs along {name}, direction {direction:+.0f}")
-        print(f"[ebs]   length {span[axis]:+.3f} / {CAD_PER_UNIT:.4f} = {length:+.4f} units")
-        print(f"[ebs]   rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
+        self._note(f"  length {span[axis]:+.3f} / {CAD_PER_UNIT:.4f} = {length:+.4f} units")
+        self._note(f"  rail.{name.lower()} {rail_local[axis]:.4f} - {length:+.4f}/2 "
               f"= start {start:.4f}")
-        print(f"[ebs]   offset scale: {self._offset_scale}")
+        self._note(f"  offset scale: {self._offset_scale}")
 
         if self._offset_scale in (SCALE_PULS, SCALE_SNAP):
             along = self._coords_by_puls(key, axis, direction, start, addr_a)
@@ -2016,7 +1999,7 @@ class EbsSimulate:
         if along is None:
             return None
 
-        print(f"[ebs]   a constant shift would match: half a rail "
+        self._note(f"  a constant shift would match: half a rail "
               f"{abs(length) / 2:.4f}, a whole rail {abs(length):.4f}"
               f"  (port 1 is {abs(along[1] - start):.4f} from the base addr)")
 
@@ -2025,7 +2008,7 @@ class EbsSimulate:
             coords = [rail_local[0], rail_local[1], rail_local[2]]
             coords[axis] = coord
             points[index] = Gf.Vec3d(*coords)
-        print(f"[ebs]   {name.lower()} = " +
+        self._note(f"  {name.lower()} = " +
               ", ".join(f"{i}:{along[i]:.4f}" for i in sorted(along)) +
               " (rail's other axes kept)")
         return points, axis, rail
@@ -2041,10 +2024,10 @@ class EbsSimulate:
 
         gaps = [f"{offsets[i] - offsets[i + 1]:.1f}"
                 for i in sorted(offsets) if i + 1 in offsets]
-        print(f"[ebs]   offsets " +
+        self._note(f"  offsets " +
               ", ".join(f"{i}:{offsets[i]:.1f}" for i in sorted(offsets)) +
               f" | gaps [{', '.join(gaps)}] -> spacing {spacing:.1f}")
-        print(f"[ebs]   offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
+        self._note(f"  offset0 = {offsets[1]:.1f} + {spacing:.1f} = {offset_zero:.1f}"
               f" / {OFFSET_PER_UNIT:.0f} = {offset_zero / OFFSET_PER_UNIT:.4f} units")
 
         all_offsets = dict(offsets)
@@ -2074,14 +2057,14 @@ class EbsSimulate:
             if step is None:
                 self._blocked = (f"{key}: addr {addr} has no straight {PULS_KEY} "
                                  f"run for port {index}")
-                print(f"[ebs] {self._blocked}")
+                self._note(f"{self._blocked}")
                 self._why = f"직선 {PULS_KEY} 구간 없음 (addr {addr})"
                 return None
             seg_length, puls = step
             addr_start = start + (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             walk = offset * seg_length / puls
             along[index] = addr_start + direction * walk
-            print(f"[ebs]   port {index} @ addr {addr}: {offset:.1f} x "
+            self._note(f"  port {index} @ addr {addr}: {offset:.1f} x "
                   f"{seg_length:.4f}/{puls:.0f} = {walk:+.4f} units "
                   f"from {addr_start:.4f}")
 
@@ -2091,7 +2074,7 @@ class EbsSimulate:
                               f"포트 {len(along)}개, 최소 2개 필요")
         pitch = sum(steps) / len(steps)
         along[0] = along[1] + pitch
-        print(f"[ebs]   pitch " + ", ".join(f"{s:.4f}" for s in steps) +
+        self._note(f"  pitch " + ", ".join(f"{s:.4f}" for s in steps) +
               f" -> {pitch:.4f} units, port 0 at {along[0]:.4f}")
 
         return along
@@ -2111,12 +2094,12 @@ class EbsSimulate:
                 continue
             cad = self._addr_cad.get(addr)
             if cad is None:
-                print(f"[ebs] {key}: port {index} sits in addr {addr}, which has no cad")
+                self._note(f"{key}: port {index} sits in addr {addr}, which has no cad")
                 continue
             gap = (cad[axis] - base_cad[axis]) / CAD_PER_UNIT
             shift = direction * gap * OFFSET_PER_UNIT
             offsets[index] = offset + shift
-            print(f"[ebs]   port {index} is in addr {addr}, not {base_addr}: "
+            self._note(f"  port {index} is in addr {addr}, not {base_addr}: "
                   f"{offset:.1f} {shift:+.1f} = {offsets[index]:.1f} "
                   f"(addr gap {gap:+.4f} units)")
         return offsets
@@ -2126,16 +2109,16 @@ class EbsSimulate:
         gaps = [offsets[i] - offsets[i + 1]
                 for i in sorted(offsets) if i + 1 in offsets]
         if 1 not in offsets or not gaps:
-            print(f"[ebs] {key}: no offsets for ports 1 and 2, got {offsets}")
+            self._note(f"{key}: no offsets for ports 1 and 2, got {offsets}")
             self._why = f"포트 1·2 offset 없음 (있는 포트 {sorted(offsets)})"
             return None
 
         spacing = sum(gaps) / len(gaps)
         if spacing <= 0:
-            print(f"[ebs] {key}: ports should get closer to the addr as the number "
+            self._note(f"{key}: ports should get closer to the addr as the number "
                   f"rises, got {offsets}")
         if len(gaps) > 1 and max(gaps) - min(gaps) > 1e-6:
-            print(f"[ebs] {key}: port spacing is uneven {gaps}, using {spacing}")
+            self._note(f"{key}: port spacing is uneven {gaps}, using {spacing}")
         return spacing
 
     def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
@@ -2160,14 +2143,14 @@ class EbsSimulate:
         in_rail_space = points[0]
         world = spots[0]
         target = self._port_world[0]
-        print(f"[ebs]   rail space ({in_rail_space[0]:.4f}, {in_rail_space[1]:.4f}, "
+        self._note(f"  rail space ({in_rail_space[0]:.4f}, {in_rail_space[1]:.4f}, "
               f"{in_rail_space[2]:.4f}) -> world ({world[0]:.4f}, {world[1]:.4f}, "
               f"{world[2]:.4f})")
         for index in sorted(self._port_world):
             spot = self._port_world[index]
             self._note(f"port {index} world ({spot[0]:.4f}, {spot[1]:.4f}, "
                        f"{spot[2]:.4f})")
-        print(f"[ebs]   target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})"
+        self._note(f"  target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})"
               f"  [rail xy, anchor z from {anchor.GetName()}]")
         return target
 
@@ -2225,7 +2208,7 @@ class EbsSimulate:
         rotation = self._normalized_rows(anchor_world * to_ebs_space)
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
         local = to_ebs_space.Transform(world_position)
-        print(f"[ebs]   EBS local translate ({local[0]:.4f}, {local[1]:.4f}, "
+        self._note(f"  EBS local translate ({local[0]:.4f}, {local[1]:.4f}, "
               f"{local[2]:.4f}), rotation from {anchor.GetName()}")
         return self._write_transform(stage, xformable, rotation, scale, local)
 
@@ -2262,14 +2245,14 @@ class EbsSimulate:
                 ops["xformOp:translate"].Set(Gf.Vec3d(translation))
                 return True
 
-            print("[ebs] no usable xform ops, authoring a single transform op")
+            self._note("no usable xform ops, authoring a single transform op")
             try:
                 xformable.ClearXformOpOrder()
                 xformable.AddTransformOp().Set(
                     self._compose(rotation, scale, translation))
                 return True
             except Exception as e:
-                print(f"[ebs] transform op failed, translate only: {e}")
+                self._note(f"transform op failed, translate only: {e}")
                 api = UsdGeom.XformCommonAPI(xformable.GetPrim())
                 return bool(api and api.SetTranslate(Gf.Vec3d(translation)))
 
@@ -3733,7 +3716,7 @@ class EbsSimulate:
                                      Gf.Vec3d(spot[0], spot[1], (top + bottom) / 2.0),
                                      radius, height, colour)
                 drawn += 1
-        print(f"[ebs] drew {drawn} port lasers under {LASER_ROOT}, "
+        self._note(f"drew {drawn} port lasers under {LASER_ROOT}, "
               f"radius {radius:.4f}, rail z {top:.4f} down to the EBS z")
         return drawn
 
@@ -3776,7 +3759,7 @@ class EbsSimulate:
                     refused.append(f"{name}: {e}")
                     continue
                 drawn += 1
-        print(f"[ebs] drew {drawn} pairs under {SWEEP_ROOT}, radius {radius:.4f}")
+        self._note(f"drew {drawn} pairs under {SWEEP_ROOT}, radius {radius:.4f}")
         if refused:
             self._note(f"{len(refused)} could not be drawn: "
                        + ", ".join(refused[:4]))
