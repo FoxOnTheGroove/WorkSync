@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import pprint
+import time
 
 import omni.ui as ui
 import omni.usd
@@ -303,12 +304,14 @@ class EbsDummyUI:
         self._task = asyncio.ensure_future(work)
 
     async def _watched(self, work):
-        """일이 도는 동안 진행률을 상태 줄에 적는다"""
+        """일이 도는 동안 진행률과 흐른 시간을 상태 줄에 적는다"""
         import omni.kit.app
+        started = time.monotonic()
         task = asyncio.ensure_future(work)
         while not task.done():
             self._set_status(
-                f"Working {EbsSimulateService.get_progress():.2f}%")
+                f"Working {EbsSimulateService.get_progress():6.2f}%"
+                f"   {time.monotonic() - started:.1f}s")
             await omni.kit.app.get_app().next_update_async()
         return task.result()
 

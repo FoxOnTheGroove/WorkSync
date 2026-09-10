@@ -235,8 +235,10 @@ LEAD_FACES  = FACES
 RESULT_ORDER  = (FACE_LEFT, FACE_RIGHT, FACE_CEILING)
 RESULT_INSIDE = "inside"
 
-COLLIDE_STEPS = (("sides", 2.0), ("faces", 55.0), ("clearance", 18.0),
-                 ("equipment", 15.0), ("verdict", 2.0), ("markers", 8.0))
+COLLIDE_STEPS = (("warm", 50.0), ("sides", 2.0), ("faces", 12.0),
+                 ("clearance", 8.0), ("equipment", 12.0), ("verdict", 2.0),
+                 ("markers", 14.0))
+WARM_CHUNK = 40
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
@@ -306,6 +308,8 @@ class EbsSimulate:
         self._lasers: bool = False
         self._verdict: dict = {}
         self._progress: float = 0.0
+        self._spent: dict = {}
+        self._shares: dict = {}
         self._results: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
                          FACE_LEFT: MIN_GAP_SIDE,
@@ -532,6 +536,7 @@ class EbsSimulate:
         """한 단계를 시작한다. 시간과 로그를 비운다"""
         self._step = step
         self._progress = 0.0
+        self._spent = {}
         self._boxed = {}
         self._timings = []
         self._notes = []
@@ -1066,21 +1071,71 @@ class EbsSimulate:
     def get_progress(self) -> float:
         """지금 단계가 얼마나 왔나. 0.0 에서 100.0
 
-        COLLIDE_STEPS  단계마다 몫이 얼마인가. 합이 100
         _collide_steps  단계 사이에서 멈춘다. 그 틈에 collide_async 가 프레임을
                      넘기고, 그동안 이걸 물어보면 된다
-        _reached     한 단계가 끝날 때 올린다. 단계 안에서는 안 올라간다
+        _warm_steps  가까운 프림의 바운드를 미리 잰다. collide 시간의 대부분이
+                     여기다. WARM_CHUNK 개씩 끊으니 이 안에서도 올라간다
+        COLLIDE_STEPS  단계마다 몫이 얼마인가. 첫 번만 쓰는 추정치다
+        _learn_shares  한 번 돌고 나면 실제로 걸린 시간의 비율로 몫을 다시 잡는다
         """
         return self._progress
 
-    def _reached(self, step: str) -> None:
-        """그 단계까지 끝났다고 적는다. COLLIDE_STEPS 가 몫을 정한다"""
-        done = 0.0
-        for name, weight in COLLIDE_STEPS:
-            done += weight
+    def _at(self, step: str, done: float = 1.0) -> None:
+        """그 단계가 done(0~1) 만큼 왔다고 적는다"""
+        weights = self._shares or dict(COLLIDE_STEPS)
+        before = 0.0
+        for name, _ in COLLIDE_STEPS:
             if name == step:
                 break
-        self._progress = min(done, 100.0)
+            before += weights.get(name, 0.0)
+        share = weights.get(step, 0.0) * max(0.0, min(done, 1.0))
+        self._progress = min(before + share, 100.0)
+
+    def _reached(self, step: str) -> None:
+        """그 단계가 끝났다고 적는다"""
+        self._at(step, 1.0)
+
+    @contextmanager
+    def _spending(self, step: str):
+        """그 단계에 쓴 시간을 더한다. 프레임을 기다린 시간은 안 센다"""
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._spent[step] = (self._spent.get(step, 0.0)
+                                 + time.perf_counter() - started)
+
+    def _learn_shares(self) -> None:
+        """이번에 걸린 시간으로 다음 번 몫을 잡는다. 첫 번은 COLLIDE_STEPS"""
+        total = sum(self._spent.values())
+        if total <= 0.0:
+            return
+        self._shares = {name: self._spent.get(name, 0.0) / total * 100.0
+                        for name, _ in COLLIDE_STEPS}
+
+    def _warm_steps(self, ebs_prim, skip: list):
+        """가까운 프림의 바운드를 미리 잰다. collide 시간의 대부분이 여기다"""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        cache = self._bounds_cache()
+        box = self._ebs_bound(ebs_prim).ComputeAlignedRange()
+        if box.IsEmpty():
+            return
+        reach = max(box.GetMax()[i] - box.GetMin()[i]
+                    for i in range(3)) * REACH_RATIO
+        margin = Gf.Vec3d(reach, reach, reach)
+        search = Gf.Range3d(box.GetMin() - margin, box.GetMax() + margin)
+        with self._spending("warm"):
+            inside, _ = self._index_inside(cache, search, skip)
+        self._note(f"warming {len(inside)} prims around the EBS")
+        for at, prim in enumerate(inside, 1):
+            with self._spending("warm"):
+                self._gather_nearby(stage, cache, search, skip, [prim])
+            if at % WARM_CHUNK and at != len(inside):
+                continue
+            self._at("warm", at / len(inside))
+            yield
 
     def _collide_steps(self):
         """collide 를 단계로 쪼갠 것. 단계마다 진행률을 올리고 한 번 멈춘다"""
@@ -1092,53 +1147,66 @@ class EbsSimulate:
             return
 
         apart = [self._target["ebs"], self._target["equipment"]]
+        skip = [str(p.GetPath()) for p in apart if p and p.IsValid()]
+        for _ in self._warm_steps(self._target["ebs"], skip):
+            yield
+        self._reached("warm")
+        yield
+
         bounds = self._bounds_cache()
-        roots = self._side_roots()
+        with self._spending("sides"):
+            roots = self._side_roots()
         self._reached("sides")
         yield
 
-        cells = self.check_collision(self._target["ebs"], exclude=apart,
-                                     cache=bounds, roots=roots)
-        hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+        with self._spending("faces"):
+            cells = self.check_collision(self._target["ebs"], exclude=apart,
+                                         cache=bounds, roots=roots)
+            hit_count = sum(sum(1 for c in v if c) for v in cells.values())
         self._reached("faces")
         yield
 
-        distances = self.measure_faces(self._target["ebs"], cells,
-                                       exclude=apart, cache=bounds, roots=roots)
-        for face, found in distances.items():
-            if found.get("distance") is None:
-                self._note(f"{face}: clear, nothing within "
-                           f"{found.get('reach', 0):.3f}")
-            else:
-                self._note(f"{face}: clear, nearest {found['distance']:.4f} away "
-                           f"({found['prim'].rsplit('/', 1)[-1]})")
+        with self._spending("clearance"):
+            distances = self.measure_faces(self._target["ebs"], cells,
+                                           exclude=apart, cache=bounds,
+                                           roots=roots)
+            for face, found in distances.items():
+                if found.get("distance") is None:
+                    self._note(f"{face}: clear, nothing within "
+                               f"{found.get('reach', 0):.3f}")
+                else:
+                    self._note(f"{face}: clear, nearest "
+                               f"{found['distance']:.4f} away "
+                               f"({found['prim'].rsplit('/', 1)[-1]})")
         self._reached("clearance")
         yield
 
-        try:
-            meeting = self.check_equipment(self._target["ebs"],
-                                           self._target["equipment"],
-                                           cache=bounds)
-        except Exception as e:
-            meeting = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
-            self._note(f"interference check failed: {type(e).__name__}: {e}")
-        if meeting["hit"]:
-            names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
-            self._note(f"the EBS runs through the equipment at "
-                       f"{len(names)} place(s): " + ", ".join(names[:6])
-                       + (" ..." if len(names) > 6 else "")
-                       + f" ({meeting['tests']} pairs tested)")
-        else:
-            self._note(f"clear of the equipment itself "
-                       f"({meeting['tests']} triangle pairs tested)")
-        for why, paths in sorted(self._boxed.items()):
-            self._note(f"{len(paths)} judged by box, {why}: "
-                       + ", ".join(sorted(p.rsplit("/", 1)[-1] for p in paths)[:4])
-                       + (" ..." if len(paths) > 4 else ""))
+        with self._spending("equipment"):
+            try:
+                meeting = self.check_equipment(self._target["ebs"],
+                                               self._target["equipment"],
+                                               cache=bounds)
+            except Exception as e:
+                meeting = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
+                self._note(f"interference check failed: {type(e).__name__}: {e}")
+            if meeting["hit"]:
+                names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
+                self._note(f"the EBS runs through the equipment at "
+                           f"{len(names)} place(s): " + ", ".join(names[:6])
+                           + (" ..." if len(names) > 6 else "")
+                           + f" ({meeting['tests']} pairs tested)")
+            else:
+                self._note(f"clear of the equipment itself "
+                           f"({meeting['tests']} triangle pairs tested)")
+            for why, paths in sorted(self._boxed.items()):
+                self._note(f"{len(paths)} judged by box, {why}: "
+                           + ", ".join(sorted(p.rsplit("/", 1)[-1]
+                                              for p in paths)[:4])
+                           + (" ..." if len(paths) > 4 else ""))
         self._reached("equipment")
         yield
 
-        with self._stage_timer("verdict: build"):
+        with self._spending("verdict"), self._stage_timer("verdict: build"):
             try:
                 verdict = self.build_verdict(self._target["ebs"], cells,
                                              distances, meeting["hit"],
@@ -1149,7 +1217,7 @@ class EbsSimulate:
         self._reached("verdict")
         yield
 
-        with self._stage_timer("markers: draw"):
+        with self._spending("markers"), self._stage_timer("markers: draw"):
             self.show_markers(self._target["ebs"], cells,
                               verdict.get("marks"), verdict.get("boxes"))
         self._verdict = verdict
@@ -1168,6 +1236,7 @@ class EbsSimulate:
             equipment_hit=meeting,
         )
         self._reached("markers")
+        self._learn_shares()
 
     def _keep_result(self, verdict: dict, meeting: dict) -> str:
         """이번 판정을 장비 이름으로 적어 두고 그 이름을 준다"""
@@ -2930,15 +2999,15 @@ class EbsSimulate:
         self._note(f"stage index: {len(index)} boxes")
         return index
 
-    def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
-        """그 상자 목록에서 검색 상자에 걸리는 것만 꺼낸다"""
+    def _index_inside(self, cache, search: Gf.Range3d, skip: list) -> tuple:
+        """색인에서 검색 상자에 걸리고 보이는 프림들. 몇 개를 봤는지도"""
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
         low, high = search.GetMin(), search.GetMax()
         lo0, lo1, lo2 = low[0], low[1], low[2]
         hi0, hi1, hi2 = high[0], high[1], high[2]
         eps = OVERLAP_EPS
-        found, visited, inside = [], 0, []
+        inside, visited = [], 0
         for path, lo, hi, box, prim, chain in self._stage_boxes(cache):
             if path in skip_exact or (skip_under and path.startswith(skip_under)):
                 continue
@@ -2950,6 +3019,12 @@ class EbsSimulate:
             if any(not self._is_visible(one, where) for one, where in chain):
                 continue
             inside.append(prim)
+        return inside, visited
+
+    def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
+        """그 상자 목록에서 검색 상자에 걸리는 것만 꺼낸다"""
+        inside, visited = self._index_inside(cache, search, skip)
+        found = []
         for prim in inside:
             got, seen = self._gather_nearby(stage, cache, search, skip, [prim])
             found.extend(got)
