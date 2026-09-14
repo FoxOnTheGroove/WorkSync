@@ -1204,13 +1204,9 @@ class EbsSimulate:
         if stage is None:
             return
         cache = self._bounds_cache()
-        box = self._ebs_bound(ebs_prim).ComputeAlignedRange()
-        if box.IsEmpty():
+        search = self._reach_box(ebs_prim)
+        if search is None:
             return
-        reach = max(box.GetMax()[i] - box.GetMin()[i]
-                    for i in range(3)) * REACH_RATIO
-        margin = Gf.Vec3d(reach, reach, reach)
-        search = Gf.Range3d(box.GetMin() - margin, box.GetMax() + margin)
         with self._spending("warm"):
             inside, _ = self._index_inside(cache, search, skip)
         self._note(f"warming {len(inside)} prims around the EBS")
@@ -1221,6 +1217,28 @@ class EbsSimulate:
                 continue
             self._at("warm", at / len(inside))
             yield
+
+    def _reach_box(self, ebs_prim):
+        """collide 가 실제로 뒤지는 범위. 세 면의 프리즘과 EBS 상자를 합친 것
+
+        _warm_steps  이 안쪽만 미리 잰다. 바깥은 어차피 아무도 안 묻는다
+        measure_faces / check_collision / check_equipment  묻는 범위가 다 여기 든다
+        """
+        bbox = self._ebs_bound(ebs_prim)
+        whole = bbox.ComputeAlignedRange()
+        if whole.IsEmpty():
+            return None
+        local, to_world = bbox.GetRange(), bbox.GetMatrix()
+        if local.IsEmpty():
+            return None
+        self._build_cells(local)
+        reach = max(local.GetMax()[i] - local.GetMin()[i]
+                    for i in range(3)) * REACH_RATIO
+        boxes = [whole]
+        for axis, outward, coord, _, _ in self._face_planes.values():
+            prism = self._face_prism(local, axis, outward, coord, reach)
+            boxes.append(Gf.BBox3d(prism, to_world).ComputeAlignedRange())
+        return self._union(boxes)
 
     def _collide_steps(self):
         """collide 를 단계로 쪼갠 것. 단계마다 진행률을 올리고 한 번 멈춘다"""
@@ -3394,7 +3412,7 @@ class EbsSimulate:
         return kept, tally
 
     def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
-        """만난 쌍들. 쌍마다 한 번만 검사하고 나머지 삼각형은 건너뛴다"""
+        """만난 쌍들. 장비 메시 하나가 걸리면 그 메시는 더 안 본다"""
         grid, origin, step, spread = self._grid_of(yours, box)
         pairs, known, tests = [], set(), 0
         for ebs_path, triangle, lo, hi in mine:
@@ -3403,7 +3421,7 @@ class EbsSimulate:
                 seen.update(grid.get(key, ()))
             for index in seen:
                 eqp_path, other, other_lo, other_hi = yours[index]
-                if (ebs_path, eqp_path) in known:
+                if eqp_path in known:
                     continue
                 if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
                         or lo[1] > other_hi[1] or hi[1] < other_lo[1]
@@ -3411,7 +3429,7 @@ class EbsSimulate:
                     continue
                 tests += 1
                 if self._triangles_meet(triangle, other):
-                    known.add((ebs_path, eqp_path))
+                    known.add(eqp_path)
                     pairs.append((ebs_path, eqp_path))
                     if len(pairs) >= CLASH_MARKS:
                         return pairs, tests
