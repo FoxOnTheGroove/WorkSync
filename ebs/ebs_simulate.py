@@ -198,6 +198,9 @@ GEOMETRY_TYPES = frozenset({
 })
 
 VERDICT_HEIGHT = 0.8
+GRIP_HEIGHT = 0.5
+GRIP_WIDE   = 1.0 / 8.0
+GRIP_TALL   = 1.0 / 16.0
 CLASH_HEIGHT   = 0.45
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
@@ -553,6 +556,9 @@ class EbsSimulate:
             spot = self._verdict.get(name)
             if spot:
                 self._verdict[name] = tuple(spot[i] + step[i] for i in range(3))
+        grip = self._verdict.get("grip")
+        if grip and grip.get("at"):
+            grip["at"] = tuple(grip["at"][i] + step[i] for i in range(3))
         marks = self._verdict["marks"]
         self._verdict["faces"] = [{"face": one["face"], "name": one["name"],
                                    "state": one["state"]} for one in marks
@@ -1611,6 +1617,7 @@ class EbsSimulate:
             "marks": marks,
             "right": self._right_way(0),
             "front": self._right_way(2),
+            "grip": self._grip_spot(local_box, to_world),
             "offset": self._nudge,
             "centre": (middle[0], middle[1], middle[2]),
             "inside_at": (lower[0], lower[1], lower[2]),
@@ -1622,6 +1629,24 @@ class EbsSimulate:
                            for face in FACES),
             "placeable": not inside and not blocked,
         }
+
+    def _grip_spot(self, local_box, to_world) -> dict:
+        """손잡이를 세울 자리와 크기
+
+        at    3면 판의 앞모서리와 같은 깊이, EBS 중간 높이(GRIP_HEIGHT)
+        wide  EBS 폭의 GRIP_WIDE. high  EBS 높이의 GRIP_TALL
+        """
+        up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
+        front_axis = 3 - up_axis
+        side_axis = 3 - up_axis - front_axis
+        lo, hi = local_box.GetMin(), local_box.GetMax()
+        spot = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+        spot[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
+        spot[up_axis] = lo[up_axis] + (hi[up_axis] - lo[up_axis]) * GRIP_HEIGHT
+        at = to_world.Transform(Gf.Vec3d(*spot))
+        return {"at": (at[0], at[1], at[2]),
+                "wide": (hi[side_axis] - lo[side_axis]) * GRIP_WIDE,
+                "high": (hi[up_axis] - lo[up_axis]) * GRIP_TALL}
 
     def _right_way(self, which: int = 0):
         """EBS 가 보는 방향으로 만든 축 하나. 0 은 오른쪽, 2 는 정면(앞)"""

@@ -22,11 +22,10 @@ HOME   = "제자리"
 SLID   = "{0:+.3f} M"
 STALE  = "~"
 
-GRIP_SPAN  = 0.22
-GRIP_FRONT = 0.7
-GRIP_HEAD  = 0.5
-GRIP_THICK = 0.16
-GRIP_FLARE = 1.9
+GRIP_FRONT = 1.0
+GRIP_HEAD  = 0.3
+GRIP_THICK = 0.35
+GRIP_FLARE = 0.5
 GRIP_PICK  = 14.0
 GRIP_GLOW  = 2000.0
 
@@ -486,15 +485,14 @@ class EbsSimulateGrip:
     @classmethod
     def place(cls, said: dict, to_screen) -> bool:
         """판정이 준 자리 앞에 손잡이를 세운다. 없으면 만든다"""
-        at, right = said.get("centre"), said.get("right")
+        grip, right = said.get("grip") or {}, said.get("right")
         front = said.get("front") or (0.0, 0.0, 0.0)
-        if not at or not right:
+        if not grip.get("at") or not right:
             cls.hide()
             return False
         if cls._one is None:
             cls._one = cls()
-        return cls._one.stand(at, right, front, said.get("span") or 1.0,
-                              to_screen)
+        return cls._one.stand(grip, right, front, to_screen)
 
     @classmethod
     def hide(cls) -> None:
@@ -516,6 +514,7 @@ class EbsSimulateGrip:
         self._ends = None
         self._right = (1.0, 0.0, 0.0)
         self._reach = 1.0
+        self._high = 1.0
         self._to_screen = None
         self._state = ""
         self._from = None
@@ -530,11 +529,12 @@ class EbsSimulateGrip:
         except Exception:
             return None
 
-    def stand(self, at, right, front, span: float, to_screen) -> bool:
-        """EBS 앞으로 조금 띄워 좌우 축으로 눕힌다"""
+    def stand(self, grip: dict, right, front, to_screen) -> bool:
+        """3면 앞모서리 자리에 EBS 폭만 한 양방향 화살표로 눕힌다"""
         self._right, self._to_screen = tuple(right), to_screen
-        self._reach = max(span * GRIP_SPAN, 1e-6)
-        spot = [at[i] + front[i] * span * GRIP_FRONT for i in range(3)]
+        at, self._high = grip["at"], max(grip.get("high") or 0.0, 1e-6)
+        self._reach = max((grip.get("wide") or 0.0) * 0.5, 1e-6)
+        spot = [at[i] + front[i] * self._high * GRIP_FRONT for i in range(3)]
         self._ends = tuple(
             tuple(spot[i] + right[i] * self._reach * way for i in range(3))
             for way in (-1.0, 1.0))
@@ -550,7 +550,7 @@ class EbsSimulateGrip:
         self._state = state
         colour = GRIP_COLORS[state]
         one, two = self._ends
-        thick = self._reach * GRIP_THICK
+        thick = self._high * GRIP_THICK
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 UsdGeom.Scope.Define(stage, self._root)
@@ -558,7 +558,7 @@ class EbsSimulateGrip:
                                              1.0, GRIP_GLOW)
                 self._paint._gap_line(stage, f"{self._root}/shaft", one, two,
                                       thick, skin, colour)
-                high, wide = self._reach * GRIP_HEAD, thick * GRIP_FLARE
+                high, wide = self._reach * GRIP_HEAD, self._high * GRIP_FLARE
                 for name, tip, back in (("a", one, two), ("b", two, one)):
                     self._paint._gap_head(stage, f"{self._root}/head_{name}",
                                           tip, back, skin, colour, high, wide)
