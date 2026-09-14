@@ -333,7 +333,7 @@ class EbsDummyUI:
             return NEAR_SPAN
 
     def _on_nudge(self, way: float):
-        """민 자리로 다시 놓고 다시 잰다. 도는 중이면 무시한다"""
+        """민 자리로 EBS 만 옮긴다. 다시 재는 것은 3 Collide 몫이다"""
         if self._task is not None and not self._task.done():
             self._set_status("Busy")
             return
@@ -342,17 +342,9 @@ class EbsDummyUI:
             self._reset_nudge()
         step = self._number(self._nudge_field, NUDGE_STEP)
         EbsSimulateService.nudge(way * abs(step))
-        self._mark_nudge(busy=True)
         self._apply_settings()
         EbsSimulateOverlay.hide()
-        self._start(self._nudge_task())
-
-    async def _nudge_task(self):
-        """align 과 collide 만 다시. 카메라는 그대로 둔다"""
-        self._render(EbsSimulateService.align(
-            self._eqp_field.model.get_value_as_string()))
-        self._render(await self._watched(EbsSimulateService.collide_async()))
-        EbsSimulateOverlay.show()
+        self._render(EbsSimulateService.align(name))
         self._mark_nudge()
 
     def _reset_nudge(self):
