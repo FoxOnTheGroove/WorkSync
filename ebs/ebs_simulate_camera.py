@@ -517,6 +517,11 @@ class EbsSimulateCamera:
         except Exception:
             return None
 
+    @classmethod
+    def axes(cls, stage, facing) -> tuple:
+        """그 프림이 보는 방향으로 만든 세 축. x 가 화면 좌우다"""
+        return cls._frame(stage, facing)
+
     @staticmethod
     def _frame(stage, facing) -> tuple:
         """EBS 가 보는 방향에서 카메라의 세 축을 만든다"""

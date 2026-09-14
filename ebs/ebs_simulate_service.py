@@ -67,6 +67,21 @@ class EbsSimulateService:
         return cls._simulate.set_checks(outer, inner)
 
     @classmethod
+    def nudge(cls, step):
+        """놓을 자리를 EBS 좌우로 step(m) 만큼 더 민다. 누적 거리를 돌려준다"""
+        return cls._simulate.nudge(step)
+
+    @classmethod
+    def set_nudge(cls, metres):
+        """민 거리를 그 값으로. 0 이면 제자리"""
+        return cls._simulate.set_nudge(metres)
+
+    @classmethod
+    def get_nudge(cls):
+        """지금 민 거리(m). 오른쪽이 양수"""
+        return cls._simulate.get_nudge()
+
+    @classmethod
     def set_min_gaps(cls, side, ceiling):
         """3면 최소 여유(m). 미달이면 안 닿아도 간섭 판정"""
         return cls._simulate.set_min_gaps(side, ceiling)

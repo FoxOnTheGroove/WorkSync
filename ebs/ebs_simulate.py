@@ -238,6 +238,8 @@ RESULT_INSIDE = "inside"
 COLLIDE_STEPS = (("warm", 50.0), ("sides", 2.0), ("faces", 12.0),
                  ("clearance", 8.0), ("equipment", 12.0), ("verdict", 2.0),
                  ("markers", 14.0))
+NUDGE_LIMIT = 1.0
+
 OUTER_STEPS = ("warm", "sides", "faces", "clearance")
 INNER_STEPS = ("equipment",)
 WARM_CHUNK = 40
@@ -310,6 +312,7 @@ class EbsSimulate:
         self._lasers: bool = False
         self._outer: bool = True
         self._inner: bool = True
+        self._nudge: float = 0.0
         self._verdict: dict = {}
         self._progress: float = 0.0
         self._spent: dict = {}
@@ -445,6 +448,33 @@ class EbsSimulate:
             self._note(f"could not set the EBS visibility ({e})")
         self._forget_ebs(touched)
         return done
+
+    def nudge(self, step: float) -> float:
+        """놓을 자리를 EBS 좌우로 step(m) 만큼 더 민다. 누적 거리를 돌려준다
+
+        _do_align  목표점에 이만큼 더해서 놓는다. 다음 align 도 민 자리다
+        set_nudge  0 으로 되돌리는 곳. SIM, Clear, Camera 가 부른다
+        NUDGE_LIMIT  좌우로 이 거리까지만. 넘으면 거기서 멈춘다
+        """
+        return self.set_nudge(self._nudge + float(step))
+
+    def set_nudge(self, metres: float) -> float:
+        """민 거리를 그 값으로. 한계 안으로 잘라서 돌려준다"""
+        self._nudge = max(-NUDGE_LIMIT, min(NUDGE_LIMIT, float(metres)))
+        return self._nudge
+
+    def get_nudge(self) -> float:
+        """지금 민 거리(m). 오른쪽이 양수"""
+        return self._nudge
+
+    def _pushed(self, anchor, target):
+        """민 거리만큼 EBS 좌우로 옮긴 목표점"""
+        if not self._nudge or target is None:
+            return target
+        right, _, _ = self._camera.axes(self._get_stage(), anchor)
+        moved = Gf.Vec3d(*[target[i] + right[i] * self._nudge for i in range(3)])
+        self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
+        return moved
 
     def set_checks(self, outer: bool, inner: bool) -> None:
         """collide 가 무엇을 잴지
@@ -1048,7 +1078,8 @@ class EbsSimulate:
         anchor = self._target["anchor"]
 
         with self._stage_timer("align EBS"):
-            target = self.compute_target(stage, self._target["eqp_id"], anchor)
+            target = self._pushed(
+                anchor, self.compute_target(stage, self._target["eqp_id"], anchor))
             if target is not None:
                 self._aligned = self._place_ebs(self._target["ebs"], target, anchor)
                 note = ("EBS placed at port 0, world "
@@ -1319,6 +1350,7 @@ class EbsSimulate:
             "port_count": target.get("port_count") or 0,
             "inside_hit": bool(meeting.get("hit")),
             "inside": [b.rsplit("/", 1)[-1] for _, b in pairs],
+            "offset": round(self._nudge, 4),
             "faces": {mark["face"]: {"hit": mark["state"] == STATE_CLASH,
                                      "gap": mark["distance"],
                                      "name": mark["name"]}
@@ -1329,8 +1361,9 @@ class EbsSimulate:
     def get_result(self, equipment: str = "") -> dict:
         """그 장비의 마지막 판정. 화면은 안 건드린다
 
-        equipment, port_count, reason, faces, inside, placeable 여섯.
+        equipment, port_count, reason, faces, inside, offset, placeable 일곱.
                      기록이 없어도 키는 다 있다
+        offset       좌우로 민 거리(m). 0 이 아니면 제자리 판정이 아니다
         reason       면마다 clear / tight / clash. 닿았으면 clash, 안 닿아도
                      최소 여유 미달이면 tight. 내부는 clear / clash
         faces        면마다 잰 간격(m)과 상대 이름 (RESULT_ORDER 순서)
@@ -1361,6 +1394,7 @@ class EbsSimulate:
             "reason": " / ".join(words),
             "faces": faces,
             "inside": list(found.get("inside") or ()),
+            "offset": found.get("offset") or 0.0,
             "placeable": bool(found) and not found["inside_hit"] and not snug,
         }
 
@@ -2442,7 +2476,19 @@ class EbsSimulate:
         rotation = self._normalized_rows(target_local)
         scale = self._extract_scale(xformable.GetLocalTransformation(tc))
         return self._write_transform(stage, xformable, rotation, scale,
-                                     target_local.ExtractTranslation())
+                                     self._pushed_local(ebs_prim, anchor_prim,
+                                                        target_local))
+
+    def _pushed_local(self, ebs_prim, anchor_prim, target_local):
+        """앵커에 맞출 때의 자리. 민 거리는 EBS 부모 공간으로 바꿔서 더한다"""
+        spot = target_local.ExtractTranslation()
+        if not self._nudge:
+            return spot
+        right, _, _ = self._camera.axes(self._get_stage(), anchor_prim)
+        shift = self._parent_world(ebs_prim).GetInverse().TransformDir(
+            Gf.Vec3d(*[right[i] * self._nudge for i in range(3)]))
+        self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
+        return Gf.Vec3d(*[spot[i] + shift[i] for i in range(3)])
 
     def _write_transform(self, stage, xformable, rotation, scale, translation) -> bool:
         """쓸 수 있는 xformOp 를 찾아 회전·크기·이동을 쓴다"""
