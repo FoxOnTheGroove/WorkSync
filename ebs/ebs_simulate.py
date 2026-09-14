@@ -211,6 +211,7 @@ MIN_GAP_SIDE = 0.6
 
 
 MARKER_ROOT    = "/EbsCollisionMarkers"
+GRIP_ROOT      = "/EbsGrip"
 
 LASER_ROOT     = "/EbsPortLasers"
 LASER_COLOR    = (1.0, 0.05, 0.05)
@@ -221,7 +222,7 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
-OURS = (MARKER_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
+OURS = (MARKER_ROOT, GRIP_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
 OURS_UNDER = tuple(p + "/" for p in OURS)
 NOW = Usd.TimeCode.Default()
 
@@ -460,6 +461,10 @@ class EbsSimulate:
         NUDGE_LIMIT  좌우로 이 거리까지만. 넘으면 거기서 멈춘다
         """
         return self.set_nudge(self._nudge + float(step))
+
+    def watch_grip(self, grip) -> None:
+        """뷰포트 기즈모가 마우스를 먼저 보도록 카메라에 걸어 둔다"""
+        self._camera.watch(grip)
 
     def hold_camera(self, on: bool) -> None:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
@@ -1604,7 +1609,8 @@ class EbsSimulate:
                    for mark in marks if mark["state"] != STATE_CLEAR]
         return {
             "marks": marks,
-            "right": self._right_way(),
+            "right": self._right_way(0),
+            "front": self._right_way(2),
             "offset": self._nudge,
             "centre": (middle[0], middle[1], middle[2]),
             "inside_at": (lower[0], lower[1], lower[2]),
@@ -1617,17 +1623,18 @@ class EbsSimulate:
             "placeable": not inside and not blocked,
         }
 
-    def _right_way(self):
-        """EBS 가 보는 방향 기준 오른쪽. 미세조정이 미는 축이다"""
+    def _right_way(self, which: int = 0):
+        """EBS 가 보는 방향으로 만든 축 하나. 0 은 오른쪽, 2 는 정면(앞)"""
         target = self._target or {}
         anchor = target.get("anchor") or target.get("ebs")
         if anchor is None:
             return None
         try:
-            right, _, _ = self._camera.axes(self._get_stage(), anchor)
+            axes = self._camera.axes(self._get_stage(), anchor)
         except Exception:
             return None
-        return (right[0], right[1], right[2])
+        way = axes[which]
+        return (way[0], way[1], way[2])
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:

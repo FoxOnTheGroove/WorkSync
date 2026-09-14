@@ -77,6 +77,11 @@ class EbsSimulateService:
         return cls._simulate.nudge(step)
 
     @classmethod
+    def watch_grip(cls, grip):
+        """뷰포트 기즈모가 마우스를 먼저 보도록 걸어 둔다"""
+        return cls._simulate.watch_grip(grip)
+
+    @classmethod
     def hold_camera(cls, on):
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         return cls._simulate.hold_camera(on)

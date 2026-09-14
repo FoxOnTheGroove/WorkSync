@@ -100,6 +100,11 @@ class EbsSimulateCamera:
         self._box = None
         self._span = NEAR_SPAN
         self._held = False
+        self._watcher = None
+
+    def watch(self, grip) -> None:
+        """마우스를 먼저 볼 것. 뷰포트 기즈모가 자기를 걸어 둔다"""
+        self._watcher = grip
 
     def hold(self, on: bool) -> None:
         """궤도 조작을 잠깐 놓는다. 기즈모를 끄는 동안 카메라가 안 따라 돌게"""
@@ -348,15 +353,24 @@ class EbsSimulateCamera:
         self._frame_ui = None
 
     def _pressed(self, x, y, button) -> None:
-        """왼쪽 버튼이면 드래그 시작, 아니면 무시"""
+        """왼쪽 버튼이면 드래그 시작. 기즈모가 먼저 가져가면 궤도는 쉰다"""
         if self._held or button != LEFT_BUTTON:
+            self._from = self._axis = None
+            return
+        if self._watcher is not None and self._watcher.press(x, y):
             self._from = self._axis = None
             return
         self._start_drag()
         self._at = (x, y)
 
     def _moved(self, x, y) -> None:
-        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다"""
+        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다. 기즈모가 먼저다"""
+        watcher = self._watcher
+        if watcher is not None:
+            if watcher.drag(x, y):
+                return
+            if self._from is None:
+                watcher.over(x, y)
         if self._held or self._from is None or self._at is None:
             return
         dx, dy = x - self._at[0], y - self._at[1]
@@ -369,7 +383,9 @@ class EbsSimulateCamera:
         self._axis = None
 
     def _end_drag(self) -> None:
-        """드래그 상태를 놓는다"""
+        """드래그 상태를 놓는다. 기즈모를 잡고 있었으면 그것도 놓는다"""
+        if self._watcher is not None:
+            self._watcher.release()
         self._from = self._axis = self._at = None
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
