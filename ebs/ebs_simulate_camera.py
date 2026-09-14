@@ -9,6 +9,7 @@ CAMERA_PATH = "/EbsCamera"
 CAMERA_BACK = 30.0
 CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
+NEAR_SPAN   = 2.5
 
 FOCAL      = 50.0
 APERTURE_H = 20.955
@@ -30,7 +31,8 @@ DEFAULT_BINDINGS = {
     "ZoomScrollGesture": "Any", "FlightSpeedGesture": "RightButton",
     "FlightMode": "RightButton",
 }
-PITCH_LIMIT = 85.0
+PITCH_UP   = 60.0
+PITCH_DOWN = 10.0
 
 LEFT_BUTTON, RIGHT_BUTTON, MIDDLE_BUTTON = 0, 1, 2
 
@@ -484,10 +486,10 @@ class EbsSimulateCamera:
 
     @staticmethod
     def _room(arm, up, pitch: float) -> float:
-        """지금 각도에서 상하로 더 돌 수 있는 몫"""
+        """지금 각도에서 상하로 더 돌 수 있는 몫. 위아래 한계가 따로다"""
         height = Gf.Dot(arm.GetNormalized(), up)
         now = math.degrees(math.asin(max(-1.0, min(1.0, height))))
-        return max(-PITCH_LIMIT, min(PITCH_LIMIT, now + pitch)) - now
+        return max(-PITCH_DOWN, min(PITCH_UP, now + pitch)) - now
 
     @staticmethod
     def _up(stage):
@@ -529,12 +531,12 @@ class EbsSimulateCamera:
         return x_cam, y_cam, z_cam
 
     def _near(self, x_cam, distance: float) -> float:
-        """EBS 폭 절반만큼 앞에서부터 보이게. 그보다 앞을 가린 것은 잘려 나간다"""
+        """EBS 폭 절반의 NEAR_SPAN 배만큼 앞에서부터. 그보다 앞은 잘려 나간다"""
         if self._box is None:
             return CAMERA_NEAR
         low, high = self._box.GetMin(), self._box.GetMax()
         half = sum(abs(x_cam[i]) * (high[i] - low[i]) * 0.5 for i in range(3))
-        return max(CAMERA_NEAR, distance - half)
+        return max(CAMERA_NEAR, distance - half * NEAR_SPAN)
 
     def _write(self, stage, cam_prim, camera, x_cam, y_cam, z_cam, eye,
                distance: float) -> None:
