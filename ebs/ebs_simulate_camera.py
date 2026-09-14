@@ -98,6 +98,19 @@ class EbsSimulateCamera:
         self._axis = None
         self._home = None
         self._box = None
+        self._span = NEAR_SPAN
+
+    def set_near_span(self, span: float) -> float:
+        """근평면을 EBS 폭 절반의 몇 배 앞에 둘지. 지금 자리에 바로 반영한다"""
+        self._span = max(0.0, float(span))
+        self.restate()
+        return self._span
+
+    def restate(self) -> None:
+        """지금 자리 그대로 다시 쓴다. 근평면만 바뀔 때"""
+        hold = self._hold()
+        if hold is not None:
+            self._settle(hold, hold[3], hold[4])
 
     @property
     def previous(self):
@@ -536,12 +549,12 @@ class EbsSimulateCamera:
         return x_cam, y_cam, z_cam
 
     def _near(self, x_cam, distance: float) -> float:
-        """EBS 폭 절반의 NEAR_SPAN 배만큼 앞에서부터. 그보다 앞은 잘려 나간다"""
+        """EBS 폭 절반의 set_near_span 배만큼 앞에서부터. 그보다 앞은 잘린다"""
         if self._box is None:
             return CAMERA_NEAR
         low, high = self._box.GetMin(), self._box.GetMax()
         half = sum(abs(x_cam[i]) * (high[i] - low[i]) * 0.5 for i in range(3))
-        return max(CAMERA_NEAR, distance - half * NEAR_SPAN)
+        return max(CAMERA_NEAR, distance - half * self._span)
 
     def _write(self, stage, cam_prim, camera, x_cam, y_cam, z_cam, eye,
                distance: float) -> None:

@@ -476,6 +476,13 @@ class EbsSimulate:
         self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
         return moved
 
+    def set_near_span(self, span: float) -> float:
+        """근평면을 EBS 폭 절반의 몇 배 앞에 둘지
+
+        EbsSimulateCamera._near  실제로 자르는 곳. 거리에서 이만큼 뺀다
+        """
+        return self._camera.set_near_span(span)
+
     def set_checks(self, outer: bool, inner: bool) -> None:
         """collide 가 무엇을 잴지
 
@@ -1180,12 +1187,15 @@ class EbsSimulate:
                                  + time.perf_counter() - started)
 
     def _spent_line(self) -> str:
-        """외부와 내부 충돌에 각각 얼마나 썼나. 디버깅용 콘솔 한 줄"""
+        """외부와 내부에 각각 얼마나 썼나, 단계마다 얼마였나. 디버깅용 한 줄"""
         def spent(names, on):
-            """켠 쪽은 합, 끈 쪽은 skipped"""
+            """켠 쪽은 합과 단계별 내역, 끈 쪽은 skipped"""
             if not on:
                 return "skipped"
-            return f"{sum(self._spent.get(one, 0.0) for one in names):.2f}s"
+            whole = sum(self._spent.get(one, 0.0) for one in names)
+            each = ", ".join(f"{one} {self._spent.get(one, 0.0):.2f}"
+                             for one in names)
+            return f"{whole:.2f}s ({each})"
 
         return (f"[ebs] collide: outer {spent(OUTER_STEPS, self._outer)}, "
                 f"inner {spent(INNER_STEPS, self._inner)}")

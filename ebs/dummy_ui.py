@@ -25,6 +25,8 @@ VIEW_PATHS = (("Ceiling:", "", False),
 
 EQP_PREFIX = "EQP_"
 
+NEAR_SPAN = 2.5
+NEAR_MIN, NEAR_MAX = 0.0, 5.0
 NUDGE_STEP = 0.05
 NUDGE_LEFT  = "◀ 왼쪽"
 NUDGE_RIGHT = "▶ 오른쪽"
@@ -113,6 +115,7 @@ class EbsDummyUI:
         self._side_field = None
         self._ceiling_field = None
         self._status_label = None
+        self._near_slider = None
         self._nudge_label = None
         self._nudge_field = None
         self._nudge_for = ""
@@ -179,6 +182,12 @@ class EbsDummyUI:
 
                 with ui.HStack(height=26, spacing=4):
                     ui.Button("1 Camera", clicked_fn=self._on_camera)
+                    ui.Label("near", width=30)
+                    self._near_slider = ui.FloatSlider(min=NEAR_MIN, max=NEAR_MAX,
+                                                       step=0.1, width=110)
+                    self._near_slider.model.set_value(NEAR_SPAN)
+                    self._near_slider.model.add_value_changed_fn(
+                        lambda model: self._on_near_span())
                     ui.Button("2 Align", clicked_fn=self._on_align)
                     ui.Button("3 Collide", clicked_fn=self._on_collide)
 
@@ -311,6 +320,18 @@ class EbsDummyUI:
         self._render(await self._watched(EbsSimulateService.collide_async()))
         EbsSimulateOverlay.show()
 
+    def _on_near_span(self):
+        """슬라이더를 끄는 그 자리에서 카메라에 반영한다"""
+        span = EbsSimulateService.set_near_span(self._near_span())
+        self._set_status(f"Near plane at {span:.2f} x half the EBS width")
+
+    def _near_span(self) -> float:
+        """슬라이더가 가리키는 근평면 배수"""
+        try:
+            return float(self._near_slider.model.get_value_as_float())
+        except (AttributeError, TypeError, ValueError):
+            return NEAR_SPAN
+
     def _on_nudge(self, way: float):
         """민 자리로 다시 놓고 다시 잰다. 도는 중이면 무시한다"""
         if self._task is not None and not self._task.done():
@@ -406,6 +427,7 @@ class EbsDummyUI:
         EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
         EbsSimulateService.set_checks(self._outer.model.get_value_as_bool(),
                                       self._inner.model.get_value_as_bool())
+        EbsSimulateService.set_near_span(self._near_span())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))
 

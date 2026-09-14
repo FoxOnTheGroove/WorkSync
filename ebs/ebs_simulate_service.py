@@ -62,6 +62,11 @@ class EbsSimulateService:
         return cls._simulate.set_show_lasers(on)
 
     @classmethod
+    def set_near_span(cls, span):
+        """근평면을 EBS 폭 절반의 몇 배 앞에 둘지. 0 이면 안 자른다"""
+        return cls._simulate.set_near_span(span)
+
+    @classmethod
     def set_checks(cls, outer, inner):
         """collide 가 외부(3면)와 내부(장비끼리) 중 무엇을 잴지"""
         return cls._simulate.set_checks(outer, inner)
