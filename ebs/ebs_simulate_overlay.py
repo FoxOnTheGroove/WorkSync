@@ -667,14 +667,29 @@ class EbsSimulateMarks:
                                     Gf.Vec3f(1.0, 1.0, 1.0)])
             block.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_CLASH)]))
             block.CreateDisplayOpacityAttr(Vt.FloatArray([CLASH_OPACITY]))
-            shape = UsdGeom.Xformable(block)
-            shape.AddTranslateOp().Set(Gf.Vec3d(*middle))
-            shape.AddScaleOp().Set(Gf.Vec3f(*half))
+            matrix = Gf.Matrix4d(1.0)
+            matrix.SetScale(Gf.Vec3d(*half))
+            matrix.SetTranslateOnly(Gf.Vec3d(*middle))
+            self._moved(block, matrix)
             UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
             drawn += 1
         if drawn:
             self._start_pulse(stage)
         return drawn
+
+    @staticmethod
+    def _moved(shape, matrix) -> None:
+        """그 프림의 변환을 쓴다. 있던 것이면 갈아 끼운다
+
+        fresh=False 로 다시 그릴 때 AddTransformOp 를 또 부르면 USD 가 막는다
+        """
+        xformable = UsdGeom.Xformable(shape)
+        op = next((one for one in xformable.GetOrderedXformOps()
+                   if one.GetOpName() == "xformOp:transform"), None)
+        if op is None:
+            xformable.ClearXformOpOrder()
+            op = xformable.AddTransformOp()
+        op.Set(matrix)
 
     @staticmethod
     def _clash_pad(stage) -> float:
@@ -789,7 +804,7 @@ class EbsSimulateMarks:
         matrix.SetTranslateOnly(
             Gf.Vec3d(*[tip[i] - along[i] * GAP_HEAD_HIGH * 0.5
                        for i in range(3)]))
-        UsdGeom.Xformable(cone).AddTransformOp().Set(matrix)
+        EbsSimulateMarks._moved(cone, matrix)
         try:
             cone.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
@@ -820,7 +835,7 @@ class EbsSimulateMarks:
                                      direction.GetNormalized()))
         matrix.SetTranslateOnly(
             Gf.Vec3d(*[(start[i] + end[i]) * 0.5 for i in range(3)]))
-        UsdGeom.Xformable(rod).AddTransformOp().Set(matrix)
+        EbsSimulateMarks._moved(rod, matrix)
         try:
             rod.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
