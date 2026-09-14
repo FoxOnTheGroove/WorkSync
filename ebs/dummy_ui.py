@@ -253,8 +253,9 @@ class EbsDummyUI:
         self._set_status(f"Selected: {name}")
 
     def _on_simulate(self):
-        """자리 -> 카메라 -> 충돌. collide 가 길어 프레임에 나눠 돈다"""
+        """카메라 -> 자리 -> 충돌. collide 가 길어 프레임에 나눠 돈다"""
         self._apply_settings()
+        EbsSimulateOverlay.hide()
         self._start(self._simulate_task())
 
     async def _simulate_task(self):
@@ -275,7 +276,7 @@ class EbsDummyUI:
         self._apply_settings()
         self._render(EbsSimulateService.focus(
             self._eqp_field.model.get_value_as_string()))
-        EbsSimulateOverlay.reveal()
+        EbsSimulateOverlay.hide()
 
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""

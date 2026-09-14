@@ -998,6 +998,7 @@ class EbsSimulate:
         """EBS 상자를 담도록 카메라를 세운다. 아직이면 감춘 채로 먼저 놓는다"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
+        self.clear_markers()
         if not self._aligned:
             ebs = self._target["ebs"]
             placed = self._do_align(reveal=self._is_visible(
@@ -1038,9 +1039,11 @@ class EbsSimulate:
         """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다
 
         reveal  False 면 자리만 잡고 감춰 둔다. 카메라를 먼저 잡는 SIM 이 쓴다
+        clear_markers  collide 이전 단계라, 지난 판정과 그린 것을 먼저 지운다
         """
         if self._target is None:
             return self._payload(False, "Run Prepare first")
+        self.clear_markers()
         stage = self._get_stage()
         anchor = self._target["anchor"]
 
