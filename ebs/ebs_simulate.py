@@ -261,6 +261,7 @@ GONE = (("inputs:opacity", "Float", 0.0),
         ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 
 CLASH_MARKS   = 200
+MEET_WIDE     = 256
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
@@ -324,6 +325,7 @@ class EbsSimulate:
         self._blockers: dict = {}
         self._local: dict = {}
         self._faces: dict = {}
+        self._leaves: dict = {}
         self._parts: dict = {}
         self._hidden: list = []
         self._eqp_looks: dict = {}
@@ -588,7 +590,8 @@ class EbsSimulate:
 
 
     def _begin(self, step: str = "") -> None:
-        """한 단계를 시작한다. 시간과 로그를 비운다"""
+        """한 단계를 시작한다. 시간과 로그를 비운다. 훑어 둔 잎도 버린다"""
+        self._leaves = {}
         self._step = step
         self._progress = 0.0
         self._spent = {}
@@ -653,6 +656,7 @@ class EbsSimulate:
         self._hidden = []
         self._bounds = None
         self._stage_index = None
+        self._leaves = {}
         self._ebs_box = None
         self._ready = False
         self._target = None
@@ -3104,6 +3108,8 @@ class EbsSimulate:
     def _forget_ebs(self, paths=()) -> None:
         """EBS 상자 캐시를 버린다. 옮겼거나 켜고 껐을 때"""
         self._ebs_box = None
+        if paths:
+            self._leaves = {}
         for path in paths:
             self._visible.pop(path, None)
 
@@ -3206,32 +3212,56 @@ class EbsSimulate:
         if roots is None:
             return self._from_index(stage, cache, search, skip)
         found, visited = [], 0
-        ours_exact = frozenset(OURS)
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
-        stack = list(roots)
+        for root in roots:
+            for path, box, prim, chain in self._subtree_leaves(stage, cache, root):
+                visited += 1
+                if path in skip_exact or (skip_under
+                                          and path.startswith(skip_under)):
+                    continue
+                if not self._overlaps(box, search):
+                    continue
+                if any(not self._is_visible(one, where) for one, where in chain):
+                    continue
+                if not self._is_visible(prim, path):
+                    continue
+                found.append((path, box))
+        return found, visited
+
+    def _subtree_leaves(self, stage, cache, root) -> list:
+        """그 프림 아래 지오메트리 잎들. 한 번 훑어 두고 다시 안 훑는다
+
+        _gather_nearby  상자로 거르는 것은 꺼낼 때 한다. 훑기가 collide 마다
+                     되풀이되던 자리다. 움직이는 EBS 는 캐시를 안 탄다
+        _leaves  단계 하나 도는 동안만 산다. _begin 이 버린다
+        """
+        path = str(root.GetPath())
+        shared = cache is self._bounds
+        got = self._leaves.get(path) if shared else None
+        if got is not None:
+            return got
+        found = []
+        stack = [(root, ())]
         while stack:
-            prim = stack.pop()
-            path = str(prim.GetPath())
-            if path in ours_exact or path.startswith(OURS_UNDER):
-                continue
-            if path in skip_exact or (skip_under and path.startswith(skip_under)):
+            prim, chain = stack.pop()
+            where = str(prim.GetPath())
+            if where in OURS or where.startswith(OURS_UNDER):
                 continue
             type_name = prim.GetTypeName()
             if type_name in SKIP_TYPES or type_name.endswith("Light"):
                 continue
-
-            visited += 1
             box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-            if box.IsEmpty() or not self._overlaps(box, search):
-                continue
-            if not self._is_visible(prim, path):
+            if box.IsEmpty():
                 continue
             if type_name in GEOMETRY_TYPES:
-                found.append((path, box))
+                found.append((where, box, prim, chain))
                 continue
-            stack.extend(_children(prim))
-        return found, visited
+            stack.extend((kid, chain + ((prim, where),))
+                         for kid in _children(prim))
+        if shared:
+            self._leaves[path] = found
+        return found
 
     def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
@@ -3435,25 +3465,39 @@ class EbsSimulate:
             region = Gf.Range3d.GetIntersection(box, whole)
             if region.IsEmpty():
                 continue
+            near = set()
+            for key in self._cells_of(region.GetMin(), region.GetMax(),
+                                      origin, step, spread):
+                near.update(grid.get(key, ()))
+            if not near:
+                continue
             yours = self._triangles_reaching(stage, path, region)
             read += len(yours)
             if not yours:
                 continue
-            met, spent = self._meets_mesh(mine, yours, grid, origin, step, spread)
+            met, spent = self._meets_mesh(mine, yours, near, grid, origin,
+                                          step, spread)
             tests += spent
             if met:
                 pairs.append((met, path))
         return pairs, tests, read
 
-    def _meets_mesh(self, mine: list, yours: list, grid, origin, step,
+    def _meets_mesh(self, mine: list, yours: list, near, grid, origin, step,
                     spread) -> tuple:
-        """그 장비 메시가 EBS 를 뚫나. 처음 만난 EBS 메시 경로와 검사 횟수"""
+        """그 장비 메시가 EBS 를 뚫나. 처음 만난 EBS 메시 경로와 검사 횟수
+
+        near  그 조각에 걸친 EBS 삼각형 번호들. 조각이 좁으면 이것만 보면 된다
+        MEET_WIDE  그보다 넓으면 삼각형마다 다시 격자를 탄다
+        """
         tests = 0
+        close = list(near) if len(near) <= MEET_WIDE else None
         for _, triangle, lo, hi in yours:
-            seen = set()
-            for key in self._cells_of(lo, hi, origin, step, spread):
-                seen.update(grid.get(key, ()))
-            for index in seen:
+            spots = close
+            if spots is None:
+                spots = set()
+                for key in self._cells_of(lo, hi, origin, step, spread):
+                    spots.update(grid.get(key, ()))
+            for index in spots:
                 ebs_path, other, other_lo, other_hi = mine[index]
                 if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
                         or lo[1] > other_hi[1] or hi[1] < other_lo[1]
