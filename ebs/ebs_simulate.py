@@ -880,9 +880,9 @@ class EbsSimulate:
                        f"ports than the EBS spans")
 
     def simulate(self, equipment: str = "") -> dict:
-        """prepare + align + collide + focus 를 잇달아
+        """prepare + focus + align + collide 를 잇달아
 
-        simulate  순서를 바꾸려면 여기. 오버레이는 focus 뒤에 뜬다
+        simulate  순서를 바꾸려면 여기. 카메라가 먼저라 오버레이는 collide 뒤에 뜬다
         """
         self._begin("simulate")
         if not self._ready:
@@ -890,15 +890,15 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return result
+        told = self._do_focus()
+        if not told["ok"]:
+            return told
         result = self._do_align()
         if not result["ok"]:
             return result
         result = self._do_collide()
         if not result["ok"]:
             return result
-        told = self._do_focus()
-        if not told["ok"]:
-            return told
         result["timings"] = list(self._timings)
         result["notes"] = list(self._notes)
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
@@ -913,6 +913,9 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return self._done(result)
+        told = self._do_focus()
+        if not told["ok"]:
+            return self._done(told)
         result = self._do_align()
         if not result["ok"]:
             return self._done(result)
@@ -921,9 +924,6 @@ class EbsSimulate:
         result = self._result
         if not result["ok"]:
             return self._done(result)
-        told = self._do_focus()
-        if not told["ok"]:
-            return self._done(told)
         result["timings"] = list(self._timings)
         result["notes"] = list(self._notes)
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
@@ -978,11 +978,9 @@ class EbsSimulate:
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
     def _do_focus(self) -> dict:
-        """EBS 상자를 담도록 카메라를 세운다"""
+        """EBS 상자를 담도록 카메라를 세운다. 아직 안 놓았으면 장비 상자로"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
-        if not self._aligned:
-            return self._payload(False, "Run Align first")
         stage = self._get_stage()
         if FADE_OTHERS:
             with self._stage_timer("hide the other equipment"):
@@ -995,8 +993,9 @@ class EbsSimulate:
         ebs = self._target["ebs"]
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
+        framed = ebs if self._aligned else self._target["equipment"]
         with self._stage_timer("camera focus"):
-            told = self._camera.place(stage, self._world_range(ebs), facing)
+            told = self._camera.place(stage, self._world_range(framed), facing)
         if told:
             self._note(told)
         return self._payload(bool(told), "Camera on the EBS" if told

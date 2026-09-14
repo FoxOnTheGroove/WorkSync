@@ -108,8 +108,6 @@ class EbsDummyUI:
         self._side_field = None
         self._ceiling_field = None
         self._status_label = None
-        self._overlay_button = None
-        self._overlay_on = False
         self._task = None
 
 
@@ -165,13 +163,11 @@ class EbsDummyUI:
                     ui.Button("Get", width=56, clicked_fn=self._on_get_result)
 
                 with ui.HStack(height=26, spacing=4):
-                    ui.Button("1 Align", clicked_fn=self._on_align)
-                    ui.Button("2 Collide", clicked_fn=self._on_collide)
-                    ui.Button("3 Camera", clicked_fn=self._on_camera)
+                    ui.Button("1 Camera", clicked_fn=self._on_camera)
+                    ui.Button("2 Align", clicked_fn=self._on_align)
+                    ui.Button("3 Collide", clicked_fn=self._on_collide)
                     ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
-                    self._overlay_button = ui.Button(
-                        "Col UI", width=64, clicked_fn=self._on_toggle_overlay)
 
                 self._status_label = ui.Label("Ready", height=20)
 
@@ -266,8 +262,6 @@ class EbsDummyUI:
         self._render(await self._watched(EbsSimulateService.simulate_async(
             self._eqp_field.model.get_value_as_string())))
         EbsSimulateOverlay.show()
-        self._overlay_on = True
-        self._mark_overlay()
 
     def _on_get_result(self):
         """입력칸의 장비 이름으로 적어 둔 판정을 꺼내 콘솔에 찍는다"""
@@ -283,35 +277,16 @@ class EbsDummyUI:
                          + (", ".join(known) if known else "nothing yet"))
 
     def _on_align(self):
-        """1단계. EBS 를 놓는다. 오버레이는 끈다"""
+        """2단계. EBS 를 놓는다. 아직 잰 것이 없으니 오버레이는 끈다"""
         self._apply_settings()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.hide()
-        self._overlay_on = False
-        self._mark_overlay()
 
     def _on_camera(self):
-        """3단계. 카메라를 잡고 오버레이를 화면에 앉힌다"""
+        """1단계. 카메라를 잡고, 그려 둔 것이 있으면 화면에 다시 앉힌다"""
         self._render(EbsSimulateService.focus())
         EbsSimulateOverlay.reveal()
-        self._overlay_on = True
-        self._mark_overlay()
-
-    def _on_toggle_overlay(self):
-        """판정 오버레이를 손으로 켜고 끈다"""
-        self._overlay_on = not self._overlay_on
-        if self._overlay_on:
-            EbsSimulateOverlay.show()
-        else:
-            EbsSimulateOverlay.hide()
-        self._mark_overlay()
-        self._set_status("Overlay on" if self._overlay_on else "Overlay off")
-
-    def _mark_overlay(self):
-        """Col UI 버튼 글자를 켜짐/꺼짐에 맞춘다"""
-        if self._overlay_button:
-            self._overlay_button.text = "Col UI ON" if self._overlay_on else "Col UI"
 
     def _on_refresh(self):
         """카메라만 원래 자리로 되돌린다"""
@@ -325,19 +300,17 @@ class EbsDummyUI:
         EbsSimulateService.release_camera()
         EbsSimulateService.hide_ebs()
         EbsSimulateOverlay.hide()
-        self._overlay_on = False
-        self._mark_overlay()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
     def _on_collide(self):
-        """2단계. 충돌을 재고 오버레이는 그리기만 해 둔다"""
+        """3단계. 충돌을 재고 오버레이를 띄운다"""
         self._apply_settings()
         self._start(self._collide_task())
 
     async def _collide_task(self):
-        """도는 동안 진행률을 적는다"""
+        """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
         self._render(await self._watched(EbsSimulateService.collide_async()))
-        EbsSimulateOverlay.build()
+        EbsSimulateOverlay.show()
 
     def _start(self, work):
         """코루틴 하나를 띄운다. 이미 도는 것이 있으면 무시한다"""

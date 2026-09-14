@@ -98,14 +98,14 @@ class EbsSimulateService:
         """뷰포트 선택에서 장비 경로를 꺼낸다. UI 의 From Sel"""
         return cls._simulate.get_selected_equipment()
 
-    # -- 1단계 align ---------------------------------------------------------
+    # -- 2단계 align ---------------------------------------------------------
 
     @classmethod
     def align(cls, equipment=""):
         """포트 위치를 계산해 EBS 를 놓는다. prepare 를 품는다"""
         return cls._simulate.align(equipment)
 
-    # -- 2단계 collide -------------------------------------------------------
+    # -- 3단계 collide -------------------------------------------------------
 
     @classmethod
     def collide(cls):
@@ -147,7 +147,7 @@ class EbsSimulateService:
         """판정을 적어 둔 장비 이름 전부"""
         return cls._simulate.list_results()
 
-    # -- 3단계 camera --------------------------------------------------------
+    # -- 1단계 camera --------------------------------------------------------
 
     @classmethod
     def focus(cls):
@@ -178,15 +178,15 @@ class EbsSimulateService:
 
     @classmethod
     def simulate(cls, equipment=""):
-        """align -> collide -> focus 를 연속으로. UI 의 SIM"""
+        """camera -> align -> collide 를 연속으로. UI 의 SIM"""
         return cls._simulate.simulate(equipment)
-
-    # -- 검증용 스윕 (단계와 무관) -------------------------------------------
 
     @classmethod
     async def simulate_async(cls, equipment=""):
         """simulate 인데 collide 만 프레임에 나눠 돈다. UI 의 SIM"""
         return await cls._simulate.simulate_async(equipment)
+
+    # -- 검증용 스윕 (단계와 무관) -------------------------------------------
 
     @classmethod
     def sweep_ports(cls):
