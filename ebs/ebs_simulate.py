@@ -559,8 +559,10 @@ class EbsSimulate:
             if spot:
                 self._verdict[name] = tuple(spot[i] + step[i] for i in range(3))
         grip = self._verdict.get("grip")
-        if grip and grip.get("at"):
-            grip["at"] = tuple(grip["at"][i] + step[i] for i in range(3))
+        if grip and grip.get("matrix") is not None:
+            moved = Gf.Matrix4d(1.0)
+            moved.SetTranslateOnly(Gf.Vec3d(*step))
+            grip["matrix"] = grip["matrix"] * moved
         marks = self._verdict["marks"]
         self._verdict["faces"] = [{"face": one["face"], "name": one["name"],
                                    "state": one["state"]} for one in marks
@@ -1619,7 +1621,6 @@ class EbsSimulate:
         return {
             "marks": marks,
             "right": self._right_way(0),
-            "front": self._right_way(2),
             "grip": self._grip_spot(local_box, to_world),
             "offset": self._nudge,
             "centre": (middle[0], middle[1], middle[2]),
@@ -1633,11 +1634,13 @@ class EbsSimulate:
         }
 
     def _grip_spot(self, local_box, to_world) -> dict:
-        """손잡이를 세울 자리와 크기. 길이는 월드 단위로 내보낸다
+        """손잡이를 EBS 에 붙이는 법. 자리도 크기도 EBS 안에서 잰다
 
+        손잡이 뿌리에 matrix 를 그대로 걸고 나머지는 EBS 안 좌표로 그리면
+        EBS 가 어디로 가든, 크기가 얼마든 손잡이가 같이 간다
         at    3면 판의 앞모서리와 같은 깊이, EBS 중간 높이(GRIP_HEIGHT)
+        side  손잡이가 눕는 축. front 는 앞으로 띄우는 축, away 는 그 방향
         wide  EBS 폭의 GRIP_WIDE. high  EBS 높이의 GRIP_TALL
-        _world_reach  로컬 변을 월드 길이로. 프림에 크기가 걸려 있어도 맞다
         unit  스테이지 한 단위가 몇 미터인가. 끈 픽셀을 미터로 바꿀 때 쓴다
         """
         up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
@@ -1647,27 +1650,13 @@ class EbsSimulate:
         spot = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
         spot[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
         spot[up_axis] = lo[up_axis] + (hi[up_axis] - lo[up_axis]) * GRIP_HEIGHT
-        at = to_world.Transform(Gf.Vec3d(*spot))
-        return {"at": (at[0], at[1], at[2]),
+        return {"at": tuple(spot),
+                "matrix": Gf.Matrix4d(to_world),
+                "side": side_axis, "front": front_axis,
+                "away": -1.0 if LEAD_FRONT < 0 else 1.0,
                 "unit": self._per_unit(),
-                "wide": self._world_reach(local_box, to_world, side_axis)
-                        * GRIP_WIDE,
-                "high": self._world_reach(local_box, to_world, up_axis)
-                        * GRIP_TALL}
-
-    @staticmethod
-    def _world_reach(local_box, to_world, axis: int) -> float:
-        """그 축의 로컬 변이 월드에서 몇 단위인가
-
-        프림에 크기가 걸려 있으면 로컬 길이와 월드 길이가 다르다
-        모서리 두 점을 옮겨 재므로 회전·크기가 섞여 있어도 맞다
-        """
-        lo, hi = local_box.GetMin(), local_box.GetMax()
-        far = list(lo)
-        far[axis] = hi[axis]
-        one = to_world.Transform(Gf.Vec3d(*lo))
-        two = to_world.Transform(Gf.Vec3d(*far))
-        return sum((two[i] - one[i]) ** 2 for i in range(3)) ** 0.5
+                "wide": (hi[side_axis] - lo[side_axis]) * GRIP_WIDE,
+                "high": (hi[up_axis] - lo[up_axis]) * GRIP_TALL}
 
     def _right_way(self, which: int = 0):
         """EBS 가 보는 방향으로 만든 축 하나. 0 은 오른쪽, 2 는 정면(앞)"""

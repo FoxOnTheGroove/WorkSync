@@ -485,14 +485,13 @@ class EbsSimulateGrip:
     @classmethod
     def place(cls, said: dict, to_screen) -> bool:
         """판정이 준 자리 앞에 손잡이를 세운다. 없으면 만든다"""
-        grip, right = said.get("grip") or {}, said.get("right")
-        front = said.get("front") or (0.0, 0.0, 0.0)
-        if not grip.get("at") or not right:
+        grip = said.get("grip") or {}
+        if not grip.get("at"):
             cls.hide()
             return False
         if cls._one is None:
             cls._one = cls()
-        return cls._one.stand(grip, right, front, to_screen)
+        return cls._one.stand(grip, to_screen)
 
     @classmethod
     def hide(cls) -> None:
@@ -512,7 +511,7 @@ class EbsSimulateGrip:
         self._root = GRIP_ROOT
         self._paint = EbsSimulateMarks(self._stage, self._root)
         self._ends = None
-        self._right = (1.0, 0.0, 0.0)
+        self._matrix = None
         self._reach = 1.0
         self._high = 1.0
         self._unit = 1.0
@@ -530,22 +529,28 @@ class EbsSimulateGrip:
         except Exception:
             return None
 
-    def stand(self, grip: dict, right, front, to_screen) -> bool:
-        """3면 앞모서리 자리에 EBS 폭만 한 양방향 화살표로 눕힌다"""
-        self._right, self._to_screen = tuple(right), to_screen
-        at, self._high = grip["at"], max(grip.get("high") or 0.0, 1e-6)
+    def stand(self, grip: dict, to_screen) -> bool:
+        """EBS 안 좌표로 눕힌다. 뿌리에 EBS 변환을 걸어 같이 움직인다"""
+        self._to_screen = to_screen
+        self._matrix = grip.get("matrix")
+        self._high = max(grip.get("high") or 0.0, 1e-6)
         self._reach = max((grip.get("wide") or 0.0) * 0.5, 1e-6)
         self._unit = grip.get("unit") or 1.0
-        spot = [at[i] + front[i] * self._high * GRIP_FRONT for i in range(3)]
-        self._ends = tuple(
-            tuple(spot[i] + right[i] * self._reach * way for i in range(3))
-            for way in (-1.0, 1.0))
+        spot = list(grip["at"])
+        spot[grip["front"]] += grip["away"] * self._high * GRIP_FRONT
+        side = grip["side"]
+        ends = []
+        for way in (-1.0, 1.0):
+            end = list(spot)
+            end[side] += self._reach * way
+            ends.append(tuple(end))
+        self._ends = tuple(ends)
         EbsSimulateService.watch_grip(self)
         return self._draw(GRIP_HOLD if self._from is not None else
                           GRIP_HOT if self._state == GRIP_HOT else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
-        """그 상태 색으로 몸통 하나와 화살촉 둘"""
+        """그 상태 색으로 몸통 하나와 화살촉 둘. 뿌리가 EBS 를 따라간다"""
         stage = self._stage()
         if stage is None or self._ends is None:
             return False
@@ -555,7 +560,9 @@ class EbsSimulateGrip:
         thick = self._high * GRIP_THICK
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
-                UsdGeom.Scope.Define(stage, self._root)
+                root = UsdGeom.Xform.Define(stage, self._root)
+                if self._matrix is not None:
+                    EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, f"grip_{state}", colour,
                                              1.0, GRIP_GLOW)
                 self._paint._gap_line(stage, f"{self._root}/shaft", one, two,
@@ -573,6 +580,7 @@ class EbsSimulateGrip:
         """그린 것을 지우고 잡은 것도 놓는다"""
         self._from = None
         self._ends = None
+        self._matrix = None
         self._paint.clear()
 
     def over(self, x: float, y: float) -> bool:
@@ -633,21 +641,31 @@ class EbsSimulateGrip:
     def _unit_pixels(self) -> float:
         """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0
 
-        _reach 도 월드 길이라 둘을 나누면 단위당 픽셀이 나온다
+        몸통을 화면에서 재고 월드에서 재서 나눈다. EBS 크기가 얼마든 맞는다
         """
-        spots = self._screen_ends()
-        if spots is None:
+        spots, ends = self._screen_ends(), self._world_ends()
+        if spots is None or ends is None:
             return 0.0
         (ax, ay), (bx, by) = spots
-        span = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
-        return span / (self._reach * 2.0) if span else 0.0
+        pixels = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+        reach = sum((ends[1][i] - ends[0][i]) ** 2 for i in range(3)) ** 0.5
+        return pixels / reach if pixels and reach else 0.0
+
+    def _world_ends(self):
+        """몸통 양 끝의 월드 좌표. EBS 변환을 태워서 낸다"""
+        if self._ends is None:
+            return None
+        if self._matrix is None:
+            return self._ends
+        return tuple(tuple(self._matrix.Transform(Gf.Vec3d(*end)))
+                     for end in self._ends)
 
     def _screen_ends(self):
         """몸통 양 끝의 화면 좌표. 화면 밖이면 None"""
-        if self._ends is None or self._to_screen is None:
+        ends = self._world_ends()
+        if ends is None or self._to_screen is None:
             return None
-        one = self._to_screen(self._ends[0])
-        two = self._to_screen(self._ends[1])
+        one, two = self._to_screen(ends[0]), self._to_screen(ends[1])
         return None if one is None or two is None else (one, two)
 
 
