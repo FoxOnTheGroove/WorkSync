@@ -6,7 +6,7 @@ __all__ = ["EbsSimulateCamera", "CAMERA_PATH", "CAMERA_BACK",
            "CAMERA_NEAR", "CAMERA_FAR"]
 
 CAMERA_PATH = "/EbsCamera"
-CAMERA_BACK = 30.0
+CAMERA_BACK = 18.0
 CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
 NEAR_SPAN   = 2.5
@@ -31,7 +31,7 @@ DEFAULT_BINDINGS = {
     "ZoomScrollGesture": "Any", "FlightSpeedGesture": "RightButton",
     "FlightMode": "RightButton",
 }
-PITCH_UP   = 60.0
+PITCH_UP   = 15.0
 PITCH_DOWN = 10.0
 
 LEFT_BUTTON, RIGHT_BUTTON, MIDDLE_BUTTON = 0, 1, 2
