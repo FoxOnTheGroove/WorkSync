@@ -992,7 +992,7 @@ class EbsSimulate:
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
     def _do_focus(self) -> dict:
-        """EBS 상자를 담도록 카메라를 세운다. 아직 안 놓았으면 장비 상자로"""
+        """EBS 상자를 담도록 카메라를 세운다. 아직 안 놓았으면 설 자리에 맞춰"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         stage = self._get_stage()
@@ -1007,13 +1007,43 @@ class EbsSimulate:
         ebs = self._target["ebs"]
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
-        framed = ebs if self._aligned else self._target["equipment"]
         with self._stage_timer("camera focus"):
-            told = self._camera.place(stage, self._world_range(framed), facing)
+            told = self._camera.place(stage, self._framed_box(), facing)
         if told:
             self._note(told)
         return self._payload(bool(told), "Camera on the EBS" if told
                              else "Camera focus failed")
+
+    def _framed_box(self):
+        """카메라가 담을 상자. 놓기 전에는 EBS 가 설 자리에 EBS 크기로 하나 세운다"""
+        ebs = self._target["ebs"]
+        box = self._world_range(ebs)
+        if self._aligned or box is None or box.IsEmpty():
+            return box
+        anchor = self._target["anchor"]
+        spot = self._origin_of(anchor)
+        origin = self._origin_of(ebs)
+        if spot is None or origin is None:
+            return box
+        low, high = box.GetMin(), box.GetMax()
+        half = Gf.Vec3d(*[(high[i] - low[i]) * 0.5 for i in range(3)])
+        lifted = Gf.Vec3d(*[spot[i] + (low[i] + high[i]) * 0.5 - origin[i]
+                            for i in range(3)])
+        self._note(f"camera on where the EBS will stand, centre "
+                   f"({lifted[0]:.2f}, {lifted[1]:.2f}, {lifted[2]:.2f})")
+        return Gf.Range3d(lifted - half, lifted + half)
+
+    @staticmethod
+    def _origin_of(prim):
+        """그 프림의 월드 원점. 못 읽으면 None"""
+        if prim is None or not prim.IsValid():
+            return None
+        try:
+            spot = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+                NOW).ExtractTranslation()
+        except Exception:
+            return None
+        return Gf.Vec3d(spot[0], spot[1], spot[2])
 
     def _do_align(self) -> dict:
         """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다"""
