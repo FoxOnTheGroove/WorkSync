@@ -538,8 +538,11 @@ class EbsSimulate:
         paces = shift / per_unit
         step = [right[i] * paces for i in range(3)]
         for mark in self._verdict.get("marks") or ():
-            way = mark.get("way")
-            if way is None or mark.get("distance") is None:
+            way, reach = mark.get("way"), mark.get("distance")
+            if way is None or reach is None:
+                if mark.get("at") is not None:
+                    mark["at"] = tuple(mark["at"][i] + step[i]
+                                       for i in range(3))
                 continue
             along = sum(right[i] * way[i] for i in range(3)) * shift
             gap = mark["distance"] - along

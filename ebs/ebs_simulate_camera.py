@@ -354,10 +354,13 @@ class EbsSimulateCamera:
 
     def _pressed(self, x, y, button) -> None:
         """왼쪽 버튼이면 드래그 시작. 기즈모가 먼저 가져가면 궤도는 쉰다"""
-        if self._held or button != LEFT_BUTTON:
+        if button != LEFT_BUTTON:
             self._from = self._axis = None
             return
         if self._watcher is not None and self._watcher.press(x, y):
+            self._from = self._axis = None
+            return
+        if self._held:
             self._from = self._axis = None
             return
         self._start_drag()

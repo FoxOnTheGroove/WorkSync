@@ -24,10 +24,9 @@ STALE  = "~"
 
 GRIP_FRONT = 1.0
 GRIP_HEAD  = 0.3
-GRIP_THICK = 0.35
+GRIP_THICK = 0.175
 GRIP_FLARE = 0.5
 GRIP_PICK  = 14.0
-GRIP_GLOW  = 2000.0
 
 GRIP_IDLE, GRIP_HOT, GRIP_HOLD = "idle", "hot", "hold"
 GRIP_COLORS = {GRIP_IDLE: (1.0, 0.78, 0.20),
@@ -558,16 +557,17 @@ class EbsSimulateGrip:
         colour = GRIP_COLORS[state]
         one, two = self._ends
         thick = self._high * GRIP_THICK
+        high, wide = self._reach * GRIP_HEAD, self._high * GRIP_FLARE
+        body = EbsSimulateMarks._gap_shaft(one, two, high)
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 root = UsdGeom.Xform.Define(stage, self._root)
                 if self._matrix is not None:
                     EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, f"grip_{state}", colour,
-                                             1.0, GRIP_GLOW)
-                self._paint._gap_line(stage, f"{self._root}/shaft", one, two,
-                                      thick, skin, colour)
-                high, wide = self._reach * GRIP_HEAD, self._high * GRIP_FLARE
+                                             1.0, 0.0, glow=False)
+                self._paint._gap_line(stage, f"{self._root}/shaft", body[0],
+                                      body[1], thick, skin, colour)
                 for name, tip, back in (("a", one, two), ("b", two, one)):
                     self._paint._gap_head(stage, f"{self._root}/head_{name}",
                                           tip, back, skin, colour, high, wide)
@@ -636,7 +636,17 @@ class EbsSimulateGrip:
             return False
         along = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / size))
         near_x, near_y = ax + dx * along, ay + dy * along
-        return (x - near_x) ** 2 + (y - near_y) ** 2 <= GRIP_PICK ** 2
+        pick = self._pick_pixels(size ** 0.5)
+        return (x - near_x) ** 2 + (y - near_y) ** 2 <= pick * pick
+
+    def _pick_pixels(self, pixels: float) -> float:
+        """집을 수 있는 반지름. 가까이 가서 굵게 그려지면 그만큼 넓게 잡는다
+
+        굵기와 길이는 둘 다 EBS 안 길이라 비로 두면 크기가 얼마든 맞는다
+        """
+        fat = max(GRIP_THICK, GRIP_FLARE) * self._high
+        drawn = pixels * fat / (self._reach * 2.0) if self._reach else 0.0
+        return max(GRIP_PICK, drawn)
 
     def _unit_pixels(self) -> float:
         """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0
@@ -918,13 +928,13 @@ class EbsSimulateMarks:
 
 
     @staticmethod
-    def _gap_shaft(start, end):
+    def _gap_shaft(start, end, head: float = GAP_HEAD_HIGH):
         """선은 원뿔 중점에서 시작한다. 뭉툭한 끝이 뾰족한 끝을 먹지 않게"""
         along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         span = along.GetLength()
-        if span <= GAP_HEAD_HIGH:
+        if span <= head:
             return start, end
-        step = along.GetNormalized() * (GAP_HEAD_HIGH * 0.5)
+        step = along.GetNormalized() * (head * 0.5)
         return (tuple(start[i] + step[i] for i in range(3)),
                 tuple(end[i] - step[i] for i in range(3)))
 
@@ -1047,23 +1057,28 @@ class EbsSimulateMarks:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
 
     def _material(self, stage, name: str, color, opacity: float = MARKER_OPACITY,
-                  emission: float = MARKER_EMISSION):
-        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다"""
+                  emission: float = MARKER_EMISSION, glow: bool = True):
+        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다
+
+        glow  색을 발광으로 낸다. 끄면 빛을 받는 diffuse 로 낸다
+        """
         path = f"{self._root}/Looks/{name}"
         material = UsdShade.Material.Define(stage, path)
-        self._preview_shader(stage, material, path, color, opacity)
-        self._mdl_shader(stage, material, path, color, opacity, emission)
+        self._preview_shader(stage, material, path, color, opacity, glow)
+        self._mdl_shader(stage, material, path, color, opacity, emission, glow)
         return material
 
     @staticmethod
-    def _preview_shader(stage, material, path: str, color, opacity: float) -> None:
-        """UsdPreviewSurface 쪽. 색은 발광으로 낸다"""
+    def _preview_shader(stage, material, path: str, color, opacity: float,
+                        glow: bool = True) -> None:
+        """UsdPreviewSurface 쪽. 색은 발광으로, glow 를 끄면 diffuse 로 낸다"""
         shader = UsdShade.Shader.Define(stage, path + "/shader")
         shader.CreateIdAttr("UsdPreviewSurface")
+        dark = Gf.Vec3f(0.0, 0.0, 0.0)
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(0.0, 0.0, 0.0))
+            dark if glow else Gf.Vec3f(*color))
         shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(*color))
+            Gf.Vec3f(*color) if glow else dark)
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
         shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
@@ -1075,7 +1090,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _mdl_shader(stage, material, path: str, color, opacity: float,
-                    emission: float) -> None:
+                    emission: float, glow: bool = True) -> None:
         """OmniPBR 쪽. RTX 가 이걸 쓴다"""
         shader = UsdShade.Shader.Define(stage, path + "/mdl")
         shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
@@ -1085,11 +1100,13 @@ class EbsSimulateMarks:
             """셰이더 입력 하나를 만든다"""
             shader.CreateInput(name, type_name).Set(value)
 
+        dark = Gf.Vec3f(0.0, 0.0, 0.0)
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
-            Gf.Vec3f(0.0, 0.0, 0.0))
+            dark if glow else Gf.Vec3f(*color))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
-        put("emissive_intensity", Sdf.ValueTypeNames.Float, emission)
-        put("enable_emission", Sdf.ValueTypeNames.Bool, True)
+        put("emissive_intensity", Sdf.ValueTypeNames.Float,
+            emission if glow else 0.0)
+        put("enable_emission", Sdf.ValueTypeNames.Bool, bool(glow))
         put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
