@@ -155,9 +155,9 @@ class EbsSimulateService:
     # -- 1단계 camera --------------------------------------------------------
 
     @classmethod
-    def focus(cls):
-        """카메라를 EBS 정면에 놓고 뷰포트를 그리로 넘긴다"""
-        return cls._simulate.focus()
+    def focus(cls, equipment=""):
+        """EBS 가 설 자리에 카메라를 놓는다. prepare 를 품는다"""
+        return cls._simulate.focus(equipment)
 
     @classmethod
     def refresh_camera(cls):

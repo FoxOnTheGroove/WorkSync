@@ -169,8 +169,8 @@ class EbsDummyUI:
                     ui.Button("Clear", width=64, clicked_fn=self._on_clear_markers)
 
                 with ui.HStack(height=26, spacing=4):
-                    ui.Button("1 Align", clicked_fn=self._on_align)
-                    ui.Button("2 Camera", clicked_fn=self._on_camera)
+                    ui.Button("1 Camera", clicked_fn=self._on_camera)
+                    ui.Button("2 Align", clicked_fn=self._on_align)
                     ui.Button("3 Collide", clicked_fn=self._on_collide)
 
                 self._status_label = ui.Label("Ready", height=20)
@@ -264,15 +264,17 @@ class EbsDummyUI:
         EbsSimulateOverlay.show()
 
     def _on_align(self):
-        """1단계. EBS 를 놓는다. 아직 잰 것이 없으니 오버레이는 끈다"""
+        """2단계. EBS 를 놓아 화면에 보인다. 아직 잰 것이 없으니 오버레이는 끈다"""
         self._apply_settings()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.hide()
 
     def _on_camera(self):
-        """2단계. 놓인 EBS 에 카메라를 맞춘다. 그려 둔 것이 있으면 다시 앉힌다"""
-        self._render(EbsSimulateService.focus())
+        """1단계. EBS 가 설 자리에 카메라를 맞춘다. EBS 는 아직 감춰 둔 채다"""
+        self._apply_settings()
+        self._render(EbsSimulateService.focus(
+            self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.reveal()
 
     def _on_collide(self):
