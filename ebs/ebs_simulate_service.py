@@ -62,6 +62,11 @@ class EbsSimulateService:
         return cls._simulate.set_show_lasers(on)
 
     @classmethod
+    def set_checks(cls, outer, inner):
+        """collide 가 외부(3면)와 내부(장비끼리) 중 무엇을 잴지"""
+        return cls._simulate.set_checks(outer, inner)
+
+    @classmethod
     def set_min_gaps(cls, side, ceiling):
         """3면 최소 여유(m). 미달이면 안 닿아도 간섭 판정"""
         return cls._simulate.set_min_gaps(side, ceiling)

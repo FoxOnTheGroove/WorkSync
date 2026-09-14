@@ -135,6 +135,13 @@ class EbsDummyUI:
                     # ui.Label("Offset:", width=48)
                     # self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                     #                           "length / puls", width=126)
+                    ui.Label("Collide:", width=90)
+                    ui.Label("outer", width=36)
+                    self._outer = ui.CheckBox(width=20)
+                    self._outer.model.set_value(True)
+                    ui.Label("inner", width=36)
+                    self._inner = ui.CheckBox(width=20)
+                    self._inner.model.set_value(True)
                     ui.Label("Debug laser:", width=76)
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
@@ -349,6 +356,8 @@ class EbsDummyUI:
         # index = self._scale.model.get_item_value_model().get_value_as_int()
         # EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
         EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
+        EbsSimulateService.set_checks(self._outer.model.get_value_as_bool(),
+                                      self._inner.model.get_value_as_bool())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))
 

@@ -238,6 +238,8 @@ RESULT_INSIDE = "inside"
 COLLIDE_STEPS = (("warm", 50.0), ("sides", 2.0), ("faces", 12.0),
                  ("clearance", 8.0), ("equipment", 12.0), ("verdict", 2.0),
                  ("markers", 14.0))
+OUTER_STEPS = ("warm", "sides", "faces", "clearance")
+INNER_STEPS = ("equipment",)
 WARM_CHUNK = 40
 LEAD_FRONT  = -1
 LEAD_TOL    = 0.001
@@ -306,6 +308,8 @@ class EbsSimulate:
         self._stage_index = None
         self._ebs_box = None
         self._lasers: bool = False
+        self._outer: bool = True
+        self._inner: bool = True
         self._verdict: dict = {}
         self._progress: float = 0.0
         self._spent: dict = {}
@@ -441,6 +445,16 @@ class EbsSimulate:
             self._note(f"could not set the EBS visibility ({e})")
         self._forget_ebs(touched)
         return done
+
+    def set_checks(self, outer: bool, inner: bool) -> None:
+        """collide 가 무엇을 잴지
+
+        _collide_steps  끄면 그 단계를 건너뛴다. 진행률과 판정은 그대로 돈다
+        outer  좌/우/천장 세 면과 스테이지. warm, sides, faces, clearance
+        inner  EBS 와 대상 장비끼리. equipment
+        """
+        self._outer = bool(outer)
+        self._inner = bool(inner)
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
         """면마다 지켜야 하는 최소 여유(m)
@@ -1108,6 +1122,17 @@ class EbsSimulate:
             self._spent[step] = (self._spent.get(step, 0.0)
                                  + time.perf_counter() - started)
 
+    def _spent_line(self) -> str:
+        """외부와 내부 충돌에 각각 얼마나 썼나. 디버깅용 콘솔 한 줄"""
+        def spent(names, on):
+            """켠 쪽은 합, 끈 쪽은 skipped"""
+            if not on:
+                return "skipped"
+            return f"{sum(self._spent.get(one, 0.0) for one in names):.2f}s"
+
+        return (f"[ebs] collide: outer {spent(OUTER_STEPS, self._outer)}, "
+                f"inner {spent(INNER_STEPS, self._inner)}")
+
     def _learn_shares(self) -> None:
         """이번에 걸린 시간으로 다음 번 몫을 잡는다. 첫 번은 COLLIDE_STEPS"""
         total = sum(self._spent.values())
@@ -1151,61 +1176,74 @@ class EbsSimulate:
 
         apart = [self._target["ebs"], self._target["equipment"]]
         skip = [str(p.GetPath()) for p in apart if p and p.IsValid()]
-        for _ in self._warm_steps(self._target["ebs"], skip):
-            yield
-        self._reached("warm")
-        yield
-
         bounds = self._bounds_cache()
-        with self._spending("sides"):
-            roots = self._side_roots()
-        self._reached("sides")
-        yield
+        cells = {face: [] for face in FACES}
+        distances = {}
+        hit_count = 0
+        if not self._outer:
+            self._note("outer collide off: the three faces were not measured")
+            for step in OUTER_STEPS:
+                self._reached(step)
+            yield
+        else:
+            for _ in self._warm_steps(self._target["ebs"], skip):
+                yield
+            self._reached("warm")
+            yield
 
-        with self._spending("faces"):
-            cells = self.check_collision(self._target["ebs"], exclude=apart,
-                                         cache=bounds, roots=roots)
-            hit_count = sum(sum(1 for c in v if c) for v in cells.values())
-        self._reached("faces")
-        yield
+            with self._spending("sides"):
+                roots = self._side_roots()
+            self._reached("sides")
+            yield
 
-        with self._spending("clearance"):
-            distances = self.measure_faces(self._target["ebs"], cells,
-                                           exclude=apart, cache=bounds,
-                                           roots=roots)
-            for face, found in distances.items():
-                if found.get("distance") is None:
-                    self._note(f"{face}: clear, nothing within "
-                               f"{found.get('reach', 0):.3f}")
+            with self._spending("faces"):
+                cells = self.check_collision(self._target["ebs"], exclude=apart,
+                                             cache=bounds, roots=roots)
+                hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+            self._reached("faces")
+            yield
+
+            with self._spending("clearance"):
+                distances = self.measure_faces(self._target["ebs"], cells,
+                                               exclude=apart, cache=bounds,
+                                               roots=roots)
+                for face, found in distances.items():
+                    if found.get("distance") is None:
+                        self._note(f"{face}: clear, nothing within "
+                                   f"{found.get('reach', 0):.3f}")
+                    else:
+                        self._note(f"{face}: clear, nearest "
+                                   f"{found['distance']:.4f} away "
+                                   f"({found['prim'].rsplit('/', 1)[-1]})")
+            self._reached("clearance")
+            yield
+
+        meeting = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
+        if not self._inner:
+            self._note("inner collide off: the equipment itself was not tested")
+        else:
+            with self._spending("equipment"):
+                try:
+                    meeting = self.check_equipment(self._target["ebs"],
+                                                   self._target["equipment"],
+                                                   cache=bounds)
+                except Exception as e:
+                    self._note(f"interference check failed: "
+                               f"{type(e).__name__}: {e}")
+                if meeting["hit"]:
+                    names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
+                    self._note(f"the EBS runs through the equipment at "
+                               f"{len(names)} place(s): " + ", ".join(names[:6])
+                               + (" ..." if len(names) > 6 else "")
+                               + f" ({meeting['tests']} pairs tested)")
                 else:
-                    self._note(f"{face}: clear, nearest "
-                               f"{found['distance']:.4f} away "
-                               f"({found['prim'].rsplit('/', 1)[-1]})")
-        self._reached("clearance")
-        yield
-
-        with self._spending("equipment"):
-            try:
-                meeting = self.check_equipment(self._target["ebs"],
-                                               self._target["equipment"],
-                                               cache=bounds)
-            except Exception as e:
-                meeting = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
-                self._note(f"interference check failed: {type(e).__name__}: {e}")
-            if meeting["hit"]:
-                names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
-                self._note(f"the EBS runs through the equipment at "
-                           f"{len(names)} place(s): " + ", ".join(names[:6])
-                           + (" ..." if len(names) > 6 else "")
-                           + f" ({meeting['tests']} pairs tested)")
-            else:
-                self._note(f"clear of the equipment itself "
-                           f"({meeting['tests']} triangle pairs tested)")
-            for why, paths in sorted(self._boxed.items()):
-                self._note(f"{len(paths)} judged by box, {why}: "
-                           + ", ".join(sorted(p.rsplit("/", 1)[-1]
-                                              for p in paths)[:4])
-                           + (" ..." if len(paths) > 4 else ""))
+                    self._note(f"clear of the equipment itself "
+                               f"({meeting['tests']} triangle pairs tested)")
+                for why, paths in sorted(self._boxed.items()):
+                    self._note(f"{len(paths)} judged by box, {why}: "
+                               + ", ".join(sorted(p.rsplit("/", 1)[-1]
+                                                  for p in paths)[:4])
+                               + (" ..." if len(paths) > 4 else ""))
         self._reached("equipment")
         yield
 
@@ -1239,6 +1277,7 @@ class EbsSimulate:
             equipment_hit=meeting,
         )
         self._reached("markers")
+        print(self._spent_line())
         self._learn_shares()
 
     def _keep_result(self, verdict: dict, meeting: dict) -> str:
