@@ -99,6 +99,13 @@ class EbsSimulateCamera:
         self._home = None
         self._box = None
         self._span = NEAR_SPAN
+        self._held = False
+
+    def hold(self, on: bool) -> None:
+        """궤도 조작을 잠깐 놓는다. 기즈모를 끄는 동안 카메라가 안 따라 돌게"""
+        self._held = bool(on)
+        if self._held:
+            self._end_drag()
 
     def set_near_span(self, span: float) -> float:
         """근평면을 EBS 폭 절반의 몇 배 앞에 둘지. 지금 자리에 바로 반영한다"""
@@ -342,7 +349,7 @@ class EbsSimulateCamera:
 
     def _pressed(self, x, y, button) -> None:
         """왼쪽 버튼이면 드래그 시작, 아니면 무시"""
-        if button != LEFT_BUTTON:
+        if self._held or button != LEFT_BUTTON:
             self._from = self._axis = None
             return
         self._start_drag()
@@ -350,7 +357,7 @@ class EbsSimulateCamera:
 
     def _moved(self, x, y) -> None:
         """누른 채 움직인 만큼을 궤도 회전으로 넘긴다"""
-        if self._from is None or self._at is None:
+        if self._held or self._from is None or self._at is None:
             return
         dx, dy = x - self._at[0], y - self._at[1]
         self._at = (x, y)
@@ -367,7 +374,7 @@ class EbsSimulateCamera:
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
         """더블클릭한 자리에 무엇이 있는지 뷰포트에 묻는다"""
-        if not self._orbit or button != LEFT_BUTTON:
+        if self._held or not self._orbit or button != LEFT_BUTTON:
             return
         ndc = self._ndc(x, y)
         viewport = self.viewport()
@@ -421,7 +428,7 @@ class EbsSimulateCamera:
 
     def _wheel(self, notches: float = 0.0) -> None:
         """휠을 굴린 만큼 줌"""
-        if notches:
+        if notches and not self._held:
             self._zoom(notches)
 
     def _drag(self, dx: float, dy: float) -> None:

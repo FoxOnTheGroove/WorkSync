@@ -77,6 +77,11 @@ class EbsSimulateService:
         return cls._simulate.nudge(step)
 
     @classmethod
+    def hold_camera(cls, on):
+        """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
+        return cls._simulate.hold_camera(on)
+
+    @classmethod
     def slide(cls, metres):
         """민 자리로 EBS 를 옮기고 판정을 산수로 고쳐 다시 그린다. 다시 안 잰다"""
         return cls._simulate.slide(metres)

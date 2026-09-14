@@ -461,6 +461,10 @@ class EbsSimulate:
         """
         return self.set_nudge(self._nudge + float(step))
 
+    def hold_camera(self, on: bool) -> None:
+        """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
+        self._camera.hold(on)
+
     def slide(self, metres: float) -> dict:
         """민 자리로 EBS 를 옮기고 판정을 산수로 고쳐 다시 그린다
 

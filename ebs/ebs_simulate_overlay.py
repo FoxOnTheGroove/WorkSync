@@ -1,3 +1,4 @@
+import asyncio
 import math
 import time
 
@@ -141,6 +142,7 @@ class EbsSimulateOverlay:
         self._marks = []
         self._follow = None
         self._texts = {}
+        self._grounds = {}
         self._from = None
         self._was = 0.0
 
@@ -195,9 +197,11 @@ class EbsSimulateOverlay:
         with placer:
             panel = ui.ZStack(width=0, height=0)
             with panel:
-                ui.Rectangle(style={"background_color": ground,
-                                    "border_radius": 4})
+                behind = ui.Rectangle(style={"background_color": ground,
+                                             "border_radius": 4})
                 fill()
+        if key is not None:
+            self._grounds.setdefault(key, []).append(behind)
         panel.visible = False
         self._marks.append([placer, panel, tuple(at), anchor, step,
                             share, group, key])
@@ -259,14 +263,29 @@ class EbsSimulateOverlay:
         return HOME if not metres else SLID.format(metres)
 
     def _grab(self, x: float) -> None:
-        """끌기 시작. 그 자리와 그때 민 거리를 적어 둔다"""
+        """끌기 시작. 그 자리와 그때 민 거리를 적어 두고 궤도를 잠근다"""
         self._from = x
         self._was = EbsSimulateService.get_nudge()
+        EbsSimulateService.hold_camera(True)
 
     def _drop(self) -> None:
-        """끌기 끝. 판을 제대로 다시 그린다"""
+        """끌기 끝. 궤도를 풀고, 판은 다음 프레임에 다시 그린다"""
         self._from = None
-        self.refresh()
+        EbsSimulateService.hold_camera(False)
+        self._soon()
+
+    def _soon(self) -> None:
+        """다음 프레임에 refresh. 마우스가 올라탄 판을 지금 지우면 안 된다"""
+        async def later():
+            """한 프레임 기다렸다가 판을 새로 그린다"""
+            import omni.kit.app
+            await omni.kit.app.get_app().next_update_async()
+            self.refresh()
+
+        try:
+            asyncio.ensure_future(later())
+        except Exception as e:
+            print(f"[ebs] could not redraw the overlay: {e}")
 
     def _drag(self, x: float) -> None:
         """끈 만큼 EBS 를 옮기고, 숫자와 판 자리를 갈아 끼운다"""
@@ -304,6 +323,8 @@ class EbsSimulateOverlay:
                 self._say(("face", mark["face"], "span"),
                           (STALE if mark.get("stale") else "") + SPAN.format(gap))
         self._say(("grip", "offset"), self._offset_text(said.get("offset") or 0.0))
+        for mark in said.get("marks") or ():
+            self._repaint(("face", mark["face"]), mark.get("state"))
         for entry in self._marks:
             at = spots.get(entry[7])
             if at is not None:
@@ -314,6 +335,17 @@ class EbsSimulateOverlay:
         label = self._texts.get(key)
         if label is not None:
             label.text = text
+
+    def _repaint(self, key, state: str) -> None:
+        """그 면의 판 색을 지금 상태에 맞춘다. 끄는 동안 여유가 충돌로 바뀐다"""
+        ground = COLOR_CAN if state == STATE_CLEAR else COLOR_CANNOT
+        ink = COLOR_INK if state == STATE_CLEAR else COLOR_TEXT
+        for behind in self._grounds.get(key, ()):
+            behind.style = {"background_color": ground, "border_radius": 4}
+        for one in ("word", "span", "least"):
+            label = self._texts.get(key + (one,))
+            if label is not None:
+                label.style = {"font_size": FACE_SIZE, "color": ink}
 
     @staticmethod
     def _word_of(mark: dict) -> str:
@@ -359,7 +391,8 @@ class EbsSimulateOverlay:
                                  ("face", face, "span")), ground,
                        second, 0, share, (face, second), ("face", face))
         if least:
-            self._floating(at, block([LEAST.format(least)]), ground, second,
+            self._floating(at, block([LEAST.format(least)],
+                                     ("face", face, "least")), ground, second,
                            1, share, (face, second), ("face", face))
 
     def _start(self) -> bool:
@@ -464,6 +497,7 @@ class EbsSimulateOverlay:
         self._follow = None
         self._marks = []
         self._texts = {}
+        self._grounds = {}
         if self._stack is not None:
             try:
                 self._stack.clear()
