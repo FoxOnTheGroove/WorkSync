@@ -323,6 +323,7 @@ class EbsDummyUI:
         EbsSimulateService.nudge(way * abs(step))
         self._mark_nudge(busy=True)
         self._apply_settings()
+        EbsSimulateOverlay.hide()
         self._start(self._nudge_task())
 
     async def _nudge_task(self):
