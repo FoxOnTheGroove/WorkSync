@@ -262,7 +262,6 @@ GONE = (("inputs:opacity", "Float", 0.0),
 
 CLASH_MARKS   = 200
 MEET_WIDE     = 256
-LEAF_CELLS    = 64
 
 GRID_CELLS = 24
 OVERLAP_EPS = 1e-6
@@ -3216,17 +3215,7 @@ class EbsSimulate:
         skip_exact = frozenset(skip)
         skip_under = tuple(s + "/" for s in skip)
         for root in roots:
-            leaves, grid, origin, step, spread = self._subtree_leaves(
-                stage, cache, root)
-            if grid is None:
-                spots = range(len(leaves))
-            else:
-                spots = set()
-                for key in self._cells_of(search.GetMin(), search.GetMax(),
-                                          origin, step, spread):
-                    spots.update(grid.get(key, ()))
-            for index in spots:
-                path, box, prim, chain = leaves[index]
+            for path, box, prim, chain in self._subtree_leaves(stage, cache, root):
                 visited += 1
                 if path in skip_exact or (skip_under
                                           and path.startswith(skip_under)):
@@ -3240,11 +3229,11 @@ class EbsSimulate:
                 found.append((path, box))
         return found, visited
 
-    def _subtree_leaves(self, stage, cache, root) -> tuple:
-        """그 프림 아래 지오메트리 잎들과 그 격자. 한 번 훑어 두고 다시 안 훑는다
+    def _subtree_leaves(self, stage, cache, root) -> list:
+        """그 프림 아래 지오메트리 잎들. 한 번 훑어 두고 다시 안 훑는다
 
-        _gather_nearby  꺼낼 때 격자로 좁히고 상자·가시성·skip 을 본다
-        _leaf_grid  잎이 많으면 칸에 나눠 담는다. 매번 전수로 훑던 자리다
+        _gather_nearby  상자로 거르는 것은 꺼낼 때 한다. 훑기가 collide 마다
+                     되풀이되던 자리다. 움직이는 EBS 는 캐시를 안 탄다
         _leaves  단계 하나 도는 동안만 산다. _begin 이 버린다
         """
         path = str(root.GetPath())
@@ -3270,26 +3259,9 @@ class EbsSimulate:
                 continue
             stack.extend((kid, chain + ((prim, where),))
                          for kid in _children(prim))
-        made = (found,) + self._leaf_grid(found)
         if shared:
-            self._leaves[path] = made
-        return made
-
-    @classmethod
-    def _leaf_grid(cls, leaves: list) -> tuple:
-        """잎 상자들을 칸에 나눠 담는다. 몇 개 안 되면 안 담는다"""
-        if len(leaves) <= LEAF_CELLS:
-            return None, None, None, None
-        low = [min(box.GetMin()[i] for _, box, _, _ in leaves) for i in range(3)]
-        high = [max(box.GetMax()[i] for _, box, _, _ in leaves) for i in range(3)]
-        spread = max(1, min(GRID_CELLS, int(round(len(leaves) ** (1.0 / 3.0)))))
-        step = [max((high[i] - low[i]) / spread, 1e-9) for i in range(3)]
-        grid = {}
-        for index, (_, box, _, _) in enumerate(leaves):
-            for key in cls._cells_of(box.GetMin(), box.GetMax(), low, step,
-                                     spread):
-                grid.setdefault(key, []).append(index)
-        return grid, low, step, spread
+            self._leaves[path] = found
+        return found
 
     def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
