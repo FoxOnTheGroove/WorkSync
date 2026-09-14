@@ -1197,8 +1197,14 @@ class EbsSimulate:
                              for one in names)
             return f"{whole:.2f}s ({each})"
 
+        rest = ", ".join(f"{name} {self._spent.get(name, 0.0):.2f}"
+                         for name, _ in COLLIDE_STEPS
+                         if name not in OUTER_STEPS and name not in INNER_STEPS)
+        detail = "; ".join(f"{name} {spent:.2f}" for name, spent in self._timings
+                           if spent >= 0.05)
         return (f"[ebs] collide: outer {spent(OUTER_STEPS, self._outer)}, "
-                f"inner {spent(INNER_STEPS, self._inner)}")
+                f"inner {spent(INNER_STEPS, self._inner)}, {rest}"
+                + (f"\n[ebs] collide detail: {detail}" if detail else ""))
 
     def _learn_shares(self) -> None:
         """이번에 걸린 시간으로 다음 번 몫을 잡는다. 첫 번은 COLLIDE_STEPS"""
@@ -3257,33 +3263,25 @@ class EbsSimulate:
             self._note(f"{len(boxed)} pair(s) judged by box: not a mesh, so no "
                        f"triangle to test (Cube/Capsule/etc)")
 
-        shared = Gf.Range3d.GetIntersection(self._union([b for _, b in ours]),
-                                            self._union([b for _, b in theirs]))
-        if shared.IsEmpty():
+        whole = self._union([box for _, box in ours])
+        with self._stage_timer("equipment: read"):
+            mine, ebs_read = self._triangles_near(stage, ours, whole)
+        self._note(f"read: EBS {ebs_read['meshes']} mesh, {ebs_read['faces']} "
+                   f"faces, {ebs_read['built']} grid built, "
+                   f"{ebs_read['world']} from the world cache")
+        if not mine:
             if not pairs:
-                self._note(f"clear of the equipment: {len(ours)} EBS meshes and "
-                           f"{len(theirs)} on it never share a box")
+                self._note(f"clear of the equipment: nothing of the EBS reaches "
+                           f"its own box ({len(ours)} meshes)")
         else:
-            with self._stage_timer("equipment: read"):
-                mine, ebs_read = self._triangles_near(stage, ours, shared)
-                yours, eqp_read = self._triangles_near(stage, theirs, shared)
-            self._note("read: " + "; ".join(
-                f"{side} {t['meshes']} mesh, {t['faces']} faces, "
-                f"{t['built']} grid built, {t['world']} from the world cache"
-                for side, t in (("EBS", ebs_read), ("equipment", eqp_read))))
-            if not mine or not yours:
-                if not pairs:
-                    self._note(f"clear of the equipment: nothing reaches the "
-                               f"shared box ({len(mine)} against {len(yours)} "
-                               f"triangles)")
-            else:
-                with self._stage_timer("equipment: detect"):
-                    mesh_pairs, tests = self._meetings(mine, yours, shared)
-                for pair in mesh_pairs:
-                    if pair not in pairs:
-                        pairs.append(pair)
-                self._note(f"interference: {len(mine)} EBS triangles against "
-                           f"{len(yours)} on the equipment, {tests} pairs tested")
+            with self._stage_timer("equipment: detect"):
+                mesh_pairs, tests, read = self._meetings(stage, mine, theirs,
+                                                         whole, pairs)
+            for pair in mesh_pairs:
+                if pair not in pairs:
+                    pairs.append(pair)
+            self._note(f"interference: {len(mine)} EBS triangles against "
+                       f"{read} on the equipment, {tests} pairs tested")
 
         self._missed(theirs, pairs, world_box)
         where = dict(theirs)
@@ -3421,29 +3419,50 @@ class EbsSimulate:
                 tally["faces"] += len(made[0])
         return kept, tally
 
-    def _meetings(self, mine: list, yours: list, box: Gf.Range3d) -> tuple:
-        """만난 쌍들. 장비 메시 하나가 걸리면 그 메시는 더 안 본다"""
-        grid, origin, step, spread = self._grid_of(yours, box)
-        pairs, known, tests = [], set(), 0
-        for ebs_path, triangle, lo, hi in mine:
+    def _meetings(self, stage, mine: list, theirs: list, whole: Gf.Range3d,
+                  known_pairs: list) -> tuple:
+        """장비 메시마다 EBS 와 겹치는 데만 보고, 걸리면 그 메시는 더 안 본다
+
+        _grid_of  EBS 삼각형은 한 번만 격자에 담는다. 장비 메시마다 다시 안 담는다
+        _triangles_reaching  장비 쪽은 겹치는 조각에 닿는 삼각형만 읽는다
+        """
+        grid, origin, step, spread = self._grid_of(mine, whole)
+        known = {path for _, path in known_pairs}
+        pairs, tests, read = [], 0, 0
+        for path, box in theirs:
+            if path in known or len(pairs) + len(known) >= CLASH_MARKS:
+                continue
+            region = Gf.Range3d.GetIntersection(box, whole)
+            if region.IsEmpty():
+                continue
+            yours = self._triangles_reaching(stage, path, region)
+            read += len(yours)
+            if not yours:
+                continue
+            met, spent = self._meets_mesh(mine, yours, grid, origin, step, spread)
+            tests += spent
+            if met:
+                pairs.append((met, path))
+        return pairs, tests, read
+
+    def _meets_mesh(self, mine: list, yours: list, grid, origin, step,
+                    spread) -> tuple:
+        """그 장비 메시가 EBS 를 뚫나. 처음 만난 EBS 메시 경로와 검사 횟수"""
+        tests = 0
+        for _, triangle, lo, hi in yours:
             seen = set()
             for key in self._cells_of(lo, hi, origin, step, spread):
                 seen.update(grid.get(key, ()))
             for index in seen:
-                eqp_path, other, other_lo, other_hi = yours[index]
-                if eqp_path in known:
-                    continue
+                ebs_path, other, other_lo, other_hi = mine[index]
                 if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
                         or lo[1] > other_hi[1] or hi[1] < other_lo[1]
                         or lo[2] > other_hi[2] or hi[2] < other_lo[2]):
                     continue
                 tests += 1
                 if self._triangles_meet(triangle, other):
-                    known.add(eqp_path)
-                    pairs.append((ebs_path, eqp_path))
-                    if len(pairs) >= CLASH_MARKS:
-                        return pairs, tests
-        return pairs, tests
+                    return ebs_path, tests
+        return "", tests
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
