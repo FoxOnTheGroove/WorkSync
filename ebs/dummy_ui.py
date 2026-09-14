@@ -168,6 +168,11 @@ class EbsDummyUI:
                     ui.Button("Refresh", width=70, clicked_fn=self._on_refresh)
                     ui.Button("Clear", width=64, clicked_fn=self._on_clear_markers)
 
+                with ui.HStack(height=26, spacing=4):
+                    ui.Button("1 Align", clicked_fn=self._on_align)
+                    ui.Button("2 Camera", clicked_fn=self._on_camera)
+                    ui.Button("3 Collide", clicked_fn=self._on_collide)
+
                 self._status_label = ui.Label("Ready", height=20)
 
     def _path_row(self, label: str, value: str = ""):
@@ -256,6 +261,28 @@ class EbsDummyUI:
         """도는 동안 진행률을 적고, 끝나면 오버레이를 켠다"""
         self._render(await self._watched(EbsSimulateService.simulate_async(
             self._eqp_field.model.get_value_as_string())))
+        EbsSimulateOverlay.show()
+
+    def _on_align(self):
+        """1단계. EBS 를 놓는다. 아직 잰 것이 없으니 오버레이는 끈다"""
+        self._apply_settings()
+        self._render(EbsSimulateService.align(
+            self._eqp_field.model.get_value_as_string()))
+        EbsSimulateOverlay.hide()
+
+    def _on_camera(self):
+        """2단계. 놓인 EBS 에 카메라를 맞춘다. 그려 둔 것이 있으면 다시 앉힌다"""
+        self._render(EbsSimulateService.focus())
+        EbsSimulateOverlay.reveal()
+
+    def _on_collide(self):
+        """3단계. 충돌을 재고 오버레이를 띄운다"""
+        self._apply_settings()
+        self._start(self._collide_task())
+
+    async def _collide_task(self):
+        """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
+        self._render(await self._watched(EbsSimulateService.collide_async()))
         EbsSimulateOverlay.show()
 
     def _on_refresh(self):
