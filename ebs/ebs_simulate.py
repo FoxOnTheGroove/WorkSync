@@ -314,6 +314,7 @@ class EbsSimulate:
         self._outer: bool = True
         self._inner: bool = True
         self._nudge: float = 0.0
+        self._base = None
         self._verdict: dict = {}
         self._progress: float = 0.0
         self._spent: dict = {}
@@ -459,6 +460,101 @@ class EbsSimulate:
         NUDGE_LIMIT  좌우로 이 거리까지만. 넘으면 거기서 멈춘다
         """
         return self.set_nudge(self._nudge + float(step))
+
+    def slide(self, metres: float) -> dict:
+        """민 자리로 EBS 를 옮기고 판정을 산수로 고쳐 다시 그린다
+
+        _slide_marks  검출 지점은 그대로 두고 거리와 선 끝만 옮긴다. 좌우로만
+                     미는 한 다시 잴 필요가 없다 (재는 축과 미는 축이 같다)
+        collide  천장은 발자국을 벗어날 수 있어 stale 로 적는다. 그때는 다시
+        """
+        if self._target is None or not self._aligned:
+            return self._payload(False, "Run Align first")
+        was = self._nudge
+        shift = self.set_nudge(metres) - was
+        if not self._place_nudged():
+            return self._payload(False, "EBS could not be moved")
+        if shift and self._verdict:
+            self._slide_marks(shift)
+            self.show_markers(self._target["ebs"], self._slid_cells(),
+                              self._verdict.get("marks"),
+                              self._verdict.get("boxes"))
+        return self._payload(True, f"offset {self._nudge:+.3f}")
+
+    def _place_nudged(self) -> bool:
+        """지금 민 거리로 EBS 를 다시 놓는다. 포트 계산은 다시 안 한다"""
+        ebs, anchor = self._target["ebs"], self._target["anchor"]
+        if self._base is None:
+            return self._align_prims(ebs, anchor)
+        target = self._pushed(anchor, self._base)
+        return self._place_ebs(ebs, target, anchor)
+
+    def _slid_cells(self) -> dict:
+        """지금 판정에서 면마다 막혔나. 그린 판 색에만 쓴다"""
+        marks = {mark["face"]: mark for mark in self._verdict.get("marks") or ()}
+        return {face: [marks.get(face, {}).get("state") == STATE_CLASH]
+                for face in FACES}
+
+    def _slide_marks(self, shift: float) -> None:
+        """민 만큼 선을 늘이고 줄인다. 검출 지점과 안내선은 그대로 둔다
+
+        way  면의 바깥 방향. 미는 방향과 나란한 면만 간격이 변한다
+        stale  천장처럼 미는 축과 직각인 면은 검출 지점이 발자국을 벗어날 수 있다
+        """
+        stage = self._get_stage()
+        right = self._verdict.get("right")
+        if stage is None or not right:
+            return
+        step = [right[i] * shift for i in range(3)]
+        per_unit = self._per_unit()
+        for mark in self._verdict.get("marks") or ():
+            way = mark.get("way")
+            if way is None or mark.get("distance") is None:
+                continue
+            along = sum(step[i] * way[i] for i in range(3))
+            span = mark["distance"] / (per_unit or 1.0) - along
+            near = [mark["from"][i] + step[i] for i in range(3)]
+            far = [near[i] + way[i] * span for i in range(3)]
+            mark["from"] = tuple(near)
+            mark["to"] = tuple(far)
+            mark["at"] = tuple((near[i] + far[i]) * 0.5 for i in range(3))
+            mark["distance"] = span * per_unit
+            mark["state"] = (STATE_CLASH if mark["distance"] < 0.0 else
+                             STATE_TIGHT
+                             if mark["distance"] < mark.get("min_gap", 0.0)
+                             else STATE_CLEAR)
+            mark["stale"] = not self._still_inside(mark)
+        marks = self._verdict["marks"]
+        self._verdict["faces"] = [{"face": one["face"], "name": one["name"],
+                                   "state": one["state"]} for one in marks
+                                  if one["state"] != STATE_CLEAR]
+        self._verdict["blocked"] = len(self._verdict["faces"])
+        self._verdict["offset"] = self._nudge
+        self._verdict["placeable"] = (not self._verdict.get("inside")
+                                      and not self._verdict["faces"])
+
+    def _still_inside(self, mark: dict) -> bool:
+        """검출 지점이 아직 그 면의 발자국 안인가. 벗어났으면 다시 재야 한다"""
+        plane = self._face_planes.get(mark.get("face"))
+        spot = mark.get("spot")
+        if plane is None or spot is None:
+            return True
+        bbox = self._ebs_bound(self._target["ebs"])
+        local_box = bbox.GetRange()
+        if local_box.IsEmpty():
+            return True
+        here = bbox.GetMatrix().GetInverse().Transform(Gf.Vec3d(*spot))
+        lo, hi = local_box.GetMin(), local_box.GetMax()
+        _, _, _, row_axis, col_axis = plane
+        return all(lo[one] - LEAD_TOL <= here[one] <= hi[one] + LEAD_TOL
+                   for one in (row_axis, col_axis))
+
+    def _per_unit(self) -> float:
+        """스테이지 한 단위가 몇 미터인가"""
+        try:
+            return UsdGeom.GetStageMetersPerUnit(self._get_stage()) or 1.0
+        except Exception:
+            return 1.0
 
     def set_nudge(self, metres: float) -> float:
         """민 거리를 그 값으로. 한계 안으로 잘라서 돌려준다"""
@@ -1089,8 +1185,8 @@ class EbsSimulate:
         anchor = self._target["anchor"]
 
         with self._stage_timer("align EBS"):
-            target = self._pushed(
-                anchor, self.compute_target(stage, self._target["eqp_id"], anchor))
+            self._base = self.compute_target(stage, self._target["eqp_id"], anchor)
+            target = self._pushed(anchor, self._base)
             if target is not None:
                 self._aligned = self._place_ebs(self._target["ebs"], target, anchor)
                 note = ("EBS placed at port 0, world "
@@ -1485,6 +1581,8 @@ class EbsSimulate:
                    for mark in marks if mark["state"] != STATE_CLEAR]
         return {
             "marks": marks,
+            "right": self._right_way(),
+            "offset": self._nudge,
             "centre": (middle[0], middle[1], middle[2]),
             "inside_at": (lower[0], lower[1], lower[2]),
             "span": max(hi[i] - lo[i] for i in range(3)),
@@ -1495,6 +1593,18 @@ class EbsSimulate:
                            for face in FACES),
             "placeable": not inside and not blocked,
         }
+
+    def _right_way(self):
+        """EBS 가 보는 방향 기준 오른쪽. 미세조정이 미는 축이다"""
+        target = self._target or {}
+        anchor = target.get("anchor") or target.get("ebs")
+        if anchor is None:
+            return None
+        try:
+            right, _, _ = self._camera.axes(self._get_stage(), anchor)
+        except Exception:
+            return None
+        return (right[0], right[1], right[2])
 
     def _face_marks(self, local_box, to_world, cells: dict,
                     distances: dict) -> list:
@@ -1524,8 +1634,9 @@ class EbsSimulate:
             surface[axis] = coord
 
             least = self._min_gap.get(face, 0.0)
-            blank = {"face": face, "distance": None, "name": "",
-                     "min_gap": least, "at": world(surface),
+            way = self._outward_way(surface, axis, outward, world)
+            blank = {"face": face, "distance": None, "name": "", "way": way,
+                     "min_gap": least, "at": world(surface), "stale": False,
                      "from": None, "to": None, "lead": None, "spot": None,
                      "tick": None}
             hit = bool(any(cells.get(face, [])))
@@ -1562,7 +1673,7 @@ class EbsSimulate:
             span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
             gap = -span if reach < 0 else span
             marks.append({
-                "face": face, "tick": tick,
+                "face": face, "tick": tick, "way": way, "stale": False,
                 "state": (STATE_CLASH if hit else
                           STATE_TIGHT if gap < least else STATE_CLEAR),
                 "distance": gap, "min_gap": least,
@@ -1572,6 +1683,16 @@ class EbsSimulate:
                 "from": near, "to": far, "lead": lead, "spot": world(spot),
             })
         return marks
+
+    @staticmethod
+    def _outward_way(surface, axis: int, outward: int, world) -> tuple:
+        """그 면이 바라보는 바깥 방향. 월드 단위 벡터"""
+        ahead = [surface[i] + (1.0 if i == axis else 0.0) for i in range(3)]
+        here, there = world(surface), world(ahead)
+        step = [(there[i] - here[i]) * (1.0 if outward > 0 else -1.0)
+                for i in range(3)]
+        size = sum(one * one for one in step) ** 0.5
+        return tuple(one / size for one in step) if size else None
 
     @staticmethod
     def _tick_way(end, axis: int, world):

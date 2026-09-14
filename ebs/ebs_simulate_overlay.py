@@ -17,6 +17,10 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
 INNER  = "내부 장비와 충돌"
+GRIP   = "◀    ⇔    ▶"
+HOME   = "제자리"
+SLID   = "{0:+.3f} M"
+STALE  = "~"
 
 CLASH = "충돌"
 GAP   = "여유"
@@ -136,6 +140,9 @@ class EbsSimulateOverlay:
         self._stack = None
         self._marks = []
         self._follow = None
+        self._texts = {}
+        self._from = None
+        self._was = 0.0
 
     def _build(self, window) -> bool:
         """뷰포트에 프레임을 걸고 투영에 쓸 viewport api 를 잡는다"""
@@ -166,6 +173,7 @@ class EbsSimulateOverlay:
         try:
             with self._stack:
                 self._verdict_panel(said)
+                self._grip_panel(said)
                 for mark in said.get("marks") or ():
                     self._face_panel(mark)
         except Exception as e:
@@ -179,7 +187,7 @@ class EbsSimulateOverlay:
 
 
     def _floating(self, at, fill, ground, anchor=MIDDLE, step: int = 0,
-                  share: int = 1, group=None):
+                  share: int = 1, group=None, key=None):
         """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다"""
         if at is None:
             return
@@ -191,8 +199,8 @@ class EbsSimulateOverlay:
                                     "border_radius": 4})
                 fill()
         panel.visible = False
-        self._marks.append((placer, panel, tuple(at), anchor, step,
-                            share, group))
+        self._marks.append([placer, panel, tuple(at), anchor, step,
+                            share, group, key])
 
     def _verdict_panel(self, said: dict) -> None:
         """못 세울 때만 한 줄. 내부 간섭이면 그 아래에 한 줄 더. 세울 수 있으면 없다"""
@@ -213,6 +221,107 @@ class EbsSimulateOverlay:
         if said.get("inside"):
             self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT)
 
+    def _grip_panel(self, said: dict) -> None:
+        """가운데 판 아래 좌우 손잡이. 끌면 EBS 가 그만큼 옆으로 간다
+
+        _drag  끈 픽셀을 스테이지 거리로 바꿔 slide 로 넘긴다
+        """
+        def handle():
+            """_floating 에 넘길 그리기 함수. 마우스는 덮개가 받는다"""
+            with ui.ZStack():
+                with ui.VStack(spacing=0, style={"margin_width": PAD_X * 3,
+                                                 "margin_height": PAD_Y}):
+                    ui.Label(GRIP, height=0, alignment=ui.Alignment.CENTER,
+                             style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
+                catch = ui.Rectangle(style={"background_color": 0x01000000})
+                catch.set_mouse_pressed_fn(lambda x, y, b, m: self._grab(x))
+                catch.set_mouse_moved_fn(lambda x, y, m, held: self._drag(x))
+                catch.set_mouse_released_fn(lambda x, y, b, m: self._drop())
+
+        def told():
+            """_floating 에 넘길 그리기 함수. 지금 민 거리"""
+            with ui.VStack(spacing=0, style={"margin_width": PAD_X,
+                                             "margin_height": PAD_Y}):
+                self._texts[("grip", "offset")] = ui.Label(
+                    self._offset_text(said.get("offset") or 0.0), height=0,
+                    alignment=ui.Alignment.CENTER,
+                    style={"font_size": FACE_SIZE, "color": COLOR_TEXT})
+
+        at = said.get("centre")
+        self._floating(at, handle, COLOR_CANNOT, BELOW, 0, 1, ("grip", BELOW),
+                       ("verdict", "centre"))
+        self._floating(at, told, COLOR_CANNOT, BELOW, 1, 1, ("grip", BELOW),
+                       ("verdict", "centre"))
+
+    @staticmethod
+    def _offset_text(metres: float) -> str:
+        """민 거리 한 줄"""
+        return HOME if not metres else SLID.format(metres)
+
+    def _grab(self, x: float) -> None:
+        """끌기 시작. 그 자리와 그때 민 거리를 적어 둔다"""
+        self._from = x
+        self._was = EbsSimulateService.get_nudge()
+
+    def _drop(self) -> None:
+        """끌기 끝. 판을 제대로 다시 그린다"""
+        self._from = None
+        self.refresh()
+
+    def _drag(self, x: float) -> None:
+        """끈 만큼 EBS 를 옮기고, 숫자와 판 자리를 갈아 끼운다"""
+        if self._from is None:
+            return
+        per = self._unit_pixels()
+        if not per:
+            return
+        EbsSimulateService.slide(self._was + (x - self._from) / per)
+        self._restate()
+
+    def _unit_pixels(self) -> float:
+        """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0"""
+        said = EbsSimulateService.get_verdict()
+        at, right = said.get("centre"), said.get("right")
+        if not at or not right:
+            return 0.0
+        here = self._to_screen(at)
+        there = self._to_screen([at[i] + right[i] for i in range(3)])
+        if here is None or there is None:
+            return 0.0
+        return ((there[0] - here[0]) ** 2 + (there[1] - here[1]) ** 2) ** 0.5
+
+    def _restate(self) -> None:
+        """끄는 동안. 판을 다시 만들지 않고 자리와 글자만 고친다"""
+        said = EbsSimulateService.get_verdict()
+        if not said:
+            return
+        spots = {("verdict", "centre"): said.get("centre")}
+        for mark in said.get("marks") or ():
+            spots[("face", mark["face"])] = mark.get("at")
+            self._say(("face", mark["face"], "word"), self._word_of(mark))
+            gap = mark.get("distance")
+            if gap is not None:
+                self._say(("face", mark["face"], "span"),
+                          (STALE if mark.get("stale") else "") + SPAN.format(gap))
+        self._say(("grip", "offset"), self._offset_text(said.get("offset") or 0.0))
+        for entry in self._marks:
+            at = spots.get(entry[7])
+            if at is not None:
+                entry[2] = tuple(at)
+
+    def _say(self, key, text: str) -> None:
+        """적어 둔 글줄 하나를 갈아 끼운다"""
+        label = self._texts.get(key)
+        if label is not None:
+            label.text = text
+
+    @staticmethod
+    def _word_of(mark: dict) -> str:
+        """그 면의 상태 한 낱말"""
+        state = mark.get("state")
+        return (CLASH if state == STATE_CLASH else
+                TIGHT if state == STATE_TIGHT else GAP)
+
     def _face_panel(self, mark: dict) -> None:
         """한쪽에 상태, 다른 쪽에 거리와 최소 여유. 막힌 면도 똑같이 붙인다"""
         state = mark.get("state")
@@ -221,32 +330,37 @@ class EbsSimulateOverlay:
         gap = mark.get("distance")
         least = mark.get("min_gap")
 
-        def block(lines):
-            """_floating 에 넘길 그리기 함수"""
+        def block(lines, key=None):
+            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
-                        ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
-                                 style={"font_size": FACE_SIZE, "color": ink})
+                        label = ui.Label(text, height=0,
+                                         alignment=ui.Alignment.CENTER,
+                                         style={"font_size": FACE_SIZE,
+                                                "color": ink})
+                        if key is not None:
+                            self._texts.setdefault(key, label)
             return fill
 
         at = mark.get("at")
         first, second = ((LEFT, RIGHT) if mark.get("face") in SIDE_BY_SIDE
                          else (ABOVE, BELOW))
-        word = (CLASH if state == STATE_CLASH else
-                TIGHT if state == STATE_TIGHT else GAP)
         face = mark.get("face")
-        self._floating(at, block([word]), ground, first, group=(face, first))
+        self._floating(at, block([self._word_of(mark)],
+                                 ("face", face, "word")), ground,
+                       first, group=(face, first), key=("face", face))
         if gap is None:
             return
         share = 2 if least else 1
-        self._floating(at, block([SPAN.format(gap)]), ground, second, 0, share,
-                       (face, second))
+        self._floating(at, block([SPAN.format(gap)],
+                                 ("face", face, "span")), ground,
+                       second, 0, share, (face, second), ("face", face))
         if least:
             self._floating(at, block([LEAST.format(least)]), ground, second,
-                           1, share, (face, second))
+                           1, share, (face, second), ("face", face))
 
     def _start(self) -> bool:
         """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""
@@ -268,11 +382,11 @@ class EbsSimulateOverlay:
             width = self._frame.computed_width
             height = self._frame.computed_height
             widest = {}
-            for _, panel, _, _, _, _, group in self._marks:
+            for _, panel, _, _, _, _, group, _ in self._marks:
                 if group is not None:
                     widest[group] = max(widest.get(group, 0.0),
                                         panel.computed_width)
-            for placer, panel, at, anchor, step, share, group in self._marks:
+            for placer, panel, at, anchor, step, share, group, _ in self._marks:
                 spot = self._to_screen(at)
                 if spot is None:
                     panel.visible = False
@@ -349,6 +463,7 @@ class EbsSimulateOverlay:
         """그린 판과 카메라 추적을 놓는다"""
         self._follow = None
         self._marks = []
+        self._texts = {}
         if self._stack is not None:
             try:
                 self._stack.clear()

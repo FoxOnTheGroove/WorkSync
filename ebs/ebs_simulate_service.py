@@ -77,6 +77,11 @@ class EbsSimulateService:
         return cls._simulate.nudge(step)
 
     @classmethod
+    def slide(cls, metres):
+        """민 자리로 EBS 를 옮기고 판정을 산수로 고쳐 다시 그린다. 다시 안 잰다"""
+        return cls._simulate.slide(metres)
+
+    @classmethod
     def set_nudge(cls, metres):
         """민 거리를 그 값으로. 0 이면 제자리"""
         return cls._simulate.set_nudge(metres)
