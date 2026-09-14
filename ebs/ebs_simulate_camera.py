@@ -96,6 +96,7 @@ class EbsSimulateCamera:
         self._from = None
         self._axis = None
         self._home = None
+        self._box = None
 
     @property
     def previous(self):
@@ -197,6 +198,7 @@ class EbsSimulateCamera:
 
         distance = CAMERA_BACK
         eye = interest + z_cam * distance
+        self._box = box
         self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, distance)
         self._interest = interest
         self._home = (x_cam, y_cam, z_cam, eye, distance, interest)
@@ -204,7 +206,8 @@ class EbsSimulateCamera:
         self._grab()
         return (f"camera {distance:.2f} back from the EBS centre, "
                 f"orbiting ({interest[0]:.2f}, {interest[1]:.2f}, "
-                f"{interest[2]:.2f}), near plane {CAMERA_NEAR:.2f}")
+                f"{interest[2]:.2f}), near plane "
+                f"{self._near(x_cam, distance):.2f}")
 
     def _camera(self, stage):
         """카메라 프림과 스키마. 없으면 만들어서 준다"""
@@ -553,8 +556,15 @@ class EbsSimulateCamera:
         y_cam = Gf.Cross(z_cam, x_cam).GetNormalized()
         return x_cam, y_cam, z_cam
 
-    @staticmethod
-    def _write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye,
+    def _near(self, x_cam, distance: float) -> float:
+        """EBS 폭 절반만큼 앞에서부터 보이게. 그보다 앞을 가린 것은 잘려 나간다"""
+        if self._box is None:
+            return CAMERA_NEAR
+        low, high = self._box.GetMin(), self._box.GetMax()
+        half = sum(abs(x_cam[i]) * (high[i] - low[i]) * 0.5 for i in range(3))
+        return max(CAMERA_NEAR, distance - half)
+
+    def _write(self, stage, cam_prim, camera, x_cam, y_cam, z_cam, eye,
                distance: float) -> None:
         """카메라 행렬과 클리핑, 궤도 중심 거리를 세션 레이어에 쓴다"""
         matrix = Gf.Matrix4d(
@@ -574,7 +584,7 @@ class EbsSimulateCamera:
                 xformable.ClearXformOpOrder()
                 xformable.AddTransformOp().Set(matrix)
             camera.CreateClippingRangeAttr().Set(
-                Gf.Vec2f(float(CAMERA_NEAR), float(CAMERA_FAR)))
+                Gf.Vec2f(float(self._near(x_cam, distance)), float(CAMERA_FAR)))
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
