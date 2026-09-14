@@ -8,7 +8,7 @@ from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 from .ebs_simulate_camera import viewport_window
 from .ebs_simulate_service import EbsSimulateService
 
-__all__ = ["EbsSimulateOverlay", "EbsSimulateMarks"]
+__all__ = ["EbsSimulateOverlay", "EbsSimulateMarks", "EbsSimulateGrip"]
 
 STATE_CLEAR = "clear"
 STATE_TIGHT = "tight"
@@ -18,10 +18,17 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
 INNER  = "내부 장비와 충돌"
-GRIP   = "◀    ⇔    ▶"
 HOME   = "제자리"
 SLID   = "{0:+.3f} M"
 STALE  = "~"
+
+GRIP_FRAME = "ebs_simulate_grip"
+GRIP_SPAN  = 0.55
+GRIP_HEAD  = 0.25
+GRIP_DROP  = 0.35
+GRIP_THICK = 4.0
+GRIP_TEXT  = 20
+COLOR_GRIP = (1.0, 0.82, 0.25, 1.0)
 
 CLASH = "충돌"
 GAP   = "여유"
@@ -175,9 +182,9 @@ class EbsSimulateOverlay:
         try:
             with self._stack:
                 self._verdict_panel(said)
-                self._grip_panel(said)
                 for mark in said.get("marks") or ():
                     self._face_panel(mark)
+            EbsSimulateGrip.place(said)
         except Exception as e:
             print(f"[ebs] could not build the overlay: {e}")
             self.clear()
@@ -227,89 +234,12 @@ class EbsSimulateOverlay:
             self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT,
                            key=("verdict", "inside_at"))
 
-    def _grip_panel(self, said: dict) -> None:
-        """가운데 판 아래 좌우 손잡이. 끌면 EBS 가 그만큼 옆으로 간다
-
-        _drag  끈 픽셀을 스테이지 거리로 바꿔 slide 로 넘긴다
-        """
-        def handle():
-            """_floating 에 넘길 그리기 함수. 마우스는 덮개가 받는다"""
-            with ui.ZStack():
-                with ui.VStack(spacing=0, style={"margin_width": PAD_X * 3,
-                                                 "margin_height": PAD_Y}):
-                    ui.Label(GRIP, height=0, alignment=ui.Alignment.CENTER,
-                             style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
-                catch = ui.Rectangle(style={"background_color": 0x01000000})
-                catch.set_mouse_pressed_fn(lambda x, y, b, m: self._grab(x))
-                catch.set_mouse_moved_fn(lambda x, y, m, held: self._drag(x))
-                catch.set_mouse_released_fn(lambda x, y, b, m: self._drop())
-
-        def told():
-            """_floating 에 넘길 그리기 함수. 지금 민 거리"""
-            with ui.VStack(spacing=0, style={"margin_width": PAD_X,
-                                             "margin_height": PAD_Y}):
-                self._texts[("grip", "offset")] = ui.Label(
-                    self._offset_text(said.get("offset") or 0.0), height=0,
-                    alignment=ui.Alignment.CENTER,
-                    style={"font_size": FACE_SIZE, "color": COLOR_TEXT})
-
-        at = said.get("centre")
-        self._floating(at, handle, COLOR_CANNOT, BELOW, 0, 1, ("grip", BELOW),
-                       ("verdict", "centre"))
-        self._floating(at, told, COLOR_CANNOT, BELOW, 1, 1, ("grip", BELOW),
-                       ("verdict", "centre"))
-
-    @staticmethod
-    def _offset_text(metres: float) -> str:
-        """민 거리 한 줄"""
-        return HOME if not metres else SLID.format(metres)
-
-    def _grab(self, x: float) -> None:
-        """끌기 시작. 그 자리와 그때 민 거리를 적어 두고 궤도를 잠근다"""
-        self._from = x
-        self._was = EbsSimulateService.get_nudge()
-        EbsSimulateService.hold_camera(True)
-
-    def _drop(self) -> None:
-        """끌기 끝. 궤도를 풀고, 판은 다음 프레임에 다시 그린다"""
-        self._from = None
-        EbsSimulateService.hold_camera(False)
-        self._soon()
-
-    def _soon(self) -> None:
-        """다음 프레임에 refresh. 마우스가 올라탄 판을 지금 지우면 안 된다"""
-        async def later():
-            """한 프레임 기다렸다가 판을 새로 그린다"""
-            import omni.kit.app
-            await omni.kit.app.get_app().next_update_async()
-            self.refresh()
-
-        try:
-            asyncio.ensure_future(later())
-        except Exception as e:
-            print(f"[ebs] could not redraw the overlay: {e}")
-
-    def _drag(self, x: float) -> None:
-        """끈 만큼 EBS 를 옮기고, 숫자와 판 자리를 갈아 끼운다"""
-        if self._from is None:
-            return
-        per = self._unit_pixels()
-        if not per:
-            return
-        EbsSimulateService.slide(self._was + (x - self._from) / per)
-        self._restate()
-
-    def _unit_pixels(self) -> float:
-        """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0"""
-        said = EbsSimulateService.get_verdict()
-        at, right = said.get("centre"), said.get("right")
-        if not at or not right:
-            return 0.0
-        here = self._to_screen(at)
-        there = self._to_screen([at[i] + right[i] for i in range(3)])
-        if here is None or there is None:
-            return 0.0
-        return ((there[0] - here[0]) ** 2 + (there[1] - here[1]) ** 2) ** 0.5
+    @classmethod
+    def restate(cls, vp_name: str = None) -> None:
+        """판을 다시 만들지 않고 자리와 글자만 고친다. 손잡이가 끌 때 부른다"""
+        for name, overlay in list(cls._instances.items()):
+            if vp_name in (None, name):
+                overlay._restate()
 
     def _restate(self) -> None:
         """끄는 동안. 판을 다시 만들지 않고 자리와 글자만 고친다"""
@@ -325,7 +255,7 @@ class EbsSimulateOverlay:
             if gap is not None:
                 self._say(("face", mark["face"], "span"),
                           (STALE if mark.get("stale") else "") + SPAN.format(gap))
-        self._say(("grip", "offset"), self._offset_text(said.get("offset") or 0.0))
+        EbsSimulateGrip.place(said)
         for mark in said.get("marks") or ():
             self._repaint(("face", mark["face"]), mark.get("state"))
         for entry in self._marks:
@@ -497,6 +427,7 @@ class EbsSimulateOverlay:
 
     def clear(self) -> None:
         """그린 판과 카메라 추적을 놓는다"""
+        EbsSimulateGrip.hide()
         self._follow = None
         self._marks = []
         self._texts = {}
@@ -510,10 +441,211 @@ class EbsSimulateOverlay:
     def _destroy(self) -> None:
         """프레임과 api 참조까지 전부 놓는다"""
         self.clear()
+        EbsSimulateGrip.destroy()
         self._stack = None
         self._frame = None
         self._api = None
         self._window = None
+
+
+class EbsSimulateGrip:
+    """EBS 를 좌우로 미는 3D 손잡이. 씬 위에 얹혀 앞에 뭐가 있어도 안 가려진다
+
+    omni.ui.scene  Kit 의 기즈모가 쓰는 것. 3D 배치와 드래그 제스처를 준다
+    EbsSimulateService.slide  끈 만큼을 넘긴다. 다시 재지 않고 산수로 따라간다
+    place  collide 판정이 새로 뜰 때마다, 그리고 끄는 동안 매번 다시 세운다
+    """
+
+    _one = None
+
+    @classmethod
+    def place(cls, said: dict) -> bool:
+        """판정이 준 자리에 손잡이를 세운다. 없으면 만든다"""
+        at, right = said.get("centre"), said.get("right")
+        if not at or not right:
+            cls.hide()
+            return False
+        grip = cls._get()
+        if grip is None:
+            return False
+        return grip.stand(at, right, said.get("span") or 1.0,
+                          said.get("offset") or 0.0)
+
+    @classmethod
+    def hide(cls) -> None:
+        """손잡이를 치운다. 프레임은 남긴다"""
+        if cls._one is not None:
+            cls._one.stow()
+
+    @classmethod
+    def destroy(cls) -> None:
+        """프레임까지 놓는다"""
+        if cls._one is not None:
+            cls._one.drop()
+            cls._one = None
+
+    @classmethod
+    def _get(cls):
+        """하나만 만들어 들고 있는다. 못 만들면 None"""
+        if cls._one is None:
+            one = cls()
+            if not one.build():
+                return None
+            cls._one = one
+        return cls._one
+
+    def __init__(self):
+        """만들 자리만. 구성은 build"""
+        self._view = None
+        self._api = None
+        self._shapes = []
+        self._label = None
+        self._where = None
+        self._spot = None
+        self._right = (1.0, 0.0, 0.0)
+        self._was = 0.0
+        self._moved = 0.0
+
+    def build(self) -> bool:
+        """뷰포트에 씬 뷰를 걸고 선과 글자를 만든다"""
+        try:
+            from omni.ui import scene as sc
+        except Exception as e:
+            print(f"[ebs] no 3d grip, omni.ui.scene is missing: {e}")
+            return False
+        window = viewport_window()
+        if window is None:
+            return False
+        try:
+            with window.get_frame(GRIP_FRAME):
+                self._view = sc.SceneView()
+            self._api = getattr(window, "viewport_api", None)
+            if self._api is not None and hasattr(self._api, "add_scene_view"):
+                self._api.add_scene_view(self._view)
+            self._fill(sc)
+        except Exception as e:
+            print(f"[ebs] could not put the grip on the viewport: {e}")
+            self._view = None
+            return False
+        return True
+
+    def _fill(self, sc) -> None:
+        """손잡이 한 벌. 자리는 stand 가 잡는다"""
+        drag = sc.DragGesture(on_began_fn=lambda one: self._began(),
+                              on_changed_fn=self._changed,
+                              on_ended_fn=lambda one: self._ended())
+        with self._view.scene:
+            for _ in range(5):
+                self._shapes.append(sc.Line([0, 0, 0], [0, 0, 0],
+                                            color=COLOR_GRIP,
+                                            thickness=GRIP_THICK,
+                                            gestures=[drag]))
+            self._where = sc.Transform()
+            with self._where:
+                self._label = sc.Label("", alignment=ui.Alignment.CENTER,
+                                       color=COLOR_GRIP, size=GRIP_TEXT)
+
+    def stand(self, at, right, span: float, offset: float) -> bool:
+        """그 자리에 축 방향으로 눕힌다. 길이는 EBS 크기에 맞춘다"""
+        if self._view is None:
+            return False
+        self._spot, self._right = tuple(at), tuple(right)
+        reach = span * GRIP_SPAN
+        try:
+            self._lay(reach)
+            self._view.visible = True
+            if self._label is not None:
+                self._label.text = self._told(offset)
+        except Exception as e:
+            print(f"[ebs] could not stand the grip: {e}")
+            return False
+        return True
+
+    def _lay(self, reach: float) -> None:
+        """축을 따라 선 다섯 개. 몸통 하나와 양 끝 화살촉 넷"""
+        from omni.ui import scene as sc
+        at, right = self._spot, self._right
+        up = self._up()
+        ends = [[at[i] + right[i] * reach * way for i in range(3)]
+                for way in (-1.0, 1.0)]
+        self._shapes[0].start, self._shapes[0].end = ends[0], ends[1]
+        made = 1
+        for way, tip in zip((-1.0, 1.0), ends):
+            for side in (-1.0, 1.0):
+                back = [tip[i] - right[i] * way * reach * GRIP_HEAD
+                        + up[i] * side * reach * GRIP_HEAD for i in range(3)]
+                self._shapes[made].start, self._shapes[made].end = tip, back
+                made += 1
+        drop = [at[i] - up[i] * reach * GRIP_DROP for i in range(3)]
+        self._where.transform = sc.Matrix44.get_translation_matrix(*drop)
+
+    def _up(self) -> tuple:
+        """화살촉과 글자를 눕힐 위쪽. 카메라가 보는 위쪽을 쓴다"""
+        try:
+            camera = self._api.view.GetInverse()
+            side = Gf.Vec3d(camera[1][0], camera[1][1], camera[1][2])
+            return tuple(side.GetNormalized())
+        except Exception:
+            return (0.0, 0.0, 1.0)
+
+    @staticmethod
+    def _told(offset: float) -> str:
+        """민 거리 한 줄"""
+        return HOME if not offset else SLID.format(offset)
+
+    def _began(self) -> None:
+        """끌기 시작. 그때 민 거리를 적고 궤도를 잠근다"""
+        self._was = EbsSimulateService.get_nudge()
+        self._moved = 0.0
+        EbsSimulateService.hold_camera(True)
+
+    def _changed(self, gesture) -> None:
+        """끈 만큼을 미는 축에 투영해 slide 로 넘긴다"""
+        step = self._step_of(gesture)
+        if step is None:
+            return
+        self._moved += sum(step[i] * self._right[i] for i in range(3))
+        EbsSimulateService.slide(self._was + self._moved)
+        EbsSimulateOverlay.restate()
+
+    def _ended(self) -> None:
+        """끌기 끝. 궤도를 풀고 판을 제대로 다시 그린다"""
+        EbsSimulateService.hold_camera(False)
+        EbsSimulateOverlay.show()
+
+    @staticmethod
+    def _step_of(gesture):
+        """이번 이벤트에서 움직인 월드 거리. 못 읽으면 None"""
+        payload = getattr(gesture, "gesture_payload", None)
+        step = getattr(payload, "moved", None)
+        if step is None:
+            return None
+        try:
+            return (step[0], step[1], step[2])
+        except Exception:
+            return None
+
+    def stow(self) -> None:
+        """안 보이게만 한다"""
+        if self._view is not None:
+            try:
+                self._view.visible = False
+            except Exception:
+                pass
+
+    def drop(self) -> None:
+        """씬 뷰를 뷰포트에서 떼고 놓는다"""
+        if self._view is None:
+            return
+        try:
+            if self._api is not None and hasattr(self._api, "remove_scene_view"):
+                self._api.remove_scene_view(self._view)
+            self._view.scene.clear()
+        except Exception:
+            pass
+        self._view = None
+        self._shapes = []
+        self._label = None
 
 
 class EbsSimulateMarks:
