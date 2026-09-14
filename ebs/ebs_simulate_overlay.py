@@ -233,14 +233,18 @@ class EbsSimulateOverlay:
         on  끄는 동안 세울 수 있게 바뀌면 _restate 가 이 표만 내린다. 판을
                   그때 만들면 마우스를 받고 있는 판을 갈아엎게 된다
         """
-        def one(text):
-            """_floating 에 넘길 그리기 함수"""
+        def one(text, ink=COLOR_TEXT, key=None):
+            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
-                    ui.Label(text, height=0, alignment=ui.Alignment.CENTER,
-                             style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
+                    label = ui.Label(text, height=0,
+                                     alignment=ui.Alignment.CENTER,
+                                     style={"font_size": TEXT_SIZE,
+                                            "color": ink})
+                    if key is not None:
+                        self._texts.setdefault(key, label)
             return fill
 
         self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT,
@@ -249,6 +253,32 @@ class EbsSimulateOverlay:
         self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=bool(said.get("inside")))
+        self._floating(self._grip_at(said),
+                       one(self._offset_word(said), COLOR_INK,
+                           ("verdict", "offset")),
+                       COLOR_CAN, ABOVE, key=("verdict", "offset"))
+
+    @staticmethod
+    def _grip_at(said: dict):
+        """손잡이가 선 월드 자리. 손잡이가 없으면 None
+
+        자리는 EBS 안 좌표라 뿌리 변환을 태워야 월드가 된다. 미는 동안에는
+        그 변환만 바뀌므로 표도 저절로 따라간다
+        """
+        grip = said.get("grip") or {}
+        at, matrix = grip.get("at"), grip.get("matrix")
+        if at is None:
+            return None
+        if matrix is None:
+            return tuple(at)
+        got = matrix.Transform(Gf.Vec3d(*at))
+        return (got[0], got[1], got[2])
+
+    @staticmethod
+    def _offset_word(said: dict) -> str:
+        """지금 얼마나 밀려 있나. 안 밀었으면 제자리"""
+        slid = said.get("offset") or 0.0
+        return SLID.format(slid) if abs(slid) >= 5e-4 else HOME
 
     @classmethod
     def restate(cls, vp_name: str = None) -> None:
@@ -263,7 +293,9 @@ class EbsSimulateOverlay:
         if not said:
             return
         spots = {("verdict", "centre"): said.get("centre"),
-                 ("verdict", "inside_at"): said.get("inside_at")}
+                 ("verdict", "inside_at"): said.get("inside_at"),
+                 ("verdict", "offset"): self._grip_at(said)}
+        self._say(("verdict", "offset"), self._offset_word(said))
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
