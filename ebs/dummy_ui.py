@@ -296,16 +296,16 @@ class EbsDummyUI:
         EbsSimulateOverlay.show()
 
     def _on_align(self):
-        """2단계. EBS 를 놓아 화면에 보인다. 아직 잰 것이 없으니 오버레이는 끈다"""
+        """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
         self._apply_settings()
+        self._reset_nudge()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.hide()
 
     def _on_camera(self):
-        """1단계. EBS 가 설 자리에 카메라를 맞춘다. EBS 는 아직 감춰 둔 채다"""
+        """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
         self._apply_settings()
-        self._reset_nudge()
         self._render(EbsSimulateService.focus(
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.hide()
