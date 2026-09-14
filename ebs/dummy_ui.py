@@ -32,6 +32,9 @@ NUDGE_LEFT  = "◀ 왼쪽"
 NUDGE_RIGHT = "▶ 오른쪽"
 NUDGE_HOME  = "제자리"
 NUDGE_BUSY  = " · 갱신 중"
+NUDGE_SOON  = " · {0:.0f}초 뒤 다시 잼"
+NUDGE_WAIT  = 2.0
+NUDGE_TICK  = 0.2
 
 
 class SweepLog:
@@ -120,6 +123,7 @@ class EbsDummyUI:
         self._nudge_field = None
         self._nudge_for = ""
         self._task = None
+        self._pending = None
 
 
     def build_ui(self):
@@ -285,6 +289,7 @@ class EbsDummyUI:
     def _on_simulate(self):
         """카메라 -> 자리 -> 충돌. collide 가 길어 프레임에 나눠 돈다"""
         self._apply_settings()
+        self._cancel_later()
         self._reset_nudge()
         EbsSimulateOverlay.hide()
         self._start(self._simulate_task())
@@ -298,6 +303,7 @@ class EbsDummyUI:
     def _on_align(self):
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
         self._apply_settings()
+        self._cancel_later()
         self._reset_nudge()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
@@ -306,6 +312,7 @@ class EbsDummyUI:
     def _on_camera(self):
         """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
         self._apply_settings()
+        self._cancel_later()
         self._render(EbsSimulateService.focus(
             self._eqp_field.model.get_value_as_string()))
         EbsSimulateOverlay.hide()
@@ -313,12 +320,15 @@ class EbsDummyUI:
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""
         self._apply_settings()
+        self._cancel_later()
         self._start(self._collide_task())
 
     async def _collide_task(self):
         """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
+        self._mark_nudge(busy=True)
         self._render(await self._watched(EbsSimulateService.collide_async()))
         EbsSimulateOverlay.show()
+        self._mark_nudge()
 
     def _on_near_span(self):
         """슬라이더를 끄는 그 자리에서 카메라에 반영한다"""
@@ -333,7 +343,7 @@ class EbsDummyUI:
             return NEAR_SPAN
 
     def _on_nudge(self, way: float):
-        """민 자리로 EBS 만 옮긴다. 다시 재는 것은 3 Collide 몫이다"""
+        """민 자리로 EBS 를 옮기고, 조용해지면 그 자리에서 다시 잰다"""
         if self._task is not None and not self._task.done():
             self._set_status("Busy")
             return
@@ -345,7 +355,33 @@ class EbsDummyUI:
         self._apply_settings()
         EbsSimulateOverlay.hide()
         self._render(EbsSimulateService.align(name))
+        self._mark_nudge(soon=NUDGE_WAIT)
+        self._later()
+
+    def _later(self):
+        """조용해지면 다시 재도록 예약한다. 또 누르면 처음부터 다시 센다"""
+        self._cancel_later()
+        self._pending = asyncio.ensure_future(self._waited())
+
+    def _cancel_later(self):
+        """걸어 둔 예약을 놓는다. 다른 버튼이 눌렸을 때"""
+        if self._pending is not None and not self._pending.done():
+            self._pending.cancel()
+        self._pending = None
+
+    async def _waited(self):
+        """남은 시간을 적어 가며 기다렸다가, 그 자리에서 다시 잰다"""
+        left = NUDGE_WAIT
+        try:
+            while left > 0:
+                self._mark_nudge(soon=left)
+                await asyncio.sleep(NUDGE_TICK)
+                left -= NUDGE_TICK
+        except asyncio.CancelledError:
+            self._mark_nudge()
+            return
         self._mark_nudge()
+        self._start(self._collide_task())
 
     def _reset_nudge(self):
         """민 거리를 0 으로. 지금 장비 이름을 기억해 둔다"""
@@ -353,8 +389,8 @@ class EbsDummyUI:
         self._nudge_for = self._eqp_field.model.get_value_as_string().strip()
         self._mark_nudge()
 
-    def _mark_nudge(self, busy: bool = False):
-        """어느 쪽으로 얼마나 밀어 둔 상태인가"""
+    def _mark_nudge(self, busy: bool = False, soon: float = 0.0):
+        """어느 쪽으로 얼마나 밀어 뒀나, 다시 재기까지 얼마 남았나"""
         if self._nudge_label is None:
             return
         metres = EbsSimulateService.get_nudge()
@@ -363,7 +399,11 @@ class EbsDummyUI:
         else:
             way = NUDGE_RIGHT if metres > 0 else NUDGE_LEFT
             text = f"{way} {abs(metres):.3f} m"
-        self._nudge_label.text = text + (NUDGE_BUSY if busy else "")
+        if busy:
+            text += NUDGE_BUSY
+        elif soon > 0:
+            text += NUDGE_SOON.format(soon)
+        self._nudge_label.text = text
 
     def _on_refresh(self):
         """카메라만 원래 자리로 되돌린다"""
@@ -371,6 +411,7 @@ class EbsDummyUI:
 
     def _on_clear_markers(self):
         """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
+        self._cancel_later()
         EbsSimulateService.clear_markers()
         EbsSimulateService.clear_port_lasers()
         EbsSimulateService.clear_sweep()
