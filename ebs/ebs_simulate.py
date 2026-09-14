@@ -498,12 +498,13 @@ class EbsSimulate:
         return self._payload(True, f"offset {self._nudge:+.3f}")
 
     def _slid_box(self, box, shift: float) -> None:
-        """EBS 상자를 다시 재지 않고 민 만큼 옮겨 적는다"""
+        """EBS 상자를 다시 재지 않고 민 만큼 옮겨 적는다. shift 는 미터다"""
         right = (self._verdict or {}).get("right")
         path = self._path_of(self._target["ebs"])
         if right is None or not path:
             return
-        step = Gf.Vec3d(*[right[i] * shift for i in range(3)])
+        paces = shift / (self._per_unit() or 1.0)
+        step = Gf.Vec3d(*[right[i] * paces for i in range(3)])
         moved = Gf.Matrix4d(1.0)
         moved.SetTranslateOnly(step)
         self._ebs_box = (path, Gf.BBox3d(box.GetRange(),
@@ -533,20 +534,21 @@ class EbsSimulate:
         right = self._verdict.get("right")
         if stage is None or not right:
             return
-        step = [right[i] * shift for i in range(3)]
-        per_unit = self._per_unit()
+        per_unit = self._per_unit() or 1.0
+        paces = shift / per_unit
+        step = [right[i] * paces for i in range(3)]
         for mark in self._verdict.get("marks") or ():
             way = mark.get("way")
             if way is None or mark.get("distance") is None:
                 continue
-            along = sum(step[i] * way[i] for i in range(3))
-            span = mark["distance"] / (per_unit or 1.0) - along
+            along = sum(right[i] * way[i] for i in range(3)) * shift
+            gap = mark["distance"] - along
             near = [mark["from"][i] + step[i] for i in range(3)]
-            far = [near[i] + way[i] * span for i in range(3)]
+            far = [near[i] + way[i] * (gap / per_unit) for i in range(3)]
             mark["from"] = tuple(near)
             mark["to"] = tuple(far)
             mark["at"] = tuple((near[i] + far[i]) * 0.5 for i in range(3))
-            mark["distance"] = span * per_unit
+            mark["distance"] = gap
             mark["state"] = (STATE_CLASH if mark["distance"] < 0.0 else
                              STATE_TIGHT
                              if mark["distance"] < mark.get("min_gap", 0.0)
@@ -604,7 +606,8 @@ class EbsSimulate:
         if not self._nudge or target is None:
             return target
         right, _, _ = self._camera.axes(self._get_stage(), anchor)
-        moved = Gf.Vec3d(*[target[i] + right[i] * self._nudge for i in range(3)])
+        paces = self._nudge / (self._per_unit() or 1.0)
+        moved = Gf.Vec3d(*[target[i] + right[i] * paces for i in range(3)])
         self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
         return moved
 
@@ -1621,7 +1624,6 @@ class EbsSimulate:
             "offset": self._nudge,
             "centre": (middle[0], middle[1], middle[2]),
             "inside_at": (lower[0], lower[1], lower[2]),
-            "span": max(hi[i] - lo[i] for i in range(3)),
             "inside": bool(inside),
             "boxes": list(boxes or ()),
             "faces": blocked,
@@ -1631,10 +1633,12 @@ class EbsSimulate:
         }
 
     def _grip_spot(self, local_box, to_world) -> dict:
-        """손잡이를 세울 자리와 크기
+        """손잡이를 세울 자리와 크기. 길이는 월드 단위로 내보낸다
 
         at    3면 판의 앞모서리와 같은 깊이, EBS 중간 높이(GRIP_HEIGHT)
         wide  EBS 폭의 GRIP_WIDE. high  EBS 높이의 GRIP_TALL
+        _world_reach  로컬 변을 월드 길이로. 프림에 크기가 걸려 있어도 맞다
+        unit  스테이지 한 단위가 몇 미터인가. 끈 픽셀을 미터로 바꿀 때 쓴다
         """
         up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
         front_axis = 3 - up_axis
@@ -1645,8 +1649,25 @@ class EbsSimulate:
         spot[up_axis] = lo[up_axis] + (hi[up_axis] - lo[up_axis]) * GRIP_HEIGHT
         at = to_world.Transform(Gf.Vec3d(*spot))
         return {"at": (at[0], at[1], at[2]),
-                "wide": (hi[side_axis] - lo[side_axis]) * GRIP_WIDE,
-                "high": (hi[up_axis] - lo[up_axis]) * GRIP_TALL}
+                "unit": self._per_unit(),
+                "wide": self._world_reach(local_box, to_world, side_axis)
+                        * GRIP_WIDE,
+                "high": self._world_reach(local_box, to_world, up_axis)
+                        * GRIP_TALL}
+
+    @staticmethod
+    def _world_reach(local_box, to_world, axis: int) -> float:
+        """그 축의 로컬 변이 월드에서 몇 단위인가
+
+        프림에 크기가 걸려 있으면 로컬 길이와 월드 길이가 다르다
+        모서리 두 점을 옮겨 재므로 회전·크기가 섞여 있어도 맞다
+        """
+        lo, hi = local_box.GetMin(), local_box.GetMax()
+        far = list(lo)
+        far[axis] = hi[axis]
+        one = to_world.Transform(Gf.Vec3d(*lo))
+        two = to_world.Transform(Gf.Vec3d(*far))
+        return sum((two[i] - one[i]) ** 2 for i in range(3)) ** 0.5
 
     def _right_way(self, which: int = 0):
         """EBS 가 보는 방향으로 만든 축 하나. 0 은 오른쪽, 2 는 정면(앞)"""
@@ -2699,8 +2720,9 @@ class EbsSimulate:
         if not self._nudge:
             return spot
         right, _, _ = self._camera.axes(self._get_stage(), anchor_prim)
+        paces = self._nudge / (self._per_unit() or 1.0)
         shift = self._parent_world(ebs_prim).GetInverse().TransformDir(
-            Gf.Vec3d(*[right[i] * self._nudge for i in range(3)]))
+            Gf.Vec3d(*[right[i] * paces for i in range(3)]))
         self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
         return Gf.Vec3d(*[spot[i] + shift[i] for i in range(3)])
 

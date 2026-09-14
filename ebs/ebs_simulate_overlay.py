@@ -515,6 +515,7 @@ class EbsSimulateGrip:
         self._right = (1.0, 0.0, 0.0)
         self._reach = 1.0
         self._high = 1.0
+        self._unit = 1.0
         self._to_screen = None
         self._state = ""
         self._from = None
@@ -534,6 +535,7 @@ class EbsSimulateGrip:
         self._right, self._to_screen = tuple(right), to_screen
         at, self._high = grip["at"], max(grip.get("high") or 0.0, 1e-6)
         self._reach = max((grip.get("wide") or 0.0) * 0.5, 1e-6)
+        self._unit = grip.get("unit") or 1.0
         spot = [at[i] + front[i] * self._high * GRIP_FRONT for i in range(3)]
         self._ends = tuple(
             tuple(spot[i] + right[i] * self._reach * way for i in range(3))
@@ -597,7 +599,8 @@ class EbsSimulateGrip:
             return False
         per = self._unit_pixels()
         if per:
-            EbsSimulateService.slide(self._was + (x - self._from) / per)
+            metres = (x - self._from) / per * self._unit
+            EbsSimulateService.slide(self._was + metres)
             EbsSimulateOverlay.restate()
         return True
 
@@ -628,7 +631,10 @@ class EbsSimulateGrip:
         return (x - near_x) ** 2 + (y - near_y) ** 2 <= GRIP_PICK ** 2
 
     def _unit_pixels(self) -> float:
-        """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0"""
+        """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0
+
+        _reach 도 월드 길이라 둘을 나누면 단위당 픽셀이 나온다
+        """
         spots = self._screen_ends()
         if spots is None:
             return 0.0
