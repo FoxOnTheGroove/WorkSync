@@ -476,14 +476,30 @@ class EbsSimulate:
             return self._payload(False, "Run Align first")
         was = self._nudge
         shift = self.set_nudge(metres) - was
+        if not shift:
+            return self._payload(True, f"offset {self._nudge:+.3f}")
+        box = self._ebs_bound(self._target["ebs"])
         if not self._place_nudged():
             return self._payload(False, "EBS could not be moved")
-        if shift and self._verdict:
-            self._slide_marks(shift)
+        self._slid_box(box, shift)
+        if self._verdict:
+            self._slide_marks(shift, box)
             self.show_markers(self._target["ebs"], self._slid_cells(),
                               self._verdict.get("marks"),
-                              self._verdict.get("boxes"))
+                              self._verdict.get("boxes"), fresh=False)
         return self._payload(True, f"offset {self._nudge:+.3f}")
+
+    def _slid_box(self, box, shift: float) -> None:
+        """EBS 상자를 다시 재지 않고 민 만큼 옮겨 적는다"""
+        right = (self._verdict or {}).get("right")
+        path = self._path_of(self._target["ebs"])
+        if right is None or not path:
+            return
+        step = Gf.Vec3d(*[right[i] * shift for i in range(3)])
+        moved = Gf.Matrix4d(1.0)
+        moved.SetTranslateOnly(step)
+        self._ebs_box = (path, Gf.BBox3d(box.GetRange(),
+                                         box.GetMatrix() * moved))
 
     def _place_nudged(self) -> bool:
         """지금 민 거리로 EBS 를 다시 놓는다. 포트 계산은 다시 안 한다"""
@@ -499,7 +515,7 @@ class EbsSimulate:
         return {face: [marks.get(face, {}).get("state") == STATE_CLASH]
                 for face in FACES}
 
-    def _slide_marks(self, shift: float) -> None:
+    def _slide_marks(self, shift: float, box) -> None:
         """민 만큼 선을 늘이고 줄인다. 검출 지점과 안내선은 그대로 둔다
 
         way  면의 바깥 방향. 미는 방향과 나란한 면만 간격이 변한다
@@ -527,7 +543,11 @@ class EbsSimulate:
                              STATE_TIGHT
                              if mark["distance"] < mark.get("min_gap", 0.0)
                              else STATE_CLEAR)
-            mark["stale"] = not self._still_inside(mark)
+            mark["stale"] = not self._still_inside(mark, box)
+        for name in ("centre", "inside_at"):
+            spot = self._verdict.get(name)
+            if spot:
+                self._verdict[name] = tuple(spot[i] + step[i] for i in range(3))
         marks = self._verdict["marks"]
         self._verdict["faces"] = [{"face": one["face"], "name": one["name"],
                                    "state": one["state"]} for one in marks
@@ -537,13 +557,12 @@ class EbsSimulate:
         self._verdict["placeable"] = (not self._verdict.get("inside")
                                       and not self._verdict["faces"])
 
-    def _still_inside(self, mark: dict) -> bool:
+    def _still_inside(self, mark: dict, bbox) -> bool:
         """검출 지점이 아직 그 면의 발자국 안인가. 벗어났으면 다시 재야 한다"""
         plane = self._face_planes.get(mark.get("face"))
         spot = mark.get("spot")
         if plane is None or spot is None:
             return True
-        bbox = self._ebs_bound(self._target["ebs"])
         local_box = bbox.GetRange()
         if local_box.IsEmpty():
             return True
@@ -4126,15 +4145,19 @@ class EbsSimulate:
 
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
-                     marks: list = None, marks_boxes: list = None) -> int:
-        """3면 판, 여유 선, 내부 충돌 상자를 오버레이에게 그리게 한다"""
+                     marks: list = None, marks_boxes: list = None,
+                     fresh: bool = True) -> int:
+        """3면 판, 여유 선, 내부 충돌 상자를 오버레이에게 그리게 한다
+
+        fresh  False 면 지우지 않고 있던 프림을 고쳐 그린다. 미는 동안 쓴다
+        """
         bbox = self._ebs_bound(ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
             return 0
         return self._marks().draw(
             self._face_sheets(local_box, to_world, cells, marks),
-            marks, marks_boxes)
+            marks, marks_boxes, fresh)
 
     def _face_sheets(self, local_box, to_world, cells: dict,
                      marks: list) -> list:

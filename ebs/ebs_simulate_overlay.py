@@ -221,9 +221,11 @@ class EbsSimulateOverlay:
                              style={"font_size": TEXT_SIZE, "color": COLOR_TEXT})
             return fill
 
-        self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT)
+        self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT,
+                       key=("verdict", "centre"))
         if said.get("inside"):
-            self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT)
+            self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT,
+                           key=("verdict", "inside_at"))
 
     def _grip_panel(self, said: dict) -> None:
         """가운데 판 아래 좌우 손잡이. 끌면 EBS 가 그만큼 옆으로 간다
@@ -314,7 +316,8 @@ class EbsSimulateOverlay:
         said = EbsSimulateService.get_verdict()
         if not said:
             return
-        spots = {("verdict", "centre"): said.get("centre")}
+        spots = {("verdict", "centre"): said.get("centre"),
+                 ("verdict", "inside_at"): said.get("inside_at")}
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
@@ -524,12 +527,18 @@ class EbsSimulateMarks:
         self._pulse_inputs: tuple = ()
         self._pulse_from: float = 0.0
 
-    def draw(self, sheets: list, marks: list = None, boxes: list = None) -> int:
-        """판정 한 벌을 씬에 그린다. 그리기 전에 먼저 지운다"""
+    def draw(self, sheets: list, marks: list = None, boxes: list = None,
+             fresh: bool = True) -> int:
+        """판정 한 벌을 씬에 그린다. fresh 면 먼저 지우고, 아니면 고쳐 그린다
+
+        fresh=False  프림을 지웠다 다시 만들지 않는다. 이름이 같으니 Define 이
+                  있던 것을 돌려주고 속성만 새로 쓴다. 미는 동안 이 길로 온다
+        """
         stage = self._stage_of()
         if stage is None:
             return 0
-        self.clear()
+        if fresh:
+            self.clear()
         drawn = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, self._root)
