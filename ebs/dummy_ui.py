@@ -1,6 +1,5 @@
 import asyncio
 import csv
-import pprint
 import time
 
 import omni.ui as ui
@@ -165,16 +164,9 @@ class EbsDummyUI:
                     ui.Spacer()
 
                 with ui.HStack(height=28, spacing=4):
-                    ui.Button("INIT", width=70, clicked_fn=self._on_init)
                     ui.Button("SIM", clicked_fn=self._on_simulate)
-                    ui.Button("Get", width=56, clicked_fn=self._on_get_result)
-
-                with ui.HStack(height=26, spacing=4):
-                    ui.Button("1 Camera", clicked_fn=self._on_camera)
-                    ui.Button("2 Align", clicked_fn=self._on_align)
-                    ui.Button("3 Collide", clicked_fn=self._on_collide)
-                    ui.Button("Refresh", width=60, clicked_fn=self._on_refresh)
-                    ui.Button("Clear", width=54, clicked_fn=self._on_clear_markers)
+                    ui.Button("Refresh", width=70, clicked_fn=self._on_refresh)
+                    ui.Button("Clear", width=64, clicked_fn=self._on_clear_markers)
 
                 self._status_label = ui.Label("Ready", height=20)
 
@@ -255,12 +247,8 @@ class EbsDummyUI:
         self._eqp_field.model.set_value(name)
         self._set_status(f"Selected: {name}")
 
-    def _on_init(self):
-        """설정을 넘기고 init 한다. 보임은 건드리지 않는다"""
-        self.auto_init()
-
     def _on_simulate(self):
-        """align + collide + camera. collide 가 길어 프레임에 나눠 돈다"""
+        """자리 -> 카메라 -> 충돌. collide 가 길어 프레임에 나눠 돈다"""
         self._apply_settings()
         self._start(self._simulate_task())
 
@@ -269,31 +257,6 @@ class EbsDummyUI:
         self._render(await self._watched(EbsSimulateService.simulate_async(
             self._eqp_field.model.get_value_as_string())))
         EbsSimulateOverlay.show()
-
-    def _on_get_result(self):
-        """입력칸의 장비 이름으로 적어 둔 판정을 꺼내 콘솔에 찍는다"""
-        name = self._eqp_field.model.get_value_as_string().strip()
-        found = EbsSimulateService.get_result(name)
-        print(f"[ebs] get_result({name!r}):")
-        print(pprint.pformat(found, width=100, sort_dicts=False))
-        if found["equipment"]:
-            self._set_status(f"{found['equipment']}: {found['reason']}")
-            return
-        known = EbsSimulateService.list_results()
-        self._set_status(f"No result for {name!r}. Have: "
-                         + (", ".join(known) if known else "nothing yet"))
-
-    def _on_align(self):
-        """2단계. EBS 를 놓는다. 아직 잰 것이 없으니 오버레이는 끈다"""
-        self._apply_settings()
-        self._render(EbsSimulateService.align(
-            self._eqp_field.model.get_value_as_string()))
-        EbsSimulateOverlay.hide()
-
-    def _on_camera(self):
-        """1단계. 카메라를 잡고, 그려 둔 것이 있으면 화면에 다시 앉힌다"""
-        self._render(EbsSimulateService.focus())
-        EbsSimulateOverlay.reveal()
 
     def _on_refresh(self):
         """카메라만 원래 자리로 되돌린다"""
@@ -308,16 +271,6 @@ class EbsDummyUI:
         EbsSimulateService.hide_ebs()
         EbsSimulateOverlay.hide()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
-
-    def _on_collide(self):
-        """3단계. 충돌을 재고 오버레이를 띄운다"""
-        self._apply_settings()
-        self._start(self._collide_task())
-
-    async def _collide_task(self):
-        """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
-        self._render(await self._watched(EbsSimulateService.collide_async()))
-        EbsSimulateOverlay.show()
 
     def _start(self, work):
         """코루틴 하나를 띄운다. 이미 도는 것이 있으면 무시한다"""

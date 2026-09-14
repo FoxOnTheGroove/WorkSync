@@ -894,9 +894,10 @@ class EbsSimulate:
                        f"ports than the EBS spans")
 
     def simulate(self, equipment: str = "") -> dict:
-        """prepare + focus + align + collide 를 잇달아
+        """자리를 잡고, 카메라를 잡고, EBS 를 보이고, 잰다
 
-        simulate  순서를 바꾸려면 여기. 카메라가 먼저라 오버레이는 collide 뒤에 뜬다
+        simulate  순서를 바꾸려면 여기. 오버레이는 collide 뒤에 뜬다
+        _do_align  reveal=False 로 부른다. 카메라가 잡힌 뒤에 EBS 가 나타나도록
         """
         self._begin("simulate")
         if not self._ready:
@@ -904,12 +905,13 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return result
+        result = self._do_align(reveal=False)
+        if not result["ok"]:
+            return result
         told = self._do_focus()
         if not told["ok"]:
             return told
-        result = self._do_align()
-        if not result["ok"]:
-            return result
+        self.show_ebs(self._target["ebs"])
         result = self._do_collide()
         if not result["ok"]:
             return result
@@ -927,12 +929,13 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return self._done(result)
+        result = self._do_align(reveal=False)
+        if not result["ok"]:
+            return self._done(result)
         told = self._do_focus()
         if not told["ok"]:
             return self._done(told)
-        result = self._do_align()
-        if not result["ok"]:
-            return self._done(result)
+        self.show_ebs(self._target["ebs"])
         for _ in self._collide_steps():
             await omni.kit.app.get_app().next_update_async()
         result = self._result
@@ -992,7 +995,7 @@ class EbsSimulate:
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
     def _do_focus(self) -> dict:
-        """EBS 상자를 담도록 카메라를 세운다. 아직 안 놓았으면 설 자리에 맞춰"""
+        """놓인 EBS 상자를 담도록 카메라를 세운다"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         stage = self._get_stage()
@@ -1015,38 +1018,21 @@ class EbsSimulate:
                              else "Camera focus failed")
 
     def _framed_box(self):
-        """카메라가 담을 상자. 놓기 전에는 EBS 가 설 자리에 EBS 크기로 하나 세운다"""
+        """카메라가 담을 상자. 아직 감춰 둔 EBS 는 잠깐 켜서 잰다"""
         ebs = self._target["ebs"]
         box = self._world_range(ebs)
-        if self._aligned or box is None or box.IsEmpty():
+        if box is not None and not box.IsEmpty():
             return box
-        anchor = self._target["anchor"]
-        spot = self._origin_of(anchor)
-        origin = self._origin_of(ebs)
-        if spot is None or origin is None:
-            return box
-        low, high = box.GetMin(), box.GetMax()
-        half = Gf.Vec3d(*[(high[i] - low[i]) * 0.5 for i in range(3)])
-        lifted = Gf.Vec3d(*[spot[i] + (low[i] + high[i]) * 0.5 - origin[i]
-                            for i in range(3)])
-        self._note(f"camera on where the EBS will stand, centre "
-                   f"({lifted[0]:.2f}, {lifted[1]:.2f}, {lifted[2]:.2f})")
-        return Gf.Range3d(lifted - half, lifted + half)
+        self.show_ebs(ebs)
+        box = self._world_range(ebs)
+        self._show_ebs([ebs], False)
+        return box
 
-    @staticmethod
-    def _origin_of(prim):
-        """그 프림의 월드 원점. 못 읽으면 None"""
-        if prim is None or not prim.IsValid():
-            return None
-        try:
-            spot = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
-                NOW).ExtractTranslation()
-        except Exception:
-            return None
-        return Gf.Vec3d(spot[0], spot[1], spot[2])
+    def _do_align(self, reveal: bool = True) -> dict:
+        """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다
 
-    def _do_align(self) -> dict:
-        """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다"""
+        reveal  False 면 자리만 잡고 감춰 둔다. 카메라를 먼저 잡는 SIM 이 쓴다
+        """
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         stage = self._get_stage()
@@ -1071,7 +1057,8 @@ class EbsSimulate:
         self._forget_triangles(self._target["ebs"])
         self._ebs_box = None
 
-        self.show_ebs(self._target["ebs"])
+        if reveal:
+            self.show_ebs(self._target["ebs"])
 
         if self._lasers:
             with self._stage_timer("draw port lasers"):
