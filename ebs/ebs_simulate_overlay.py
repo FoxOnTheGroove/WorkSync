@@ -198,7 +198,7 @@ class EbsSimulateOverlay:
                 self._verdict_panel(said)
                 for mark in said.get("marks") or ():
                     self._face_panel(mark)
-            EbsSimulateGrip.place(said, self._to_screen)
+            EbsSimulateGrip.place(said, self._to_window)
         except Exception as e:
             print(f"[ebs] could not build the overlay: {e}")
             self.clear()
@@ -271,7 +271,7 @@ class EbsSimulateOverlay:
             if gap is not None:
                 self._say(("face", mark["face"], "span"),
                           (STALE if mark.get("stale") else "") + SPAN.format(gap))
-        EbsSimulateGrip.place(said, self._to_screen)
+        EbsSimulateGrip.place(said, self._to_window)
         for mark in said.get("marks") or ():
             self._repaint(("face", mark["face"]), mark.get("state"))
         shown = {("verdict", "centre"): not said.get("placeable"),
@@ -446,6 +446,21 @@ class EbsSimulateOverlay:
             return None
         return ((ndc[0] * 0.5 + 0.5) * width,
                 (0.5 - ndc[1] * 0.5) * height)
+
+    def _to_window(self, point):
+        """월드 점을 창 좌표로. 마우스 콜백이 주는 좌표계와 같다
+
+        _to_screen 은 판 안 좌표라 판이 창 안쪽에 있으면 그만큼 어긋난다
+        손잡이를 집을 때는 이쪽을 쓴다
+        """
+        at = self._to_screen(point)
+        if at is None:
+            return None
+        try:
+            return (at[0] + self._frame.screen_position_x,
+                    at[1] + self._frame.screen_position_y)
+        except Exception:
+            return at
 
 
     def clear(self) -> None:
