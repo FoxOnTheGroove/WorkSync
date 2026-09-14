@@ -17,12 +17,14 @@ DOCK_NEXT = ("Property", "Stage", "Layer", "Content")
 
 PRESET = {"usd": "", "xml": "", "ebs2": "", "ebs3": "", "root": "", "rail": ""}
 
-VIEW_PATHS = (("Ceiling:", ""),
-              ("Floor:", ""),
-              ("Structure:", ""),
-              ("Other 1:", "/World/Group_01/Foups"),
-              ("Other 2:", ""),
-              ("Other 3:", ""))
+VIEW_PATHS = (("Ceiling:", "", False),
+              ("Floor:", "", True),
+              ("Structure:", "", True),
+              ("Other 1:", "/World/Group_01/Foups", False),
+              ("Other 2:", "", False),
+              ("Other 3:", "", False))
+
+EQP_PREFIX = "EQP_"
 
 
 class SweepLog:
@@ -100,7 +102,7 @@ class EbsDummyUI:
         self._ebs3_field = None
         self._root_field = None
         self._rail_field = None
-        self._views = {}
+        self._views = []
         self._docked = False
         self._eqp_field = None
         self._side_field = None
@@ -113,19 +115,20 @@ class EbsDummyUI:
 
     def build_ui(self):
         """창 하나에 경로 입력, 설정, 버튼 줄, 상태 줄을 쌓는다"""
-        self._window = ui.Window("EBS Simulate", width=520, height=470,
+        self._window = ui.Window("EBS Simulate", width=520, height=360,
                                  dockPreference=ui.DockPreference.RIGHT_BOTTOM)
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 3}):
-                with ui.VStack(spacing=1, height=0):
-                    self._usd_field  = self._path_row("Stage USD:", PRESET["usd"])
-                    self._xml_field  = self._path_row("Port XML:", PRESET["xml"])
-                    self._ebs2_field = self._path_row("EBS 2port:", PRESET["ebs2"])
-                    self._ebs3_field = self._path_row("EBS 3port:", PRESET["ebs3"])
-                    self._root_field = self._path_row("Search root:", PRESET["root"])
-                    self._rail_field = self._view_row("Rail root:", PRESET["rail"])
-                    for label, value in VIEW_PATHS:
-                        self._view_row(label, value)
+                with ui.CollapsableFrame("Paths", collapsed=True, height=0):
+                    with ui.VStack(spacing=1, height=0):
+                        self._usd_field  = self._path_row("Stage USD:", PRESET["usd"])
+                        self._xml_field  = self._path_row("Port XML:", PRESET["xml"])
+                        self._ebs2_field = self._path_row("EBS 2port:", PRESET["ebs2"])
+                        self._ebs3_field = self._path_row("EBS 3port:", PRESET["ebs3"])
+                        self._root_field = self._path_row("Search root:", PRESET["root"])
+                        self._rail_field = self._view_row("Rail root:", PRESET["rail"])
+                        for label, value, on in VIEW_PATHS:
+                            self._view_row(label, value, on)
 
                 with ui.HStack(height=22, spacing=4):
                     # 잠시 접어 둔 것. 서비스는 triangle + snap 으로 돈다
@@ -185,10 +188,11 @@ class EbsDummyUI:
         """버튼 없이 도는 init. 입력칸의 사전값을 그대로 쓴다"""
         self._apply_settings()
         result = EbsSimulateService.init()
+        self._apply_views()
         self._render(result)
         return result
 
-    def _view_row(self, label: str, value: str = ""):
+    def _view_row(self, label: str, value: str = "", on: bool = True):
         """경로 한 줄 뒤에 보임 체크박스를 붙인다"""
         with ui.HStack(height=20, spacing=4):
             ui.Label(label, width=90)
@@ -196,11 +200,21 @@ class EbsDummyUI:
             if value:
                 field.model.set_value(value)
             box = ui.CheckBox(width=20)
-            box.model.set_value(True)
+            box.model.set_value(on)
             box.model.add_value_changed_fn(
                 lambda model, f=field: self._on_view_changed(f, model))
-        self._views[id(field)] = box
+        self._views.append((field, box))
         return field
+
+    def _apply_views(self) -> int:
+        """줄마다 적힌 경로를 지금 체크 상태대로 맞춘다. init 이 한 번 부른다"""
+        done = 0
+        for field, box in self._views:
+            path = field.model.get_value_as_string().strip()
+            if path:
+                done += EbsSimulateService.set_visible(
+                    path, box.model.get_value_as_bool())
+        return done
 
     def _on_view_changed(self, field, model):
         """체크가 바뀐 그 자리에서 그 경로를 켜거나 끈다"""
@@ -233,6 +247,8 @@ class EbsDummyUI:
             self._set_status("No equipment found in selection")
             return
         name = str(path).rstrip("/").rsplit("/", 1)[-1]
+        if name.upper().startswith(EQP_PREFIX):
+            name = name[len(EQP_PREFIX):]
         self._eqp_field.model.set_value(name)
         self._set_status(f"Selected: {name}")
 

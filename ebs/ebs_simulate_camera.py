@@ -89,7 +89,6 @@ class EbsSimulateCamera:
         self._frame_ui = None
         self._catch = None
         self._at = None
-        self._selection = None
         self._no_pick = None
         self._no_menu = None
         self._bindings = None
@@ -241,7 +240,6 @@ class EbsSimulateCamera:
         if not self._grab_sheet(window):
             return False
         self._silence(window)
-        self._mute_selection()
         return True
 
     def _silence(self, window) -> None:
@@ -318,7 +316,6 @@ class EbsSimulateCamera:
     def _drop(self) -> None:
         """판과 구독을 놓고 꺼 둔 것들을 되돌린다"""
         self._from = self._axis = self._at = None
-        self._selection = None
         self._restore()
         if self._frame_ui is not None:
             try:
@@ -327,31 +324,6 @@ class EbsSimulateCamera:
                 pass
         self._catch = None
         self._frame_ui = None
-
-    def _mute_selection(self) -> None:
-        """궤도 중에 프림이 선택되면 바로 풀도록 구독한다"""
-        try:
-            import omni.usd
-            self._selection = (omni.usd.get_context().get_stage_event_stream()
-                               .create_subscription_to_pop(
-                                   self._stage_event, name="ebs orbit"))
-        except Exception as e:
-            print(f"[ebs] prims can still be picked while orbiting: {e}")
-
-    def _stage_event(self, event) -> None:
-        """궤도 중 선택 변경이 오면 선택을 지운다"""
-        if not self._orbit:
-            return
-        try:
-            import omni.usd
-            if event.type != int(omni.usd.StageEventType.SELECTION_CHANGED):
-                return
-            picked = omni.usd.get_context().get_selection()
-            if picked.get_selected_prim_paths():
-                picked.clear_selected_prim_paths()
-        except Exception:
-            pass
-
 
     def _pressed(self, x, y, button) -> None:
         """왼쪽 버튼이면 드래그 시작, 아니면 무시"""
