@@ -18,7 +18,7 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
 INNER  = "내부 장비와 충돌"
-HOME   = "제자리"
+HOME   = "원점"
 SLID   = "{0:+.3f} M"
 STALE  = "~"
 
@@ -49,6 +49,8 @@ SPAN  = "{0:.2f}M"
 LEAST = "(최소간격 : {0:.2f}M)"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
+GRIP_STEP  = 0.5
+GRIP_WIDTH = 112
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
@@ -209,7 +211,7 @@ class EbsSimulateOverlay:
         return self._start()
 
 
-    def _floating(self, at, fill, ground, anchor=MIDDLE, step: int = 0,
+    def _floating(self, at, fill, ground, anchor=MIDDLE, step: float = 0.0,
                   share: int = 1, group=None, key=None, on: bool = True):
         """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다"""
         if at is None:
@@ -233,13 +235,16 @@ class EbsSimulateOverlay:
         on  끄는 동안 세울 수 있게 바뀌면 _restate 가 이 표만 내린다. 판을
                   그때 만들면 마우스를 받고 있는 판을 갈아엎게 된다
         """
-        def one(text, ink=COLOR_TEXT, key=None):
-            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
+        def one(text, ink=COLOR_TEXT, key=None, wide: int = 0):
+            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
+
+            wide  글줄 너비를 못 박는다. 글자가 바뀌어도 판이 안 들썩인다
+            """
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
-                    label = ui.Label(text, height=0,
+                    label = ui.Label(text, height=0, width=wide,
                                      alignment=ui.Alignment.CENTER,
                                      style={"font_size": TEXT_SIZE,
                                             "color": ink})
@@ -253,30 +258,19 @@ class EbsSimulateOverlay:
         self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=bool(said.get("inside")))
-        self._floating(self._grip_at(said),
+        self._floating(said.get("inside_at"),
                        one(self._offset_word(said), COLOR_INK,
-                           ("verdict", "offset")),
-                       COLOR_CAN, ABOVE, key=("verdict", "offset"))
-
-    @staticmethod
-    def _grip_at(said: dict):
-        """손잡이가 선 월드 자리. 손잡이가 없으면 None
-
-        자리는 EBS 안 좌표라 뿌리 변환을 태워야 월드가 된다. 미는 동안에는
-        그 변환만 바뀌므로 표도 저절로 따라간다
-        """
-        grip = said.get("grip") or {}
-        at, matrix = grip.get("at"), grip.get("matrix")
-        if at is None:
-            return None
-        if matrix is None:
-            return tuple(at)
-        got = matrix.Transform(Gf.Vec3d(*at))
-        return (got[0], got[1], got[2])
+                           ("verdict", "offset"), GRIP_WIDTH),
+                       COLOR_CAN, ABOVE, GRIP_STEP,
+                       key=("verdict", "offset"))
 
     @staticmethod
     def _offset_word(said: dict) -> str:
-        """지금 얼마나 밀려 있나. 안 밀었으면 제자리"""
+        """지금 얼마나 밀려 있나. 눈금 아래면 원점
+
+        부호가 붙고 안 붙고, + 와 - 의 너비가 달라 글줄만으로는 판이
+        들썩인다. 너비는 GRIP_WIDTH 로 못 박고 가운데로 맞춘다
+        """
         slid = said.get("offset") or 0.0
         return SLID.format(slid) if abs(slid) >= 5e-4 else HOME
 
@@ -294,7 +288,7 @@ class EbsSimulateOverlay:
             return
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
-                 ("verdict", "offset"): self._grip_at(said)}
+                 ("verdict", "offset"): said.get("inside_at")}
         self._say(("verdict", "offset"), self._offset_word(said))
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
