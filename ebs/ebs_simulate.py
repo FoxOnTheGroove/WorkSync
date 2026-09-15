@@ -317,6 +317,7 @@ class EbsSimulate:
         self._lasers: bool = False
         self._outer: bool = True
         self._inner: bool = True
+        self._clash_on: bool = True
         self._nudge: float = 0.0
         self._base = None
         self._verdict: dict = {}
@@ -473,6 +474,43 @@ class EbsSimulate:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         self._camera.hold(on)
 
+    def hold_clash(self, on: bool) -> bool:
+        """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
+
+        내부충돌연출  내부 장비와 겹친 메쉬를 빨간 상자로 그리고 깜박이는 것
+        끌 때  상자를 걷는다. 미는 동안은 내부 충돌을 다시 재지 않는다
+        켤 때  지금 선 자리에서 내부 충돌만 다시 재서 판정과 그림을 고친다
+        """
+        self._clash_on = bool(on)
+        if not on:
+            self._marks().hide_clash()
+            return True
+        return self._retest_inner()
+
+    def _retest_inner(self) -> bool:
+        """지금 자리에서 내부 충돌만 다시 잰다. 3면은 산수로 이미 맞아 있다"""
+        if self._target is None or not self._verdict or not self._inner:
+            return False
+        with self._stage_timer("equipment: retest"):
+            try:
+                meeting = self.check_equipment(self._target["ebs"],
+                                               self._target["equipment"])
+            except Exception as e:
+                self._note(f"interference check failed: "
+                           f"{type(e).__name__}: {e}")
+                return False
+        self._verdict["inside"] = bool(meeting["hit"])
+        self._verdict["boxes"] = list(meeting.get("boxes") or ())
+        self._verdict["placeable"] = (not meeting["hit"]
+                                      and not self._verdict.get("faces"))
+        self._note(f"inner at {self._nudge:+.3f}: "
+                   + ("hit" if meeting["hit"] else "clear")
+                   + f" ({meeting['tests']} pairs tested)")
+        self.show_markers(self._target["ebs"], self._slid_cells(),
+                          self._verdict.get("marks"),
+                          self._verdict.get("boxes"), fresh=False)
+        return True
+
     def slide(self, metres: float) -> dict:
         """민 자리로 EBS 를 옮기고 판정을 산수로 고쳐 다시 그린다
 
@@ -494,7 +532,8 @@ class EbsSimulate:
             self._slide_marks(shift, box)
             self.show_markers(self._target["ebs"], self._slid_cells(),
                               self._verdict.get("marks"),
-                              self._verdict.get("boxes"), fresh=False)
+                              self._verdict.get("boxes") if self._clash_on
+                              else None, fresh=False)
         return self._payload(True, f"offset {self._nudge:+.3f}")
 
     def _slid_box(self, box, shift: float) -> None:

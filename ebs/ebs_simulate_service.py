@@ -87,6 +87,11 @@ class EbsSimulateService:
         return cls._simulate.hold_camera(on)
 
     @classmethod
+    def hold_clash(cls, on):
+        """내부충돌연출을 켜고 끈다. 켤 때 그 자리에서 내부 충돌을 다시 잰다"""
+        return cls._simulate.hold_clash(on)
+
+    @classmethod
     def slide(cls, metres):
         """민 자리로 EBS 를 옮기고 판정을 산수로 고쳐 다시 그린다. 다시 안 잰다"""
         return cls._simulate.slide(metres)

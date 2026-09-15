@@ -85,6 +85,7 @@ LEAD_RADIUS = 0.001
 LEAD_OVER   = 0.01
 COLOR_LEAD  = (1.0, 1.0, 1.0)
 
+CLASH_ROOT    = "{0}/Clash"
 CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002
 COLOR_CLASH   = (0.95, 0.15, 0.15)
@@ -695,6 +696,7 @@ class EbsSimulateGrip:
             return False
         self._from = x
         self._was = EbsSimulateService.get_nudge()
+        EbsSimulateService.hold_clash(False)
         self._draw(GRIP_HOLD)
         return True
 
@@ -710,11 +712,13 @@ class EbsSimulateGrip:
         return True
 
     def release(self) -> None:
-        """놓는다. 판은 오버레이가 제대로 다시 그린다"""
+        """놓는다. 선 자리에서 내부 충돌을 다시 재고 연출을 되켠다"""
         if self._from is None:
             return
         self._from = None
         self._draw(GRIP_IDLE)
+        EbsSimulateService.hold_clash(True)
+        EbsSimulateOverlay.restate()
 
     @property
     def holding(self) -> bool:
@@ -806,6 +810,22 @@ class EbsSimulateMarks:
             drawn += self._gap_lines(stage, marks)
             drawn += self._clash_boxes(stage, boxes)
         return drawn
+
+    def hide_clash(self) -> bool:
+        """내부충돌연출을 걷는다. 상자를 지우고 깜박임을 멈춘다
+
+        머티리얼은 Looks 아래 그대로 두어 다시 켤 때 만들 일이 없게 한다
+        """
+        self._stop_pulse()
+        stage = self._stage_of()
+        if stage is None:
+            return False
+        where = CLASH_ROOT.format(self._root)
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if not stage.GetPrimAtPath(where).IsValid():
+                return False
+            stage.RemovePrim(where)
+        return True
 
     def clear(self) -> None:
         """뿌리를 통째로 지우고 깜박임도 놓는다"""
@@ -918,10 +938,12 @@ class EbsSimulateMarks:
                                   CLASH_OPACITY, BLOCKED_EMISSION)
         pad = self._clash_pad(stage)
         drawn = 0
+        UsdGeom.Scope.Define(stage, CLASH_ROOT.format(self._root))
         for at, (lo, hi) in enumerate(boxes):
             middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
             half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
-            block = UsdGeom.Cube.Define(stage, f"{self._root}/clash_{at}")
+            block = UsdGeom.Cube.Define(
+                stage, f"{CLASH_ROOT.format(self._root)}/box_{at}")
             block.CreateSizeAttr(2.0)
             block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
                                     Gf.Vec3f(1.0, 1.0, 1.0)])
