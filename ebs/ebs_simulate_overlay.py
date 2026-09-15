@@ -790,6 +790,7 @@ class EbsSimulateMarks:
         self._pulse = None
         self._pulse_inputs: tuple = ()
         self._pulse_from: float = 0.0
+        self._clash_at: dict = {}
 
     def draw(self, sheets: list, marks: list = None, boxes: list = None,
              fresh: bool = True) -> int:
@@ -821,6 +822,7 @@ class EbsSimulateMarks:
         if stage is None:
             return False
         where = CLASH_ROOT.format(self._root)
+        self._clash_at = {}
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             if not stage.GetPrimAtPath(where).IsValid():
                 return False
@@ -830,6 +832,7 @@ class EbsSimulateMarks:
     def clear(self) -> None:
         """뿌리를 통째로 지우고 깜박임도 놓는다"""
         self._stop_pulse()
+        self._clash_at = {}
         stage = self._stage_of()
         if stage is None:
             return
@@ -931,33 +934,58 @@ class EbsSimulateMarks:
                 tuple(end[i] + step[i] for i in range(3)))
 
     def _clash_boxes(self, stage, boxes) -> int:
-        """걸린 조각마다 빨간 반투명 상자 하나. 다 그리면 깜박이기 시작"""
-        if not boxes:
+        """걸린 장비 메쉬마다 빨간 반투명 상자 하나
+
+        상자는 장비 메쉬의 자리라 EBS 를 밀어도 안 움직인다. 그래서 한 번
+        세워 두고 걸린 것만 보이게 한다. 다시 지을 일이 없으니 깜박임도
+        안 끊긴다
+        boxes  None 이면 손대지 않는다. 빈 목록이면 전부 감춘다
+        """
+        if boxes is None:
             return 0
-        material = self._material(stage, "clash", COLOR_CLASH,
-                                  CLASH_OPACITY, BLOCKED_EMISSION)
-        pad = self._clash_pad(stage)
+        where = CLASH_ROOT.format(self._root)
+        UsdGeom.Scope.Define(stage, where)
+        show = set()
+        for path, lo, hi in boxes:
+            name = self._clash_at.get(path)
+            if name is None:
+                name = f"{where}/box_{len(self._clash_at)}"
+                self._clash_cube(stage, name, lo, hi)
+                self._clash_at[path] = name
+            show.add(name)
         drawn = 0
-        UsdGeom.Scope.Define(stage, CLASH_ROOT.format(self._root))
-        for at, (lo, hi) in enumerate(boxes):
-            middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-            half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
-            block = UsdGeom.Cube.Define(
-                stage, f"{CLASH_ROOT.format(self._root)}/box_{at}")
-            block.CreateSizeAttr(2.0)
-            block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
-                                    Gf.Vec3f(1.0, 1.0, 1.0)])
-            block.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_CLASH)]))
-            block.CreateDisplayOpacityAttr(Vt.FloatArray([CLASH_OPACITY]))
-            matrix = Gf.Matrix4d(1.0)
-            matrix.SetScale(Gf.Vec3d(*half))
-            matrix.SetTranslateOnly(Gf.Vec3d(*middle))
-            self._moved(block, matrix)
-            UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(material)
-            drawn += 1
+        for name in self._clash_at.values():
+            prim = stage.GetPrimAtPath(name)
+            if prim is None or not prim.IsValid():
+                continue
+            on = name in show
+            UsdGeom.Imageable(prim).GetVisibilityAttr().Set(
+                UsdGeom.Tokens.inherited if on else UsdGeom.Tokens.invisible)
+            drawn += int(on)
         if drawn:
             self._start_pulse(stage)
+        else:
+            self._stop_pulse()
         return drawn
+
+    def _clash_cube(self, stage, path: str, lo, hi) -> None:
+        """그 자리에 상자 하나를 세운다. 한 번 세우면 다시 안 건드린다"""
+        pad = self._clash_pad(stage)
+        middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
+        half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
+        block = UsdGeom.Cube.Define(stage, path)
+        block.CreateSizeAttr(2.0)
+        block.CreateExtentAttr([Gf.Vec3f(-1.0, -1.0, -1.0),
+                                Gf.Vec3f(1.0, 1.0, 1.0)])
+        block.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*COLOR_CLASH)]))
+        block.CreateDisplayOpacityAttr(Vt.FloatArray([CLASH_OPACITY]))
+        matrix = Gf.Matrix4d(1.0)
+        matrix.SetScale(Gf.Vec3d(*half))
+        matrix.SetTranslateOnly(Gf.Vec3d(*middle))
+        self._moved(block, matrix)
+        UsdShade.MaterialBindingAPI(block.GetPrim()).Bind(
+            self._material(stage, "clash", COLOR_CLASH,
+                           CLASH_OPACITY, BLOCKED_EMISSION))
 
     @staticmethod
     def _moved(shape, matrix) -> None:
@@ -984,7 +1012,12 @@ class EbsSimulateMarks:
 
 
     def _start_pulse(self, stage) -> bool:
-        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다"""
+        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다
+
+        이미 돌고 있으면 그대로 둔다. 다시 걸면 깜박임이 처음으로 되돌아간다
+        """
+        if self._pulse is not None:
+            return True
         self._stop_pulse()
         if CLASH_PULSE <= 0.0:
             return False

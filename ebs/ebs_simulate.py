@@ -199,6 +199,7 @@ GEOMETRY_TYPES = frozenset({
 
 VERDICT_HEIGHT = 0.8
 GRIP_HEIGHT = 0.5
+CLASH_TERM  = 0.25
 GRIP_WIDE   = 1.0 / 8.0
 GRIP_TALL   = 1.0 / 16.0
 CLASH_HEIGHT   = 0.45
@@ -319,6 +320,7 @@ class EbsSimulate:
         self._inner: bool = True
         self._clash_on: bool = True
         self._clash_live: bool = False
+        self._clash_when: float = 0.0
         self._nudge: float = 0.0
         self._base = None
         self._verdict: dict = {}
@@ -476,9 +478,21 @@ class EbsSimulate:
         self._camera.hold(on)
 
     def set_clash_live(self, on: bool) -> bool:
-        """미는 동안에도 내부 충돌을 매번 다시 잴지. 느리다. 보려고 켜는 것"""
+        """미는 동안에도 내부 충돌을 다시 잴지. 느리다. 보려고 켜는 것"""
         self._clash_live = bool(on)
+        self._clash_when = 0.0
         return self._clash_live
+
+    def _due_clash(self) -> bool:
+        """live 로 다시 잴 때가 됐나. CLASH_TERM 보다 자주는 안 잰다
+
+        손을 뗄 때 hold_clash 가 어차피 한 번 더 재므로 마지막 자리는 정확하다
+        """
+        now = time.monotonic()
+        if now - self._clash_when < CLASH_TERM:
+            return False
+        self._clash_when = now
+        return True
 
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
@@ -545,7 +559,7 @@ class EbsSimulate:
         self._slid_box(box, shift)
         if self._verdict:
             self._slide_marks(shift, box)
-            if self._clash_on and self._clash_live:
+            if self._clash_on and self._clash_live and self._due_clash():
                 self._retest_inner(draw=False)
             self.show_markers(self._target["ebs"], self._slid_cells(),
                               self._verdict.get("marks"),
@@ -3572,7 +3586,8 @@ class EbsSimulate:
                 at = (box.GetMin(), box.GetMax())
             seen.add(eqp_path)
             lo, hi = at
-            boxes.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])))
+            boxes.append((eqp_path, (lo[0], lo[1], lo[2]),
+                          (hi[0], hi[1], hi[2])))
         return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
                 "tests": tests}
 
