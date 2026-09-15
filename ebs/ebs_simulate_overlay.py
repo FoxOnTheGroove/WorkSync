@@ -48,7 +48,8 @@ SPAN  = "{0:.2f}M"
 LEAST = "(최소간격 : {0:.2f}M)"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
-GRIP_STEP = 0.5
+GRIP_STEP  = 0.5
+GRIP_WIDTH = 100
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
@@ -241,17 +242,21 @@ class EbsSimulateOverlay:
                        on=bool(said.get("inside")))
         self._floating(self._grip_at(said),
                        self._one(self._offset_word(said), COLOR_INK,
-                                 ("verdict", "offset")),
+                                 ("verdict", "offset"), GRIP_WIDTH),
                        COLOR_CAN, BELOW, GRIP_STEP,
                        key=("verdict", "offset"))
 
-    def _one(self, text, ink=COLOR_TEXT, key=None):
-        """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
+    def _one(self, text, ink=COLOR_TEXT, key=None, wide: int = 0):
+        """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
+
+        wide  글줄 칸을 이만큼으로 못 박는다. 판이 안 들썩이고 글은 그 칸
+              한가운데에 선다
+        """
         def fill():
             """판 속 글줄을 채운다"""
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
-                self._label(text, ink, key)
+                self._label(text, ink, key, wide)
         return fill
 
     @staticmethod
@@ -291,7 +296,8 @@ class EbsSimulateOverlay:
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
                  ("verdict", "offset"): self._grip_at(said)}
-        self._say(("verdict", "offset"), self._offset_word(said))
+        self._say(("verdict", "offset"), self._offset_word(said),
+                  GRIP_WIDTH)
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
@@ -311,20 +317,29 @@ class EbsSimulateOverlay:
             if entry[7] in shown:
                 entry[8] = shown[entry[7]]
 
-    def _label(self, text: str, ink: int, key=None):
+    def _label(self, text: str, ink: int, key=None, wide: int = 0):
         """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다"""
         label = ui.Label(text, height=0,
+                         width=ui.Pixel(wide) if wide else 0,
                          alignment=ui.Alignment.CENTER,
                          style={"font_size": TEXT_SIZE, "color": ink})
         if key is not None:
             self._texts.setdefault(key, label)
         return label
 
-    def _say(self, key, text: str) -> None:
-        """적어 둔 글줄 하나를 갈아 끼운다"""
+    def _say(self, key, text: str, wide: int = 0) -> None:
+        """적어 둔 글줄 하나를 갈아 끼운다
+
+        wide  글만 바꾸면 처음 글로 잡아 둔 자리를 그대로 쓴다. 칸과 정렬을
+              다시 걸어 그 칸 안에서 자리를 다시 잡게 한다. 판은 안 헐린다
+        """
         label = self._texts.get(key)
-        if label is not None:
-            label.text = text
+        if label is None:
+            return
+        label.text = text
+        if wide:
+            label.width = ui.Pixel(wide)
+            label.alignment = ui.Alignment.CENTER
 
     def _repaint(self, key, state: str) -> None:
         """그 면의 판 색을 지금 상태에 맞춘다. 끄는 동안 여유가 충돌로 바뀐다"""
