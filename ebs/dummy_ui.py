@@ -9,8 +9,8 @@ from .ebs_simulate_overlay import EbsSimulateOverlay
 
 __all__ = ["EbsDummyUI", "SweepLog"]
 
-MIN_SIDE    = 0.6
-MIN_CEILING = 0.1
+MIN_SIDE    = 0.4
+MIN_CEILING = 0.05
 
 DOCK_NEXT = ("Property", "Stage", "Layer", "Content")
 

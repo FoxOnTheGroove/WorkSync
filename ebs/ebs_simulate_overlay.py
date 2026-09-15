@@ -44,8 +44,10 @@ def once(line: str) -> None:
 CLASH = "충돌"
 GAP   = "여유"
 TIGHT = "간섭"
-SPAN  = "{0:.2f}M"
-LEAST = "(최소간격 : {0:.2f}M)"
+SPAN  = "{0:.0f}mm"
+LEAST = "(최소간격 : {0:.0f}mm)"
+MM_PER_M  = 1000.0
+GAP_WIDTH = 84
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 GRIP_STEP  = 0.5
@@ -340,7 +342,8 @@ class EbsSimulateOverlay:
             gap = mark.get("distance")
             if gap is not None:
                 self._say(("face", mark["face"], "span"),
-                          (STALE if mark.get("stale") else "") + SPAN.format(gap))
+                          (STALE if mark.get("stale") else "")
+                          + SPAN.format(self._mm(gap)))
         EbsSimulateGrip.place(said, self._to_window)
         for mark in said.get("marks") or ():
             self._repaint(("face", mark["face"]), mark.get("state"))
@@ -395,14 +398,18 @@ class EbsSimulateOverlay:
         gap = mark.get("distance")
         least = mark.get("min_gap")
 
-        def block(lines, key=None):
-            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
+        def block(lines, key=None, wide: int = 0):
+            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
+
+            wide  글줄 칸을 이만큼으로. 자릿수가 바뀌어도 판이 안 들썩인다
+            """
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
                         label = ui.Label(text, height=0,
+                                         width=ui.Pixel(wide) if wide else 0,
                                          alignment=ui.Alignment.CENTER,
                                          style={"font_size": FACE_SIZE,
                                                 "color": ink})
@@ -420,13 +427,19 @@ class EbsSimulateOverlay:
         if gap is None:
             return
         share = 2 if least else 1
-        self._floating(at, block([SPAN.format(gap)],
-                                 ("face", face, "span")), ground,
-                       second, 0, share, (face, second), ("face", face))
+        self._floating(at, block([SPAN.format(self._mm(gap))],
+                                 ("face", face, "span"), GAP_WIDTH), ground,
+                       second, 0, share, (face, second), ("face", face),
+                       wide=GAP_WIDTH)
         if least:
-            self._floating(at, block([LEAST.format(least)],
+            self._floating(at, block([LEAST.format(self._mm(least))],
                                      ("face", face, "least")), ground, second,
                            1, share, (face, second), ("face", face))
+
+    @staticmethod
+    def _mm(metres: float) -> float:
+        """미터로 잰 값을 밀리미터로. 판에 적는 단위다"""
+        return (metres or 0.0) * MM_PER_M
 
     def _start(self) -> bool:
         """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""
