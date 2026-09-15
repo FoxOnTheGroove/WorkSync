@@ -151,6 +151,9 @@ class EbsDummyUI:
                     ui.Label("inner", width=36)
                     self._inner = ui.CheckBox(width=20)
                     self._inner.model.set_value(True)
+                    ui.Label("live", width=30)
+                    self._live = ui.CheckBox(width=20)
+                    self._live.model.set_value(False)
                     ui.Label("Debug laser:", width=76)
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
@@ -397,6 +400,7 @@ class EbsDummyUI:
         EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
         EbsSimulateService.set_checks(self._outer.model.get_value_as_bool(),
                                       self._inner.model.get_value_as_bool())
+        EbsSimulateService.set_clash_live(self._live.model.get_value_as_bool())
         EbsSimulateService.set_near_span(self._near_span())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))

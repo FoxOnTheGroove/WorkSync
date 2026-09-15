@@ -318,6 +318,7 @@ class EbsSimulate:
         self._outer: bool = True
         self._inner: bool = True
         self._clash_on: bool = True
+        self._clash_live: bool = False
         self._nudge: float = 0.0
         self._base = None
         self._verdict: dict = {}
@@ -474,21 +475,33 @@ class EbsSimulate:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         self._camera.hold(on)
 
+    def set_clash_live(self, on: bool) -> bool:
+        """미는 동안에도 내부 충돌을 매번 다시 잴지. 느리다. 보려고 켜는 것"""
+        self._clash_live = bool(on)
+        return self._clash_live
+
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
 
         내부충돌연출  내부 장비와 겹친 메쉬를 빨간 상자로 그리고 깜박이는 것
         끌 때  상자를 걷는다. 미는 동안은 내부 충돌을 다시 재지 않는다
         켤 때  지금 선 자리에서 내부 충돌만 다시 재서 판정과 그림을 고친다
+        _clash_live  켜 두면 끄라고 해도 안 끈다. 미는 동안 매 걸음 다시 잰다
         """
+        if not on and self._clash_live:
+            return False
         self._clash_on = bool(on)
         if not on:
             self._marks().hide_clash()
             return True
         return self._retest_inner()
 
-    def _retest_inner(self) -> bool:
-        """지금 자리에서 내부 충돌만 다시 잰다. 3면은 산수로 이미 맞아 있다"""
+    def _retest_inner(self, draw: bool = True) -> bool:
+        """지금 자리에서 내부 충돌만 다시 잰다. 3면은 산수로 이미 맞아 있다
+
+        draw  False 면 판정만 고친다. 부른 쪽이 이어서 한 번에 그린다.
+                  미는 동안 매 걸음 오는 길이라 로그도 남기지 않는다
+        """
         if self._target is None or not self._verdict or not self._inner:
             return False
         with self._stage_timer("equipment: retest"):
@@ -503,6 +516,8 @@ class EbsSimulate:
         self._verdict["boxes"] = list(meeting.get("boxes") or ())
         self._verdict["placeable"] = (not meeting["hit"]
                                       and not self._verdict.get("faces"))
+        if not draw:
+            return True
         self._note(f"inner at {self._nudge:+.3f}: "
                    + ("hit" if meeting["hit"] else "clear")
                    + f" ({meeting['tests']} pairs tested)")
@@ -530,6 +545,8 @@ class EbsSimulate:
         self._slid_box(box, shift)
         if self._verdict:
             self._slide_marks(shift, box)
+            if self._clash_on and self._clash_live:
+                self._retest_inner(draw=False)
             self.show_markers(self._target["ebs"], self._slid_cells(),
                               self._verdict.get("marks"),
                               self._verdict.get("boxes") if self._clash_on
