@@ -22,7 +22,6 @@ HOME   = "원점"
 SLID   = "{0:+.3f} M"
 STALE  = "~"
 
-GRIP_FRONT = 1.0
 GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175
 GRIP_FLARE = 0.5
@@ -258,11 +257,27 @@ class EbsSimulateOverlay:
         self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=bool(said.get("inside")))
-        self._floating(said.get("inside_at"),
+        self._floating(self._grip_at(said),
                        one(self._offset_word(said), COLOR_INK,
                            ("verdict", "offset"), GRIP_WIDTH),
-                       COLOR_CAN, ABOVE, GRIP_STEP,
+                       COLOR_CAN, BELOW, GRIP_STEP,
                        key=("verdict", "offset"))
+
+    @staticmethod
+    def _grip_at(said: dict):
+        """손잡이가 선 월드 자리. 손잡이가 없으면 None
+
+        자리는 EBS 안 좌표라 뿌리 변환을 태워야 월드가 된다. 미는 동안에는
+        그 변환만 바뀌므로 표도 저절로 따라간다
+        """
+        grip = said.get("grip") or {}
+        at, matrix = grip.get("at"), grip.get("matrix")
+        if at is None:
+            return None
+        if matrix is None:
+            return tuple(at)
+        got = matrix.Transform(Gf.Vec3d(*at))
+        return (got[0], got[1], got[2])
 
     @staticmethod
     def _offset_word(said: dict) -> str:
@@ -288,7 +303,7 @@ class EbsSimulateOverlay:
             return
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
-                 ("verdict", "offset"): said.get("inside_at")}
+                 ("verdict", "offset"): self._grip_at(said)}
         self._say(("verdict", "offset"), self._offset_word(said))
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
@@ -570,15 +585,16 @@ class EbsSimulateGrip:
             return None
 
     def stand(self, grip: dict, to_screen) -> bool:
-        """EBS 안 좌표로 눕힌다. 뿌리에 EBS 변환을 걸어 같이 움직인다"""
+        """EBS 안 좌표로 눕힌다. 뿌리에 EBS 변환을 걸어 같이 움직인다
+
+        몸통 중점은 EBS 상자 앞면에 정확히 앉는다. 앞으로 띄우지 않는다
+        """
         self._to_screen = to_screen
         self._matrix = grip.get("matrix")
         self._high = max(grip.get("high") or 0.0, 1e-6)
         self._reach = max((grip.get("wide") or 0.0) * 0.5, 1e-6)
         self._unit = grip.get("unit") or 1.0
-        spot = list(grip["at"])
-        spot[grip["front"]] += grip["away"] * self._high * GRIP_FRONT
-        side = grip["side"]
+        spot, side = list(grip["at"]), grip["side"]
         ends = []
         for way in (-1.0, 1.0):
             end = list(spot)

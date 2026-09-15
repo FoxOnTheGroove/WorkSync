@@ -1642,7 +1642,7 @@ class EbsSimulate:
         손잡이 뿌리에 matrix 를 그대로 걸고 나머지는 EBS 안 좌표로 그리면
         EBS 가 어디로 가든, 크기가 얼마든 손잡이가 같이 간다
         at    3면 판의 앞모서리와 같은 깊이, EBS 중간 높이(GRIP_HEIGHT)
-        side  손잡이가 눕는 축. front 는 앞으로 띄우는 축, away 는 그 방향
+        side  손잡이가 눕는 축. 몸통 중점은 EBS 상자 앞면에 그대로 앉는다
         wide  EBS 폭의 GRIP_WIDE. high  EBS 높이의 GRIP_TALL
         unit  스테이지 한 단위가 몇 미터인가. 끈 픽셀을 미터로 바꿀 때 쓴다
         """
@@ -1655,8 +1655,7 @@ class EbsSimulate:
         spot[up_axis] = lo[up_axis] + (hi[up_axis] - lo[up_axis]) * GRIP_HEIGHT
         return {"at": tuple(spot),
                 "matrix": Gf.Matrix4d(to_world),
-                "side": side_axis, "front": front_axis,
-                "away": -1.0 if LEAD_FRONT < 0 else 1.0,
+                "side": side_axis,
                 "unit": self._per_unit(),
                 "wide": (hi[side_axis] - lo[side_axis]) * GRIP_WIDE,
                 "high": (hi[up_axis] - lo[up_axis]) * GRIP_TALL}
