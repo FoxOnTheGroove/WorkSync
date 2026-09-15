@@ -18,7 +18,6 @@ APERTURE_V = 15.2908
 ORBIT_FRAME = "ebs_orbit_input"
 YAW_PER_PIXEL   = 0.35
 PITCH_PER_PIXEL = 0.35
-AXIS_LOCK  = 5
 
 ZOOM_PER_NOTCH = 0.88
 ZOOM_NEAREST   = 0.15
@@ -95,7 +94,6 @@ class EbsSimulateCamera:
         self._no_menu = None
         self._bindings = None
         self._from = None
-        self._axis = None
         self._home = None
         self._box = None
         self._span = NEAR_SPAN
@@ -196,7 +194,7 @@ class EbsSimulateCamera:
         x_cam, y_cam, z_cam, eye, distance, interest = self._home
         self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, distance)
         self._interest = interest
-        self._from = self._axis = None
+        self._from = None
         return f"camera back to {distance:.2f} in front of the EBS"
 
     def remove(self, stage) -> None:
@@ -342,7 +340,7 @@ class EbsSimulateCamera:
 
     def _drop(self) -> None:
         """판과 구독을 놓고 꺼 둔 것들을 되돌린다"""
-        self._from = self._axis = self._at = None
+        self._from = self._at = None
         self._restore()
         if self._frame_ui is not None:
             try:
@@ -355,13 +353,13 @@ class EbsSimulateCamera:
     def _pressed(self, x, y, button) -> None:
         """왼쪽 버튼이면 드래그 시작. 기즈모가 먼저 가져가면 궤도는 쉰다"""
         if button != LEFT_BUTTON:
-            self._from = self._axis = None
+            self._from = None
             return
         if self._watcher is not None and self._watcher.press(x, y):
-            self._from = self._axis = None
+            self._from = None
             return
         if self._held:
-            self._from = self._axis = None
+            self._from = None
             return
         self._start_drag()
         self._at = (x, y)
@@ -381,15 +379,14 @@ class EbsSimulateCamera:
         self._drag(dx, dy)
 
     def _start_drag(self) -> None:
-        """드래그 누적을 0 으로. 회전 축은 아직 미정"""
+        """드래그 누적을 0 으로"""
         self._from = (0.0, 0.0)
-        self._axis = None
 
     def _end_drag(self) -> None:
         """드래그 상태를 놓는다. 기즈모를 잡고 있었으면 그것도 놓는다"""
         if self._watcher is not None:
             self._watcher.release()
-        self._from = self._axis = self._at = None
+        self._from = self._at = None
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
         """더블클릭한 자리에 무엇이 있는지 뷰포트에 묻는다"""
@@ -451,19 +448,15 @@ class EbsSimulateCamera:
             self._zoom(notches)
 
     def _drag(self, dx: float, dy: float) -> None:
-        """먼저 움직인 쪽으로 축을 잠그고, 그 축으로만 돌린다"""
+        """끈 만큼 좌우와 상하를 한 번에 돌린다
+
+        EbsSimulateCamera._turn  yaw 를 먼저 걸고 그 팔에 pitch 를 건다.
+                     한 번에 앉히므로 두 축이 섞여 돈다
+        """
         if self._from is None or not self._orbit:
             return
         self._from = (self._from[0] + dx, self._from[1] + dy)
-        if self._axis is None:
-            total = self._from
-            if max(abs(total[0]), abs(total[1])) < AXIS_LOCK:
-                return
-            self._axis = "yaw" if abs(total[0]) >= abs(total[1]) else "pitch"
-        if self._axis == "yaw":
-            self._turn(yaw=-dx * YAW_PER_PIXEL)
-        else:
-            self._turn(pitch=dy * PITCH_PER_PIXEL)
+        self._turn(yaw=-dx * YAW_PER_PIXEL, pitch=dy * PITCH_PER_PIXEL)
 
 
     def _hold(self):
