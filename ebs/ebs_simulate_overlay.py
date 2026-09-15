@@ -162,6 +162,8 @@ class EbsSimulateOverlay:
         self._marks = []
         self._follow = None
         self._texts = {}
+        self._holds = {}
+        self._worded = ""
         self._grounds = {}
         self._from = None
         self._was = 0.0
@@ -245,8 +247,9 @@ class EbsSimulateOverlay:
         self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=bool(said.get("inside")))
+        self._worded = self._offset_word(said)
         self._floating(self._grip_at(said),
-                       self._one(self._offset_word(said), COLOR_INK,
+                       self._one(self._worded, COLOR_INK,
                                  ("verdict", "offset"), GRIP_WIDTH - PAD_X * 2),
                        COLOR_CAN, BELOW, GRIP_STEP,
                        key=("verdict", "offset"), wide=GRIP_WIDTH)
@@ -254,15 +257,40 @@ class EbsSimulateOverlay:
     def _one(self, text, ink=COLOR_TEXT, key=None, wide: int = 0):
         """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
 
-        wide  글줄 칸을 이만큼으로 못 박는다. 판이 안 들썩이고 글은 그 칸
-              한가운데에 선다
+        wide  글줄 칸을 이만큼으로 못 박고, 그 칸을 _reword 가 쓰도록 적어 둔다
         """
         def fill():
             """판 속 글줄을 채운다"""
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
-                self._label(text, ink, key, wide)
+                if not wide:
+                    self._label(text, ink, key)
+                    return
+                hold = ui.ZStack(width=ui.Pixel(wide), height=0)
+                with hold:
+                    self._label(text, ink, key, wide)
+                if key is not None:
+                    self._holds[key] = (hold, ink, wide)
         return fill
+
+    def _reword(self, key, text: str) -> None:
+        """글줄 위젯을 그 칸 안에서 새로 만든다
+
+        ui.Label 은 text 만 갈아 끼우면 처음 글로 잡아 둔 그리기 자리를
+        그대로 쓴다. 가운데 정렬이 처음 글 기준으로 굳는다는 뜻이다.
+        칸도 판도 폭이 박혀 있어 이 안만 새로 지으면 깜박이지 않는다
+        """
+        held = self._holds.get(key)
+        if held is None:
+            return
+        hold, ink, wide = held
+        try:
+            hold.clear()
+            self._texts.pop(key, None)
+            with hold:
+                self._label(text, ink, key, wide)
+        except Exception as e:
+            once(f"could not reword the panel: {e}")
 
     @staticmethod
     def _grip_at(said: dict):
@@ -301,7 +329,10 @@ class EbsSimulateOverlay:
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
                  ("verdict", "offset"): self._grip_at(said)}
-        self._say(("verdict", "offset"), self._offset_word(said))
+        word = self._offset_word(said)
+        if word != self._worded:
+            self._worded = word
+            self._reword(("verdict", "offset"), word)
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
@@ -518,6 +549,8 @@ class EbsSimulateOverlay:
         self._follow = None
         self._marks = []
         self._texts = {}
+        self._holds = {}
+        self._worded = ""
         self._grounds = {}
         if self._stack is not None:
             try:
