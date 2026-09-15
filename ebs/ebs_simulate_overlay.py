@@ -211,13 +211,18 @@ class EbsSimulateOverlay:
 
 
     def _floating(self, at, fill, ground, anchor=MIDDLE, step: float = 0.0,
-                  share: int = 1, group=None, key=None, on: bool = True):
-        """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다"""
+                  share: int = 1, group=None, key=None, on: bool = True,
+                  wide: int = 0):
+        """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다
+
+        wide  판 폭을 픽셀로 못 박는다. _place 가 computed_width 대신 이것을
+              쓰므로 글이 바뀌어도 판이 제자리에서 안 흔들린다
+        """
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
         with placer:
-            panel = ui.ZStack(width=0, height=0)
+            panel = ui.ZStack(width=ui.Pixel(wide) if wide else 0, height=0)
             with panel:
                 behind = ui.Rectangle(style={"background_color": ground,
                                              "border_radius": 4})
@@ -226,7 +231,7 @@ class EbsSimulateOverlay:
             self._grounds.setdefault(key, []).append(behind)
         panel.visible = False
         self._marks.append([placer, panel, tuple(at), anchor, step,
-                            share, group, key, on])
+                            share, group, key, on, wide])
 
     def _verdict_panel(self, said: dict) -> None:
         """못 세울 때만 보이는 한 줄. 판은 늘 만들어 둔다
@@ -242,9 +247,9 @@ class EbsSimulateOverlay:
                        on=bool(said.get("inside")))
         self._floating(self._grip_at(said),
                        self._one(self._offset_word(said), COLOR_INK,
-                                 ("verdict", "offset"), GRIP_WIDTH),
+                                 ("verdict", "offset"), GRIP_WIDTH - PAD_X * 2),
                        COLOR_CAN, BELOW, GRIP_STEP,
-                       key=("verdict", "offset"))
+                       key=("verdict", "offset"), wide=GRIP_WIDTH)
 
     def _one(self, text, ink=COLOR_TEXT, key=None, wide: int = 0):
         """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
@@ -296,8 +301,7 @@ class EbsSimulateOverlay:
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
                  ("verdict", "offset"): self._grip_at(said)}
-        self._say(("verdict", "offset"), self._offset_word(said),
-                  GRIP_WIDTH)
+        self._say(("verdict", "offset"), self._offset_word(said))
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
@@ -327,19 +331,11 @@ class EbsSimulateOverlay:
             self._texts.setdefault(key, label)
         return label
 
-    def _say(self, key, text: str, wide: int = 0) -> None:
-        """적어 둔 글줄 하나를 갈아 끼운다
-
-        wide  글만 바꾸면 처음 글로 잡아 둔 자리를 그대로 쓴다. 칸과 정렬을
-              다시 걸어 그 칸 안에서 자리를 다시 잡게 한다. 판은 안 헐린다
-        """
+    def _say(self, key, text: str) -> None:
+        """적어 둔 글줄 하나를 갈아 끼운다"""
         label = self._texts.get(key)
-        if label is None:
-            return
-        label.text = text
-        if wide:
-            label.width = ui.Pixel(wide)
-            label.alignment = ui.Alignment.CENTER
+        if label is not None:
+            label.text = text
 
     def _repaint(self, key, state: str) -> None:
         """그 면의 판 색을 지금 상태에 맞춘다. 끄는 동안 여유가 충돌로 바뀐다"""
@@ -420,19 +416,20 @@ class EbsSimulateOverlay:
             width = self._frame.computed_width
             height = self._frame.computed_height
             widest = {}
-            for _, panel, _, _, _, _, group, _, on in self._marks:
+            for _, panel, _, _, _, _, group, _, on, wide in self._marks:
                 if not on:
                     continue
                 if group is not None:
                     widest[group] = max(widest.get(group, 0.0),
-                                        panel.computed_width)
-            for placer, panel, at, anchor, step, share, group, _, on in \
+                                        wide or panel.computed_width)
+            for placer, panel, at, anchor, step, share, group, _, on, wide in \
                     self._marks:
                 spot = self._to_screen(at) if on else None
                 if spot is None:
                     panel.visible = False
                     continue
-                panel_w, panel_h = panel.computed_width, panel.computed_height
+                panel_w = wide or panel.computed_width
+                panel_h = panel.computed_height
                 room = self._room_at(at, spot)
                 stack = panel_h * (1.0 + PANEL_GAP)
                 block = widest.get(group, panel_w)
