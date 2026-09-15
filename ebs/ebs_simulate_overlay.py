@@ -19,7 +19,7 @@ FRAME_ID = "ebs_simulate_overlay"
 CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
 INNER  = "내부 장비와 충돌"
 HOME   = "원점"
-SLID   = "{0:+.3f} M"
+SLID   = "{0:+.3f}M"
 STALE  = "~"
 
 GRIP_HEAD  = 0.3
@@ -49,7 +49,7 @@ LEAST = "(최소간격 : {0:.2f}M)"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 GRIP_STEP  = 0.5
-GRIP_WIDTH = 112
+GRIP_WIDTH = 180
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
@@ -237,8 +237,8 @@ class EbsSimulateOverlay:
         def one(text, ink=COLOR_TEXT, key=None, wide: int = 0):
             """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
 
-            wide  판 너비를 못 박고 남는 자리를 양쪽으로 똑같이 나눈다.
-                  글자가 길든 짧든 판은 안 들썩이고 글은 가운데에 선다
+            wide  글줄 칸을 이만큼으로 못 박는다. 가장 긴 글보다 넉넉해야
+                  글이 칸을 넘지 않고, 넘지 않아야 가운데에 선다
             """
             def fill():
                 """판 속 글줄을 채운다"""
@@ -247,10 +247,8 @@ class EbsSimulateOverlay:
                     if not wide:
                         self._label(text, ink, key)
                         return
-                    with ui.HStack(height=0, width=wide):
-                        ui.Spacer()
-                        self._label(text, ink, key)
-                        ui.Spacer()
+                    with ui.ZStack(height=0, width=wide):
+                        self._label(text, ink, key, ui.Percent(100))
             return fill
 
         self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT,
@@ -326,9 +324,12 @@ class EbsSimulateOverlay:
             if entry[7] in shown:
                 entry[8] = shown[entry[7]]
 
-    def _label(self, text: str, ink: int, key=None):
-        """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다"""
-        label = ui.Label(text, height=0, width=0,
+    def _label(self, text: str, ink: int, key=None, wide=0):
+        """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다
+
+        wide  글줄 칸을 이만큼으로. 칸이 글보다 넓어야 가운데 정렬이 산다
+        """
+        label = ui.Label(text, height=0, width=wide,
                          alignment=ui.Alignment.CENTER,
                          style={"font_size": TEXT_SIZE, "color": ink})
         if key is not None:
