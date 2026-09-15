@@ -237,18 +237,20 @@ class EbsSimulateOverlay:
         def one(text, ink=COLOR_TEXT, key=None, wide: int = 0):
             """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
 
-            wide  글줄 너비를 못 박는다. 글자가 바뀌어도 판이 안 들썩인다
+            wide  판 너비를 못 박고 남는 자리를 양쪽으로 똑같이 나눈다.
+                  글자가 길든 짧든 판은 안 들썩이고 글은 가운데에 선다
             """
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
-                    label = ui.Label(text, height=0, width=wide,
-                                     alignment=ui.Alignment.CENTER,
-                                     style={"font_size": TEXT_SIZE,
-                                            "color": ink})
-                    if key is not None:
-                        self._texts.setdefault(key, label)
+                    if not wide:
+                        self._label(text, ink, key)
+                        return
+                    with ui.HStack(height=0, width=wide):
+                        ui.Spacer()
+                        self._label(text, ink, key)
+                        ui.Spacer()
             return fill
 
         self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT,
@@ -323,6 +325,15 @@ class EbsSimulateOverlay:
                 entry[2] = tuple(at)
             if entry[7] in shown:
                 entry[8] = shown[entry[7]]
+
+    def _label(self, text: str, ink: int, key=None):
+        """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다"""
+        label = ui.Label(text, height=0, width=0,
+                         alignment=ui.Alignment.CENTER,
+                         style={"font_size": TEXT_SIZE, "color": ink})
+        if key is not None:
+            self._texts.setdefault(key, label)
+        return label
 
     def _say(self, key, text: str) -> None:
         """적어 둔 글줄 하나를 갈아 끼운다"""
