@@ -49,7 +49,7 @@ LEAST = "(최소간격 : {0:.2f}M)"
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 GRIP_STEP  = 0.5
-GRIP_WIDTH = 180
+GRIP_WIDTH = 100
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
@@ -162,6 +162,7 @@ class EbsSimulateOverlay:
         self._marks = []
         self._follow = None
         self._texts = {}
+        self._worded = ""
         self._grounds = {}
         self._from = None
         self._was = 0.0
@@ -234,34 +235,55 @@ class EbsSimulateOverlay:
         on  끄는 동안 세울 수 있게 바뀌면 _restate 가 이 표만 내린다. 판을
                   그때 만들면 마우스를 받고 있는 판을 갈아엎게 된다
         """
-        def one(text, ink=COLOR_TEXT, key=None, wide: int = 0):
-            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
-
-            wide  글줄 칸을 이만큼으로 못 박는다. 가장 긴 글보다 넉넉해야
-                  글이 칸을 넘지 않고, 넘지 않아야 가운데에 선다
-            """
-            def fill():
-                """판 속 글줄을 채운다"""
-                with ui.VStack(spacing=0, style={"margin_width": PAD_X,
-                                                 "margin_height": PAD_Y}):
-                    if not wide:
-                        self._label(text, ink, key)
-                        return
-                    with ui.ZStack(height=0, width=wide):
-                        self._label(text, ink, key, ui.Percent(100))
-            return fill
-
-        self._floating(said.get("centre"), one(CANNOT), COLOR_CANNOT,
+        self._floating(said.get("centre"), self._one(CANNOT), COLOR_CANNOT,
                        key=("verdict", "centre"),
                        on=not said.get("placeable"))
-        self._floating(said.get("inside_at"), one(INNER), COLOR_CANNOT,
+        self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=bool(said.get("inside")))
+        self._worded = self._offset_word(said)
         self._floating(self._grip_at(said),
-                       one(self._offset_word(said), COLOR_INK,
-                           ("verdict", "offset"), GRIP_WIDTH),
+                       self._one(self._worded, COLOR_INK, None, GRIP_WIDTH),
                        COLOR_CAN, BELOW, GRIP_STEP,
                        key=("verdict", "offset"))
+
+    def _one(self, text, ink=COLOR_TEXT, key=None, wide: int = 0):
+        """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
+
+        wide  글줄 칸을 이만큼으로 못 박는다. 글이 길든 짧든 판이 안 들썩이고
+              정렬은 그 칸 안에서 일어난다
+        """
+        def fill():
+            """판 속 글줄을 채운다"""
+            with ui.VStack(spacing=0, style={"margin_width": PAD_X,
+                                             "margin_height": PAD_Y}):
+                if not wide:
+                    self._label(text, ink, key)
+                    return
+                with ui.ZStack(height=0, width=wide):
+                    self._label(text, ink, key, ui.Percent(100))
+        return fill
+
+    def _reword(self, key, ground, fill) -> None:
+        """그 판 속을 통째로 다시 채운다
+
+        ui.Label 은 글만 갈아 끼우면 처음 글로 잡아 둔 자리를 그대로 쓴다.
+        길이가 달라지는 글은 판을 다시 지어야 자리가 다시 잡힌다
+        """
+        for entry in self._marks:
+            if entry[7] != key:
+                continue
+            panel = entry[1]
+            try:
+                panel.clear()
+                with panel:
+                    behind = ui.Rectangle(
+                        style={"background_color": ground, "border_radius": 4})
+                    fill()
+                self._grounds[key] = [behind]
+            except Exception as e:
+                once(f"could not reword the panel: {e}")
+            return
 
     @staticmethod
     def _grip_at(said: dict):
@@ -304,7 +326,11 @@ class EbsSimulateOverlay:
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
                  ("verdict", "offset"): self._grip_at(said)}
-        self._say(("verdict", "offset"), self._offset_word(said))
+        word = self._offset_word(said)
+        if word != self._worded:
+            self._worded = word
+            self._reword(("verdict", "offset"), COLOR_CAN,
+                         self._one(word, COLOR_INK, None, GRIP_WIDTH))
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
@@ -522,6 +548,7 @@ class EbsSimulateOverlay:
         self._follow = None
         self._marks = []
         self._texts = {}
+        self._worded = ""
         self._grounds = {}
         if self._stack is not None:
             try:
