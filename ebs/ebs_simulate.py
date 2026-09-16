@@ -227,12 +227,8 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
-PAINT = (("inputs:diffuseColor", "Color3f"),
-         ("inputs:diffuse_color_constant", "Color3f"))
 
-SKIN_STRONG    = True
 SKIN_ROOT      = "/EbsSkin"
-SKIN_LAYER     = "ebs_skin.usda"
 SKIN_NAME      = "M_skin"
 
 OURS = (MARKER_ROOT, GRIP_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH, SKIN_ROOT)
@@ -334,7 +330,6 @@ class EbsSimulate:
         self._skin_worn: tuple = ()
         self._skin_wrote: list = []
         self._skin_use: bool = False
-        self._skin_layer_on = None
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
         self._base = None
@@ -753,55 +748,31 @@ class EbsSimulate:
         """지금 적어 둔 머티리얼 경로"""
         return self._skin
 
-    def _skin_layer(self, stage):
-        """머티리얼 갈이를 담는 전용 레이어. 원본 USD 는 안 건드린다
-
-        세션의 subLayerPaths 를 건드리면 레이어 스택이 바뀐다. 그때 USD 는
-        스테이지를 통째로 다시 짠다. init 에서 미리 끼워 두는 이유다
-        """
-        session = stage.GetSessionLayer()
-        if self._skin_layer_on is None:
-            self._skin_layer_on = Sdf.Layer.CreateAnonymous(SKIN_LAYER)
-        if self._skin_layer_on.identifier not in session.subLayerPaths:
-            session.subLayerPaths.insert(0, self._skin_layer_on.identifier)
-        return self._skin_layer_on
-
     def strip_skin(self) -> bool:
-        """입힌 것을 걷는다. 우리가 쓴 자리만 집어서 지운다
+        """건 것을 푼다. 우리가 건 메시에서 우리 것만 뺀다
 
-        Clear 는 레이어가 통째로 바뀌었다는 신호라 USD 가 어느 프림이
-        영향받는지 못 좁힌다. 프림 하나 썼는데도 스테이지를 넓게 다시 짠다.
-        쓴 자리를 적어 두었다가 그 프림 스펙만 지우면 그 자리만 다시 짠다
+        UnbindAllBindings 는 지금 쓰는 자리의 관계만 지운다. 그래서 원래
+        레퍼런스가 들고 있던 바인딩이 도로 떠오른다. 그것이 우리가 바라는 것이다
         """
-        layer = self._skin_layer_on
-        self._skin_worn = ()
-        if layer is None:
-            self._skin_wrote = []
-            return False
         wrote, self._skin_wrote = self._skin_wrote, []
+        self._skin_worn = ()
         if not wrote:
             return False
+        stage = self._get_stage()
+        if stage is None:
+            return False
         try:
-            with Sdf.ChangeBlock():
-                for path in wrote:
-                    self._drop_spec(layer, path)
+            with self._stage_timer("skin: unbind"):
+                with Usd.EditContext(stage, stage.GetSessionLayer()):
+                    for path in wrote:
+                        one = stage.GetPrimAtPath(path)
+                        if one is not None and one.IsValid():
+                            UsdShade.MaterialBindingAPI(one).UnbindAllBindings()
         except Exception as e:
-            self._note(f"could not take the skin off one by one "
-                       f"({type(e).__name__}: {e}); clearing the layer")
-            layer.Clear()
+            self._note(f"could not take the skin off: "
+                       f"{type(e).__name__}: {e}")
+            return False
         return True
-
-    @staticmethod
-    def _drop_spec(layer, path: str) -> None:
-        """그 레이어에서 프림 스펙 하나를 뺀다. 없으면 그냥 넘어간다"""
-        spec = layer.GetPrimAtPath(path)
-        if spec is None:
-            return
-        parent = spec.nameParent
-        if parent is None:
-            del layer.rootPrims[spec.name]
-        else:
-            del parent.nameChildren[spec.name]
 
     def warm_skin(self) -> bool:
         """적어 둔 머티리얼을 미리 챙겨 둔다. init 이 부른다
@@ -819,14 +790,51 @@ class EbsSimulate:
         with self._stage_timer("skin: load"):
             return self._make_skin(stage) is not None
 
+    def _skin_material(self, stage):
+        """걸 머티리얼 하나. 색이면 세우고, 씬 프림이면 그것, .mdl 이면 받은 것"""
+        colour = self._skin_colour(self._skin)
+        if colour is not None:
+            return self._make_colour(stage, colour)
+        if self._skin.startswith("/"):
+            found = stage.GetPrimAtPath(self._skin)
+            if found is None or not found.IsValid():
+                self._note(f"nothing stands at {self._skin}")
+                return None
+            material = UsdShade.Material(found)
+            if not material:
+                self._note(f"{self._skin} is not a material")
+                return None
+            return material
+        return self._make_skin(stage)
+
+    def _make_colour(self, stage, colour):
+        """그 색 하나짜리 머티리얼. 세션 레이어에 세운다"""
+        where = f"{SKIN_ROOT}/{SKIN_NAME}"
+        if self._skin_made == self._skin:
+            made = stage.GetPrimAtPath(where)
+            if made is not None and made.IsValid():
+                return UsdShade.Material(made)
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                UsdGeom.Scope.Define(stage, SKIN_ROOT)
+                material = UsdShade.Material.Define(stage, where)
+                shader = UsdShade.Shader.Define(stage, f"{where}/surface")
+                shader.CreateIdAttr("UsdPreviewSurface")
+                shader.CreateInput("diffuseColor",
+                                   Sdf.ValueTypeNames.Color3f).Set(
+                                       Gf.Vec3f(*colour))
+                material.CreateSurfaceOutput().ConnectToSource(
+                    shader.ConnectableAPI(), "surface")
+        except Exception as e:
+            self._note(f"could not build {self._skin}: "
+                       f"{type(e).__name__}: {e}")
+            return None
+        self._skin_made = self._skin
+        return material
+
     def _make_skin(self, stage):
         """적어 둔 자리의 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
         url = self._skin
-        if url.startswith("/"):
-            standing = self._skin_in_stage(stage, url)
-            if standing is not None:
-                self._skin_made = url
-            return standing
         where = f"{SKIN_ROOT}/{SKIN_NAME}"
         if self._skin_made == url:
             made = stage.GetPrimAtPath(where)
@@ -852,7 +860,7 @@ class EbsSimulate:
         """미리 챙겨 둔 머티리얼을 대상 장비에 건다. align 이 부른다
 
         strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
-        SKIN_LAYER  바인딩만 여기 쓴다. strip_skin 이 비우면 원래 색이다
+        세션 레이어에만 쓴다. 원본 USD 는 안 건드린다
         _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
                  레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
         """
@@ -869,25 +877,21 @@ class EbsSimulate:
         if worn == self._skin_worn:
             return True
         self.strip_skin()
-        colour = self._skin_colour(self._skin)
-        if colour is not None:
-            with self._stage_timer("skin: paint"):
-                if not self._paint_skin(stage, prim, colour):
-                    return False
-            self._skin_worn = worn
-            self._note(f"the equipment is painted {self._skin}")
-
-            return True
-        material = self._make_skin(stage)
+        material = self._skin_material(stage)
         if material is None:
             return False
         try:
-            with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
-                self._bind_skin(prim, material)
-                self._skin_wrote.append(str(prim.GetPath()))
+            with self._stage_timer("skin: bind"):
+                with Usd.EditContext(stage, stage.GetSessionLayer()):
+                    for one in self._skin_meshes(prim):
+                        self._bind_skin(one, material)
+                        self._skin_wrote.append(str(one.GetPath()))
         except Exception as e:
             self._note(f"could not put {self._skin} on the equipment: "
                        f"{type(e).__name__}: {e}")
+            return False
+        if not self._skin_wrote:
+            self._note(f"no mesh under {worn[0]} to bind")
             return False
         self._skin_worn = worn
         self._note(f"the equipment is wearing {self._skin}")
@@ -906,66 +910,27 @@ class EbsSimulate:
 
     @staticmethod
     def _bind_skin(prim, material) -> None:
-        """장비 뿌리에 바인딩 하나. API 스키마부터 붙인다
+        """그 메시에 직접 건다. 제 프림에 건 것이 제일 세다
 
-        SKIN_STRONG  안쪽 메시가 제 머티리얼을 들고 있어도 이기게 한다.
-                 대신 그 아래 전부를 다시 풀게 만들어 킷이 오래 멈춘다.
-                 끄면 안쪽에 바인딩이 없는 프림에만 먹지만 훨씬 싸다
+        조상에 strongerThanDescendants 로 걸면 그 아래 전부를 다시 풀게
+        만들어 킷이 오래 멈춘다. 메시마다 직접 걸면 그 메시들만 바뀐다
         """
-        try:
-            binding = UsdShade.MaterialBindingAPI.Apply(prim)
-        except Exception:
-            binding = UsdShade.MaterialBindingAPI(prim)
-        if SKIN_STRONG:
-            binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
-        else:
-            binding.Bind(material)
+        UsdShade.MaterialBindingAPI(prim).Bind(material)
 
-    def _paint_skin(self, stage, prim, colour) -> bool:
-        """장비가 이미 쓰는 셰이더의 색 입력만 덮어쓴다
-
-        바인딩을 안 건드리므로 그 아래 머티리얼을 다시 풀 일이 없다. 그래서
-        갈아 끼우는 것보다 훨씬 싸다
-        PAINT  규약마다 이름이 달라 둘 다 쓴다. 없는 이름은 셰이더가 무시한다
-        """
-        where = str(prim.GetPath())
-        shaders = self._looks_shaders(stage, where)
-        if not shaders:
-            self._note(f"nothing to paint under {where}/{LOOKS}"
-                       + (" (shared by instances)"
-                          if where in self._eqp_shared else ""))
-            return False
-        layer = self._skin_layer(stage)
-        value = Gf.Vec3f(*colour)
-        try:
-            with Sdf.ChangeBlock():
-                for shader in shaders:
-                    spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
-                    self._skin_wrote.append(shader)
-                    for name, kind in PAINT:
-                        attribute = spec.attributes.get(name)
-                        if attribute is None:
-                            attribute = Sdf.AttributeSpec(
-                                spec, name, getattr(Sdf.ValueTypeNames, kind))
-                        attribute.default = value
-        except Exception as e:
-            self._note(f"could not paint {len(shaders)} shader(s): "
-                       f"{type(e).__name__}: {e}")
-            return False
-        self._check_paint(stage, shaders[0], colour)
-        return True
-
-    def _check_paint(self, stage, shader: str, colour) -> None:
-        """정말 칠해졌는지 하나만 다시 읽어 본다. 이름이 안 맞으면 조용하다"""
-        prim = stage.GetPrimAtPath(shader)
-        if prim is None or not prim.IsValid():
-            return
-        for name, _ in PAINT:
-            attribute = prim.GetAttribute(name)
-            if attribute and attribute.Get() is not None:
-                return
-        self._note(f"{shader} took none of {[n for n, _ in PAINT]}; "
-                   f"that shader names its colour something else")
+    @staticmethod
+    def _skin_meshes(root) -> list:
+        """그 장비 아래 지오메트리들. 우리가 그린 것은 건너뛴다"""
+        found, stack = [], [root]
+        while stack:
+            one = stack.pop()
+            where = str(one.GetPath())
+            if where in OURS or where.startswith(OURS_UNDER):
+                continue
+            if one.GetTypeName() in GEOMETRY_TYPES:
+                found.append(one)
+                continue
+            stack.extend(_children(one))
+        return found
 
     @staticmethod
     def _skin_colour(text: str):
@@ -990,21 +955,6 @@ class EbsSimulate:
             return None
         return (tuple(v / 255.0 for v in got) if max(got) > 1.0
                 else tuple(got))
-
-    def _skin_in_stage(self, stage, url: str):
-        """씬 안에 이미 선 머티리얼이면 그것. 아니면 None
-
-        그 자리가 비었거나 머티리얼이 아니면 .mdl 로 돌려 보지 않는다
-        """
-        prim = stage.GetPrimAtPath(url)
-        if prim is None or not prim.IsValid():
-            self._note(f"nothing stands at {url}")
-            return None
-        material = UsdShade.Material(prim)
-        if not material:
-            self._note(f"{url} is not a material")
-            return None
-        return material
 
     @staticmethod
     def _skin_name(url: str) -> str:
@@ -1194,11 +1144,6 @@ class EbsSimulate:
             self._note(f"camera {CAMERA_PATH} created (the viewport switches "
                        f"to it when the camera step runs)")
 
-        with self._stage_timer("skin: layer"):
-            try:
-                self._skin_layer(self._get_stage())
-            except Exception as e:
-                self._note(f"no skin layer: {type(e).__name__}: {e}")
         self.warm_skin()
         self.hide_ebs()
         equipment = self.build_index()
