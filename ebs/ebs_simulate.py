@@ -230,6 +230,7 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 PAINT = (("inputs:diffuseColor", "Color3f"),
          ("inputs:diffuse_color_constant", "Color3f"))
 
+SKIN_STRONG    = True
 SKIN_ROOT      = "/EbsSkin"
 SKIN_LAYER     = "ebs_skin.usda"
 SKIN_NAME      = "M_skin"
@@ -901,12 +902,20 @@ class EbsSimulate:
 
     @staticmethod
     def _bind_skin(prim, material) -> None:
-        """안쪽 바인딩보다 센 바인딩 하나. API 스키마부터 붙인다"""
+        """장비 뿌리에 바인딩 하나. API 스키마부터 붙인다
+
+        SKIN_STRONG  안쪽 메시가 제 머티리얼을 들고 있어도 이기게 한다.
+                 대신 그 아래 전부를 다시 풀게 만들어 킷이 오래 멈춘다.
+                 끄면 안쪽에 바인딩이 없는 프림에만 먹지만 훨씬 싸다
+        """
         try:
             binding = UsdShade.MaterialBindingAPI.Apply(prim)
         except Exception:
             binding = UsdShade.MaterialBindingAPI(prim)
-        binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+        if SKIN_STRONG:
+            binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+        else:
+            binding.Bind(material)
 
     def _paint_skin(self, stage, prim, colour) -> bool:
         """장비가 이미 쓰는 셰이더의 색 입력만 덮어쓴다
