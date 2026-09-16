@@ -769,7 +769,7 @@ class EbsSimulate:
                         if one is not None and one.IsValid():
                             UsdShade.MaterialBindingAPI(one).UnbindAllBindings()
         except Exception as e:
-            self._note(f"could not take the skin off: "
+            self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
             return False
         return True
@@ -826,7 +826,7 @@ class EbsSimulate:
                 material.CreateSurfaceOutput().ConnectToSource(
                     shader.ConnectableAPI(), "surface")
         except Exception as e:
-            self._note(f"could not build {self._skin}: "
+            self._loud(f"skin: could not build {self._skin}: "
                        f"{type(e).__name__}: {e}")
             return None
         self._skin_made = self._skin
@@ -850,7 +850,8 @@ class EbsSimulate:
                 material.CreateSurfaceOutput("mdl").ConnectToSource(
                     shader.ConnectableAPI(), "out")
         except Exception as e:
-            self._note(f"could not load {url}: {type(e).__name__}: {e}")
+            self._loud(f"skin: could not load {url}: "
+                       f"{type(e).__name__}: {e}")
             return None
         self._skin_made = url
         self._note(f"material ready: {url}")
@@ -896,7 +897,7 @@ class EbsSimulate:
                         self._bind_skin(one, material)
                         self._skin_wrote.append(str(one.GetPath()))
         except Exception as e:
-            self._note(f"could not put {self._skin} on the equipment: "
+            self._loud(f"skin: could not bind {self._skin}: "
                        f"{type(e).__name__}: {e}")
             return False
         if not self._skin_wrote:
