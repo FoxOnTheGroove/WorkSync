@@ -869,8 +869,45 @@ class EbsSimulate:
                        f"{type(e).__name__}: {e}")
             return False
         self._skin_worn = worn + ("bind",)
-        self._loud(f"skin: bound {self._skin} on {worn[0]}")
+        with self._stage_timer("skin: leaves"):
+            deep = self._bind_leaves(stage, prim, material)
+        self._loud(f"skin: bound {self._skin} on {worn[0]} and on {deep} "
+                   f"mesh(es) under it")
         return True
+
+    def _bind_leaves(self, stage, prim, material) -> int:
+        """장비 아래 메시마다 직접 건다. 제 프림에 건 것이 제일 세다
+
+        조상에 걸어도 안쪽이 제 머티리얼을 들고 있으면 안 바뀌는 경우가 있다
+        인스턴스 프록시에는 쓸 수 없다. 그 수를 세어 로그에 적는다
+        """
+        done, shared, stack = 0, 0, [prim]
+        try:
+            with Usd.EditContext(stage,
+                                 Usd.EditTarget(self._skin_layer(stage))):
+                while stack:
+                    one = stack.pop()
+                    where = str(one.GetPath())
+                    if where in OURS or where.startswith(OURS_UNDER):
+                        continue
+                    try:
+                        if one.IsInstanceProxy():
+                            shared += 1
+                            continue
+                    except Exception:
+                        pass
+                    if one.GetTypeName() in GEOMETRY_TYPES:
+                        self._bind_skin(one, material)
+                        done += 1
+                        continue
+                    stack.extend(_children(one))
+        except Exception as e:
+            self._loud(f"skin: could not bind the meshes: "
+                       f"{type(e).__name__}: {e}")
+        if shared:
+            self._loud(f"skin: {shared} prim(s) under the equipment are "
+                       f"instance proxies; those keep their own material")
+        return done
 
     def _skin_material(self, stage):
         """걸 머티리얼 하나. 색이면 세우고, 씬에 있으면 그것, 아니면 .mdl
