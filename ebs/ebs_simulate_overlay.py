@@ -708,7 +708,9 @@ class EbsSimulateGrip:
             return False
         want = GRIP_HOT if self._hit(x, y) else GRIP_IDLE
         if want != self._state:
+            clock = time.perf_counter()
             self._draw(want)
+            EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return want == GRIP_HOT
 
     def press(self, x: float, y: float) -> bool:
@@ -724,7 +726,9 @@ class EbsSimulateGrip:
         self._from = x
         self._was = EbsSimulateService.get_nudge()
         EbsSimulateService.hold_clash(False)
+        clock = time.perf_counter()
         self._draw(GRIP_HOLD)
+        EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return True
 
     def drag(self, x: float, y: float) -> bool:
@@ -735,7 +739,10 @@ class EbsSimulateGrip:
         if per:
             metres = (x - self._from) / per * self._unit
             EbsSimulateService.slide(self._was + metres)
+            clock = time.perf_counter()
             EbsSimulateOverlay.restate()
+            EbsSimulateService.add_grip("패널", time.perf_counter() - clock)
+            EbsSimulateService.say_grip()
         return True
 
     def release(self) -> None:
