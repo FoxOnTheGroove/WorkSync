@@ -326,6 +326,7 @@ class EbsSimulate:
         self._clash_on: bool = True
         self._clash_live: bool = False
         self._skin: str = ""
+        self._skin_made: str = ""
         self._skin_layer_on = None
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
@@ -719,9 +720,12 @@ class EbsSimulate:
         if want == self._skin:
             return self._skin
         self._skin = want
+        self._skin_made = ""
         if self._target is not None:
             self.wear_skin()
-        elif not want:
+        elif want:
+            self.warm_skin()
+        else:
             self.strip_skin()
         return self._skin
 
@@ -739,42 +743,86 @@ class EbsSimulate:
         return self._skin_layer_on
 
     def strip_skin(self) -> bool:
-        """입혀 둔 머티리얼을 걷는다. 레이어를 비우면 끝이다"""
+        """입힌 것을 걷는다. 바인딩만 지우고 머티리얼은 남긴다
+
+        머티리얼까지 지우면 다시 켤 때 .mdl 을 또 받아 온다. 그게 느리다
+        """
         if self._skin_layer_on is None:
             return False
         self._skin_layer_on.Clear()
         return True
 
-    def wear_skin(self, prim=None) -> bool:
-        """적어 둔 .mdl 을 대상 장비에 입힌다
+    def warm_skin(self) -> bool:
+        """적어 둔 .mdl 을 미리 받아 둔다. init 이 부른다
 
-        strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
-        SKIN_LAYER  여기에만 쓴다. strip_skin 이 비우면 원래 색으로 돌아온다
+        머티리얼 프림을 세션 레이어에 세워 두면 그 자리에서 .mdl 을 읽는다.
+        SIM 때는 바인딩만 걸면 되므로 기다릴 일이 없다
         """
-        self.strip_skin()
-        url = self._skin
-        if prim is None:
-            prim = (self._target or {}).get("equipment")
         stage = self._get_stage()
-        if not url or stage is None or prim is None or not prim.IsValid():
+        if not self._skin or stage is None:
             return False
+        with self._stage_timer("skin: load"):
+            return self._make_skin(stage) is not None
+
+    def _make_skin(self, stage):
+        """적어 둔 .mdl 로 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
+        url = self._skin
+        where = f"{SKIN_ROOT}/{SKIN_NAME}"
+        if self._skin_made == url:
+            made = stage.GetPrimAtPath(where)
+            if made is not None and made.IsValid():
+                return UsdShade.Material(made)
         try:
-            with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
                 UsdGeom.Scope.Define(stage, SKIN_ROOT)
-                where = f"{SKIN_ROOT}/{SKIN_NAME}"
                 material = UsdShade.Material.Define(stage, where)
                 shader = UsdShade.Shader.Define(stage, f"{where}/mdl")
                 shader.SetSourceAsset(Sdf.AssetPath(url), "mdl")
                 shader.SetSourceAssetSubIdentifier(self._skin_name(url), "mdl")
                 material.CreateSurfaceOutput("mdl").ConnectToSource(
                     shader.ConnectableAPI(), "out")
+        except Exception as e:
+            self._note(f"could not load {url}: {type(e).__name__}: {e}")
+            return None
+        self._skin_made = url
+        self._note(f"material ready: {url}")
+        return material
+
+    def wear_skin(self, prim=None) -> bool:
+        """미리 받아 둔 머티리얼을 대상 장비에 건다
+
+        strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
+        SKIN_LAYER  바인딩만 여기 쓴다. strip_skin 이 비우면 원래 색이다
+        """
+        self.strip_skin()
+        if prim is None:
+            prim = (self._target or {}).get("equipment")
+        stage = self._get_stage()
+        if not self._skin or stage is None or prim is None or not prim.IsValid():
+            return False
+        material = self._make_skin(stage)
+        if material is None:
+            return False
+        try:
+            with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
                 self._bind_skin(prim, material)
         except Exception as e:
-            self._note(f"could not put {url} on the equipment: "
+            self._note(f"could not put {self._skin} on the equipment: "
                        f"{type(e).__name__}: {e}")
             return False
-        self._note(f"the equipment is wearing {url}")
+        self._note(f"the equipment is wearing {self._skin}")
         return True
+
+    def drop_skin(self) -> None:
+        """세워 둔 머티리얼까지 치운다. teardown 만 여기까지 간다"""
+        self.strip_skin()
+        self._skin_made = ""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            if stage.GetPrimAtPath(SKIN_ROOT).IsValid():
+                stage.RemovePrim(SKIN_ROOT)
 
     @staticmethod
     def _bind_skin(prim, material) -> None:
@@ -867,6 +915,7 @@ class EbsSimulate:
         """
         self.show_equipment()
         self.strip_skin()
+        self.drop_skin()
         self._camera.remove(self._get_stage())
         self.clear_markers()
         self.clear_port_lasers()
@@ -972,6 +1021,7 @@ class EbsSimulate:
             self._note(f"camera {CAMERA_PATH} created (the viewport switches "
                        f"to it when the camera step runs)")
 
+        self.warm_skin()
         self.hide_ebs()
         equipment = self.build_index()
         self._stage_boxes()
