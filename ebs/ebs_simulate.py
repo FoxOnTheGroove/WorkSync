@@ -229,6 +229,8 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
 PAINT = (("inputs:diffuseColor", "Color3f"),
          ("inputs:diffuse_color_constant", "Color3f"))
+MDL_SOURCE = "info:mdl:sourceAsset"
+MDL_SUB    = "info:mdl:sourceAsset:subIdentifier"
 
 SKIN_ROOT      = "/EbsSkin"
 SKIN_LAYER     = "ebs_skin.usda"
@@ -767,15 +769,18 @@ class EbsSimulate:
         return self._skin_layer_on
 
     def strip_skin(self) -> bool:
-        """입힌 것을 걷는다. 바인딩만 지우고 머티리얼은 남긴다
+        """입힌 것을 걷는다. 덮어쓴 것만 지우고 머티리얼은 남긴다
 
         머티리얼까지 지우면 다시 켤 때 .mdl 을 또 받아 온다. 그게 느리다
         """
         if self._skin_layer_on is None or not self._skin_worn:
             self._skin_worn = ()
             return False
+        how = self._skin_worn[2] if len(self._skin_worn) > 2 else "?"
         self._skin_worn = ()
-        self._skin_layer_on.Clear()
+        with self._stage_timer(f"skin: strip ({how})"):
+            self._skin_layer_on.Clear()
+        self._note(f"took the {how} skin off")
         return True
 
     def warm_skin(self) -> bool:
@@ -841,28 +846,39 @@ class EbsSimulate:
             self.strip_skin()
             return False
         worn = (str(prim.GetPath()), self._skin)
-        if worn == self._skin_worn:
+        if self._skin_worn[:2] == worn:
             return True
         self.strip_skin()
         colour = self._skin_colour(self._skin)
         if colour is not None:
             with self._stage_timer("skin: paint"):
-                if not self._paint_skin(stage, prim, colour):
+                if not self._over_shaders(stage, prim, self._paint_specs(colour)):
                     return False
-            self._skin_worn = worn
+            self._skin_worn = worn + ("paint",)
             self._note(f"the equipment is painted {self._skin}")
+            return True
+        if not self._skin.startswith("/"):
+            self._make_skin(stage)
+            with self._stage_timer("skin: dress"):
+                if not self._over_shaders(stage, prim,
+                                          self._mdl_specs(self._skin)):
+                    return False
+            self._skin_worn = worn + ("mdl",)
+            self._note(f"the equipment shaders now read {self._skin}")
             return True
         material = self._make_skin(stage)
         if material is None:
             return False
         try:
-            with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
-                self._bind_skin(prim, material)
+            with self._stage_timer("skin: bind"):
+                with Usd.EditContext(stage,
+                                     Usd.EditTarget(self._skin_layer(stage))):
+                    self._bind_skin(prim, material)
         except Exception as e:
             self._note(f"could not put {self._skin} on the equipment: "
                        f"{type(e).__name__}: {e}")
             return False
-        self._skin_worn = worn
+        self._skin_worn = worn + ("bind",)
         self._note(f"the equipment is wearing {self._skin}")
         return True
 
@@ -886,50 +902,60 @@ class EbsSimulate:
             binding = UsdShade.MaterialBindingAPI(prim)
         binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
 
-    def _paint_skin(self, stage, prim, colour) -> bool:
-        """장비가 이미 쓰는 셰이더의 색 입력만 덮어쓴다
+    @staticmethod
+    def _paint_specs(colour) -> tuple:
+        """색 하나를 규약마다 다른 이름으로. 없는 이름은 셰이더가 무시한다"""
+        value = Gf.Vec3f(*colour)
+        return tuple((name, kind, value) for name, kind in PAINT)
+
+    def _mdl_specs(self, url: str) -> tuple:
+        """셰이더가 읽을 .mdl 을 통째로 바꾼다. 파라미터를 맞출 일이 없다"""
+        return ((MDL_SOURCE, "Asset", Sdf.AssetPath(url)),
+                (MDL_SUB, "Token", self._skin_name(url)))
+
+    def _over_shaders(self, stage, prim, specs) -> bool:
+        """장비가 이미 쓰는 셰이더에 그 값들을 덮어쓴다
 
         바인딩을 안 건드리므로 그 아래 머티리얼을 다시 풀 일이 없다. 그래서
-        갈아 끼우는 것보다 훨씬 싸다
-        PAINT  규약마다 이름이 달라 둘 다 쓴다. 없는 이름은 셰이더가 무시한다
+        갈아 끼우는 것보다 훨씬 싸고, 걷는 것도 그만큼 싸다
         """
         where = str(prim.GetPath())
         shaders = self._looks_shaders(stage, where)
         if not shaders:
-            self._note(f"nothing to paint under {where}/{LOOKS}"
+            self._note(f"no shader to write under {where}/{LOOKS}"
                        + (" (shared by instances)"
                           if where in self._eqp_shared else ""))
             return False
         layer = self._skin_layer(stage)
-        value = Gf.Vec3f(*colour)
         try:
             with Sdf.ChangeBlock():
                 for shader in shaders:
                     spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
-                    for name, kind in PAINT:
+                    for name, kind, value in specs:
                         attribute = spec.attributes.get(name)
                         if attribute is None:
                             attribute = Sdf.AttributeSpec(
                                 spec, name, getattr(Sdf.ValueTypeNames, kind))
                         attribute.default = value
         except Exception as e:
-            self._note(f"could not paint {len(shaders)} shader(s): "
+            self._note(f"could not write {len(shaders)} shader(s): "
                        f"{type(e).__name__}: {e}")
             return False
-        self._check_paint(stage, shaders[0], colour)
+        self._note(f"wrote {len(shaders)} shader(s) under {where}")
+        self._check_over(stage, shaders[0], specs)
         return True
 
-    def _check_paint(self, stage, shader: str, colour) -> None:
-        """정말 칠해졌는지 하나만 다시 읽어 본다. 이름이 안 맞으면 조용하다"""
+    def _check_over(self, stage, shader: str, specs) -> None:
+        """정말 먹었는지 하나만 다시 읽어 본다. 이름이 안 맞으면 조용하다"""
         prim = stage.GetPrimAtPath(shader)
         if prim is None or not prim.IsValid():
             return
-        for name, _ in PAINT:
+        for name, _, _ in specs:
             attribute = prim.GetAttribute(name)
             if attribute and attribute.Get() is not None:
                 return
-        self._note(f"{shader} took none of {[n for n, _ in PAINT]}; "
-                   f"that shader names its colour something else")
+        self._note(f"{shader} took none of {[n for n, _, _ in specs]}; "
+                   f"that shader names these something else")
 
     @staticmethod
     def _skin_colour(text: str):
