@@ -812,6 +812,7 @@ class EbsSimulateMarks:
         self._pulse_inputs: tuple = ()
         self._pulse_from: float = 0.0
         self._clash_at: dict = {}
+        self._clash_lit: bool = True
 
     def draw(self, sheets: list, marks: list = None, boxes: list = None,
              fresh: bool = True) -> int:
@@ -834,26 +835,39 @@ class EbsSimulateMarks:
         return drawn
 
     def hide_clash(self) -> bool:
-        """내부충돌연출을 걷는다. 상자를 지우고 깜박임을 멈춘다
+        """내부충돌연출을 걷는다. 지우지 않고 뿌리 하나만 감춘다
 
+        지우면 상자마다 rprim 이 사라지고, 켤 때 그만큼 다시 지어야 한다.
+        손잡이를 잡을 때마다 그 값을 물면 잡는 순간이 걸린다
+        뿌리 하나를 invisible 로 두면 Hydra 는 깃발만 뒤집는다. 지어 둔 것도
+        _clash_at 도 그대로라 켤 때는 걸린 것만 다시 보이면 된다
         머티리얼은 Looks 아래 그대로 두어 다시 켤 때 만들 일이 없게 한다
         """
         self._stop_pulse()
+        return self._light_clash(False)
+
+    def _light_clash(self, on: bool) -> bool:
+        """상자 뿌리를 켜고 끈다. 달라질 때만 쓴다"""
+        if on == self._clash_lit:
+            return False
         stage = self._stage_of()
         if stage is None:
             return False
         where = CLASH_ROOT.format(self._root)
-        self._clash_at = {}
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            if not stage.GetPrimAtPath(where).IsValid():
+            prim = stage.GetPrimAtPath(where)
+            if prim is None or not prim.IsValid():
                 return False
-            stage.RemovePrim(where)
+            UsdGeom.Imageable(prim).GetVisibilityAttr().Set(
+                UsdGeom.Tokens.inherited if on else UsdGeom.Tokens.invisible)
+        self._clash_lit = on
         return True
 
     def clear(self) -> None:
         """뿌리를 통째로 지우고 깜박임도 놓는다"""
         self._stop_pulse()
         self._clash_at = {}
+        self._clash_lit = True
         stage = self._stage_of()
         if stage is None:
             return
@@ -961,11 +975,13 @@ class EbsSimulateMarks:
         세워 두고 걸린 것만 보이게 한다. 다시 지을 일이 없으니 깜박임도
         안 끊긴다
         boxes  None 이면 손대지 않는다. 빈 목록이면 전부 감춘다
+        _light_clash  잡는 동안 감춰 둔 뿌리를 도로 켠다
         """
         if boxes is None:
             return 0
         where = CLASH_ROOT.format(self._root)
         UsdGeom.Scope.Define(stage, where)
+        self._light_clash(True)
         show = set()
         for path, lo, hi in boxes:
             name = self._clash_at.get(path)
