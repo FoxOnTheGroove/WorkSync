@@ -900,8 +900,7 @@ class EbsSimulate:
         try:
             with self._stage_timer("skin: bind"):
                 with Usd.EditContext(stage, stage.GetSessionLayer()):
-                    self._open_instance(stage, prim)
-                    for one in self._skin_meshes(stage.GetPrimAtPath(where)):
+                    for one in self._skin_meshes(stage, prim):
                         self._bind_skin(one, material)
                         self._skin_wrote.append(str(one.GetPath()))
         except Exception as e:
@@ -936,12 +935,12 @@ class EbsSimulate:
         """
         UsdShade.MaterialBindingAPI(prim).Bind(material)
 
-    def _open_instance(self, stage, prim) -> bool:
-        """그 장비의 인스턴스를 풀어 안쪽 메시에 쓸 수 있게 한다
+    def _open_instance(self, prim) -> bool:
+        """인스턴스 하나를 푼다. 세션 레이어에만 쓴다
 
         인스턴스 프록시에는 USD 가 아무것도 못 쓰게 한다. 프로토타입을
-        고치면 같은 인스턴스가 전부 물든다. 그래서 이 장비 하나만 푼다.
-        공유가 끊기는 값이 들지만 걷을 때 도로 묶는다
+        고치면 같은 인스턴스가 전부 물드니 그럴 수도 없다. 만나는 것마다
+        푸는 수밖에 없고, 푼 자리는 걷을 때 도로 묶는다
         """
         try:
             if not prim.IsInstance():
@@ -952,18 +951,24 @@ class EbsSimulate:
                        f"{prim.GetPath()}: {type(e).__name__}: {e}")
             return False
         self._skin_opened.append(str(prim.GetPath()))
-        self._loud(f"skin: opened the instance at {prim.GetPath()} so its "
-                   f"meshes can take a binding")
         return True
 
-    def _skin_meshes(self, root) -> list:
-        """그 장비 아래 지오메트리들. 우리가 그린 것과 프록시는 건너뛴다"""
+    def _skin_meshes(self, stage, root) -> list:
+        """그 장비 아래 지오메트리들
+
+        내려가다 인스턴스를 만나면 풀고 계속 내려간다. 안 풀면 그 아래가
+        프록시라 아무것도 못 쓴다. 중첩되어 있어도 끝까지 닿는다
+        """
         found, shared, stack = [], 0, [root]
         while stack:
             one = stack.pop()
             where = str(one.GetPath())
             if where in OURS or where.startswith(OURS_UNDER):
                 continue
+            if self._open_instance(one):
+                one = stage.GetPrimAtPath(where)
+                if one is None or not one.IsValid():
+                    continue
             try:
                 if one.IsInstanceProxy():
                     shared += 1
@@ -974,6 +979,9 @@ class EbsSimulate:
                 found.append(one)
                 continue
             stack.extend(_children(one))
+        if self._skin_opened:
+            self._loud(f"skin: opened {len(self._skin_opened)} instance(s) "
+                       f"so their meshes can take a binding")
         if shared:
             self._loud(f"skin: {shared} prim(s) are still instance proxies; "
                        f"those keep their own material")
