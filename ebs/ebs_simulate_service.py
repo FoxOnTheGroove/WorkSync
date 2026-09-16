@@ -113,8 +113,13 @@ class EbsSimulateService:
 
     @classmethod
     def set_skin(cls, url):
-        """대상 장비에 입힐 머티리얼 경로. 빈 칸이면 원래 색 그대로"""
+        """대상 장비에 입힐 .mdl 경로. 값이 달라지면 바로 갈아입힌다"""
         return cls._simulate.set_skin(url)
+
+    @classmethod
+    def strip_skin(cls):
+        """갈아입힌 머티리얼을 걷고 원래 색으로"""
+        return cls._simulate.strip_skin()
 
     @classmethod
     def set_min_gaps(cls, side, ceiling):

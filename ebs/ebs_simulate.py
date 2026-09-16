@@ -227,7 +227,11 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
-OURS = (MARKER_ROOT, GRIP_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH)
+SKIN_ROOT      = "/EbsSkin"
+SKIN_LAYER     = "ebs_skin.usda"
+SKIN_NAME      = "M_skin"
+
+OURS = (MARKER_ROOT, GRIP_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH, SKIN_ROOT)
 OURS_UNDER = tuple(p + "/" for p in OURS)
 NOW = Usd.TimeCode.Default()
 
@@ -322,6 +326,7 @@ class EbsSimulate:
         self._clash_on: bool = True
         self._clash_live: bool = False
         self._skin: str = ""
+        self._skin_layer_on = None
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
         self._base = None
@@ -706,17 +711,85 @@ class EbsSimulate:
         self._inner = bool(inner)
 
     def set_skin(self, url: str) -> str:
-        """대상 장비에 입힐 머티리얼 경로. 빈 칸이면 원래 색 그대로
+        """대상 장비에 입힐 .mdl 경로. 빈 칸이면 원래 색 그대로
 
-        스테이지 안 프림 경로(/World/Looks/...)도, 옴니버스 URL 도 받는다.
-        입히는 것은 아직 안 한다. 값만 들고 있는다
+        값이 달라지면 바로 갈아입힌다. SIM 을 다시 안 눌러도 보인다
         """
-        self._skin = (url or "").strip()
+        want = (url or "").strip()
+        if want == self._skin:
+            return self._skin
+        self._skin = want
+        if self._target is not None:
+            self.wear_skin()
+        elif not want:
+            self.strip_skin()
         return self._skin
 
     def get_skin(self) -> str:
         """지금 적어 둔 머티리얼 경로"""
         return self._skin
+
+    def _skin_layer(self, stage):
+        """머티리얼 갈이를 담는 전용 레이어. 원본 USD 는 안 건드린다"""
+        session = stage.GetSessionLayer()
+        if self._skin_layer_on is None:
+            self._skin_layer_on = Sdf.Layer.CreateAnonymous(SKIN_LAYER)
+        if self._skin_layer_on.identifier not in session.subLayerPaths:
+            session.subLayerPaths.insert(0, self._skin_layer_on.identifier)
+        return self._skin_layer_on
+
+    def strip_skin(self) -> bool:
+        """입혀 둔 머티리얼을 걷는다. 레이어를 비우면 끝이다"""
+        if self._skin_layer_on is None:
+            return False
+        self._skin_layer_on.Clear()
+        return True
+
+    def wear_skin(self, prim=None) -> bool:
+        """적어 둔 .mdl 을 대상 장비에 입힌다
+
+        strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
+        SKIN_LAYER  여기에만 쓴다. strip_skin 이 비우면 원래 색으로 돌아온다
+        """
+        self.strip_skin()
+        url = self._skin
+        if prim is None:
+            prim = (self._target or {}).get("equipment")
+        stage = self._get_stage()
+        if not url or stage is None or prim is None or not prim.IsValid():
+            return False
+        try:
+            with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
+                UsdGeom.Scope.Define(stage, SKIN_ROOT)
+                where = f"{SKIN_ROOT}/{SKIN_NAME}"
+                material = UsdShade.Material.Define(stage, where)
+                shader = UsdShade.Shader.Define(stage, f"{where}/mdl")
+                shader.SetSourceAsset(Sdf.AssetPath(url), "mdl")
+                shader.SetSourceAssetSubIdentifier(self._skin_name(url), "mdl")
+                material.CreateSurfaceOutput("mdl").ConnectToSource(
+                    shader.ConnectableAPI(), "out")
+                self._bind_skin(prim, material)
+        except Exception as e:
+            self._note(f"could not put {url} on the equipment: "
+                       f"{type(e).__name__}: {e}")
+            return False
+        self._note(f"the equipment is wearing {url}")
+        return True
+
+    @staticmethod
+    def _bind_skin(prim, material) -> None:
+        """안쪽 바인딩보다 센 바인딩 하나. API 스키마부터 붙인다"""
+        try:
+            binding = UsdShade.MaterialBindingAPI.Apply(prim)
+        except Exception:
+            binding = UsdShade.MaterialBindingAPI(prim)
+        binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+
+    @staticmethod
+    def _skin_name(url: str) -> str:
+        """.mdl 안에서 찾을 머티리얼 이름. 파일 이름을 그대로 쓴다"""
+        stem = url.replace("\\", "/").rsplit("/", 1)[-1].split("?", 1)[0]
+        return stem[:-4] if stem.lower().endswith(".mdl") else stem
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
         """면마다 지켜야 하는 최소 여유(m)
@@ -793,6 +866,7 @@ class EbsSimulate:
         teardown  카메라 프림을 실제로 지우는 유일한 곳
         """
         self.show_equipment()
+        self.strip_skin()
         self._camera.remove(self._get_stage())
         self.clear_markers()
         self.clear_port_lasers()
@@ -1256,6 +1330,7 @@ class EbsSimulate:
             "ebs": ebs_prim,
             "anchor": anchor,
         }
+        self.wear_skin()
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
     def _do_focus(self) -> dict:
@@ -4450,12 +4525,14 @@ class EbsSimulate:
 
 
     def release_camera(self) -> None:
-        """카메라를 놓고 투명하게 만든 장비를 되돌린다
+        """카메라를 놓고 장비 색과 투명도를 되돌린다
 
         EbsSimulateCamera.release
         show_equipment  투명하게 했던 것을 되돌린다 (Clear 버튼)
+        strip_skin  갈아입힌 머티리얼도 같이 걷는다
         """
         self.show_equipment()
+        self.strip_skin()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:
