@@ -127,6 +127,16 @@ class EbsSimulateService:
         return cls._simulate.clear_all()
 
     @classmethod
+    def align_async(cls, equipment=""):
+        """align 인데 화면이 잦아들 때까지의 시간도 같이 잰다"""
+        return cls._simulate.align_async(equipment)
+
+    @classmethod
+    def clear_all_async(cls):
+        """clear_all 인데 화면이 잦아들 때까지의 시간도 같이 잰다"""
+        return cls._simulate.clear_all_async()
+
+    @classmethod
     def set_skin_use(cls, on):
         """머티리얼을 갈아입힐지. 끄면 받지도 걸지도 않는다"""
         return cls._simulate.set_skin_use(on)
@@ -135,6 +145,11 @@ class EbsSimulateService:
     def set_skin(cls, url):
         """대상 장비에 입힐 머티리얼. 씬 안 프림 경로도 .mdl 경로도 받는다"""
         return cls._simulate.set_skin(url)
+
+    @classmethod
+    def set_skin_open(cls, on):
+        """인스턴스를 풀어서 칠할지. 끄면 인스턴스 뿌리에 걸고 만다"""
+        return cls._simulate.set_skin_open(on)
 
     @classmethod
     def strip_skin(cls):

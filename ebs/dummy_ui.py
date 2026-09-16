@@ -26,6 +26,7 @@ VIEW_PATHS = (("Ceiling:", "", False),
 EQP_PREFIX = "EQP_"
 SKIN_URL   = ""
 SKIN_ON    = False
+SKIN_OPEN  = False
 
 NEAR_SPAN = 2.5
 NEAR_MIN, NEAR_MAX = 0.0, 5.0
@@ -115,6 +116,7 @@ class EbsDummyUI:
         self._eqp_field = None
         self._skin_field = None
         self._skin_on = None
+        self._skin_open = None
         self._side_field = None
         self._ceiling_field = None
         self._status_label = None
@@ -161,6 +163,9 @@ class EbsDummyUI:
                     ui.Label("skin", width=30)
                     self._skin_on = ui.CheckBox(width=20)
                     self._skin_on.model.set_value(SKIN_ON)
+                    ui.Label("open", width=34)
+                    self._skin_open = ui.CheckBox(width=20)
+                    self._skin_open.model.set_value(SKIN_OPEN)
                     ui.Label("Debug laser:", width=76)
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
@@ -317,7 +322,11 @@ class EbsDummyUI:
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
         self._apply_settings()
         self._reset_nudge()
-        self._render(EbsSimulateService.align(
+        self._start(self._aligning())
+
+    async def _aligning(self):
+        """align 을 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
+        self._render(await EbsSimulateService.align_async(
             self._eqp_field.model.get_value_as_string()))
         self._overlay(EbsSimulateOverlay.hide)
         EbsSimulateService.say_phases()
@@ -379,7 +388,11 @@ class EbsDummyUI:
 
     def _on_clear_markers(self):
         """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
-        EbsSimulateService.clear_all()
+        self._start(self._clearing())
+
+    async def _clearing(self):
+        """Clear 를 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
+        await EbsSimulateService.clear_all_async()
         self._overlay(EbsSimulateOverlay.hide)
         EbsSimulateService.say_phases()
         self._reset_nudge()
@@ -426,6 +439,8 @@ class EbsDummyUI:
                                       self._inner.model.get_value_as_bool())
         EbsSimulateService.set_clash_live(self._live.model.get_value_as_bool())
         EbsSimulateService.set_skin_use(self._skin_on.model.get_value_as_bool())
+        EbsSimulateService.set_skin_open(
+            self._skin_open.model.get_value_as_bool())
         EbsSimulateService.set_near_span(self._near_span())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))

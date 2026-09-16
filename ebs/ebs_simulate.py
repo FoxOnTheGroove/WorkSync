@@ -260,6 +260,13 @@ LEAD_ROOM   = 0.05
 
 GRID = 1
 FADE_OTHERS = False
+SETTLE_FRAME = 0.02
+SETTLE_CALM  = 3
+SETTLE_MOST  = 600
+SKIN_TELL = (("roots", "뿌리"), ("meshes", "메시"), ("bound", "바인드"),
+             ("undone", "언바인드"), ("closed", "도로묶음"))
+SKIN_SPENT = (("plan", "계획"), ("open", "열기"), ("bind", "걸기"),
+              ("close", "걷기"), ("settle", "정착"))
 PHASES = (("camera", "카메라셋"), ("place", "EBS식립"),
           ("skin", "머티리얼"), ("collide", "충돌연산"),
           ("overlay", "UI·기즈모"))
@@ -334,6 +341,8 @@ class EbsSimulate:
         self._skin_worn: tuple = ()
         self._skin_wrote: list = []
         self._skin_opened: list = []
+        self._skin_open: bool = False
+        self._skin_told: dict = {}
         self._phases: dict = {}
         self._skin_use: bool = False
         self._clash_when: float = 0.0
@@ -754,15 +763,30 @@ class EbsSimulate:
         """지금 적어 둔 머티리얼 경로"""
         return self._skin
 
+    def set_skin_open(self, on: bool) -> bool:
+        """인스턴스를 풀어서 칠할지. 끄면 인스턴스 뿌리에 걸고 만다
+
+        푸는 쪽은 공유를 끊어 메시마다 rprim 을 새로 짓게 만든다. 멈추는
+        구간의 거의 전부가 거기다. 뿌리에 걸면 상속으로만 닿아서 공짜다.
+        킷이 인스턴스별 상속 바인딩을 안 그려 주면 그때만 켠다
+        """
+        want = bool(on)
+        if want != self._skin_open:
+            self._skin_open = want
+            self._skin_worn = ()
+        return self._skin_open
+
+    def get_skin_open(self) -> bool:
+        """인스턴스를 풀어서 칠하는 중인지"""
+        return self._skin_open
+
     def strip_skin(self) -> bool:
-        """건 것을 푼다. 인스턴스였던 자리는 도로 묶기만 한다
+        """건 것을 푼다. 언바인드와 도로 묶기를 한 덩이로 한다
 
         도로 묶으면 그 아래가 인스턴스 프록시가 되고, 프록시 경로에 있는
-        세션 레이어 의견은 USD 가 안 본다. 그래서 바인딩은 저절로 죽는다.
-        따로 지우면 재구성 파동이 한 번 더 온다. 그 한 번이 비싸다
-        같은 장비를 다시 풀면 적어 둔 바인딩이 그대로 살아나므로, 두 번째
-        부터는 거는 값이 안 바뀌어 통지가 안 간다
-        인스턴스 아래가 아닌 메시는 도로 묶을 것이 없으니 직접 푼다
+        세션 레이어 의견은 USD 가 안 본다. 그래서 그 아래 바인딩은 저절로
+        죽는다. 남은 스펙은 같은 장비를 다시 풀 때 그대로 살아난다
+        ChangeBlock  N 번 쓰면 재구성이 N 번 돈다. 한 덩이면 한 번이다
         """
         opened, self._skin_opened = self._skin_opened, []
         wrote, self._skin_wrote = self._skin_wrote, []
@@ -775,16 +799,24 @@ class EbsSimulate:
             return False
         try:
             with self._phase("skin"), self._stage_timer("skin: close"):
-                with Usd.EditContext(stage, stage.GetSessionLayer()):
-                    for path in left:
-                        one = stage.GetPrimAtPath(path)
-                        if one is not None and one.IsValid():
+                started = time.perf_counter()
+                layer = stage.GetSessionLayer()
+                picked = [one for one in
+                          (stage.GetPrimAtPath(path) for path in left)
+                          if one is not None and one.IsValid()]
+                with Usd.EditContext(stage, layer):
+                    with Sdf.ChangeBlock():
+                        for one in picked:
                             UsdShade.MaterialBindingAPI(
                                 one).UnbindAllBindings()
-                    for path in opened:
-                        one = stage.GetPrimAtPath(path)
-                        if one is not None and one.IsValid():
-                            one.ClearInstanceable()
+                        for path in opened:
+                            spec = layer.GetPrimAtPath(path)
+                            if spec is not None:
+                                spec.ClearInfo("instanceable")
+                self._skin_told = {"what": "머티리얼 걷기",
+                                   "undone": len(picked),
+                                   "closed": len(opened),
+                                   "close": time.perf_counter() - started}
         except Exception as e:
             self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
@@ -796,6 +828,32 @@ class EbsSimulate:
         """그 자리가 도로 묶을 인스턴스 밑에 드는지"""
         return any(path == root or path.startswith(f"{root}/")
                    for root in roots)
+
+    async def settle_skin(self, name: str = "skin") -> float:
+        """킷이 다시 매끄러워질 때까지 프레임을 돌리고 그 시간을 얹는다
+
+        저작이 끝나도 Hydra 는 다음 프레임부터 메인 스레드에서 rprim 을
+        다시 짓는다. 멈춘 것처럼 보이는 구간이 거기고, 우리 호출이 돌아온
+        뒤라 어떤 계측에도 안 잡힌다. 마지막 느린 프레임까지를 잰다
+        """
+        import omni.kit.app
+        app = omni.kit.app.get_app()
+        started = last = time.perf_counter()
+        busy, calm = started, 0
+        for _ in range(SETTLE_MOST):
+            await app.next_update_async()
+            now = time.perf_counter()
+            if now - last > SETTLE_FRAME:
+                busy, calm = now, 0
+            else:
+                calm += 1
+            last = now
+            if calm >= SETTLE_CALM:
+                break
+        spent = max(0.0, busy - started)
+        self.add_phase(name, spent)
+        self._skin_told["settle"] = spent
+        return spent
 
     def warm_skin(self) -> bool:
         """적어 둔 머티리얼을 미리 챙겨 둔다. init 이 부른다
@@ -883,10 +941,10 @@ class EbsSimulate:
     def wear_skin(self, prim=None) -> bool:
         """미리 챙겨 둔 머티리얼을 대상 장비에 건다. align 이 부른다
 
-        strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
+        세 걸음이다. 한 자도 안 쓰고 어디에 걸지 정하고(_skin_plan),
+        풀 것이 있으면 한 덩이로 풀고(_open_instances), 한 덩이로 건다
         세션 레이어에만 쓴다. 원본 USD 는 안 건드린다
-        _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
-                 레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
+        _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다
         """
         if not self._skin_use:
             if self._skin:
@@ -903,7 +961,7 @@ class EbsSimulate:
             self._loud("skin: no equipment to bind on yet")
             self.strip_skin()
             return False
-        worn = (str(prim.GetPath()), self._skin)
+        worn = (str(prim.GetPath()), self._skin, self._skin_open)
         if worn == self._skin_worn:
             self._loud(f"skin: already on {worn[0]}, left alone")
             return True
@@ -912,23 +970,36 @@ class EbsSimulate:
         if material is None:
             self._loud(f"skin: could not resolve {self._skin}")
             return False
-        where = str(prim.GetPath())
+        told = {"what": ("머티리얼 풀어서" if self._skin_open
+                         else "머티리얼 인스턴스뿌리")}
         try:
-            with self._phase("skin"), self._stage_timer("skin: bind"):
-                with Usd.EditContext(stage, stage.GetSessionLayer()):
-                    for one in self._skin_meshes(stage, prim):
-                        self._bind_skin(one, material)
-                        self._skin_wrote.append(str(one.GetPath()))
+            with self._phase("skin"):
+                clock = time.perf_counter()
+                with self._stage_timer("skin: plan"):
+                    roots, meshes = self._skin_plan(prim)
+                told["roots"], told["meshes"] = len(roots), len(meshes)
+                told["plan"], clock = time.perf_counter() - clock, time.perf_counter()
+                if self._skin_open and roots:
+                    with self._stage_timer("skin: open"):
+                        self._open_instances(stage, roots)
+                    roots = []
+                    told["open"], clock = (time.perf_counter() - clock,
+                                           time.perf_counter())
+                with self._stage_timer("skin: bind"):
+                    told["bound"] = self._bind_all(stage, material,
+                                                   roots, meshes)
+                told["bind"] = time.perf_counter() - clock
         except Exception as e:
             self._loud(f"skin: could not bind {self._skin}: "
                        f"{type(e).__name__}: {e}")
             return False
+        self._skin_told = told
         if not self._skin_wrote:
             self._loud(f"skin: no mesh under {worn[0]} to bind")
             return False
         self._skin_worn = worn
         self._loud(f"skin: bound {self._skin} on {len(self._skin_wrote)} "
-                   f"mesh(es) under {worn[0]}")
+                   f"place(s) under {worn[0]}")
         return True
 
     def drop_skin(self) -> None:
@@ -943,65 +1014,79 @@ class EbsSimulate:
                 stage.RemovePrim(SKIN_ROOT)
 
     @staticmethod
-    def _bind_skin(prim, material) -> None:
-        """그 메시에 직접 건다. 제 프림에 건 것이 제일 세다
+    def _bind_skin(prim, material, strong: bool = False) -> None:
+        """그 프림에 건다. strong 이면 그 아래 의견까지 이긴다
 
-        조상에 strongerThanDescendants 로 걸면 그 아래 전부를 다시 풀게
-        만들어 킷이 오래 멈춘다. 메시마다 직접 걸면 그 메시들만 바뀐다
+        메시에 직접 건 것이 제일 세다. 인스턴스 뿌리는 아래가 프로토타입
+        이라 직접 못 걸고, 상속으로 닿게 하려면 strong 이어야 한다
         """
-        UsdShade.MaterialBindingAPI(prim).Bind(material)
+        api = UsdShade.MaterialBindingAPI(prim)
+        if strong:
+            api.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+        else:
+            api.Bind(material)
 
-    def _open_instance(self, prim) -> bool:
-        """인스턴스 하나를 푼다. 세션 레이어에만 쓴다
+    def _skin_plan(self, root) -> tuple:
+        """어디에 걸지만 먼저 정한다. 한 자도 안 쓴다
 
-        인스턴스 프록시에는 USD 가 아무것도 못 쓰게 한다. 프로토타입을
-        고치면 같은 인스턴스가 전부 물드니 그럴 수도 없다. 만나는 것마다
-        푸는 수밖에 없고, 푼 자리는 걷을 때 도로 묶는다
+        프록시 안까지 읽기만 하며 내려간다. 인스턴스를 만나면 그 뿌리를
+        적고 멈춘다. 뿌리 하나면 그 아래 전부에 상속으로 닿는다
+        풀기로 했으면 뿌리를 적고도 계속 내려가 안쪽 메시까지 모은다
         """
-        try:
-            if not prim.IsInstance():
-                return False
-            prim.SetInstanceable(False)
-        except Exception as e:
-            self._loud(f"skin: could not open the instance at "
-                       f"{prim.GetPath()}: {type(e).__name__}: {e}")
-            return False
-        self._skin_opened.append(str(prim.GetPath()))
-        return True
-
-    def _skin_meshes(self, stage, root) -> list:
-        """그 장비 아래 지오메트리들
-
-        내려가다 인스턴스를 만나면 풀고 계속 내려간다. 안 풀면 그 아래가
-        프록시라 아무것도 못 쓴다. 중첩되어 있어도 끝까지 닿는다
-        """
-        found, shared, stack = [], 0, [root]
+        roots, meshes, stack = [], [], [root]
         while stack:
             one = stack.pop()
             where = str(one.GetPath())
             if where in OURS or where.startswith(OURS_UNDER):
                 continue
-            if self._open_instance(one):
-                one = stage.GetPrimAtPath(where)
-                if one is None or not one.IsValid():
-                    continue
             try:
-                if one.IsInstanceProxy():
-                    shared += 1
-                    continue
+                inside = bool(one.IsInstance())
             except Exception:
-                pass
+                inside = False
+            if inside:
+                roots.append(where)
+                if not self._skin_open:
+                    continue
             if one.GetTypeName() in GEOMETRY_TYPES:
-                found.append(one)
+                meshes.append(where)
                 continue
             stack.extend(_children(one))
-        if self._skin_opened:
-            self._loud(f"skin: opened {len(self._skin_opened)} instance(s) "
-                       f"so their meshes can take a binding")
-        if shared:
-            self._loud(f"skin: {shared} prim(s) are still instance proxies; "
-                       f"those keep their own material")
-        return found
+        return roots, meshes
+
+    def _open_instances(self, stage, roots) -> int:
+        """적어 둔 인스턴스를 한 덩이로 푼다. 재구성이 한 번만 돈다
+
+        프록시 경로에는 USD API 로 못 쓴다. 레이어에 스펙을 직접 깔면
+        블록이 닫힐 때 위에서 아래로 한 번에 합성되어 중첩까지 같이 풀린다
+        """
+        layer = stage.GetSessionLayer()
+        with Sdf.ChangeBlock():
+            for path in roots:
+                spec = Sdf.CreatePrimInLayer(layer, path)
+                if spec is not None:
+                    spec.SetInfo("instanceable", False)
+        self._skin_opened.extend(roots)
+        self._loud(f"skin: opened {len(roots)} instance(s) in one block")
+        return len(roots)
+
+    def _bind_all(self, stage, material, roots, meshes) -> int:
+        """정해 둔 자리에 한 덩이로 건다. 통지가 한 번만 간다
+
+        프림은 블록 밖에서 미리 집는다. 블록 안에서는 스테이지를 안 읽는다
+        """
+        picked = [(path, True) for path in roots]
+        picked += [(path, False) for path in meshes]
+        ready = []
+        for path, strong in picked:
+            one = stage.GetPrimAtPath(path)
+            if one is not None and one.IsValid():
+                ready.append((path, one, strong))
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            with Sdf.ChangeBlock():
+                for path, one, strong in ready:
+                    self._bind_skin(one, material, strong)
+                    self._skin_wrote.append(path)
+        return len(ready)
 
     @staticmethod
     def _skin_colour(text: str):
@@ -1140,6 +1225,7 @@ class EbsSimulate:
         self._notes = []
         self._blocked = ""
         self._phases = {}
+        self._skin_told = {}
         self._started = time.perf_counter()
 
     def _done(self, payload: dict) -> dict:
@@ -1176,10 +1262,27 @@ class EbsSimulate:
         return (f"[ebs] {self._step or 'step'} {spent:.2f}s"
                 + (f" | {parts}" if parts else ""))
 
+    def skin_line(self) -> str:
+        """머티리얼을 어디에 몇 개 걸고 어디서 얼마나 걸렸나. 한 줄이면 된다"""
+        told = self._skin_told
+        if not told:
+            return ""
+        counts = " · ".join(f"{label} {told[key]}"
+                            for key, label in SKIN_TELL if told.get(key))
+        spent = " · ".join(f"{label} {told[key]:.2f}s"
+                           for key, label in SKIN_SPENT
+                           if told.get(key, 0.0) >= 0.005)
+        parts = [one for one in (counts, spent) if one]
+        return (f"[ebs] {told.get('what', 'skin')}"
+                + (" | " + " | ".join(parts) if parts else ""))
+
     def say_phases(self) -> str:
-        """한 줄을 찍고 그대로 돌려준다"""
+        """단계 한 줄을 찍는다. 머티리얼이 한 일이 있으면 그것도 한 줄"""
         line = self.phase_line()
         print(line)
+        skin = self.skin_line()
+        if skin:
+            print(skin)
         return line
 
     def _note(self, text: str) -> None:
@@ -1284,6 +1387,12 @@ class EbsSimulate:
         if not made["ok"]:
             return self._done(made)
         return self._done(self._do_align())
+
+    async def align_async(self, equipment: str = "") -> dict:
+        """align 인데 화면이 잦아들 때까지 기다려 그 시간까지 담는다"""
+        told = self.align(equipment)
+        await self.settle_skin()
+        return told
 
     def focus(self, equipment: str = "") -> dict:
         """prepare 를 품고, EBS 를 놓을 자리에 카메라를 세운다
@@ -1549,7 +1658,8 @@ class EbsSimulate:
         told = self._do_focus()
         if not told["ok"]:
             return self._done(told)
-        self.wear_skin()
+        if self.wear_skin():
+            await self.settle_skin()
         self.show_ebs(self._target["ebs"])
         for _ in self._collide_steps():
             await omni.kit.app.get_app().next_update_async()
@@ -4820,6 +4930,12 @@ class EbsSimulate:
                     self._note(f"clear failed at {phase}: "
                                f"{type(e).__name__}: {e}")
         return self._done(self._payload(True, "cleared"))
+
+    async def clear_all_async(self) -> dict:
+        """clear_all 인데 화면이 잦아들 때까지 기다려 그 시간까지 담는다"""
+        told = self.clear_all()
+        await self.settle_skin()
+        return told
 
     def _timing_line(self, what: str) -> str:
         """이번 단계의 구간별 시간 한 줄. 0.05 초 밑은 안 적는다"""
