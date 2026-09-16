@@ -1047,9 +1047,10 @@ class EbsSimulate:
             if got is None or not got.IsValid():
                 continue
             asset = got.GetAttribute(MDL_SOURCE)
-            if asset and asset.Get():
+            found = self._resolved(asset.Get()) if asset else ""
+            if found:
                 sub = got.GetAttribute(MDL_SUB)
-                return ((MDL_SOURCE, "Asset", asset.Get()),
+                return ((MDL_SOURCE, "Asset", Sdf.AssetPath(found)),
                         (MDL_SUB, "Token", (sub.Get() if sub else "") or ""))
             for name, kind in PAINT:
                 colour = got.GetAttribute(name)
@@ -1057,6 +1058,23 @@ class EbsSimulate:
                     return self._paint_specs(tuple(colour.Get()))
         self._loud(f"skin: {url} has no mdl source or colour to copy")
         return ()
+
+    def _resolved(self, asset) -> str:
+        """에셋 경로를 절대 경로로. 상대 경로는 우리 레이어에서 안 풀린다
+
+        원본이 적어 둔 것은 그 레이어 옆을 가리킬 수 있다. 익명 레이어에
+        그대로 옮겨 적으면 기준 자리가 없어져 빨갛게 뜬다
+        """
+        if asset is None:
+            return ""
+        got = getattr(asset, "resolvedPath", "") or getattr(asset, "path", "")
+        if not got:
+            got = str(asset)
+        if got and not got.startswith(("omniverse://", "/", "http")) \
+                and "://" not in got:
+            self._loud(f"skin: {got} did not resolve to a full path; "
+                       f"it may not be found from our layer")
+        return got
 
     @staticmethod
     def _shaders_under(stage, where: str) -> list:
