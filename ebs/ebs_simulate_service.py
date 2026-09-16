@@ -113,7 +113,7 @@ class EbsSimulateService:
 
     @classmethod
     def set_skin(cls, url):
-        """대상 장비에 입힐 .mdl 경로. 값이 달라지면 바로 갈아입힌다"""
+        """대상 장비에 입힐 머티리얼. 씬 안 프림 경로도 .mdl 경로도 받는다"""
         return cls._simulate.set_skin(url)
 
     @classmethod

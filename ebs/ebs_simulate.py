@@ -712,8 +712,9 @@ class EbsSimulate:
         self._inner = bool(inner)
 
     def set_skin(self, url: str) -> str:
-        """대상 장비에 입힐 .mdl 경로. 빈 칸이면 원래 색 그대로
+        """대상 장비에 입힐 머티리얼. 빈 칸이면 원래 색 그대로
 
+        / 로 시작하면 씬 안 머티리얼 프림, 아니면 받아 올 .mdl 로 본다
         값이 달라지면 바로 갈아입힌다. SIM 을 다시 안 눌러도 보인다
         """
         want = (url or "").strip()
@@ -753,10 +754,10 @@ class EbsSimulate:
         return True
 
     def warm_skin(self) -> bool:
-        """적어 둔 .mdl 을 미리 받아 둔다. init 이 부른다
+        """적어 둔 머티리얼을 미리 챙겨 둔다. init 이 부른다
 
-        머티리얼 프림을 세션 레이어에 세워 두면 그 자리에서 .mdl 을 읽는다.
-        SIM 때는 바인딩만 걸면 되므로 기다릴 일이 없다
+        .mdl 이면 세션 레이어에 프림을 세워 그 자리에서 읽는다. SIM 때는
+        바인딩만 걸면 되므로 기다릴 일이 없다. 씬 안 프림이면 읽을 것도 없다
         """
         stage = self._get_stage()
         if not self._skin or stage is None:
@@ -765,8 +766,13 @@ class EbsSimulate:
             return self._make_skin(stage) is not None
 
     def _make_skin(self, stage):
-        """적어 둔 .mdl 로 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
+        """적어 둔 자리의 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
         url = self._skin
+        if url.startswith("/"):
+            standing = self._skin_in_stage(stage, url)
+            if standing is not None:
+                self._skin_made = url
+            return standing
         where = f"{SKIN_ROOT}/{SKIN_NAME}"
         if self._skin_made == url:
             made = stage.GetPrimAtPath(where)
@@ -832,6 +838,21 @@ class EbsSimulate:
         except Exception:
             binding = UsdShade.MaterialBindingAPI(prim)
         binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+
+    def _skin_in_stage(self, stage, url: str):
+        """씬 안에 이미 선 머티리얼이면 그것. 아니면 None
+
+        그 자리가 비었거나 머티리얼이 아니면 .mdl 로 돌려 보지 않는다
+        """
+        prim = stage.GetPrimAtPath(url)
+        if prim is None or not prim.IsValid():
+            self._note(f"nothing stands at {url}")
+            return None
+        material = UsdShade.Material(prim)
+        if not material:
+            self._note(f"{url} is not a material")
+            return None
+        return material
 
     @staticmethod
     def _skin_name(url: str) -> str:
