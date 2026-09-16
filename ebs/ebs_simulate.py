@@ -4800,12 +4800,16 @@ class EbsSimulate:
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
     def clear_all(self) -> dict:
-        """Clear 버튼이 하는 일 전부. 어디서 얼마가 걸렸는지 한 줄로 찍는다"""
+        """Clear 버튼이 하는 일 전부. 어디서 얼마가 걸렸는지 한 줄로 찍는다
+
+        strip_skin  제일 먼저 푼다. 장비 전체를 다시 그리게 만드는 일이라,
+                 뒤에 두면 앞에서 지운 것까지 같은 파동에 얹혀 늦어진다
+        """
         self._begin("clear")
-        for phase, work in (("overlay", self.clear_markers),
+        for phase, work in (("skin", self.strip_skin),
+                            ("overlay", self.clear_markers),
                             ("overlay", self.clear_port_lasers),
                             ("overlay", self.clear_sweep),
-                            ("skin", self.strip_skin),
                             ("skin", self.show_equipment),
                             ("camera", self.release_camera),
                             ("place", self.hide_ebs)):
