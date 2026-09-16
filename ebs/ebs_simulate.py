@@ -780,7 +780,7 @@ class EbsSimulate:
         self._skin_worn = ()
         with self._stage_timer(f"skin: strip ({how})"):
             self._skin_layer_on.Clear()
-        self._note(f"took the {how} skin off")
+        self._loud(f"skin: took the {how} skin off")
         return True
 
     def warm_skin(self) -> bool:
@@ -922,7 +922,7 @@ class EbsSimulate:
         where = str(prim.GetPath())
         shaders = self._looks_shaders(stage, where)
         if not shaders:
-            self._note(f"no shader to write under {where}/{LOOKS}"
+            self._loud(f"skin: no shader to write under {where}/{LOOKS}"
                        + (" (shared by instances)"
                           if where in self._eqp_shared else ""))
             return False
@@ -941,9 +941,9 @@ class EbsSimulate:
             self._note(f"could not write {len(shaders)} shader(s): "
                        f"{type(e).__name__}: {e}")
             return False
-        self._note(f"wrote {len(shaders)} shader(s) under {where}. "
-                   f"every one of them is a material the renderer must "
-                   f"rebuild, here and again when it is taken off")
+        self._loud(f"skin: wrote {len(shaders)} shader(s) under {where}. "
+                   f"every one is a material the renderer rebuilds, here and "
+                   f"again when it comes off")
         self._check_over(stage, shaders[0], specs)
         return True
 
@@ -956,7 +956,7 @@ class EbsSimulate:
             attribute = prim.GetAttribute(name)
             if attribute and attribute.Get() is not None:
                 return
-        self._note(f"{shader} took none of {[n for n, _, _ in specs]}; "
+        self._loud(f"skin: {shader} took none of {[n for n, _, _ in specs]}; "
                    f"that shader names these something else")
 
     @staticmethod
@@ -1129,6 +1129,11 @@ class EbsSimulate:
     def _note(self, text: str) -> None:
         """notes 에 남긴다. 콘솔은 단계마다 _done 한 줄뿐"""
         self._notes.append(text)
+
+    def _loud(self, text: str) -> None:
+        """notes 에 남기고 콘솔에도 바로 찍는다. 눈으로 봐야 하는 것만"""
+        self._notes.append(text)
+        print(f"[ebs] {text}")
 
     def get_notes(self) -> list:
         """이번 단계에 남긴 자세한 기록
