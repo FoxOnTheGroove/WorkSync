@@ -200,7 +200,6 @@ GEOMETRY_TYPES = frozenset({
 VERDICT_HEIGHT = 0.8
 GRIP_HEIGHT   = 0.3
 OFFSET_HEIGHT = 0.25
-CLASH_TERM  = 0.25
 GRIP_WIDE   = 1.0 / 8.0
 GRIP_TALL   = 1.0 / 16.0
 CLASH_HEIGHT   = 0.45
@@ -335,17 +334,14 @@ class EbsSimulate:
         self._outer: bool = True
         self._inner: bool = True
         self._clash_on: bool = True
-        self._clash_live: bool = False
         self._skin: str = ""
         self._skin_made: str = ""
         self._skin_worn: tuple = ()
         self._skin_wrote: list = []
         self._skin_opened: list = []
-        self._skin_open: bool = True
         self._skin_told: dict = {}
         self._phases: dict = {}
         self._skin_use: bool = False
-        self._clash_when: float = 0.0
         self._nudge: float = 0.0
         self._base = None
         self._verdict: dict = {}
@@ -502,33 +498,13 @@ class EbsSimulate:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         self._camera.hold(on)
 
-    def set_clash_live(self, on: bool) -> bool:
-        """미는 동안에도 내부 충돌을 다시 잴지. 느리다. 보려고 켜는 것"""
-        self._clash_live = bool(on)
-        self._clash_when = 0.0
-        return self._clash_live
-
-    def _due_clash(self) -> bool:
-        """live 로 다시 잴 때가 됐나. CLASH_TERM 보다 자주는 안 잰다
-
-        손을 뗄 때 hold_clash 가 어차피 한 번 더 재므로 마지막 자리는 정확하다
-        """
-        now = time.monotonic()
-        if now - self._clash_when < CLASH_TERM:
-            return False
-        self._clash_when = now
-        return True
-
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
 
         내부충돌연출  내부 장비와 겹친 메쉬를 빨간 상자로 그리고 깜박이는 것
         끌 때  상자를 걷는다. 미는 동안은 내부 충돌을 다시 재지 않는다
         켤 때  지금 선 자리에서 내부 충돌만 다시 재서 판정과 그림을 고친다
-        _clash_live  켜 두면 끄라고 해도 안 끈다. 미는 동안 매 걸음 다시 잰다
         """
-        if not on and self._clash_live:
-            return False
         self._clash_on = bool(on)
         if not on:
             self._marks().hide_clash()
@@ -584,8 +560,6 @@ class EbsSimulate:
         self._slid_box(box, shift)
         if self._verdict:
             self._slide_marks(shift, box)
-            if self._clash_on and self._clash_live and self._due_clash():
-                self._retest_inner(draw=False)
             self.show_markers(self._target["ebs"], self._slid_cells(),
                               self._verdict.get("marks"),
                               self._verdict.get("boxes") if self._clash_on
@@ -762,23 +736,6 @@ class EbsSimulate:
     def get_skin(self) -> str:
         """지금 적어 둔 머티리얼 경로"""
         return self._skin
-
-    def set_skin_open(self, on: bool) -> bool:
-        """인스턴스를 풀어서 칠할지. 끄면 인스턴스 뿌리에 걸고 만다
-
-        푸는 쪽은 공유를 끊어 메시마다 rprim 을 새로 짓게 만든다. 멈추는
-        구간의 거의 전부가 거기다. 뿌리에 걸면 상속으로만 닿아서 공짜다.
-        킷이 인스턴스별 상속 바인딩을 안 그려 주면 그때만 켠다
-        """
-        want = bool(on)
-        if want != self._skin_open:
-            self._skin_open = want
-            self._skin_worn = ()
-        return self._skin_open
-
-    def get_skin_open(self) -> bool:
-        """인스턴스를 풀어서 칠하는 중인지"""
-        return self._skin_open
 
     def strip_skin(self) -> bool:
         """건 것을 푼다. 푼 인스턴스는 열어 둔 채로 둔다
@@ -972,7 +929,7 @@ class EbsSimulate:
             self._loud("skin: no equipment to bind on yet")
             self.strip_skin()
             return False
-        worn = (str(prim.GetPath()), self._skin, self._skin_open)
+        worn = (str(prim.GetPath()), self._skin)
         if worn == self._skin_worn:
             self._loud(f"skin: already on {worn[0]}, left alone")
             return True
@@ -981,8 +938,7 @@ class EbsSimulate:
         if material is None:
             self._loud(f"skin: could not resolve {self._skin}")
             return False
-        told = {"what": ("머티리얼 풀어서" if self._skin_open
-                         else "머티리얼 인스턴스뿌리")}
+        told = {"what": "머티리얼"}
         try:
             with self._phase("skin"):
                 clock = time.perf_counter()
@@ -990,15 +946,13 @@ class EbsSimulate:
                     roots, meshes = self._skin_plan(prim)
                 told["roots"], told["meshes"] = len(roots), len(meshes)
                 told["plan"], clock = time.perf_counter() - clock, time.perf_counter()
-                if self._skin_open and roots:
+                if roots:
                     with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
-                    roots = []
                     told["open"], clock = (time.perf_counter() - clock,
                                            time.perf_counter())
                 with self._stage_timer("skin: bind"):
-                    told["bound"] = self._bind_all(stage, material,
-                                                   roots, meshes)
+                    told["bound"] = self._bind_all(stage, material, meshes)
                 told["bind"] = time.perf_counter() - clock
         except Exception as e:
             self._loud(f"skin: could not bind {self._skin}: "
@@ -1026,24 +980,19 @@ class EbsSimulate:
                 stage.RemovePrim(SKIN_ROOT)
 
     @staticmethod
-    def _bind_skin(prim, material, strong: bool = False) -> None:
-        """그 프림에 건다. strong 이면 그 아래 의견까지 이긴다
+    def _bind_skin(prim, material) -> None:
+        """그 메시에 직접 건다. 제 프림에 건 것이 제일 세다
 
-        메시에 직접 건 것이 제일 세다. 인스턴스 뿌리는 아래가 프로토타입
-        이라 직접 못 걸고, 상속으로 닿게 하려면 strong 이어야 한다
+        조상에 strongerThanDescendants 로 걸면 그 아래 전부를 다시 풀게
+        만들어 킷이 오래 멈춘다. 메시마다 직접 걸면 그 메시들만 바뀐다
         """
-        api = UsdShade.MaterialBindingAPI(prim)
-        if strong:
-            api.Bind(material, UsdShade.Tokens.strongerThanDescendants)
-        else:
-            api.Bind(material)
+        UsdShade.MaterialBindingAPI(prim).Bind(material)
 
     def _skin_plan(self, root) -> tuple:
         """어디에 걸지만 먼저 정한다. 한 자도 안 쓴다
 
         프록시 안까지 읽기만 하며 내려간다. 인스턴스를 만나면 그 뿌리를
-        적고 멈춘다. 뿌리 하나면 그 아래 전부에 상속으로 닿는다
-        풀기로 했으면 뿌리를 적고도 계속 내려가 안쪽 메시까지 모은다
+        적고도 계속 내려가 안쪽 메시까지 모은다. 뿌린 뒤에 한 덩이로 푼다
         """
         roots, meshes, stack = [], [], [root]
         while stack:
@@ -1057,8 +1006,6 @@ class EbsSimulate:
                 inside = False
             if inside:
                 roots.append(where)
-                if not self._skin_open:
-                    continue
             if one.GetTypeName() in GEOMETRY_TYPES:
                 meshes.append(where)
                 continue
@@ -1082,22 +1029,20 @@ class EbsSimulate:
         self._loud(f"skin: opened {len(roots)} instance(s) in one block")
         return len(roots)
 
-    def _bind_all(self, stage, material, roots, meshes) -> int:
-        """정해 둔 자리에 한 덩이로 건다. 통지가 한 번만 간다
+    def _bind_all(self, stage, material, meshes) -> int:
+        """정해 둔 메시에 한 덩이로 건다. 통지가 한 번만 간다
 
         프림은 블록 밖에서 미리 집는다. 블록 안에서는 스테이지를 안 읽는다
         """
-        picked = [(path, True) for path in roots]
-        picked += [(path, False) for path in meshes]
         ready = []
-        for path, strong in picked:
+        for path in meshes:
             one = stage.GetPrimAtPath(path)
             if one is not None and one.IsValid():
-                ready.append((path, one, strong))
+                ready.append((path, one))
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             with Sdf.ChangeBlock():
-                for path, one, strong in ready:
-                    self._bind_skin(one, material, strong)
+                for path, one in ready:
+                    self._bind_skin(one, material)
                     self._skin_wrote.append(path)
         return len(ready)
 

@@ -87,11 +87,6 @@ class EbsSimulateService:
         return cls._simulate.hold_camera(on)
 
     @classmethod
-    def set_clash_live(cls, on):
-        """미는 동안에도 내부 충돌을 매 걸음 다시 잴지. 느리다. 보려고 켜는 것"""
-        return cls._simulate.set_clash_live(on)
-
-    @classmethod
     def hold_clash(cls, on):
         """내부충돌연출을 켜고 끈다. 켤 때 그 자리에서 내부 충돌을 다시 잰다"""
         return cls._simulate.hold_clash(on)
@@ -145,11 +140,6 @@ class EbsSimulateService:
     def set_skin(cls, url):
         """대상 장비에 입힐 머티리얼. 씬 안 프림 경로도 .mdl 경로도 받는다"""
         return cls._simulate.set_skin(url)
-
-    @classmethod
-    def set_skin_open(cls, on):
-        """인스턴스를 풀어서 칠할지. 끄면 인스턴스 뿌리에 걸고 만다"""
-        return cls._simulate.set_skin_open(on)
 
     @classmethod
     def strip_skin(cls):
