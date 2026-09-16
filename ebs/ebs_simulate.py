@@ -869,6 +869,7 @@ class EbsSimulate:
                 self._loud("skin: the skin box is off, nothing bound")
             self.strip_skin()
             return False
+        self._loud(f"skin: asked for {self._skin or '(the box is empty)'}")
         if not self._skin:
             self.strip_skin()
             return False
