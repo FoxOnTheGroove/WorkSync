@@ -762,8 +762,10 @@ class EbsSimulate:
         .mdl 이면 세션 레이어에 프림을 세워 그 자리에서 읽는다. SIM 때는
         바인딩만 걸면 되므로 기다릴 일이 없다. 씬 안 프림이면 읽을 것도 없다
         """
+        if not self._skin:
+            return False
         stage = self._get_stage()
-        if not self._skin or stage is None:
+        if stage is None:
             return False
         with self._stage_timer("skin: load"):
             return self._make_skin(stage) is not None
@@ -805,10 +807,13 @@ class EbsSimulate:
         _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
                  레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
         """
+        if not self._skin:
+            self.strip_skin()
+            return False
         if prim is None:
             prim = (self._target or {}).get("equipment")
         stage = self._get_stage()
-        if not self._skin or stage is None or prim is None or not prim.IsValid():
+        if stage is None or prim is None or not prim.IsValid():
             self.strip_skin()
             return False
         worn = (str(prim.GetPath()), self._skin)
@@ -1333,6 +1338,7 @@ class EbsSimulate:
         told = self._do_focus()
         if not told["ok"]:
             return told
+        self.wear_skin()
         self.show_ebs(self._target["ebs"])
         result = self._do_collide()
         if not result["ok"]:
@@ -1354,6 +1360,7 @@ class EbsSimulate:
         told = self._do_focus()
         if not told["ok"]:
             return self._done(told)
+        self.wear_skin()
         self.show_ebs(self._target["ebs"])
         for _ in self._collide_steps():
             await omni.kit.app.get_app().next_update_async()
@@ -1420,8 +1427,8 @@ class EbsSimulate:
         self.clear_markers()
         if not self._aligned:
             ebs = self._target["ebs"]
-            placed = self._do_align(reveal=self._is_visible(
-                ebs, str(ebs.GetPath())))
+            placed = self._do_align(
+                reveal=self._is_visible(ebs, str(ebs.GetPath())), wear=False)
             if not placed["ok"]:
                 return placed
         stage = self._get_stage()
@@ -1454,10 +1461,11 @@ class EbsSimulate:
         self._show_ebs([ebs], False)
         return box
 
-    def _do_align(self, reveal: bool = True) -> dict:
+    def _do_align(self, reveal: bool = True, wear: bool = True) -> dict:
         """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다
 
         reveal  False 면 자리만 잡고 감춰 둔다. 카메라를 먼저 잡는 SIM 이 쓴다
+        wear  False 면 머티리얼을 안 건다. 카메라가 속으로 부를 때 그렇다
         clear_markers  collide 이전 단계라, 지난 판정과 그린 것을 먼저 지운다
         """
         if self._target is None:
@@ -1485,7 +1493,8 @@ class EbsSimulate:
 
         self._forget_triangles(self._target["ebs"])
         self._ebs_box = None
-        self.wear_skin()
+        if wear:
+            self.wear_skin()
 
         if reveal:
             self.show_ebs(self._target["ebs"])
