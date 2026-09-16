@@ -363,11 +363,7 @@ class EbsDummyUI:
 
     def _on_clear_markers(self):
         """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
-        EbsSimulateService.clear_markers()
-        EbsSimulateService.clear_port_lasers()
-        EbsSimulateService.clear_sweep()
-        EbsSimulateService.release_camera()
-        EbsSimulateService.hide_ebs()
+        EbsSimulateService.clear_all()
         EbsSimulateOverlay.hide()
         self._reset_nudge()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")

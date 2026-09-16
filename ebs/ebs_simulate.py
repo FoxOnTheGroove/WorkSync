@@ -4626,6 +4626,31 @@ class EbsSimulate:
         cylinder.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
+    def clear_all(self) -> dict:
+        """Clear 버튼이 하는 일 전부. 어디서 얼마가 걸렸는지 한 줄로 찍는다"""
+        self._begin("clear")
+        for name, work in (("markers", self.clear_markers),
+                           ("lasers", self.clear_port_lasers),
+                           ("sweep", self.clear_sweep),
+                           ("skin", self.strip_skin),
+                           ("equipment", self.show_equipment),
+                           ("camera", self.release_camera),
+                           ("ebs", self.hide_ebs)):
+            with self._stage_timer(f"clear: {name}"):
+                try:
+                    work()
+                except Exception as e:
+                    self._note(f"clear {name} failed: {type(e).__name__}: {e}")
+        print(self._timing_line("clear"))
+        return self._done(self._payload(True, "cleared"))
+
+    def _timing_line(self, what: str) -> str:
+        """이번 단계의 구간별 시간 한 줄. 0.05 초 밑은 안 적는다"""
+        detail = "; ".join(f"{name} {spent / 1000.0:.2f}"
+                           for name, spent in self._timings
+                           if spent >= 50.0)
+        return f"[ebs] {what} detail: {detail or 'nothing over 0.05s'}"
+
     def clear_markers(self) -> None:
         """그린 것을 오버레이에게 지우게 하고 판정도 놓는다"""
         self._verdict = {}

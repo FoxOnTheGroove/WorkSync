@@ -112,6 +112,11 @@ class EbsSimulateService:
         return cls._simulate.get_nudge()
 
     @classmethod
+    def clear_all(cls):
+        """Clear 버튼 한 번. 어디서 얼마가 걸렸는지 로그에 찍는다"""
+        return cls._simulate.clear_all()
+
+    @classmethod
     def set_skin_use(cls, on):
         """머티리얼을 갈아입힐지. 끄면 받지도 걸지도 않는다"""
         return cls._simulate.set_skin_use(on)
