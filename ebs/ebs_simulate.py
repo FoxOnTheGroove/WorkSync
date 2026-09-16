@@ -227,6 +227,9 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
+PAINT = (("inputs:diffuseColor", "Color3f"),
+         ("inputs:diffuse_color_constant", "Color3f"))
+
 SKIN_ROOT      = "/EbsSkin"
 SKIN_LAYER     = "ebs_skin.usda"
 SKIN_NAME      = "M_skin"
@@ -729,9 +732,10 @@ class EbsSimulate:
         return want
 
     def set_skin(self, url: str) -> str:
-        """대상 장비에 입힐 머티리얼. 빈 칸이면 원래 색 그대로
+        """대상 장비에 입힐 것. 빈 칸이면 원래 색 그대로
 
-        / 로 시작하면 씬 안 머티리얼 프림, 아니면 받아 올 .mdl 로 본다
+        색으로 읽히면(#ff0000, 0.8,0.1,0.1) 쓰던 셰이더의 색만 덮어쓴다.
+        / 로 시작하면 씬 안 머티리얼 프림, 그 밖은 받아 올 .mdl 로 본다
         값이 달라지면 바로 갈아입힌다. SIM 을 다시 안 눌러도 보인다
         """
         want = (url or "").strip()
@@ -781,6 +785,8 @@ class EbsSimulate:
         바인딩만 걸면 되므로 기다릴 일이 없다. 씬 안 프림이면 읽을 것도 없다
         """
         if not self._skin or not self._skin_use:
+            return False
+        if self._skin_colour(self._skin) is not None:
             return False
         stage = self._get_stage()
         if stage is None:
@@ -838,6 +844,14 @@ class EbsSimulate:
         if worn == self._skin_worn:
             return True
         self.strip_skin()
+        colour = self._skin_colour(self._skin)
+        if colour is not None:
+            with self._stage_timer("skin: paint"):
+                if not self._paint_skin(stage, prim, colour):
+                    return False
+            self._skin_worn = worn
+            self._note(f"the equipment is painted {self._skin}")
+            return True
         material = self._make_skin(stage)
         if material is None:
             return False
@@ -871,6 +885,75 @@ class EbsSimulate:
         except Exception:
             binding = UsdShade.MaterialBindingAPI(prim)
         binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+
+    def _paint_skin(self, stage, prim, colour) -> bool:
+        """장비가 이미 쓰는 셰이더의 색 입력만 덮어쓴다
+
+        바인딩을 안 건드리므로 그 아래 머티리얼을 다시 풀 일이 없다. 그래서
+        갈아 끼우는 것보다 훨씬 싸다
+        PAINT  규약마다 이름이 달라 둘 다 쓴다. 없는 이름은 셰이더가 무시한다
+        """
+        where = str(prim.GetPath())
+        shaders = self._looks_shaders(stage, where)
+        if not shaders:
+            self._note(f"nothing to paint under {where}/{LOOKS}"
+                       + (" (shared by instances)"
+                          if where in self._eqp_shared else ""))
+            return False
+        layer = self._skin_layer(stage)
+        value = Gf.Vec3f(*colour)
+        try:
+            with Sdf.ChangeBlock():
+                for shader in shaders:
+                    spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
+                    for name, kind in PAINT:
+                        attribute = spec.attributes.get(name)
+                        if attribute is None:
+                            attribute = Sdf.AttributeSpec(
+                                spec, name, getattr(Sdf.ValueTypeNames, kind))
+                        attribute.default = value
+        except Exception as e:
+            self._note(f"could not paint {len(shaders)} shader(s): "
+                       f"{type(e).__name__}: {e}")
+            return False
+        self._check_paint(stage, shaders[0], colour)
+        return True
+
+    def _check_paint(self, stage, shader: str, colour) -> None:
+        """정말 칠해졌는지 하나만 다시 읽어 본다. 이름이 안 맞으면 조용하다"""
+        prim = stage.GetPrimAtPath(shader)
+        if prim is None or not prim.IsValid():
+            return
+        for name, _ in PAINT:
+            attribute = prim.GetAttribute(name)
+            if attribute and attribute.Get() is not None:
+                return
+        self._note(f"{shader} took none of {[n for n, _ in PAINT]}; "
+                   f"that shader names its colour something else")
+
+    @staticmethod
+    def _skin_colour(text: str):
+        """색으로 읽히면 (r, g, b). 머티리얼 경로면 None
+
+        #rrggbb, 0.8,0.1,0.1, 204,26,26 셋 다 받는다. 1 을 넘으면 255 로 나눈다
+        """
+        one = (text or "").strip()
+        if one.startswith("#") and len(one) == 7:
+            try:
+                return tuple(int(one[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+            except ValueError:
+                return None
+        parts = [p for p in one.replace(" ", "").split(",") if p]
+        if len(parts) != 3:
+            return None
+        try:
+            got = [float(p) for p in parts]
+        except ValueError:
+            return None
+        if any(v < 0.0 or v > 255.0 for v in got):
+            return None
+        return (tuple(v / 255.0 for v in got) if max(got) > 1.0
+                else tuple(got))
 
     def _skin_in_stage(self, stage, url: str):
         """씬 안에 이미 선 머티리얼이면 그것. 아니면 None

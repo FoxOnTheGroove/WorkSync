@@ -169,6 +169,7 @@ class EbsDummyUI:
 
                 with ui.HStack(height=22, spacing=4):
                     ui.Label("Material:", width=90)
+                    ui.Label("mdl / prim / rgb", width=104)
                     self._skin_field = ui.StringField()
                     self._skin_field.model.set_value(SKIN_URL)
 
