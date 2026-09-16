@@ -25,6 +25,7 @@ VIEW_PATHS = (("Ceiling:", "", False),
 
 EQP_PREFIX = "EQP_"
 SKIN_URL   = ""
+SKIN_ON    = False
 
 NEAR_SPAN = 2.5
 NEAR_MIN, NEAR_MAX = 0.0, 5.0
@@ -159,7 +160,7 @@ class EbsDummyUI:
                     self._live.model.set_value(False)
                     ui.Label("skin", width=30)
                     self._skin_on = ui.CheckBox(width=20)
-                    self._skin_on.model.set_value(True)
+                    self._skin_on.model.set_value(SKIN_ON)
                     ui.Label("Debug laser:", width=76)
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)

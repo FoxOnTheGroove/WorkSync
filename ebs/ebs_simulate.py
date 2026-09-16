@@ -333,7 +333,7 @@ class EbsSimulate:
         self._skin: str = ""
         self._skin_made: str = ""
         self._skin_worn: tuple = ()
-        self._skin_use: bool = True
+        self._skin_use: bool = False
         self._skin_layer_on = None
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
@@ -941,7 +941,9 @@ class EbsSimulate:
             self._note(f"could not write {len(shaders)} shader(s): "
                        f"{type(e).__name__}: {e}")
             return False
-        self._note(f"wrote {len(shaders)} shader(s) under {where}")
+        self._note(f"wrote {len(shaders)} shader(s) under {where}. "
+                   f"every one of them is a material the renderer must "
+                   f"rebuild, here and again when it is taken off")
         self._check_over(stage, shaders[0], specs)
         return True
 
