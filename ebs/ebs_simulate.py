@@ -328,6 +328,7 @@ class EbsSimulate:
         self._skin: str = ""
         self._skin_made: str = ""
         self._skin_worn: tuple = ()
+        self._skin_use: bool = True
         self._skin_layer_on = None
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
@@ -712,6 +713,21 @@ class EbsSimulate:
         self._outer = bool(outer)
         self._inner = bool(inner)
 
+    def set_skin_use(self, on: bool) -> bool:
+        """머티리얼을 갈아입힐지. 끄면 받지도 걸지도 않는다
+
+        거는 값이 싸지 않다. 세션 레이어에 쓸 때마다 스테이지가 다시 짜인다
+        """
+        want = bool(on)
+        if want == self._skin_use:
+            return want
+        self._skin_use = want
+        if not want:
+            self.strip_skin()
+        elif self._target is not None:
+            self.wear_skin()
+        return want
+
     def set_skin(self, url: str) -> str:
         """대상 장비에 입힐 머티리얼. 빈 칸이면 원래 색 그대로
 
@@ -723,7 +739,9 @@ class EbsSimulate:
             return self._skin
         self._skin = want
         self._skin_made = ""
-        if self._target is not None:
+        if not self._skin_use:
+            self.strip_skin()
+        elif self._target is not None:
             self.wear_skin()
         elif want:
             self.warm_skin()
@@ -762,7 +780,7 @@ class EbsSimulate:
         .mdl 이면 세션 레이어에 프림을 세워 그 자리에서 읽는다. SIM 때는
         바인딩만 걸면 되므로 기다릴 일이 없다. 씬 안 프림이면 읽을 것도 없다
         """
-        if not self._skin:
+        if not self._skin or not self._skin_use:
             return False
         stage = self._get_stage()
         if stage is None:
@@ -807,7 +825,7 @@ class EbsSimulate:
         _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
                  레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
         """
-        if not self._skin:
+        if not self._skin or not self._skin_use:
             self.strip_skin()
             return False
         if prim is None:
@@ -1953,6 +1971,7 @@ class EbsSimulate:
             axis, outward, coord, _, _ = plane
             surface = list(middle)
             surface[axis] = coord
+            surface[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
 
             least = self._min_gap.get(face, 0.0)
             way = self._outward_way(surface, axis, outward, world)

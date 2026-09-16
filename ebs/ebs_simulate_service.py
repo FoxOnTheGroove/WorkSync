@@ -112,6 +112,11 @@ class EbsSimulateService:
         return cls._simulate.get_nudge()
 
     @classmethod
+    def set_skin_use(cls, on):
+        """머티리얼을 갈아입힐지. 끄면 받지도 걸지도 않는다"""
+        return cls._simulate.set_skin_use(on)
+
+    @classmethod
     def set_skin(cls, url):
         """대상 장비에 입힐 머티리얼. 씬 안 프림 경로도 .mdl 경로도 받는다"""
         return cls._simulate.set_skin(url)
