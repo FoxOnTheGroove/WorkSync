@@ -19,7 +19,7 @@ FRAME_ID = "ebs_simulate_overlay"
 CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
 INNER  = "내부 장비와 충돌"
 HOME   = "원점"
-SLID   = "{0:+.3f}M"
+SLID   = "{0:+.0f}mm"
 STALE  = "~"
 
 GRIP_HEAD  = 0.3
@@ -50,9 +50,7 @@ MM_PER_M  = 1000.0
 GAP_WIDTH = 84
 
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
-GRIP_STEP  = 0.5
 GRIP_WIDTH = 100
-GRIP_HOME, GRIP_PLUS, GRIP_MINUS = "home", "plus", "minus"
 LINE_ROOM = 6
 ROOM_HEADS = 1.5
 PANEL_GAP = 0.1
@@ -167,6 +165,7 @@ class EbsSimulateOverlay:
         self._follow = None
         self._texts = {}
         self._dials = {}
+        self._dial_hold = None
         self._grounds = {}
         self._from = None
         self._was = 0.0
@@ -262,51 +261,50 @@ class EbsSimulateOverlay:
         return fill
 
     def _offset_panel(self, said: dict) -> None:
-        """손잡이 아래 이격 표
-
-        ui.Label 은 text 만 갈아 끼우면 처음 글로 잡아 둔 그리기 자리를
-        그대로 쓴다. 그래서 글자 폭이 다른 원점·양수·음수를 한 글줄에
-        번갈아 쓰면 정렬이 처음 글에 굳는다. 셋을 미리 겹쳐 세워 두고
-        하나만 켠다. 숫자끼리는 글자 수가 같아 그 자리가 계속 맞는다
-        """
-        room = GRIP_WIDTH - PAD_X * 2
-
+        """손잡이 아래 OFFSET_HEIGHT 높이에 다는 이격 표"""
         def fill():
-            """판 속에 세 글줄을 겹쳐 놓는다"""
+            """글줄을 담을 빈 칸 하나. 채우는 것은 _dial 이 한다"""
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
-                with ui.ZStack(height=0, width=ui.Pixel(room)):
-                    self._dials = {
-                        name: self._label(first, COLOR_INK, None, room)
-                        for name, first in ((GRIP_HOME, HOME),
-                                            (GRIP_PLUS, SLID.format(1.0)),
-                                            (GRIP_MINUS, SLID.format(-1.0)))}
+                self._dial_hold = ui.ZStack(
+                    height=0, width=ui.Pixel(GRIP_WIDTH - PAD_X * 2))
 
-        self._floating(self._grip_at(said), fill, COLOR_CAN, BELOW, GRIP_STEP,
+        self._floating(self._grip_at(said, "under"), fill, COLOR_CAN,
                        key=("verdict", "offset"), wide=GRIP_WIDTH)
         self._dial(said)
 
     def _dial(self, said: dict) -> None:
-        """세 글줄 중 맞는 하나만 켠다. 숫자는 그 글줄에만 쓴다"""
-        if not self._dials:
+        """이격 글줄. 글자 모양마다 제 글줄을 하나씩 두고 하나만 켠다
+
+        ui.Label 은 text 만 갈아 끼우면 처음 글로 잡아 둔 그리기 자리를
+        그대로 쓴다. 자릿수가 같은 글끼리만 한 글줄을 쓰면 가운데가 계속
+        맞는다. 모양은 숫자를 0 으로 바꾼 꼴로 센다
+        """
+        hold = self._dial_hold
+        if hold is None:
             return
         word = self._offset_word(said)
-        pick = (GRIP_HOME if word == HOME else
-                GRIP_PLUS if (said.get("offset") or 0.0) > 0 else GRIP_MINUS)
-        for name, label in self._dials.items():
-            label.visible = name == pick
-        if pick != GRIP_HOME:
-            self._dials[pick].text = word
+        shape = "".join("0" if one.isdigit() else one for one in word)
+        label = self._dials.get(shape)
+        if label is None:
+            with hold:
+                label = self._label(word, COLOR_INK, None,
+                                    GRIP_WIDTH - PAD_X * 2)
+            self._dials[shape] = label
+        label.text = word
+        for key, one in self._dials.items():
+            one.visible = key == shape
 
     @staticmethod
-    def _grip_at(said: dict):
-        """손잡이가 선 월드 자리. 손잡이가 없으면 None
+    def _grip_at(said: dict, which: str = "at"):
+        """손잡이 쪽 월드 자리. 손잡이가 없으면 None
 
         자리는 EBS 안 좌표라 뿌리 변환을 태워야 월드가 된다. 미는 동안에는
         그 변환만 바뀌므로 표도 저절로 따라간다
+        which  at 은 손잡이가 선 자리, under 는 그 아래 이격 표 자리
         """
         grip = said.get("grip") or {}
-        at, matrix = grip.get("at"), grip.get("matrix")
+        at, matrix = grip.get(which), grip.get("matrix")
         if at is None:
             return None
         if matrix is None:
@@ -316,9 +314,10 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _offset_word(said: dict) -> str:
-        """지금 얼마나 밀려 있나. 눈금 아래면 원점"""
+        """지금 얼마나 밀려 있나(mm). 눈금 아래면 원점"""
         slid = said.get("offset") or 0.0
-        return SLID.format(slid) if abs(slid) >= 5e-4 else HOME
+        return (SLID.format(EbsSimulateOverlay._mm(slid))
+                if abs(slid) >= 5e-4 else HOME)
 
     @classmethod
     def restate(cls, vp_name: str = None) -> None:
@@ -334,7 +333,7 @@ class EbsSimulateOverlay:
             return
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
-                 ("verdict", "offset"): self._grip_at(said)}
+                 ("verdict", "offset"): self._grip_at(said, "under")}
         self._dial(said)
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
@@ -564,6 +563,7 @@ class EbsSimulateOverlay:
         self._marks = []
         self._texts = {}
         self._dials = {}
+        self._dial_hold = None
         self._grounds = {}
         if self._stack is not None:
             try:
