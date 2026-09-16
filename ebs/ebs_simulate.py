@@ -227,11 +227,6 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
-PAINT = (("inputs:diffuseColor", "Color3f"),
-         ("inputs:diffuse_color_constant", "Color3f"))
-MDL_SOURCE = "info:mdl:sourceAsset"
-MDL_SUB    = "info:mdl:sourceAsset:subIdentifier"
-
 SKIN_ROOT      = "/EbsSkin"
 SKIN_LAYER     = "ebs_skin.usda"
 SKIN_NAME      = "M_skin"
@@ -825,11 +820,11 @@ class EbsSimulate:
         return material
 
     def wear_skin(self, prim=None) -> bool:
-        """적어 둔 것을 대상 장비 셰이더에 덮어쓴다. align 이 부른다
+        """적어 둔 머티리얼을 대상 장비에 건다. align 이 부른다
 
-        SKIN_LAYER  여기에만 쓴다. strip_skin 이 비우면 원래 색이다
-        _skin_worn  같은 장비에 같은 것을 이미 씌워 뒀으면 손대지 않는다.
-                 레이어를 비우고 다시 쓰는 것만으로도 스테이지가 다시 짜인다
+        SKIN_LAYER  바인딩만 여기 쓴다. strip_skin 이 비우면 원래 색이다
+        _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
+                 레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
         길마다 로그를 한 줄 남긴다. 아무 말도 없으면 안 불린 것이다
         """
         if not self._skin_use:
@@ -852,29 +847,14 @@ class EbsSimulate:
             self._loud(f"skin: already on {worn[0]}, left alone")
             return True
         self.strip_skin()
-        how, told = self._skin_specs(stage)
-        if told:
-            with self._stage_timer(f"skin: {how}"):
-                if self._over_shaders(stage, prim, told):
-                    self._skin_worn = worn + (how,)
-                    return True
-        return self._bind_instead(stage, prim, worn)
+        return self._bind_it(stage, prim, worn)
 
-    def _skin_specs(self, stage) -> tuple:
-        """장비 셰이더에 덮어쓸 것. 무엇을 적었느냐로 갈린다"""
-        colour = self._skin_colour(self._skin)
-        if colour is not None:
-            return "paint", self._paint_specs(colour)
-        if not self._skin.startswith("/"):
-            self._make_skin(stage)
-            return "dress", self._mdl_specs(self._skin)
-        return "copy", self._prim_specs(stage, self._skin)
+    def _bind_it(self, stage, prim, worn) -> bool:
+        """머티리얼 하나를 장비 뿌리에 건다
 
-    def _bind_instead(self, stage, prim, worn) -> bool:
-        """장비가 제 셰이더를 안 들고 있을 때. 머티리얼 하나를 걸어 버린다
-
-        그 아래 머티리얼이 통째로 다시 풀려 값이 크다. 덮어쓸 자리가 있으면
-        그쪽이 먼저다. 여기로 왔다는 것은 덮어쓸 자리가 없었다는 뜻이다
+        그 아래 머티리얼이 통째로 다시 풀려 값이 크다. 셰이더에 덮어쓰는
+        길을 써 봤지만 장비가 제 Looks 를 안 들고 있으면 쓸 자리가 없고,
+        원본이 적어 둔 경로도 우리 레이어에서 안 풀렸다. 그래서 여기로 왔다
         """
         material = self._skin_material(stage)
         if material is None:
@@ -890,8 +870,7 @@ class EbsSimulate:
                        f"{type(e).__name__}: {e}")
             return False
         self._skin_worn = worn + ("bind",)
-        self._loud(f"skin: {worn[0]} has no shader of its own, bound "
-                   f"{self._skin} instead. that costs more to put on and off")
+        self._loud(f"skin: bound {self._skin} on {worn[0]}")
         return True
 
     def _skin_material(self, stage):
@@ -952,63 +931,6 @@ class EbsSimulate:
                 stage.RemovePrim(SKIN_ROOT)
 
     @staticmethod
-    def _paint_specs(colour) -> tuple:
-        """색 하나를 규약마다 다른 이름으로. 없는 이름은 셰이더가 무시한다"""
-        value = Gf.Vec3f(*colour)
-        return tuple((name, kind, value) for name, kind in PAINT)
-
-    def _mdl_specs(self, url: str) -> tuple:
-        """셰이더가 읽을 .mdl 을 통째로 바꾼다. 파라미터를 맞출 일이 없다"""
-        return ((MDL_SOURCE, "Asset", Sdf.AssetPath(url)),
-                (MDL_SUB, "Token", self._skin_name(url)))
-
-    def _over_shaders(self, stage, prim, specs) -> bool:
-        """장비가 이미 쓰는 셰이더에 그 값들을 덮어쓴다
-
-        바인딩을 안 건드리므로 그 아래 머티리얼을 다시 풀 일이 없다. 그래서
-        갈아 끼우는 것보다 훨씬 싸고, 걷는 것도 그만큼 싸다
-        """
-        where = str(prim.GetPath())
-        shaders = self._looks_shaders(stage, where)
-        if not shaders:
-            self._loud(f"skin: no shader to write under {where}/{LOOKS}"
-                       + (" (shared by instances)"
-                          if where in self._eqp_shared else ""))
-            return False
-        layer = self._skin_layer(stage)
-        try:
-            with Sdf.ChangeBlock():
-                for shader in shaders:
-                    spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
-                    for name, kind, value in specs:
-                        attribute = spec.attributes.get(name)
-                        if attribute is None:
-                            attribute = Sdf.AttributeSpec(
-                                spec, name, getattr(Sdf.ValueTypeNames, kind))
-                        attribute.default = value
-        except Exception as e:
-            self._note(f"could not write {len(shaders)} shader(s): "
-                       f"{type(e).__name__}: {e}")
-            return False
-        self._loud(f"skin: wrote {len(shaders)} shader(s) under {where}. "
-                   f"every one is a material the renderer rebuilds, here and "
-                   f"again when it comes off")
-        self._check_over(stage, shaders[0], specs)
-        return True
-
-    def _check_over(self, stage, shader: str, specs) -> None:
-        """정말 먹었는지 하나만 다시 읽어 본다. 이름이 안 맞으면 조용하다"""
-        prim = stage.GetPrimAtPath(shader)
-        if prim is None or not prim.IsValid():
-            return
-        for name, _, _ in specs:
-            attribute = prim.GetAttribute(name)
-            if attribute and attribute.Get() is not None:
-                return
-        self._loud(f"skin: {shader} took none of {[n for n, _, _ in specs]}; "
-                   f"that shader names these something else")
-
-    @staticmethod
     def _skin_colour(text: str):
         """색으로 읽히면 (r, g, b). 머티리얼 경로면 None
 
@@ -1031,65 +953,6 @@ class EbsSimulate:
             return None
         return (tuple(v / 255.0 for v in got) if max(got) > 1.0
                 else tuple(got))
-
-    def _prim_specs(self, stage, url: str) -> tuple:
-        """씬 안 머티리얼이 쓰는 것을 베낀다. 바인딩은 안 한다
-
-        바인딩을 걸면 장비 아래 머티리얼이 통째로 다시 풀린다. 그 값이
-        크다. 그 대신 셰이더가 읽는 .mdl 이나 색만 가져와 덮어쓴다
-        """
-        shaders = self._shaders_under(stage, url)
-        if not shaders:
-            self._loud(f"skin: no shader under {url} to copy")
-            return ()
-        for shader in shaders:
-            got = stage.GetPrimAtPath(shader)
-            if got is None or not got.IsValid():
-                continue
-            asset = got.GetAttribute(MDL_SOURCE)
-            found = self._resolved(asset.Get()) if asset else ""
-            if found:
-                sub = got.GetAttribute(MDL_SUB)
-                return ((MDL_SOURCE, "Asset", Sdf.AssetPath(found)),
-                        (MDL_SUB, "Token", (sub.Get() if sub else "") or ""))
-            for name, kind in PAINT:
-                colour = got.GetAttribute(name)
-                if colour and colour.Get() is not None:
-                    return self._paint_specs(tuple(colour.Get()))
-        self._loud(f"skin: {url} has no mdl source or colour to copy")
-        return ()
-
-    def _resolved(self, asset) -> str:
-        """에셋 경로를 절대 경로로. 상대 경로는 우리 레이어에서 안 풀린다
-
-        원본이 적어 둔 것은 그 레이어 옆을 가리킬 수 있다. 익명 레이어에
-        그대로 옮겨 적으면 기준 자리가 없어져 빨갛게 뜬다
-        """
-        if asset is None:
-            return ""
-        got = getattr(asset, "resolvedPath", "") or getattr(asset, "path", "")
-        if not got:
-            got = str(asset)
-        if got and not got.startswith(("omniverse://", "/", "http")) \
-                and "://" not in got:
-            self._loud(f"skin: {got} did not resolve to a full path; "
-                       f"it may not be found from our layer")
-        return got
-
-    @staticmethod
-    def _shaders_under(stage, where: str) -> list:
-        """그 프림 아래 Shader 들. 없으면 빈 목록"""
-        root = stage.GetPrimAtPath(where)
-        if root is None or not root.IsValid():
-            return []
-        found, stack = [], [root]
-        while stack:
-            prim = stack.pop()
-            if prim.GetTypeName() == SHADER_TYPE:
-                found.append(str(prim.GetPath()))
-                continue
-            stack.extend(_children(prim))
-        return found
 
     @staticmethod
     def _skin_name(url: str) -> str:
