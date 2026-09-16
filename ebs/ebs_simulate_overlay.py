@@ -242,13 +242,15 @@ class EbsSimulateOverlay:
 
         on  끄는 동안 세울 수 있게 바뀌면 _restate 가 이 표만 내린다. 판을
                   그때 만들면 마우스를 받고 있는 판을 갈아엎게 된다
+        끄는 동안에는 둘 다 내린다. 손을 뗀 자리에서 다시 재고 올린다
         """
+        held = EbsSimulateGrip.held()
         self._floating(said.get("centre"), self._one(CANNOT), COLOR_CANNOT,
                        key=("verdict", "centre"),
-                       on=not said.get("placeable"))
+                       on=not held and not said.get("placeable"))
         self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
-                       on=bool(said.get("inside")))
+                       on=not held and bool(said.get("inside")))
         self._offset_panel(said)
 
     def _one(self, text, ink=COLOR_TEXT, key=None):
@@ -346,8 +348,9 @@ class EbsSimulateOverlay:
         EbsSimulateGrip.place(said, self._to_window)
         for mark in said.get("marks") or ():
             self._repaint(("face", mark["face"]), mark.get("state"))
-        shown = {("verdict", "centre"): not said.get("placeable"),
-                 ("verdict", "inside_at"): bool(said.get("inside"))}
+        held = EbsSimulateGrip.held()
+        shown = {("verdict", "centre"): not held and not said.get("placeable"),
+                 ("verdict", "inside_at"): not held and bool(said.get("inside"))}
         for entry in self._marks:
             at = spots.get(entry[7])
             if at is not None:
@@ -601,6 +604,11 @@ class EbsSimulateGrip:
         if cls._one is None:
             cls._one = cls()
         return cls._one.stand(grip, to_screen)
+
+    @classmethod
+    def held(cls) -> bool:
+        """지금 손잡이를 잡고 있나. 판정 표를 내릴지 여기로 묻는다"""
+        return cls._one is not None and cls._one.holding
 
     @classmethod
     def hide(cls) -> None:

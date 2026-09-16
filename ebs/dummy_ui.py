@@ -149,12 +149,6 @@ class EbsDummyUI:
                     # self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                     #                           "length / puls", width=126)
                     ui.Label("Collide:", width=90)
-                    ui.Label("outer", width=36)
-                    self._outer = ui.CheckBox(width=20)
-                    self._outer.model.set_value(True)
-                    ui.Label("inner", width=36)
-                    self._inner = ui.CheckBox(width=20)
-                    self._inner.model.set_value(True)
                     ui.Label("skin", width=30)
                     self._skin_on = ui.CheckBox(width=20)
                     self._skin_on.model.set_value(SKIN_ON)
@@ -383,9 +377,12 @@ class EbsDummyUI:
         self._start(self._clearing())
 
     async def _clearing(self):
-        """Clear 를 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
-        await EbsSimulateService.clear_all_async()
+        """오버레이부터 내리고 Clear 를 돌린다. 화면이 잦아들 때까지 기다린다
+
+        오버레이가 먼저 내려가야 지우는 동안 빈 자리를 가리키고 있지 않다
+        """
         self._overlay(EbsSimulateOverlay.hide)
+        await EbsSimulateService.clear_all_async()
         EbsSimulateService.say_phases()
         self._reset_nudge()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
@@ -427,8 +424,6 @@ class EbsDummyUI:
         # index = self._scale.model.get_item_value_model().get_value_as_int()
         # EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
         EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
-        EbsSimulateService.set_checks(self._outer.model.get_value_as_bool(),
-                                      self._inner.model.get_value_as_bool())
         EbsSimulateService.set_skin_use(self._skin_on.model.get_value_as_bool())
         EbsSimulateService.set_near_span(self._near_span())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
