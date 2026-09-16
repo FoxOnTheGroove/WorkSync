@@ -285,7 +285,7 @@ class EbsDummyUI:
         self._apply_settings()
         self._reset_nudge()
         EbsSimulateOverlay.hide()
-        self._start(self._simulate_task())
+        self._start(self._simulate_task)
 
     async def _simulate_task(self):
         """도는 동안 진행률을 적고, 끝나면 오버레이를 켠다"""
@@ -308,7 +308,7 @@ class EbsDummyUI:
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
         self._apply_settings()
         self._reset_nudge()
-        self._start(self._aligning())
+        self._start(self._aligning)
 
     async def _aligning(self):
         """align 을 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
@@ -328,7 +328,7 @@ class EbsDummyUI:
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""
         self._apply_settings()
-        self._start(self._collide_task())
+        self._start(self._collide_task)
 
     async def _collide_task(self):
         """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
@@ -374,7 +374,7 @@ class EbsDummyUI:
 
     def _on_clear_markers(self):
         """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
-        self._start(self._clearing())
+        self._start(self._clearing)
 
     async def _clearing(self):
         """오버레이부터 내리고 Clear 를 돌린다. 화면이 잦아들 때까지 기다린다
@@ -387,12 +387,16 @@ class EbsDummyUI:
         self._reset_nudge()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
-    def _start(self, work):
-        """코루틴 하나를 띄운다. 이미 도는 것이 있으면 무시한다"""
+    def _start(self, make):
+        """코루틴 하나를 띄운다. 이미 도는 것이 있으면 아예 안 만든다
+
+        make  코루틴이 아니라 코루틴을 만드는 함수다. 코루틴을 먼저 만들어
+                 넘기면, 바빠서 버릴 때 안 기다린 코루틴이 남아 경고가 뜬다
+        """
         if self._task is not None and not self._task.done():
             self._set_status("Busy")
             return
-        self._task = asyncio.ensure_future(work)
+        self._task = asyncio.ensure_future(make())
 
     async def _watched(self, work):
         """일이 도는 동안 진행률과 흐른 시간을 상태 줄에 적는다"""
