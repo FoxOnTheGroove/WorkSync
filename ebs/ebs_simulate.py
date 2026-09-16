@@ -798,11 +798,11 @@ class EbsSimulate:
         if self._skin.startswith("/"):
             found = stage.GetPrimAtPath(self._skin)
             if found is None or not found.IsValid():
-                self._note(f"nothing stands at {self._skin}")
+                self._loud(f"skin: nothing stands at {self._skin}")
                 return None
             material = UsdShade.Material(found)
             if not material:
-                self._note(f"{self._skin} is not a material")
+                self._loud(f"skin: {self._skin} is not a material")
                 return None
             return material
         return self._make_skin(stage)
@@ -864,21 +864,29 @@ class EbsSimulate:
         _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
                  레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
         """
-        if not self._skin or not self._skin_use:
+        if not self._skin_use:
+            if self._skin:
+                self._loud("skin: the skin box is off, nothing bound")
+            self.strip_skin()
+            return False
+        if not self._skin:
             self.strip_skin()
             return False
         if prim is None:
             prim = (self._target or {}).get("equipment")
         stage = self._get_stage()
         if stage is None or prim is None or not prim.IsValid():
+            self._loud("skin: no equipment to bind on yet")
             self.strip_skin()
             return False
         worn = (str(prim.GetPath()), self._skin)
         if worn == self._skin_worn:
+            self._loud(f"skin: already on {worn[0]}, left alone")
             return True
         self.strip_skin()
         material = self._skin_material(stage)
         if material is None:
+            self._loud(f"skin: could not resolve {self._skin}")
             return False
         try:
             with self._stage_timer("skin: bind"):
@@ -891,10 +899,11 @@ class EbsSimulate:
                        f"{type(e).__name__}: {e}")
             return False
         if not self._skin_wrote:
-            self._note(f"no mesh under {worn[0]} to bind")
+            self._loud(f"skin: no mesh under {worn[0]} to bind")
             return False
         self._skin_worn = worn
-        self._note(f"the equipment is wearing {self._skin}")
+        self._loud(f"skin: bound {self._skin} on {len(self._skin_wrote)} "
+                   f"mesh(es) under {worn[0]}")
         return True
 
     def drop_skin(self) -> None:
@@ -1087,6 +1096,11 @@ class EbsSimulate:
     def _note(self, text: str) -> None:
         """notes 에 남긴다. 콘솔은 단계마다 _done 한 줄뿐"""
         self._notes.append(text)
+
+    def _loud(self, text: str) -> None:
+        """notes 에 남기고 콘솔에도 바로 찍는다. 눈으로 봐야 하는 것만"""
+        self._notes.append(text)
+        print(f"[ebs] {text}")
 
     def get_notes(self) -> list:
         """이번 단계에 남긴 자세한 기록
