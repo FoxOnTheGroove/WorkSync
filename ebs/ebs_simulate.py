@@ -327,6 +327,7 @@ class EbsSimulate:
         self._clash_live: bool = False
         self._skin: str = ""
         self._skin_made: str = ""
+        self._skin_worn: tuple = ()
         self._skin_layer_on = None
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
@@ -748,8 +749,10 @@ class EbsSimulate:
 
         머티리얼까지 지우면 다시 켤 때 .mdl 을 또 받아 온다. 그게 느리다
         """
-        if self._skin_layer_on is None:
+        if self._skin_layer_on is None or not self._skin_worn:
+            self._skin_worn = ()
             return False
+        self._skin_worn = ()
         self._skin_layer_on.Clear()
         return True
 
@@ -795,17 +798,23 @@ class EbsSimulate:
         return material
 
     def wear_skin(self, prim=None) -> bool:
-        """미리 받아 둔 머티리얼을 대상 장비에 건다
+        """미리 챙겨 둔 머티리얼을 대상 장비에 건다. align 이 부른다
 
         strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
         SKIN_LAYER  바인딩만 여기 쓴다. strip_skin 이 비우면 원래 색이다
+        _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
+                 레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
         """
-        self.strip_skin()
         if prim is None:
             prim = (self._target or {}).get("equipment")
         stage = self._get_stage()
         if not self._skin or stage is None or prim is None or not prim.IsValid():
+            self.strip_skin()
             return False
+        worn = (str(prim.GetPath()), self._skin)
+        if worn == self._skin_worn:
+            return True
+        self.strip_skin()
         material = self._make_skin(stage)
         if material is None:
             return False
@@ -816,6 +825,7 @@ class EbsSimulate:
             self._note(f"could not put {self._skin} on the equipment: "
                        f"{type(e).__name__}: {e}")
             return False
+        self._skin_worn = worn
         self._note(f"the equipment is wearing {self._skin}")
         return True
 
@@ -1401,7 +1411,6 @@ class EbsSimulate:
             "ebs": ebs_prim,
             "anchor": anchor,
         }
-        self.wear_skin()
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
     def _do_focus(self) -> dict:
@@ -1476,6 +1485,7 @@ class EbsSimulate:
 
         self._forget_triangles(self._target["ebs"])
         self._ebs_box = None
+        self.wear_skin()
 
         if reveal:
             self.show_ebs(self._target["ebs"])
