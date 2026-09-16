@@ -791,7 +791,8 @@ class EbsSimulate:
         """
         if not self._skin or not self._skin_use:
             return False
-        if self._skin_colour(self._skin) is not None:
+        if (self._skin_colour(self._skin) is not None
+                or self._skin.startswith("/")):
             return False
         stage = self._get_stage()
         if stage is None:
@@ -802,11 +803,6 @@ class EbsSimulate:
     def _make_skin(self, stage):
         """적어 둔 자리의 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
         url = self._skin
-        if url.startswith("/"):
-            standing = self._skin_in_stage(stage, url)
-            if standing is not None:
-                self._skin_made = url
-            return standing
         where = f"{SKIN_ROOT}/{SKIN_NAME}"
         if self._skin_made == url:
             made = stage.GetPrimAtPath(where)
@@ -866,20 +862,14 @@ class EbsSimulate:
             self._skin_worn = worn + ("mdl",)
             self._note(f"the equipment shaders now read {self._skin}")
             return True
-        material = self._make_skin(stage)
-        if material is None:
+        told = self._prim_specs(stage, self._skin)
+        if not told:
             return False
-        try:
-            with self._stage_timer("skin: bind"):
-                with Usd.EditContext(stage,
-                                     Usd.EditTarget(self._skin_layer(stage))):
-                    self._bind_skin(prim, material)
-        except Exception as e:
-            self._note(f"could not put {self._skin} on the equipment: "
-                       f"{type(e).__name__}: {e}")
-            return False
-        self._skin_worn = worn + ("bind",)
-        self._note(f"the equipment is wearing {self._skin}")
+        with self._stage_timer("skin: copy"):
+            if not self._over_shaders(stage, prim, told):
+                return False
+        self._skin_worn = worn + ("copy",)
+        self._note(f"the equipment copied {self._skin}")
         return True
 
     def drop_skin(self) -> None:
@@ -892,15 +882,6 @@ class EbsSimulate:
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             if stage.GetPrimAtPath(SKIN_ROOT).IsValid():
                 stage.RemovePrim(SKIN_ROOT)
-
-    @staticmethod
-    def _bind_skin(prim, material) -> None:
-        """안쪽 바인딩보다 센 바인딩 하나. API 스키마부터 붙인다"""
-        try:
-            binding = UsdShade.MaterialBindingAPI.Apply(prim)
-        except Exception:
-            binding = UsdShade.MaterialBindingAPI(prim)
-        binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
 
     @staticmethod
     def _paint_specs(colour) -> tuple:
@@ -983,20 +964,46 @@ class EbsSimulate:
         return (tuple(v / 255.0 for v in got) if max(got) > 1.0
                 else tuple(got))
 
-    def _skin_in_stage(self, stage, url: str):
-        """씬 안에 이미 선 머티리얼이면 그것. 아니면 None
+    def _prim_specs(self, stage, url: str) -> tuple:
+        """씬 안 머티리얼이 쓰는 것을 베낀다. 바인딩은 안 한다
 
-        그 자리가 비었거나 머티리얼이 아니면 .mdl 로 돌려 보지 않는다
+        바인딩을 걸면 장비 아래 머티리얼이 통째로 다시 풀린다. 그 값이
+        크다. 그 대신 셰이더가 읽는 .mdl 이나 색만 가져와 덮어쓴다
         """
-        prim = stage.GetPrimAtPath(url)
-        if prim is None or not prim.IsValid():
-            self._note(f"nothing stands at {url}")
-            return None
-        material = UsdShade.Material(prim)
-        if not material:
-            self._note(f"{url} is not a material")
-            return None
-        return material
+        shaders = self._shaders_under(stage, url)
+        if not shaders:
+            self._loud(f"skin: no shader under {url} to copy")
+            return ()
+        for shader in shaders:
+            got = stage.GetPrimAtPath(shader)
+            if got is None or not got.IsValid():
+                continue
+            asset = got.GetAttribute(MDL_SOURCE)
+            if asset and asset.Get():
+                sub = got.GetAttribute(MDL_SUB)
+                return ((MDL_SOURCE, "Asset", asset.Get()),
+                        (MDL_SUB, "Token", (sub.Get() if sub else "") or ""))
+            for name, kind in PAINT:
+                colour = got.GetAttribute(name)
+                if colour and colour.Get() is not None:
+                    return self._paint_specs(tuple(colour.Get()))
+        self._loud(f"skin: {url} has no mdl source or colour to copy")
+        return ()
+
+    @staticmethod
+    def _shaders_under(stage, where: str) -> list:
+        """그 프림 아래 Shader 들. 없으면 빈 목록"""
+        root = stage.GetPrimAtPath(where)
+        if root is None or not root.IsValid():
+            return []
+        found, stack = [], [root]
+        while stack:
+            prim = stack.pop()
+            if prim.GetTypeName() == SHADER_TYPE:
+                found.append(str(prim.GetPath()))
+                continue
+            stack.extend(_children(prim))
+        return found
 
     @staticmethod
     def _skin_name(url: str) -> str:
