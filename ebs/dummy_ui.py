@@ -24,6 +24,7 @@ VIEW_PATHS = (("Ceiling:", "", False),
               ("Other 3:", "", False))
 
 EQP_PREFIX = "EQP_"
+SKIN_URL   = ""
 
 NEAR_SPAN = 2.5
 NEAR_MIN, NEAR_MAX = 0.0, 5.0
@@ -111,6 +112,7 @@ class EbsDummyUI:
         self._views = []
         self._docked = False
         self._eqp_field = None
+        self._skin_field = None
         self._side_field = None
         self._ceiling_field = None
         self._status_label = None
@@ -160,6 +162,11 @@ class EbsDummyUI:
                     ui.Spacer()
 
                 ui.Separator(height=4)
+
+                with ui.HStack(height=22, spacing=4):
+                    ui.Label("Material:", width=90)
+                    self._skin_field = ui.StringField()
+                    self._skin_field.model.set_value(SKIN_URL)
 
                 with ui.HStack(height=22, spacing=4):
                     ui.Label("Equipment:", width=90)
@@ -404,6 +411,8 @@ class EbsDummyUI:
         EbsSimulateService.set_near_span(self._near_span())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))
+        EbsSimulateService.set_skin(
+            self._skin_field.model.get_value_as_string().strip())
 
     @staticmethod
     def _number(field, fallback: float) -> float:

@@ -112,6 +112,11 @@ class EbsSimulateService:
         return cls._simulate.get_nudge()
 
     @classmethod
+    def set_skin(cls, url):
+        """대상 장비에 입힐 머티리얼 경로. 빈 칸이면 원래 색 그대로"""
+        return cls._simulate.set_skin(url)
+
+    @classmethod
     def set_min_gaps(cls, side, ceiling):
         """3면 최소 여유(m). 미달이면 안 닿아도 간섭 판정"""
         return cls._simulate.set_min_gaps(side, ceiling)

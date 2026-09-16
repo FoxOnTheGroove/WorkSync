@@ -321,6 +321,7 @@ class EbsSimulate:
         self._inner: bool = True
         self._clash_on: bool = True
         self._clash_live: bool = False
+        self._skin: str = ""
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
         self._base = None
@@ -703,6 +704,19 @@ class EbsSimulate:
         """
         self._outer = bool(outer)
         self._inner = bool(inner)
+
+    def set_skin(self, url: str) -> str:
+        """대상 장비에 입힐 머티리얼 경로. 빈 칸이면 원래 색 그대로
+
+        스테이지 안 프림 경로(/World/Looks/...)도, 옴니버스 URL 도 받는다.
+        입히는 것은 아직 안 한다. 값만 들고 있는다
+        """
+        self._skin = (url or "").strip()
+        return self._skin
+
+    def get_skin(self) -> str:
+        """지금 적어 둔 머티리얼 경로"""
+        return self._skin
 
     def set_min_gaps(self, side: float, ceiling: float) -> None:
         """면마다 지켜야 하는 최소 여유(m)
