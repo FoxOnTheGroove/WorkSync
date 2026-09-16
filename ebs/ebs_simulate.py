@@ -754,7 +754,11 @@ class EbsSimulate:
         return self._skin
 
     def _skin_layer(self, stage):
-        """머티리얼 갈이를 담는 전용 레이어. 원본 USD 는 안 건드린다"""
+        """머티리얼 갈이를 담는 전용 레이어. 원본 USD 는 안 건드린다
+
+        세션의 subLayerPaths 를 건드리면 레이어 스택이 바뀐다. 그때 USD 는
+        스테이지를 통째로 다시 짠다. init 에서 미리 끼워 두는 이유다
+        """
         session = stage.GetSessionLayer()
         if self._skin_layer_on is None:
             self._skin_layer_on = Sdf.Layer.CreateAnonymous(SKIN_LAYER)
@@ -1190,6 +1194,11 @@ class EbsSimulate:
             self._note(f"camera {CAMERA_PATH} created (the viewport switches "
                        f"to it when the camera step runs)")
 
+        with self._stage_timer("skin: layer"):
+            try:
+                self._skin_layer(self._get_stage())
+            except Exception as e:
+                self._note(f"no skin layer: {type(e).__name__}: {e}")
         self.warm_skin()
         self.hide_ebs()
         equipment = self.build_index()
