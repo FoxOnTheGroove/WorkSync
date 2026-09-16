@@ -786,8 +786,7 @@ class EbsSimulate:
         """
         if not self._skin or not self._skin_use:
             return False
-        if (self._skin_colour(self._skin) is not None
-                or self._skin.startswith("/")):
+        if not self._skin.lower().endswith(".mdl"):
             return False
         stage = self._get_stage()
         if stage is None:
@@ -874,16 +873,37 @@ class EbsSimulate:
         return True
 
     def _skin_material(self, stage):
-        """걸 머티리얼 하나. 색이면 세우고, 경로면 그 자리 것, .mdl 이면 받은 것"""
+        """걸 머티리얼 하나. 색이면 세우고, 씬에 있으면 그것, 아니면 .mdl
+
+        앞의 / 는 있어도 없어도 된다. 스테이지에 그 자리가 있는지를 먼저 본다
+        """
         colour = self._skin_colour(self._skin)
         if colour is not None:
             return self._make_colour(stage, colour)
-        if self._skin.startswith("/"):
-            found = stage.GetPrimAtPath(self._skin)
+        standing = self._skin_prim(stage, self._skin)
+        if standing is not None:
+            return standing
+        if self._skin.lower().endswith(".mdl"):
+            return self._make_skin(stage)
+        self._loud(f"skin: {self._skin} is neither a prim in the stage nor "
+                   f"a .mdl path")
+        return None
+
+    def _skin_prim(self, stage, text: str):
+        """씬 안 머티리얼이면 그것. 그 자리가 없으면 None"""
+        for path in ((text,) if text.startswith("/") else ("/" + text, text)):
+            try:
+                found = stage.GetPrimAtPath(path)
+            except Exception:
+                continue
             if found is None or not found.IsValid():
-                return None
-            return UsdShade.Material(found) or None
-        return self._make_skin(stage)
+                continue
+            material = UsdShade.Material(found)
+            if material:
+                return material
+            self._loud(f"skin: {path} stands there but is not a material")
+            return None
+        return None
 
     def _make_colour(self, stage, colour):
         """그 색 하나짜리 머티리얼. 걸어야 할 때만 쓴다"""
