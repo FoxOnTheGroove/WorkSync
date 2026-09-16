@@ -1355,7 +1355,7 @@ class EbsSimulate:
     def focus(self, equipment: str = "") -> dict:
         """prepare 를 품고, EBS 를 놓을 자리에 카메라를 세운다
 
-        _do_focus  아직 안 놓았으면 감춘 채로 먼저 놓는다. 담는 것은 EBS 상자다
+        _do_stage  아직 안 놓았으면 감춘 채로 먼저 놓는다. 담는 것은 EBS 상자다
         EbsSimulateCamera.place  놓는 곳. 거리는 CAMERA_BACK
         _grab / _turn / _zoom / _double  좌드래그 공전, 휠 줌, 더블클릭 중심 옮기기
         FADE_OTHERS  양옆 빼고 투명하게. 느려서 기본 꺼짐 (hide_other_equipment)
@@ -1366,6 +1366,9 @@ class EbsSimulate:
         made = self._do_prepare(equipment)
         if not made["ok"]:
             return self._done(made)
+        placed = self._do_stage()
+        if not placed["ok"]:
+            return self._done(placed)
         return self._done(self._do_focus())
 
     def collide(self) -> dict:
@@ -1583,7 +1586,8 @@ class EbsSimulate:
         """카메라를 먼저 잡고, EBS 를 보이고, 잰다
 
         simulate  순서를 바꾸려면 여기. 오버레이는 collide 뒤에 뜬다
-        _do_focus  감춘 EBS 를 자리에 옮겨 놓고 담는다. 보이는 것은 그 다음이다
+        한 걸음이 한 줄이다. prepare 로 고르고, _do_stage 로 놓고, _do_focus 로
+        담고, wear_skin 으로 입히고, show_ebs 로 보이고, _do_collide 로 잰다
         """
         self._begin("simulate")
         if not self._ready:
@@ -1591,6 +1595,9 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return result
+        placed = self._do_stage()
+        if not placed["ok"]:
+            return placed
         told = self._do_focus()
         if not told["ok"]:
             return told
@@ -1613,6 +1620,9 @@ class EbsSimulate:
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return self._done(result)
+        placed = self._do_stage()
+        if not placed["ok"]:
+            return self._done(placed)
         told = self._do_focus()
         if not told["ok"]:
             return self._done(told)
@@ -1677,17 +1687,26 @@ class EbsSimulate:
         }
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
-    def _do_focus(self) -> dict:
-        """EBS 상자를 담도록 카메라를 세운다. 아직이면 감춘 채로 먼저 놓는다"""
+    def _do_stage(self) -> dict:
+        """카메라를 세우기 전에 해 둘 것. 그린 것을 걷고, 아직이면 놓는다
+
+        놓을 때는 보임 상태를 그대로 두고 머티리얼도 안 입힌다. 보이는 것도
+        입히는 것도 부른 쪽이 제 차례에 한다
+        clear_markers  놓기 전에 걷는다. 놓으면서 그린 레이저가 살아남는다
+        """
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         self.clear_markers()
-        if not self._aligned:
-            ebs = self._target["ebs"]
-            placed = self._do_align(
-                reveal=self._is_visible(ebs, str(ebs.GetPath())), wear=False)
-            if not placed["ok"]:
-                return placed
+        if self._aligned:
+            return self._payload(True, "EBS already placed")
+        ebs = self._target["ebs"]
+        return self._do_align(reveal=self._is_visible(ebs, str(ebs.GetPath())),
+                              wear=False)
+
+    def _do_focus(self) -> dict:
+        """EBS 상자를 담도록 카메라를 세운다. 놓는 것은 _do_stage 몫이다"""
+        if self._target is None:
+            return self._payload(False, "Run Prepare first")
         stage = self._get_stage()
         if FADE_OTHERS:
             with self._stage_timer("hide the other equipment"):

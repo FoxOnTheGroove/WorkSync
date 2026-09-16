@@ -186,13 +186,13 @@ class EbsDummyUI:
                     ui.Button("Clear", width=64, clicked_fn=self._on_clear_markers)
 
                 with ui.HStack(height=26, spacing=4):
-                    ui.Button("1 Camera", clicked_fn=self._on_camera)
                     ui.Label("near", width=30)
                     self._near_slider = ui.FloatSlider(min=NEAR_MIN, max=NEAR_MAX,
                                                        step=0.1, width=110)
                     self._near_slider.model.set_value(NEAR_SPAN)
                     self._near_slider.model.add_value_changed_fn(
                         lambda model: self._on_near_span())
+                    ui.Button("1 Camera", clicked_fn=self._on_camera)
                     ui.Button("2 Align", clicked_fn=self._on_align)
                     ui.Button("3 Collide", clicked_fn=self._on_collide)
 
