@@ -717,9 +717,10 @@ class EbsSimulate:
         self._inner = bool(inner)
 
     def set_skin_use(self, on: bool) -> bool:
-        """머티리얼을 갈아입힐지. 끄면 받지도 걸지도 않는다
+        """머티리얼을 갈아입힐지. 끄면 걷고, 켜도 그 자리에서 안 입힌다
 
-        거는 값이 싸지 않다. 세션 레이어에 쓸 때마다 스테이지가 다시 짜인다
+        거는 값이 싸지 않다. 세션 레이어에 쓸 때마다 스테이지가 다시 짜인다.
+        그래서 입히는 자리를 align 하나로 못 박는다. 이 함수는 끄는 쪽만 한다
         """
         want = bool(on)
         if want == self._skin_use:
@@ -727,8 +728,6 @@ class EbsSimulate:
         self._skin_use = want
         if not want:
             self.strip_skin()
-        elif self._target is not None:
-            self.wear_skin()
         return want
 
     def set_skin(self, url: str) -> str:
@@ -736,21 +735,16 @@ class EbsSimulate:
 
         색으로 읽히면(#ff0000, 0.8,0.1,0.1) 쓰던 셰이더의 색만 덮어쓴다.
         / 로 시작하면 씬 안 머티리얼 프림, 그 밖은 받아 올 .mdl 로 본다
-        값이 달라지면 바로 갈아입힌다. SIM 을 다시 안 눌러도 보인다
+        값만 적어 두고 미리 받아만 둔다. 입히는 것은 align 몫이다
         """
         want = (url or "").strip()
         if want == self._skin:
             return self._skin
         self._skin = want
         self._skin_made = ""
-        if not self._skin_use:
-            self.strip_skin()
-        elif self._target is not None:
-            self.wear_skin()
-        elif want:
+        self.strip_skin()
+        if want and self._skin_use:
             self.warm_skin()
-        else:
-            self.strip_skin()
         return self._skin
 
     def get_skin(self) -> str:
