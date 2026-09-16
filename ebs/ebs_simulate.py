@@ -852,32 +852,93 @@ class EbsSimulate:
             self._loud(f"skin: already on {worn[0]}, left alone")
             return True
         self.strip_skin()
+        how, told = self._skin_specs(stage)
+        if told:
+            with self._stage_timer(f"skin: {how}"):
+                if self._over_shaders(stage, prim, told):
+                    self._skin_worn = worn + (how,)
+                    return True
+        return self._bind_instead(stage, prim, worn)
+
+    def _skin_specs(self, stage) -> tuple:
+        """장비 셰이더에 덮어쓸 것. 무엇을 적었느냐로 갈린다"""
         colour = self._skin_colour(self._skin)
         if colour is not None:
-            with self._stage_timer("skin: paint"):
-                if not self._over_shaders(stage, prim, self._paint_specs(colour)):
-                    return False
-            self._skin_worn = worn + ("paint",)
-            self._note(f"the equipment is painted {self._skin}")
-            return True
+            return "paint", self._paint_specs(colour)
         if not self._skin.startswith("/"):
             self._make_skin(stage)
-            with self._stage_timer("skin: dress"):
-                if not self._over_shaders(stage, prim,
-                                          self._mdl_specs(self._skin)):
-                    return False
-            self._skin_worn = worn + ("mdl",)
-            self._note(f"the equipment shaders now read {self._skin}")
-            return True
-        told = self._prim_specs(stage, self._skin)
-        if not told:
+            return "dress", self._mdl_specs(self._skin)
+        return "copy", self._prim_specs(stage, self._skin)
+
+    def _bind_instead(self, stage, prim, worn) -> bool:
+        """장비가 제 셰이더를 안 들고 있을 때. 머티리얼 하나를 걸어 버린다
+
+        그 아래 머티리얼이 통째로 다시 풀려 값이 크다. 덮어쓸 자리가 있으면
+        그쪽이 먼저다. 여기로 왔다는 것은 덮어쓸 자리가 없었다는 뜻이다
+        """
+        material = self._skin_material(stage)
+        if material is None:
+            self._loud(f"skin: nothing to bind for {self._skin}")
             return False
-        with self._stage_timer("skin: copy"):
-            if not self._over_shaders(stage, prim, told):
-                return False
-        self._skin_worn = worn + ("copy",)
-        self._note(f"the equipment copied {self._skin}")
+        try:
+            with self._stage_timer("skin: bind"):
+                with Usd.EditContext(stage,
+                                     Usd.EditTarget(self._skin_layer(stage))):
+                    self._bind_skin(prim, material)
+        except Exception as e:
+            self._loud(f"skin: could not bind {self._skin}: "
+                       f"{type(e).__name__}: {e}")
+            return False
+        self._skin_worn = worn + ("bind",)
+        self._loud(f"skin: {worn[0]} has no shader of its own, bound "
+                   f"{self._skin} instead. that costs more to put on and off")
         return True
+
+    def _skin_material(self, stage):
+        """걸 머티리얼 하나. 색이면 세우고, 경로면 그 자리 것, .mdl 이면 받은 것"""
+        colour = self._skin_colour(self._skin)
+        if colour is not None:
+            return self._make_colour(stage, colour)
+        if self._skin.startswith("/"):
+            found = stage.GetPrimAtPath(self._skin)
+            if found is None or not found.IsValid():
+                return None
+            return UsdShade.Material(found) or None
+        return self._make_skin(stage)
+
+    def _make_colour(self, stage, colour):
+        """그 색 하나짜리 머티리얼. 걸어야 할 때만 쓴다"""
+        where = f"{SKIN_ROOT}/{SKIN_NAME}"
+        if self._skin_made == self._skin:
+            made = stage.GetPrimAtPath(where)
+            if made is not None and made.IsValid():
+                return UsdShade.Material(made)
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                UsdGeom.Scope.Define(stage, SKIN_ROOT)
+                material = UsdShade.Material.Define(stage, where)
+                shader = UsdShade.Shader.Define(stage, f"{where}/surface")
+                shader.CreateIdAttr("UsdPreviewSurface")
+                shader.CreateInput("diffuseColor",
+                                   Sdf.ValueTypeNames.Color3f).Set(
+                                       Gf.Vec3f(*colour))
+                material.CreateSurfaceOutput().ConnectToSource(
+                    shader.ConnectableAPI(), "surface")
+        except Exception as e:
+            self._loud(f"skin: could not build {self._skin}: "
+                       f"{type(e).__name__}: {e}")
+            return None
+        self._skin_made = self._skin
+        return material
+
+    @staticmethod
+    def _bind_skin(prim, material) -> None:
+        """안쪽 바인딩보다 센 바인딩 하나. API 스키마부터 붙인다"""
+        try:
+            binding = UsdShade.MaterialBindingAPI.Apply(prim)
+        except Exception:
+            binding = UsdShade.MaterialBindingAPI(prim)
+        binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
 
     def drop_skin(self) -> None:
         """세워 둔 머티리얼까지 치운다. teardown 만 여기까지 간다"""
