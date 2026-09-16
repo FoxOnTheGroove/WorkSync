@@ -4,11 +4,47 @@ from .ebs_simulate import EbsSimulate
 
 __all__ = ["EbsSimulateService"]
 
+WORK_SIM     = "시뮬레이션"
+WORK_CAMERA  = "카메라"
+WORK_ALIGN   = "EBS 식립"
+WORK_COLLIDE = "충돌 계산"
+WORK_CLEAR   = "정리"
+WORK_REFRESH = "카메라 되돌리기"
+WORK_SETTLE  = "내부 충돌 재계산"
+
 
 class EbsSimulateService:
     """EBS 시뮬레이션 공개 API."""
 
     _simulate = None
+    _busy = ""
+
+    # -- 작업중 ----------------------------------------------------------------
+
+    @classmethod
+    def busy(cls):
+        """지금 도는 일의 이름. 아무것도 안 돌면 빈 칸
+
+        도는 동안 버튼도 손잡이도 안 받는다. 도중에 끼어들면 판정 한 벌을
+        바깥에서 갈아엎게 된다. 세우는 것은 일을 띄우는 쪽이 직접 한다
+        """
+        return cls._busy
+
+    @classmethod
+    def begin_work(cls, label):
+        """그 일이 시작됐다고 세운다. 띄우기 전에 그 자리에서 세운다"""
+        cls._busy = label or "작업"
+        return cls._busy
+
+    @classmethod
+    def end_work(cls):
+        """일이 끝났다고 내린다. finally 에서 부른다"""
+        cls._busy = ""
+
+    @classmethod
+    def get_step(cls):
+        """지금 도는 단계의 이름. 진행도 옆에 적을 것"""
+        return cls._simulate.get_step() if cls._simulate else ""
 
     # -- 수명주기 ------------------------------------------------------------
 

@@ -6,7 +6,7 @@ import omni.ui as ui
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 
 from .ebs_simulate_camera import viewport_window
-from .ebs_simulate_service import EbsSimulateService
+from .ebs_simulate_service import EbsSimulateService, WORK_SETTLE
 
 __all__ = ["EbsSimulateOverlay", "EbsSimulateMarks", "EbsSimulateGrip"]
 
@@ -712,8 +712,14 @@ class EbsSimulateGrip:
         return want == GRIP_HOT
 
     def press(self, x: float, y: float) -> bool:
-        """여기서 눌렸나. 눌렸으면 끌기를 시작한다"""
-        if self._ends is None or not self._hit(x, y):
+        """여기서 눌렸나. 눌렸으면 끌기를 시작한다
+
+        도는 일이 있으면 안 받는다. 재는 중에 밀면 판정 한 벌을 바깥에서
+        갈아엎게 된다
+        """
+        if self._ends is None or EbsSimulateService.busy():
+            return False
+        if not self._hit(x, y):
             return False
         self._from = x
         self._was = EbsSimulateService.get_nudge()
@@ -723,7 +729,7 @@ class EbsSimulateGrip:
 
     def drag(self, x: float, y: float) -> bool:
         """끄는 중이면 그만큼 민다"""
-        if self._from is None:
+        if self._from is None or EbsSimulateService.busy():
             return False
         per = self._unit_pixels()
         if per:
@@ -733,13 +739,32 @@ class EbsSimulateGrip:
         return True
 
     def release(self) -> None:
-        """놓는다. 선 자리에서 내부 충돌을 다시 재고 연출을 되켠다"""
+        """놓는다. 다시 재는 것은 다음 프레임부터 따로 돈다
+
+        마우스 이벤트 안에서 재면 그동안 킷이 멈춘다. 띄워 놓고 바로
+        돌려주면 그 사이에 화면이 한 번 그려진다
+        """
         if self._from is None:
             return
         self._from = None
         self._draw(GRIP_IDLE)
-        EbsSimulateService.hold_clash(True)
         EbsSimulateOverlay.restate()
+        if EbsSimulateService.busy():
+            return
+        EbsSimulateService.begin_work(WORK_SETTLE)
+        asyncio.ensure_future(self._settle())
+
+    async def _settle(self) -> None:
+        """손을 뗀 자리에서 내부 충돌을 다시 재고 연출을 되켠다"""
+        try:
+            import omni.kit.app
+            await omni.kit.app.get_app().next_update_async()
+            EbsSimulateService.hold_clash(True)
+            EbsSimulateOverlay.restate()
+        except Exception as e:
+            print(f"[ebs] could not retest after the grip: {e}")
+        finally:
+            EbsSimulateService.end_work()
 
     @property
     def holding(self) -> bool:

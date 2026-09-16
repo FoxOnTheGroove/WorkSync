@@ -259,6 +259,7 @@ LEAD_ROOM   = 0.05
 
 GRID = 1
 FADE_OTHERS = False
+SETTLE_GUESS = 2.0
 SETTLE_FRAME = 0.02
 SETTLE_CALM  = 3
 SETTLE_MOST  = 600
@@ -346,6 +347,8 @@ class EbsSimulate:
         self._base = None
         self._verdict: dict = {}
         self._progress: float = 0.0
+        self._doing: str = ""
+        self._settled: float = 0.0
         self._spent: dict = {}
         self._shares: dict = {}
         self._results: dict = {}
@@ -806,11 +809,13 @@ class EbsSimulate:
         """
         import omni.kit.app
         app = omni.kit.app.get_app()
+        guess = self._settled or SETTLE_GUESS
         started = last = time.perf_counter()
         busy, calm = started, 0
         for _ in range(SETTLE_MOST):
             await app.next_update_async()
             now = time.perf_counter()
+            self._progress = min(99.0, (now - started) / guess * 100.0)
             if now - last > SETTLE_FRAME:
                 busy, calm = now, 0
             else:
@@ -819,6 +824,8 @@ class EbsSimulate:
             if calm >= SETTLE_CALM:
                 break
         spent = max(0.0, busy - started)
+        self._settled = spent or self._settled
+        self._progress = 100.0
         self.add_phase(name, spent)
         self._skin_told["settle"] = spent
         return spent
@@ -1199,13 +1206,19 @@ class EbsSimulate:
 
     @contextmanager
     def _phase(self, name: str):
-        """그 단계에 걸린 시간을 이름별로 모은다. 한 줄 보고에만 쓴다"""
+        """그 단계에 걸린 시간을 이름별로 모은다. 한 줄 보고과 진행도에 쓴다"""
         started = time.perf_counter()
+        before, self._doing = self._doing, name
         try:
             yield
         finally:
+            self._doing = before
             self._phases[name] = (self._phases.get(name, 0.0)
                                   + time.perf_counter() - started)
+
+    def get_step(self) -> str:
+        """지금 도는 단계의 이름. 아무것도 안 돌면 빈 칸"""
+        return dict(PHASES).get(self._doing, "")
 
     def add_phase(self, name: str, spent: float) -> None:
         """바깥에서 잰 시간을 같은 줄에 얹는다. UI 가 오버레이 시간을 준다"""
@@ -1827,6 +1840,8 @@ class EbsSimulate:
                      여기다. WARM_CHUNK 개씩 끊으니 이 안에서도 올라간다
         COLLIDE_STEPS  단계마다 몫이 얼마인가. 첫 번만 쓰는 추정치다
         _learn_shares  한 번 돌고 나면 실제로 걸린 시간의 비율로 몫을 다시 잡는다
+        settle_skin  머티리얼은 정착만 길다. 지난번 걸린 시간으로 어림잡아
+                     올리고 99 에서 기다리다 끝나면 100 을 찍는다
         """
         return self._progress
 

@@ -4,7 +4,9 @@ import time
 
 import omni.ui as ui
 
-from .ebs_simulate_service import EbsSimulateService
+from .ebs_simulate_service import (EbsSimulateService, WORK_ALIGN,
+                                   WORK_CAMERA, WORK_CLEAR, WORK_COLLIDE,
+                                   WORK_REFRESH, WORK_SIM)
 from .ebs_simulate_overlay import EbsSimulateOverlay
 
 __all__ = ["EbsDummyUI", "SweepLog"]
@@ -285,7 +287,7 @@ class EbsDummyUI:
         self._apply_settings()
         self._reset_nudge()
         EbsSimulateOverlay.hide()
-        self._start(self._simulate_task)
+        self._start(self._simulate_task, WORK_SIM)
 
     async def _simulate_task(self):
         """도는 동안 진행률을 적고, 끝나면 오버레이를 켠다"""
@@ -308,7 +310,7 @@ class EbsDummyUI:
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
         self._apply_settings()
         self._reset_nudge()
-        self._start(self._aligning)
+        self._start(self._aligning, WORK_ALIGN)
 
     async def _aligning(self):
         """align 을 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
@@ -320,6 +322,10 @@ class EbsDummyUI:
     def _on_camera(self):
         """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
         self._apply_settings()
+        self._start(self._focusing, WORK_CAMERA)
+
+    async def _focusing(self):
+        """카메라를 잡고 한 줄 찍는다. 도는 동안은 다른 것을 안 받는다"""
         self._render(EbsSimulateService.focus(
             self._eqp_field.model.get_value_as_string()))
         self._overlay(EbsSimulateOverlay.hide)
@@ -328,7 +334,7 @@ class EbsDummyUI:
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""
         self._apply_settings()
-        self._start(self._collide_task)
+        self._start(self._collide_task, WORK_COLLIDE)
 
     async def _collide_task(self):
         """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
@@ -370,11 +376,15 @@ class EbsDummyUI:
 
     def _on_refresh(self):
         """카메라만 원래 자리로 되돌린다"""
+        self._start(self._refreshing, WORK_REFRESH)
+
+    async def _refreshing(self):
+        """되돌리고 한 줄 찍는다"""
         self._render(EbsSimulateService.refresh_camera())
 
     def _on_clear_markers(self):
         """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
-        self._start(self._clearing)
+        self._start(self._clearing, WORK_CLEAR)
 
     async def _clearing(self):
         """오버레이부터 내리고 Clear 를 돌린다. 화면이 잦아들 때까지 기다린다
@@ -387,25 +397,37 @@ class EbsDummyUI:
         self._reset_nudge()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
-    def _start(self, make):
-        """코루틴 하나를 띄운다. 이미 도는 것이 있으면 아예 안 만든다
+    def _start(self, make, label: str):
+        """일 하나를 띄운다. 이미 도는 것이 있으면 아예 안 만든다
 
         make  코루틴이 아니라 코루틴을 만드는 함수다. 코루틴을 먼저 만들어
                  넘기면, 바빠서 버릴 때 안 기다린 코루틴이 남아 경고가 뜬다
+        begin_work  띄우기 전에 그 자리에서 세운다. 한 프레임 안에 두 번
+                 눌러도 뒤엣것이 막힌다. 손잡이도 같은 것을 본다
         """
-        if self._task is not None and not self._task.done():
-            self._set_status("Busy")
+        busy = EbsSimulateService.busy()
+        if busy:
+            self._set_status(f"Busy: {busy}")
             return
-        self._task = asyncio.ensure_future(make())
+        EbsSimulateService.begin_work(label)
+        self._task = asyncio.ensure_future(self._working(make))
+
+    async def _working(self, make):
+        """일을 돌리고, 어떻게 끝나든 바쁨을 내린다"""
+        try:
+            await make()
+        finally:
+            EbsSimulateService.end_work()
 
     async def _watched(self, work):
-        """일이 도는 동안 진행률과 흐른 시간을 상태 줄에 적는다"""
+        """일이 도는 동안 단계와 진행률과 흐른 시간을 상태 줄에 적는다"""
         import omni.kit.app
         started = time.monotonic()
         task = asyncio.ensure_future(work)
         while not task.done():
+            step = EbsSimulateService.get_step() or EbsSimulateService.busy()
             self._set_status(
-                f"Working {EbsSimulateService.get_progress():6.2f}%"
+                f"{step} {EbsSimulateService.get_progress():3.0f}%"
                 f"   {time.monotonic() - started:.1f}s")
             await omni.kit.app.get_app().next_update_async()
         return task.result()
