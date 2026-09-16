@@ -755,26 +755,32 @@ class EbsSimulate:
         return self._skin
 
     def strip_skin(self) -> bool:
-        """건 것을 푼다. 우리가 건 메시에서 우리 것만 뺀다
+        """건 것을 푼다. 인스턴스였던 자리는 도로 묶기만 한다
 
-        UnbindAllBindings 는 지금 쓰는 자리의 관계만 지운다. 그래서 원래
-        레퍼런스가 들고 있던 바인딩이 도로 떠오른다. 그것이 우리가 바라는 것이다
+        도로 묶으면 그 아래가 인스턴스 프록시가 되고, 프록시 경로에 있는
+        세션 레이어 의견은 USD 가 안 본다. 그래서 바인딩은 저절로 죽는다.
+        따로 지우면 재구성 파동이 한 번 더 온다. 그 한 번이 비싸다
+        같은 장비를 다시 풀면 적어 둔 바인딩이 그대로 살아나므로, 두 번째
+        부터는 거는 값이 안 바뀌어 통지가 안 간다
+        인스턴스 아래가 아닌 메시는 도로 묶을 것이 없으니 직접 푼다
         """
-        wrote, self._skin_wrote = self._skin_wrote, []
         opened, self._skin_opened = self._skin_opened, []
+        wrote, self._skin_wrote = self._skin_wrote, []
         self._skin_worn = ()
-        if not wrote and not opened:
+        left = [path for path in wrote if not self._under(path, opened)]
+        if not opened and not left:
             return False
         stage = self._get_stage()
         if stage is None:
             return False
         try:
-            with self._phase("skin"), self._stage_timer("skin: unbind"):
+            with self._phase("skin"), self._stage_timer("skin: close"):
                 with Usd.EditContext(stage, stage.GetSessionLayer()):
-                    for path in wrote:
+                    for path in left:
                         one = stage.GetPrimAtPath(path)
                         if one is not None and one.IsValid():
-                            UsdShade.MaterialBindingAPI(one).UnbindAllBindings()
+                            UsdShade.MaterialBindingAPI(
+                                one).UnbindAllBindings()
                     for path in opened:
                         one = stage.GetPrimAtPath(path)
                         if one is not None and one.IsValid():
@@ -784,6 +790,12 @@ class EbsSimulate:
                        f"{type(e).__name__}: {e}")
             return False
         return True
+
+    @staticmethod
+    def _under(path: str, roots) -> bool:
+        """그 자리가 도로 묶을 인스턴스 밑에 드는지"""
+        return any(path == root or path.startswith(f"{root}/")
+                   for root in roots)
 
     def warm_skin(self) -> bool:
         """적어 둔 머티리얼을 미리 챙겨 둔다. init 이 부른다
