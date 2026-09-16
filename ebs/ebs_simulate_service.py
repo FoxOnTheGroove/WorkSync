@@ -112,6 +112,16 @@ class EbsSimulateService:
         return cls._simulate.get_nudge()
 
     @classmethod
+    def add_phase(cls, name, spent):
+        """바깥에서 잰 시간을 이번 단계 보고에 얹는다"""
+        return cls._simulate.add_phase(name, spent)
+
+    @classmethod
+    def say_phases(cls):
+        """이번 단계에 어디서 얼마나 걸렸나 한 줄로 찍는다"""
+        return cls._simulate.say_phases()
+
+    @classmethod
     def clear_all(cls):
         """Clear 버튼 한 번. 어디서 얼마가 걸렸는지 로그에 찍는다"""
         return cls._simulate.clear_all()

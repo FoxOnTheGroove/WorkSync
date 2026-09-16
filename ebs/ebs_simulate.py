@@ -260,6 +260,10 @@ LEAD_ROOM   = 0.05
 
 GRID = 1
 FADE_OTHERS = False
+PHASES = (("camera", "카메라셋"), ("place", "EBS식립"),
+          ("skin", "머티리얼"), ("collide", "충돌연산"),
+          ("overlay", "UI·기즈모"))
+
 LOOKS = "Looks"
 SHADER_TYPE = "Shader"
 GONE_THRESHOLD = 0.5
@@ -330,6 +334,7 @@ class EbsSimulate:
         self._skin_worn: tuple = ()
         self._skin_wrote: list = []
         self._skin_opened: list = []
+        self._phases: dict = {}
         self._skin_use: bool = False
         self._clash_when: float = 0.0
         self._nudge: float = 0.0
@@ -764,7 +769,7 @@ class EbsSimulate:
         if stage is None:
             return False
         try:
-            with self._stage_timer("skin: unbind"):
+            with self._phase("skin"), self._stage_timer("skin: unbind"):
                 with Usd.EditContext(stage, stage.GetSessionLayer()):
                     for path in wrote:
                         one = stage.GetPrimAtPath(path)
@@ -793,7 +798,7 @@ class EbsSimulate:
         stage = self._get_stage()
         if stage is None:
             return False
-        with self._stage_timer("skin: load"):
+        with self._phase("skin"), self._stage_timer("skin: load"):
             return self._make_skin(stage) is not None
 
     def _skin_material(self, stage):
@@ -876,7 +881,6 @@ class EbsSimulate:
                 self._loud("skin: the skin box is off, nothing bound")
             self.strip_skin()
             return False
-        self._loud(f"skin: asked for {self._skin or '(the box is empty)'}")
         if not self._skin:
             self.strip_skin()
             return False
@@ -898,7 +902,7 @@ class EbsSimulate:
             return False
         where = str(prim.GetPath())
         try:
-            with self._stage_timer("skin: bind"):
+            with self._phase("skin"), self._stage_timer("skin: bind"):
                 with Usd.EditContext(stage, stage.GetSessionLayer()):
                     for one in self._skin_meshes(stage, prim):
                         self._bind_skin(one, material)
@@ -1123,14 +1127,12 @@ class EbsSimulate:
         self._timings = []
         self._notes = []
         self._blocked = ""
+        self._phases = {}
         self._started = time.perf_counter()
 
     def _done(self, payload: dict) -> dict:
         """단계 하나에 한 줄. 무엇을 했고 얼마나 걸렸나"""
-        spent = time.perf_counter() - self._started
-        state = "done" if payload.get("ok") else "failed"
-        print(f"[ebs] {self._step or 'step'} {state} in {spent:.2f}s"
-              f" - {payload.get('reason', '')}")
+        self._note(f"{self._step or 'step'}: {payload.get('reason', '')}")
         return payload
 
     def _fail(self, key: str, reason: str, short: str = ""):
@@ -1139,14 +1141,42 @@ class EbsSimulate:
         print(f"[ebs] {key}: {reason}")
         return None
 
+    @contextmanager
+    def _phase(self, name: str):
+        """그 단계에 걸린 시간을 이름별로 모은다. 한 줄 보고에만 쓴다"""
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._phases[name] = (self._phases.get(name, 0.0)
+                                  + time.perf_counter() - started)
+
+    def add_phase(self, name: str, spent: float) -> None:
+        """바깥에서 잰 시간을 같은 줄에 얹는다. UI 가 오버레이 시간을 준다"""
+        self._phases[name] = self._phases.get(name, 0.0) + float(spent)
+
+    def phase_line(self) -> str:
+        """이번 단계에 어디서 얼마나 걸렸나. 한 줄이면 된다"""
+        spent = time.perf_counter() - self._started
+        parts = " | ".join(f"{label} {self._phases[key]:.2f}"
+                           for key, label in PHASES
+                           if self._phases.get(key, 0.0) >= 0.005)
+        return (f"[ebs] {self._step or 'step'} {spent:.2f}s"
+                + (f" | {parts}" if parts else ""))
+
+    def say_phases(self) -> str:
+        """한 줄을 찍고 그대로 돌려준다"""
+        line = self.phase_line()
+        print(line)
+        return line
+
     def _note(self, text: str) -> None:
         """notes 에 남긴다. 콘솔은 단계마다 _done 한 줄뿐"""
         self._notes.append(text)
 
     def _loud(self, text: str) -> None:
-        """notes 에 남기고 콘솔에도 바로 찍는다. 눈으로 봐야 하는 것만"""
+        """notes 에 남긴다. 한 줄 보고만 콘솔에 나간다"""
         self._notes.append(text)
-        print(f"[ebs] {text}")
 
     def get_notes(self) -> list:
         """이번 단계에 남긴 자세한 기록
@@ -1590,7 +1620,7 @@ class EbsSimulate:
         ebs = self._target["ebs"]
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
-        with self._stage_timer("camera focus"):
+        with self._phase("camera"), self._stage_timer("camera focus"):
             told = self._camera.place(stage, self._framed_box(), facing)
         if told:
             self._note(told)
@@ -1621,7 +1651,7 @@ class EbsSimulate:
         stage = self._get_stage()
         anchor = self._target["anchor"]
 
-        with self._stage_timer("align EBS"):
+        with self._phase("place"), self._stage_timer("align EBS"):
             self._base = self.compute_target(stage, self._target["eqp_id"], anchor)
             target = self._pushed(anchor, self._base)
             if target is not None:
@@ -1676,8 +1706,9 @@ class EbsSimulate:
 
     def _do_collide(self) -> dict:
         """3면 충돌, 빈 면 거리, 내부 간섭을 재고 판정과 마커까지"""
-        for _ in self._collide_steps():
-            pass
+        with self._phase("collide"):
+            for _ in self._collide_steps():
+                pass
         return self._result
 
     async def collide_async(self) -> dict:
@@ -1888,7 +1919,8 @@ class EbsSimulate:
         self._reached("verdict")
         yield
 
-        with self._spending("markers"), self._stage_timer("markers: draw"):
+        with self._phase("overlay"), self._spending("markers"), \
+                self._stage_timer("markers: draw"):
             self.show_markers(self._target["ebs"], cells,
                               verdict.get("marks"), verdict.get("boxes"))
         self._verdict = verdict
@@ -1907,7 +1939,7 @@ class EbsSimulate:
             equipment_hit=meeting,
         )
         self._reached("markers")
-        print(self._spent_line())
+        self._note(self._spent_line())
         self._learn_shares()
 
     def _keep_result(self, verdict: dict, meeting: dict) -> str:
@@ -4758,19 +4790,19 @@ class EbsSimulate:
     def clear_all(self) -> dict:
         """Clear 버튼이 하는 일 전부. 어디서 얼마가 걸렸는지 한 줄로 찍는다"""
         self._begin("clear")
-        for name, work in (("markers", self.clear_markers),
-                           ("lasers", self.clear_port_lasers),
-                           ("sweep", self.clear_sweep),
-                           ("skin", self.strip_skin),
-                           ("equipment", self.show_equipment),
-                           ("camera", self.release_camera),
-                           ("ebs", self.hide_ebs)):
-            with self._stage_timer(f"clear: {name}"):
+        for phase, work in (("overlay", self.clear_markers),
+                            ("overlay", self.clear_port_lasers),
+                            ("overlay", self.clear_sweep),
+                            ("skin", self.strip_skin),
+                            ("skin", self.show_equipment),
+                            ("camera", self.release_camera),
+                            ("place", self.hide_ebs)):
+            with self._phase(phase):
                 try:
                     work()
                 except Exception as e:
-                    self._note(f"clear {name} failed: {type(e).__name__}: {e}")
-        print(self._timing_line("clear"))
+                    self._note(f"clear failed at {phase}: "
+                               f"{type(e).__name__}: {e}")
         return self._done(self._payload(True, "cleared"))
 
     def _timing_line(self, what: str) -> str:

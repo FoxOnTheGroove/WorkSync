@@ -300,7 +300,18 @@ class EbsDummyUI:
         """도는 동안 진행률을 적고, 끝나면 오버레이를 켠다"""
         self._render(await self._watched(EbsSimulateService.simulate_async(
             self._eqp_field.model.get_value_as_string())))
-        EbsSimulateOverlay.show()
+        self._overlay(EbsSimulateOverlay.show)
+        EbsSimulateService.say_phases()
+
+    @staticmethod
+    def _overlay(work):
+        """오버레이 세우는 시간을 재서 같은 줄에 얹는다"""
+        started = time.perf_counter()
+        try:
+            work()
+        finally:
+            EbsSimulateService.add_phase(
+                "overlay", time.perf_counter() - started)
 
     def _on_align(self):
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
@@ -308,14 +319,16 @@ class EbsDummyUI:
         self._reset_nudge()
         self._render(EbsSimulateService.align(
             self._eqp_field.model.get_value_as_string()))
-        EbsSimulateOverlay.hide()
+        self._overlay(EbsSimulateOverlay.hide)
+        EbsSimulateService.say_phases()
 
     def _on_camera(self):
         """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
         self._apply_settings()
         self._render(EbsSimulateService.focus(
             self._eqp_field.model.get_value_as_string()))
-        EbsSimulateOverlay.hide()
+        self._overlay(EbsSimulateOverlay.hide)
+        EbsSimulateService.say_phases()
 
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""
@@ -326,7 +339,8 @@ class EbsDummyUI:
         """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
         self._mark_nudge(busy=True)
         self._render(await self._watched(EbsSimulateService.collide_async()))
-        EbsSimulateOverlay.show()
+        self._overlay(EbsSimulateOverlay.show)
+        EbsSimulateService.say_phases()
         self._mark_nudge()
 
     def _on_near_span(self):
@@ -366,7 +380,8 @@ class EbsDummyUI:
     def _on_clear_markers(self):
         """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
         EbsSimulateService.clear_all()
-        EbsSimulateOverlay.hide()
+        self._overlay(EbsSimulateOverlay.hide)
+        EbsSimulateService.say_phases()
         self._reset_nudge()
         self._set_status("Markers and lasers cleared, camera released, EBS hidden")
 
