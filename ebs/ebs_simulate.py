@@ -227,6 +227,9 @@ SWEEP_ROOT     = "/EbsPortSweep"
 SWEEP_COLOR_PORT = LASER_COLOR
 SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 
+PAINT = (("inputs:diffuseColor", "Color3f"),
+         ("inputs:diffuse_color_constant", "Color3f"))
+
 SKIN_ROOT      = "/EbsSkin"
 SKIN_LAYER     = "ebs_skin.usda"
 SKIN_NAME      = "M_skin"
@@ -764,18 +767,15 @@ class EbsSimulate:
         return self._skin_layer_on
 
     def strip_skin(self) -> bool:
-        """입힌 것을 걷는다. 덮어쓴 것만 지우고 머티리얼은 남긴다
+        """입힌 것을 걷는다. 바인딩만 지우고 머티리얼은 남긴다
 
         머티리얼까지 지우면 다시 켤 때 .mdl 을 또 받아 온다. 그게 느리다
         """
         if self._skin_layer_on is None or not self._skin_worn:
             self._skin_worn = ()
             return False
-        how = self._skin_worn[2] if len(self._skin_worn) > 2 else "?"
         self._skin_worn = ()
-        with self._stage_timer(f"skin: strip ({how})"):
-            self._skin_layer_on.Clear()
-        self._loud(f"skin: took the {how} skin off")
+        self._skin_layer_on.Clear()
         return True
 
     def warm_skin(self) -> bool:
@@ -786,7 +786,7 @@ class EbsSimulate:
         """
         if not self._skin or not self._skin_use:
             return False
-        if not self._skin.lower().endswith(".mdl"):
+        if self._skin_colour(self._skin) is not None:
             return False
         stage = self._get_stage()
         if stage is None:
@@ -797,6 +797,11 @@ class EbsSimulate:
     def _make_skin(self, stage):
         """적어 둔 자리의 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
         url = self._skin
+        if url.startswith("/"):
+            standing = self._skin_in_stage(stage, url)
+            if standing is not None:
+                self._skin_made = url
+            return standing
         where = f"{SKIN_ROOT}/{SKIN_NAME}"
         if self._skin_made == url:
             made = stage.GetPrimAtPath(where)
@@ -819,162 +824,47 @@ class EbsSimulate:
         return material
 
     def wear_skin(self, prim=None) -> bool:
-        """적어 둔 머티리얼을 대상 장비에 건다. align 이 부른다
+        """미리 챙겨 둔 머티리얼을 대상 장비에 건다. align 이 부른다
 
+        strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
         SKIN_LAYER  바인딩만 여기 쓴다. strip_skin 이 비우면 원래 색이다
         _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
                  레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
-        길마다 로그를 한 줄 남긴다. 아무 말도 없으면 안 불린 것이다
         """
-        if not self._skin_use:
-            if self._skin:
-                self._loud("skin: the skin box is off, nothing written")
-            self.strip_skin()
-            return False
-        if not self._skin:
+        if not self._skin or not self._skin_use:
             self.strip_skin()
             return False
         if prim is None:
             prim = (self._target or {}).get("equipment")
         stage = self._get_stage()
         if stage is None or prim is None or not prim.IsValid():
-            self._loud("skin: no equipment to write on yet")
             self.strip_skin()
             return False
         worn = (str(prim.GetPath()), self._skin)
-        if self._skin_worn[:2] == worn:
-            self._loud(f"skin: already on {worn[0]}, left alone")
+        if worn == self._skin_worn:
             return True
         self.strip_skin()
-        return self._bind_it(stage, prim, worn)
-
-    def _bind_it(self, stage, prim, worn) -> bool:
-        """머티리얼 하나를 장비 뿌리에 건다
-
-        그 아래 머티리얼이 통째로 다시 풀려 값이 크다. 셰이더에 덮어쓰는
-        길을 써 봤지만 장비가 제 Looks 를 안 들고 있으면 쓸 자리가 없고,
-        원본이 적어 둔 경로도 우리 레이어에서 안 풀렸다. 그래서 여기로 왔다
-        """
-        material = self._skin_material(stage)
-        if material is None:
-            self._loud(f"skin: nothing to bind for {self._skin}")
-            return False
-        try:
-            with self._stage_timer("skin: bind"):
-                with Usd.EditContext(stage,
-                                     Usd.EditTarget(self._skin_layer(stage))):
-                    self._bind_skin(prim, material)
-        except Exception as e:
-            self._loud(f"skin: could not bind {self._skin}: "
-                       f"{type(e).__name__}: {e}")
-            return False
-        self._skin_worn = worn + ("bind",)
-        with self._stage_timer("skin: leaves"):
-            deep = self._bind_leaves(stage, prim, material)
-        self._loud(f"skin: bound {self._skin} on {worn[0]} and on {deep} "
-                   f"mesh(es) under it")
-        return True
-
-    def _bind_leaves(self, stage, prim, material) -> int:
-        """장비 아래 메시마다 직접 건다. 제 프림에 건 것이 제일 세다
-
-        조상에 걸어도 안쪽이 제 머티리얼을 들고 있으면 안 바뀌는 경우가 있다
-        인스턴스 프록시에는 쓸 수 없다. 그 수를 세어 로그에 적는다
-        """
-        done, shared, stack = 0, 0, [prim]
-        try:
-            with Usd.EditContext(stage,
-                                 Usd.EditTarget(self._skin_layer(stage))):
-                while stack:
-                    one = stack.pop()
-                    where = str(one.GetPath())
-                    if where in OURS or where.startswith(OURS_UNDER):
-                        continue
-                    try:
-                        if one.IsInstanceProxy():
-                            shared += 1
-                            continue
-                    except Exception:
-                        pass
-                    if one.GetTypeName() in GEOMETRY_TYPES:
-                        self._bind_skin(one, material)
-                        done += 1
-                        continue
-                    stack.extend(_children(one))
-        except Exception as e:
-            self._loud(f"skin: could not bind the meshes: "
-                       f"{type(e).__name__}: {e}")
-        if shared:
-            self._loud(f"skin: {shared} prim(s) under the equipment are "
-                       f"instance proxies; those keep their own material")
-        return done
-
-    def _skin_material(self, stage):
-        """걸 머티리얼 하나. 색이면 세우고, 씬에 있으면 그것, 아니면 .mdl
-
-        앞의 / 는 있어도 없어도 된다. 스테이지에 그 자리가 있는지를 먼저 본다
-        """
         colour = self._skin_colour(self._skin)
         if colour is not None:
-            return self._make_colour(stage, colour)
-        standing = self._skin_prim(stage, self._skin)
-        if standing is not None:
-            return standing
-        if self._skin.lower().endswith(".mdl"):
-            return self._make_skin(stage)
-        self._loud(f"skin: {self._skin} is neither a prim in the stage nor "
-                   f"a .mdl path")
-        return None
-
-    def _skin_prim(self, stage, text: str):
-        """씬 안 머티리얼이면 그것. 그 자리가 없으면 None"""
-        for path in ((text,) if text.startswith("/") else ("/" + text, text)):
-            try:
-                found = stage.GetPrimAtPath(path)
-            except Exception:
-                continue
-            if found is None or not found.IsValid():
-                continue
-            material = UsdShade.Material(found)
-            if material:
-                return material
-            self._loud(f"skin: {path} stands there but is not a material")
-            return None
-        return None
-
-    def _make_colour(self, stage, colour):
-        """그 색 하나짜리 머티리얼. 걸어야 할 때만 쓴다"""
-        where = f"{SKIN_ROOT}/{SKIN_NAME}"
-        if self._skin_made == self._skin:
-            made = stage.GetPrimAtPath(where)
-            if made is not None and made.IsValid():
-                return UsdShade.Material(made)
+            with self._stage_timer("skin: paint"):
+                if not self._paint_skin(stage, prim, colour):
+                    return False
+            self._skin_worn = worn
+            self._note(f"the equipment is painted {self._skin}")
+            return True
+        material = self._make_skin(stage)
+        if material is None:
+            return False
         try:
-            with Usd.EditContext(stage, stage.GetSessionLayer()):
-                UsdGeom.Scope.Define(stage, SKIN_ROOT)
-                material = UsdShade.Material.Define(stage, where)
-                shader = UsdShade.Shader.Define(stage, f"{where}/surface")
-                shader.CreateIdAttr("UsdPreviewSurface")
-                shader.CreateInput("diffuseColor",
-                                   Sdf.ValueTypeNames.Color3f).Set(
-                                       Gf.Vec3f(*colour))
-                material.CreateSurfaceOutput().ConnectToSource(
-                    shader.ConnectableAPI(), "surface")
+            with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
+                self._bind_skin(prim, material)
         except Exception as e:
-            self._loud(f"skin: could not build {self._skin}: "
+            self._note(f"could not put {self._skin} on the equipment: "
                        f"{type(e).__name__}: {e}")
-            return None
-        self._skin_made = self._skin
-        return material
-
-    @staticmethod
-    def _bind_skin(prim, material) -> None:
-        """안쪽 바인딩보다 센 바인딩 하나. API 스키마부터 붙인다"""
-        try:
-            binding = UsdShade.MaterialBindingAPI.Apply(prim)
-        except Exception:
-            binding = UsdShade.MaterialBindingAPI(prim)
-        binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+            return False
+        self._skin_worn = worn
+        self._note(f"the equipment is wearing {self._skin}")
+        return True
 
     def drop_skin(self) -> None:
         """세워 둔 머티리얼까지 치운다. teardown 만 여기까지 간다"""
@@ -986,6 +876,60 @@ class EbsSimulate:
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             if stage.GetPrimAtPath(SKIN_ROOT).IsValid():
                 stage.RemovePrim(SKIN_ROOT)
+
+    @staticmethod
+    def _bind_skin(prim, material) -> None:
+        """안쪽 바인딩보다 센 바인딩 하나. API 스키마부터 붙인다"""
+        try:
+            binding = UsdShade.MaterialBindingAPI.Apply(prim)
+        except Exception:
+            binding = UsdShade.MaterialBindingAPI(prim)
+        binding.Bind(material, UsdShade.Tokens.strongerThanDescendants)
+
+    def _paint_skin(self, stage, prim, colour) -> bool:
+        """장비가 이미 쓰는 셰이더의 색 입력만 덮어쓴다
+
+        바인딩을 안 건드리므로 그 아래 머티리얼을 다시 풀 일이 없다. 그래서
+        갈아 끼우는 것보다 훨씬 싸다
+        PAINT  규약마다 이름이 달라 둘 다 쓴다. 없는 이름은 셰이더가 무시한다
+        """
+        where = str(prim.GetPath())
+        shaders = self._looks_shaders(stage, where)
+        if not shaders:
+            self._note(f"nothing to paint under {where}/{LOOKS}"
+                       + (" (shared by instances)"
+                          if where in self._eqp_shared else ""))
+            return False
+        layer = self._skin_layer(stage)
+        value = Gf.Vec3f(*colour)
+        try:
+            with Sdf.ChangeBlock():
+                for shader in shaders:
+                    spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
+                    for name, kind in PAINT:
+                        attribute = spec.attributes.get(name)
+                        if attribute is None:
+                            attribute = Sdf.AttributeSpec(
+                                spec, name, getattr(Sdf.ValueTypeNames, kind))
+                        attribute.default = value
+        except Exception as e:
+            self._note(f"could not paint {len(shaders)} shader(s): "
+                       f"{type(e).__name__}: {e}")
+            return False
+        self._check_paint(stage, shaders[0], colour)
+        return True
+
+    def _check_paint(self, stage, shader: str, colour) -> None:
+        """정말 칠해졌는지 하나만 다시 읽어 본다. 이름이 안 맞으면 조용하다"""
+        prim = stage.GetPrimAtPath(shader)
+        if prim is None or not prim.IsValid():
+            return
+        for name, _ in PAINT:
+            attribute = prim.GetAttribute(name)
+            if attribute and attribute.Get() is not None:
+                return
+        self._note(f"{shader} took none of {[n for n, _ in PAINT]}; "
+                   f"that shader names its colour something else")
 
     @staticmethod
     def _skin_colour(text: str):
@@ -1010,6 +954,21 @@ class EbsSimulate:
             return None
         return (tuple(v / 255.0 for v in got) if max(got) > 1.0
                 else tuple(got))
+
+    def _skin_in_stage(self, stage, url: str):
+        """씬 안에 이미 선 머티리얼이면 그것. 아니면 None
+
+        그 자리가 비었거나 머티리얼이 아니면 .mdl 로 돌려 보지 않는다
+        """
+        prim = stage.GetPrimAtPath(url)
+        if prim is None or not prim.IsValid():
+            self._note(f"nothing stands at {url}")
+            return None
+        material = UsdShade.Material(prim)
+        if not material:
+            self._note(f"{url} is not a material")
+            return None
+        return material
 
     @staticmethod
     def _skin_name(url: str) -> str:
@@ -1142,11 +1101,6 @@ class EbsSimulate:
     def _note(self, text: str) -> None:
         """notes 에 남긴다. 콘솔은 단계마다 _done 한 줄뿐"""
         self._notes.append(text)
-
-    def _loud(self, text: str) -> None:
-        """notes 에 남기고 콘솔에도 바로 찍는다. 눈으로 봐야 하는 것만"""
-        self._notes.append(text)
-        print(f"[ebs] {text}")
 
     def get_notes(self) -> list:
         """이번 단계에 남긴 자세한 기록
