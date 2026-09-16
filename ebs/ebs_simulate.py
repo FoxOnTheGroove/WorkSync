@@ -331,6 +331,7 @@ class EbsSimulate:
         self._skin: str = ""
         self._skin_made: str = ""
         self._skin_worn: tuple = ()
+        self._skin_wrote: list = []
         self._skin_use: bool = False
         self._skin_layer_on = None
         self._clash_when: float = 0.0
@@ -761,16 +762,41 @@ class EbsSimulate:
         return self._skin_layer_on
 
     def strip_skin(self) -> bool:
-        """입힌 것을 걷는다. 바인딩만 지우고 머티리얼은 남긴다
+        """입힌 것을 걷는다. 우리가 쓴 자리만 집어서 지운다
 
-        머티리얼까지 지우면 다시 켤 때 .mdl 을 또 받아 온다. 그게 느리다
+        Clear 는 레이어가 통째로 바뀌었다는 신호라 USD 가 어느 프림이
+        영향받는지 못 좁힌다. 프림 하나 썼는데도 스테이지를 넓게 다시 짠다.
+        쓴 자리를 적어 두었다가 그 프림 스펙만 지우면 그 자리만 다시 짠다
         """
-        if self._skin_layer_on is None or not self._skin_worn:
-            self._skin_worn = ()
-            return False
+        layer = self._skin_layer_on
         self._skin_worn = ()
-        self._skin_layer_on.Clear()
+        if layer is None:
+            self._skin_wrote = []
+            return False
+        wrote, self._skin_wrote = self._skin_wrote, []
+        if not wrote:
+            return False
+        try:
+            with Sdf.ChangeBlock():
+                for path in wrote:
+                    self._drop_spec(layer, path)
+        except Exception as e:
+            self._note(f"could not take the skin off one by one "
+                       f"({type(e).__name__}: {e}); clearing the layer")
+            layer.Clear()
         return True
+
+    @staticmethod
+    def _drop_spec(layer, path: str) -> None:
+        """그 레이어에서 프림 스펙 하나를 뺀다. 없으면 그냥 넘어간다"""
+        spec = layer.GetPrimAtPath(path)
+        if spec is None:
+            return
+        parent = spec.nameParent
+        if parent is None:
+            del layer.rootPrims[spec.name]
+        else:
+            del parent.nameChildren[spec.name]
 
     def warm_skin(self) -> bool:
         """적어 둔 머티리얼을 미리 챙겨 둔다. init 이 부른다
@@ -845,6 +871,7 @@ class EbsSimulate:
                     return False
             self._skin_worn = worn
             self._note(f"the equipment is painted {self._skin}")
+
             return True
         material = self._make_skin(stage)
         if material is None:
@@ -852,6 +879,7 @@ class EbsSimulate:
         try:
             with Usd.EditContext(stage, Usd.EditTarget(self._skin_layer(stage))):
                 self._bind_skin(prim, material)
+                self._skin_wrote.append(str(prim.GetPath()))
         except Exception as e:
             self._note(f"could not put {self._skin} on the equipment: "
                        f"{type(e).__name__}: {e}")
@@ -900,6 +928,7 @@ class EbsSimulate:
             with Sdf.ChangeBlock():
                 for shader in shaders:
                     spec = Sdf.CreatePrimInLayer(layer, Sdf.Path(shader))
+                    self._skin_wrote.append(shader)
                     for name, kind in PAINT:
                         attribute = spec.attributes.get(name)
                         if attribute is None:
