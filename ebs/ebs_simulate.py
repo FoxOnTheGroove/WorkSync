@@ -264,7 +264,7 @@ SETTLE_FRAME = 0.02
 SETTLE_CALM  = 3
 SETTLE_MOST  = 600
 SKIN_TELL = (("roots", "뿌리"), ("meshes", "메시"), ("bound", "바인드"),
-             ("undone", "언바인드"), ("closed", "도로묶음"))
+             ("undone", "언바인드"), ("opened", "열린채"))
 SKIN_SPENT = (("plan", "계획"), ("open", "열기"), ("bind", "걸기"),
               ("close", "걷기"), ("settle", "정착"))
 PHASES = (("camera", "카메라셋"), ("place", "EBS식립"),
@@ -341,7 +341,7 @@ class EbsSimulate:
         self._skin_worn: tuple = ()
         self._skin_wrote: list = []
         self._skin_opened: list = []
-        self._skin_open: bool = False
+        self._skin_open: bool = True
         self._skin_told: dict = {}
         self._phases: dict = {}
         self._skin_use: bool = False
@@ -781,41 +781,36 @@ class EbsSimulate:
         return self._skin_open
 
     def strip_skin(self) -> bool:
-        """건 것을 푼다. 언바인드와 도로 묶기를 한 덩이로 한다
+        """건 것을 푼다. 푼 인스턴스는 열어 둔 채로 둔다
 
-        도로 묶으면 그 아래가 인스턴스 프록시가 되고, 프록시 경로에 있는
-        세션 레이어 의견은 USD 가 안 본다. 그래서 그 아래 바인딩은 저절로
-        죽는다. 남은 스펙은 같은 장비를 다시 풀 때 그대로 살아난다
-        ChangeBlock  N 번 쓰면 재구성이 N 번 돈다. 한 덩이면 한 번이다
+        도로 묶는 것이 다시 여는 것만큼 비싸다. rprim 을 버리고 인스턴서를
+        다시 배칭하는 일이라 Clear 가 SIM 만큼 걸렸다. 열어 두면 Clear 는
+        언바인드만 하면 되고, 같은 장비를 다시 재면 열 것도 없다
+        인스턴싱 여부는 세션 레이어에만 있고 눈에는 안 보인다. 색은 여기서
+        돌아오므로 "Clear 면 원래대로" 는 그대로 지켜진다
+        도로 묶는 것은 close_skin 이 teardown 에서 한 번만 한다
         """
-        opened, self._skin_opened = self._skin_opened, []
         wrote, self._skin_wrote = self._skin_wrote, []
         self._skin_worn = ()
-        left = [path for path in wrote if not self._under(path, opened)]
-        if not opened and not left:
+        if not wrote:
             return False
         stage = self._get_stage()
         if stage is None:
             return False
         try:
-            with self._phase("skin"), self._stage_timer("skin: close"):
+            with self._phase("skin"), self._stage_timer("skin: unbind"):
                 started = time.perf_counter()
-                layer = stage.GetSessionLayer()
                 picked = [one for one in
-                          (stage.GetPrimAtPath(path) for path in left)
+                          (stage.GetPrimAtPath(path) for path in wrote)
                           if one is not None and one.IsValid()]
-                with Usd.EditContext(stage, layer):
+                with Usd.EditContext(stage, stage.GetSessionLayer()):
                     with Sdf.ChangeBlock():
                         for one in picked:
                             UsdShade.MaterialBindingAPI(
                                 one).UnbindAllBindings()
-                        for path in opened:
-                            spec = layer.GetPrimAtPath(path)
-                            if spec is not None:
-                                spec.ClearInfo("instanceable")
                 self._skin_told = {"what": "머티리얼 걷기",
                                    "undone": len(picked),
-                                   "closed": len(opened),
+                                   "opened": len(self._skin_opened),
                                    "close": time.perf_counter() - started}
         except Exception as e:
             self._loud(f"skin: could not take it off: "
@@ -823,11 +818,27 @@ class EbsSimulate:
             return False
         return True
 
-    @staticmethod
-    def _under(path: str, roots) -> bool:
-        """그 자리가 도로 묶을 인스턴스 밑에 드는지"""
-        return any(path == root or path.startswith(f"{root}/")
-                   for root in roots)
+    def close_skin(self) -> bool:
+        """열어 둔 인스턴스를 도로 묶는다. teardown 만 여기까지 간다"""
+        opened, self._skin_opened = self._skin_opened, []
+        if not opened:
+            return False
+        stage = self._get_stage()
+        if stage is None:
+            return False
+        try:
+            layer = stage.GetSessionLayer()
+            with Usd.EditContext(stage, layer):
+                with Sdf.ChangeBlock():
+                    for path in opened:
+                        spec = layer.GetPrimAtPath(path)
+                        if spec is not None:
+                            spec.ClearInfo("instanceable")
+        except Exception as e:
+            self._loud(f"skin: could not close the instances: "
+                       f"{type(e).__name__}: {e}")
+            return False
+        return True
 
     async def settle_skin(self, name: str = "skin") -> float:
         """킷이 다시 매끄러워질 때까지 프레임을 돌리고 그 시간을 얹는다
@@ -1003,8 +1014,9 @@ class EbsSimulate:
         return True
 
     def drop_skin(self) -> None:
-        """세워 둔 머티리얼까지 치운다. teardown 만 여기까지 간다"""
+        """세워 둔 머티리얼까지 치우고 열어 둔 인스턴스를 도로 묶는다"""
         self.strip_skin()
+        self.close_skin()
         self._skin_made = ""
         stage = self._get_stage()
         if stage is None:
@@ -1065,7 +1077,8 @@ class EbsSimulate:
                 spec = Sdf.CreatePrimInLayer(layer, path)
                 if spec is not None:
                     spec.SetInfo("instanceable", False)
-        self._skin_opened.extend(roots)
+        already = set(self._skin_opened)
+        self._skin_opened.extend(p for p in roots if p not in already)
         self._loud(f"skin: opened {len(roots)} instance(s) in one block")
         return len(roots)
 

@@ -26,7 +26,7 @@ VIEW_PATHS = (("Ceiling:", "", False),
 EQP_PREFIX = "EQP_"
 SKIN_URL   = ""
 SKIN_ON    = False
-SKIN_OPEN  = False
+SKIN_OPEN  = True
 
 NEAR_SPAN = 2.5
 NEAR_MIN, NEAR_MAX = 0.0, 5.0
