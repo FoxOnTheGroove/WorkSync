@@ -825,24 +825,31 @@ class EbsSimulate:
         return material
 
     def wear_skin(self, prim=None) -> bool:
-        """미리 챙겨 둔 머티리얼을 대상 장비에 건다. align 이 부른다
+        """적어 둔 것을 대상 장비 셰이더에 덮어쓴다. align 이 부른다
 
-        strongerThanDescendants  안쪽 메시가 제 머티리얼을 들고 있어도 이긴다
-        SKIN_LAYER  바인딩만 여기 쓴다. strip_skin 이 비우면 원래 색이다
-        _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다.
-                 레이어를 비우고 다시 거는 것만으로도 스테이지가 다시 짜인다
+        SKIN_LAYER  여기에만 쓴다. strip_skin 이 비우면 원래 색이다
+        _skin_worn  같은 장비에 같은 것을 이미 씌워 뒀으면 손대지 않는다.
+                 레이어를 비우고 다시 쓰는 것만으로도 스테이지가 다시 짜인다
+        길마다 로그를 한 줄 남긴다. 아무 말도 없으면 안 불린 것이다
         """
-        if not self._skin or not self._skin_use:
+        if not self._skin_use:
+            if self._skin:
+                self._loud("skin: the skin box is off, nothing written")
+            self.strip_skin()
+            return False
+        if not self._skin:
             self.strip_skin()
             return False
         if prim is None:
             prim = (self._target or {}).get("equipment")
         stage = self._get_stage()
         if stage is None or prim is None or not prim.IsValid():
+            self._loud("skin: no equipment to write on yet")
             self.strip_skin()
             return False
         worn = (str(prim.GetPath()), self._skin)
         if self._skin_worn[:2] == worn:
+            self._loud(f"skin: already on {worn[0]}, left alone")
             return True
         self.strip_skin()
         colour = self._skin_colour(self._skin)
