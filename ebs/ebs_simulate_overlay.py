@@ -33,6 +33,7 @@ GRIP_COLORS = {GRIP_IDLE: (1.0, 0.78, 0.20),
                GRIP_HOLD: (0.45, 1.0, 0.65)}
 
 SAID = set()
+CURSOR = None
 
 
 def once(line: str) -> None:
@@ -565,8 +566,9 @@ class EbsSimulateOverlay:
         return (metres or 0.0) * MM_PER_M
 
     def _tick(self) -> None:
-        """한 프레임 몫. 작업중 표를 먼저 보고 판을 카메라에 맞춘다"""
+        """한 프레임 몫. 표를 보고, hover 를 묻고, 판을 카메라에 맞춘다"""
         self._work_place()
+        EbsSimulateGrip.sweep()
         self._place()
 
     def _start(self) -> bool:
@@ -746,6 +748,44 @@ class EbsSimulateGrip:
         return cls._one.stand(grip, to_screen)
 
     @classmethod
+    def sweep(cls) -> None:
+        """프레임마다 커서 자리를 물어 hover 를 판단한다
+
+        킷은 버튼을 안 누른 채 움직인 것을 위젯 콜백으로 안 준다. 눌러야
+        _moved 가 온다. set_mouse_hovered_fn 을 걸어도 마찬가지다. 그래서
+        hover 만은 이벤트가 아니라 프레임마다 묻는 쪽으로 돈다
+        """
+        one = cls._one
+        if one is None or one._ends is None or one._from is not None:
+            return
+        spot = cls._cursor()
+        if spot is not None:
+            one.over(spot[0], spot[1])
+
+    @staticmethod
+    def _cursor():
+        """앱 창 기준 커서 자리. 한 번 못 물으면 다시 안 묻는다"""
+        global CURSOR
+        if CURSOR is False:
+            return None
+        try:
+            if CURSOR is None:
+                import carb.input
+                import omni.appwindow
+                CURSOR = (carb.input.acquire_input_interface(),
+                          omni.appwindow.get_default_app_window().get_mouse(),
+                          carb.input.MouseInput.MOUSE_POSITION_X,
+                          carb.input.MouseInput.MOUSE_POSITION_Y)
+                once("grip hover asks the cursor every frame")
+            reader, mouse, across, down = CURSOR
+            return (reader.get_mouse_value(mouse, across),
+                    reader.get_mouse_value(mouse, down))
+        except Exception as e:
+            CURSOR = False
+            once(f"cannot ask where the cursor is: {type(e).__name__}: {e}")
+            return None
+
+    @classmethod
     def held(cls) -> bool:
         """지금 손잡이를 잡고 있나. 판정 표를 내릴지 여기로 묻는다"""
         return cls._one is not None and cls._one.holding
@@ -856,9 +896,7 @@ class EbsSimulateGrip:
         want = GRIP_HOT if self._hit(x, y) else GRIP_IDLE
         if want != self._state:
             once(f"grip hover paints {want}")
-            clock = time.perf_counter()
             self._draw(want)
-            EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return want == GRIP_HOT
 
     def away(self) -> None:
@@ -881,9 +919,7 @@ class EbsSimulateGrip:
         self._from = x
         self._was = EbsSimulateService.get_nudge()
         EbsSimulateService.hold_clash(False)
-        clock = time.perf_counter()
         self._draw(GRIP_HOLD)
-        EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return True
 
     def drag(self, x: float, y: float) -> bool:
@@ -894,10 +930,7 @@ class EbsSimulateGrip:
         if per:
             metres = (x - self._from) / per * self._unit
             EbsSimulateService.slide(self._was + metres)
-            clock = time.perf_counter()
             EbsSimulateOverlay.restate()
-            EbsSimulateService.add_grip("패널", time.perf_counter() - clock)
-            EbsSimulateService.say_grip()
         return True
 
     def release(self) -> None:
@@ -918,12 +951,17 @@ class EbsSimulateGrip:
         asyncio.ensure_future(self._settle())
 
     async def _settle(self) -> None:
-        """손을 뗀 자리에서 내부 충돌을 다시 재고 연출을 되켠다"""
+        """손을 뗀 자리에서 내부 충돌을 다시 재고 연출을 되켠다
+
+        다시 켠 상자가 실제로 빛나기 시작할 때까지 표를 세워 둔다. 저작이
+        끝난 자리에서 내리면 표가 사라지고도 한참 아무것도 안 보인다
+        """
         try:
             import omni.kit.app
             await omni.kit.app.get_app().next_update_async()
             EbsSimulateService.hold_clash(True)
             EbsSimulateOverlay.restate()
+            await EbsSimulateService.settle()
         except Exception as e:
             print(f"[ebs] could not retest after the grip: {e}")
         finally:

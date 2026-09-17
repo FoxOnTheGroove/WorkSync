@@ -294,6 +294,7 @@ class EbsDummyUI:
         self._render(await self._watched(EbsSimulateService.simulate_async(
             self._eqp_field.model.get_value_as_string())))
         self._overlay(EbsSimulateOverlay.show)
+        await EbsSimulateService.settle()
         EbsSimulateService.say_phases()
 
     @staticmethod
@@ -341,6 +342,7 @@ class EbsDummyUI:
         self._mark_nudge(busy=True)
         self._render(await self._watched(EbsSimulateService.collide_async()))
         self._overlay(EbsSimulateOverlay.show)
+        await EbsSimulateService.settle()
         EbsSimulateService.say_phases()
         self._mark_nudge()
 

@@ -42,16 +42,9 @@ class EbsSimulateService:
         cls._busy = ""
 
     @classmethod
-    def add_grip(cls, name, spent):
-        """손잡이 쪽에서 잰 시간. 첫 동작 한 줄 보고에 얹는다"""
-        if cls._simulate:
-            cls._simulate.add_grip(name, spent)
-
-    @classmethod
-    def say_grip(cls):
-        """손잡이 첫 동작 한 줄을 찍는다. 두 번째부터는 조용하다"""
-        if cls._simulate:
-            cls._simulate.say_grip()
+    def settle(cls, name="overlay"):
+        """그린 것이 화면에 다 뜰 때까지 기다린다. 작업중 표가 그때까지 선다"""
+        return cls._simulate.settle(name)
 
     @classmethod
     def get_step(cls):
