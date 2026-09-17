@@ -270,6 +270,8 @@ SKIN_SPENT = (("plan", "계획"), ("open", "열기"), ("bind", "걸기"),
 PHASES = (("camera", "카메라셋"), ("place", "EBS식립"),
           ("skin", "머티리얼"), ("collide", "충돌연산"),
           ("overlay", "UI·기즈모"))
+STEPS = {"camera": "Camera", "place": "Placing", "skin": "Material",
+         "collide": "Collision", "overlay": "Overlay"}
 
 LOOKS = "Looks"
 SHADER_TYPE = "Shader"
@@ -348,6 +350,8 @@ class EbsSimulate:
         self._verdict: dict = {}
         self._progress: float = 0.0
         self._doing: str = ""
+        self._grip_first: bool = True
+        self._grip_told: list = []
         self._settled: float = 0.0
         self._spent: dict = {}
         self._shares: dict = {}
@@ -501,6 +505,34 @@ class EbsSimulate:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         self._camera.hold(on)
 
+    @staticmethod
+    def _tick(told: list, name: str, clock: float) -> float:
+        """그 사이에 걸린 시간을 적고 시계를 다시 잡는다"""
+        now = time.perf_counter()
+        told.append((name, now - clock))
+        return now
+
+    def add_grip(self, name: str, spent: float) -> None:
+        """손잡이 쪽에서 잰 시간을 첫 동작 보고에 얹는다"""
+        self._grip_told.append((name, float(spent)))
+
+    def say_grip(self) -> None:
+        """손잡이 첫 동작에 어디서 얼마나 걸렸나. SIM 뒤 한 번만 찍는다
+
+        SIM 직후 처음 잡을 때만 걸린다는 말이 있어 구간을 쪼개 둔다
+        손잡이가 제 몫까지 다 적은 뒤에 부른다
+        """
+        if not self._grip_first:
+            self._grip_told = []
+            return
+        self._grip_first = False
+        told, self._grip_told = self._grip_told, []
+        whole = sum(spent for _, spent in told)
+        parts = " · ".join(f"{name} {spent:.2f}s" for name, spent in told
+                           if spent >= 0.005)
+        print(f"[ebs] 손잡이 첫 동작 {whole:.2f}s"
+              + (f" | {parts}" if parts else ""))
+
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
 
@@ -509,10 +541,14 @@ class EbsSimulate:
         켤 때  지금 선 자리에서 내부 충돌만 다시 재서 판정과 그림을 고친다
         """
         self._clash_on = bool(on)
+        clock = time.perf_counter()
         if not on:
             self._marks().hide_clash()
+            self._tick(self._grip_told, "연출끄기", clock)
             return True
-        return self._retest_inner()
+        told = self._retest_inner()
+        self._tick(self._grip_told, "내부충돌", clock)
+        return told
 
     def _retest_inner(self, draw: bool = True) -> bool:
         """지금 자리에서 내부 충돌만 다시 잰다. 3면은 산수로 이미 맞아 있다
@@ -557,16 +593,21 @@ class EbsSimulate:
         shift = self.set_nudge(metres) - was
         if not shift:
             return self._payload(True, f"offset {self._nudge:+.3f}")
+        told, clock = self._grip_told, time.perf_counter()
         box = self._ebs_bound(self._target["ebs"])
+        clock = self._tick(told, "EBS상자", clock)
         if not self._place_nudged():
             return self._payload(False, "EBS could not be moved")
+        clock = self._tick(told, "EBS이동", clock)
         self._slid_box(box, shift)
         if self._verdict:
             self._slide_marks(shift, box)
+            clock = self._tick(told, "안내선", clock)
             self.show_markers(self._target["ebs"], self._slid_cells(),
                               self._verdict.get("marks"),
                               self._verdict.get("boxes") if self._clash_on
                               else None, fresh=False)
+            self._tick(told, "마커", clock)
         return self._payload(True, f"offset {self._nudge:+.3f}")
 
     def _slid_box(self, box, shift: float) -> None:
@@ -1198,6 +1239,8 @@ class EbsSimulate:
         self._blocked = ""
         self._phases = {}
         self._skin_told = {}
+        self._grip_first = True
+        self._grip_told = []
         self._started = time.perf_counter()
 
     def _done(self, payload: dict) -> dict:
@@ -1224,8 +1267,11 @@ class EbsSimulate:
                                   + time.perf_counter() - started)
 
     def get_step(self) -> str:
-        """지금 도는 단계의 이름. 아무것도 안 돌면 빈 칸"""
-        return dict(PHASES).get(self._doing, "")
+        """지금 도는 단계의 이름. 아무것도 안 돌면 빈 칸
+
+        STEPS  화면에 뜨는 이름은 영어다. PHASES 의 한글은 콘솔 한 줄 몫
+        """
+        return STEPS.get(self._doing, "")
 
     def add_phase(self, name: str, spent: float) -> None:
         """바깥에서 잰 시간을 같은 줄에 얹는다. UI 가 오버레이 시간을 준다"""

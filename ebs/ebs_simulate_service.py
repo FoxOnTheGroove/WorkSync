@@ -4,13 +4,13 @@ from .ebs_simulate import EbsSimulate
 
 __all__ = ["EbsSimulateService"]
 
-WORK_SIM     = "시뮬레이션"
-WORK_CAMERA  = "카메라"
-WORK_ALIGN   = "EBS 식립"
-WORK_COLLIDE = "충돌 계산"
-WORK_CLEAR   = "정리"
-WORK_REFRESH = "카메라 되돌리기"
-WORK_SETTLE  = "내부 충돌 재계산"
+WORK_SIM     = "Simulate"
+WORK_CAMERA  = "Camera"
+WORK_ALIGN   = "Align"
+WORK_COLLIDE = "Collide"
+WORK_CLEAR   = "Clear"
+WORK_REFRESH = "Refresh"
+WORK_SETTLE  = "Recheck"
 
 
 class EbsSimulateService:
@@ -33,13 +33,25 @@ class EbsSimulateService:
     @classmethod
     def begin_work(cls, label):
         """그 일이 시작됐다고 세운다. 띄우기 전에 그 자리에서 세운다"""
-        cls._busy = label or "작업"
+        cls._busy = label or "Working"
         return cls._busy
 
     @classmethod
     def end_work(cls):
         """일이 끝났다고 내린다. finally 에서 부른다"""
         cls._busy = ""
+
+    @classmethod
+    def add_grip(cls, name, spent):
+        """손잡이 쪽에서 잰 시간. 첫 동작 한 줄 보고에 얹는다"""
+        if cls._simulate:
+            cls._simulate.add_grip(name, spent)
+
+    @classmethod
+    def say_grip(cls):
+        """손잡이 첫 동작 한 줄을 찍는다. 두 번째부터는 조용하다"""
+        if cls._simulate:
+            cls._simulate.say_grip()
 
     @classmethod
     def get_step(cls):

@@ -93,6 +93,7 @@ WORK_GAP      = 4
 WORK_ROOM     = WORK_WIDE - WORK_PAD * 2
 WORK_HIGH     = WORK_PAD * 2 + WORK_LINE * 2 + WORK_GAP * 2 + WORK_BAR
 WORK_PCT      = "{0:.0f}%"
+WORK_JOIN     = " / "
 COLOR_WORK    = 0xE6141414
 COLOR_TRACK   = 0x33FFFFFF
 COLOR_FILL    = 0xFF20C8FF
@@ -257,15 +258,19 @@ class EbsSimulateOverlay:
         self._work_panel.visible = False
 
     def _work_word(self, hold, store: dict, text: str) -> None:
-        """그 글 모양의 글줄만 켠다. 없으면 그때 하나 만든다"""
+        """그 글 모양의 글줄만 켠다. 없으면 그때 하나 만든다
+
+        글줄 폭은 판 폭과 같다. 좁게 잡으면 그만큼 왼쪽으로 치우친다
+        """
         if hold is None:
             return
         shape = "".join("0" if one.isdigit() else one for one in text)
+
         label = store.get(shape)
         if label is None:
             with hold:
                 label = ui.Label(text, height=ui.Pixel(WORK_LINE),
-                                 width=ui.Pixel(WORK_ROOM),
+                                 width=ui.Pixel(WORK_WIDE),
                                  alignment=ui.Alignment.CENTER,
                                  style={"color": COLOR_TEXT,
                                         "font_size": WORK_SIZE})
@@ -290,7 +295,7 @@ class EbsSimulateOverlay:
         step = EbsSimulateService.get_step()
         done = max(0.0, min(EbsSimulateService.get_progress(), 100.0))
         self._work_word(self._work_hold, self._work_words,
-                        f"{busy} · {step}" if step else busy)
+                        busy + WORK_JOIN + step if step else busy)
         self._work_word(self._work_pct_hold, self._work_pcts,
                         WORK_PCT.format(done))
         if self._work_fill is not None:
@@ -838,15 +843,30 @@ class EbsSimulateGrip:
         self._paint.clear()
 
     def over(self, x: float, y: float) -> bool:
-        """커서가 위에 있나. 있으면 색을 바꾼다"""
+        """커서가 위에 있나. 있으면 색을 바꾼다
+
+        버튼을 안 누른 채 움직인 것이 여기까지 오는지부터가 관건이다.
+        한 번도 안 오면 hover 색이 안 바뀐다. 그래서 첫 걸음을 적어 둔다
+        """
         if self._ends is None:
             return False
+        once("grip hover reaches over()")
         if EbsSimulateService.busy():
             return False
         want = GRIP_HOT if self._hit(x, y) else GRIP_IDLE
         if want != self._state:
+            once(f"grip hover paints {want}")
+            clock = time.perf_counter()
             self._draw(want)
+            EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return want == GRIP_HOT
+
+    def away(self) -> None:
+        """커서가 뷰포트 판을 떠났다. 잡고 있지 않으면 색을 되돌린다"""
+        if self._ends is None or self._from is not None:
+            return
+        if self._state != GRIP_IDLE:
+            self._draw(GRIP_IDLE)
 
     def press(self, x: float, y: float) -> bool:
         """여기서 눌렸나. 눌렸으면 끌기를 시작한다
@@ -861,7 +881,9 @@ class EbsSimulateGrip:
         self._from = x
         self._was = EbsSimulateService.get_nudge()
         EbsSimulateService.hold_clash(False)
+        clock = time.perf_counter()
         self._draw(GRIP_HOLD)
+        EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return True
 
     def drag(self, x: float, y: float) -> bool:
@@ -872,7 +894,10 @@ class EbsSimulateGrip:
         if per:
             metres = (x - self._from) / per * self._unit
             EbsSimulateService.slide(self._was + metres)
+            clock = time.perf_counter()
             EbsSimulateOverlay.restate()
+            EbsSimulateService.add_grip("패널", time.perf_counter() - clock)
+            EbsSimulateService.say_grip()
         return True
 
     def release(self) -> None:
