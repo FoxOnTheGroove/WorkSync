@@ -96,7 +96,7 @@ CLASH_PAD     = 0.002
 COLOR_CLASH   = (0.95, 0.15, 0.15)
 CLASH_PULSE   = 2.0
 CLASH_PULSE_LOW  = 0.15
-CLASH_PULSE_HIGH = 1.0
+CLASH_PULSE_HIGH = 0.99
 
 
 class EbsSimulateOverlay:
@@ -1317,7 +1317,12 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _pulse_inputs_of(stage, root: str) -> tuple:
-        """깜박일 때 건드릴 속성과 1.0 일 때의 값. 투명도만 건드린다"""
+        """깜박일 때 건드릴 속성과 파동이 1 일 때의 값. 투명도만 건드린다
+
+        CLASH_PULSE_HIGH 가 1.0 이 아닌 이유가 여기다. RTX 는 opacity 가 꼭
+        1.0 이면 그 머티리얼을 불투명으로 분류한다. 파동이 1.0 을 스치면
+        주기마다 불투명과 반투명을 오가며 다시 분류된다
+        """
         looks = f"{root}/Looks/clash"
         wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
                   (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
@@ -1351,10 +1356,26 @@ class EbsSimulateMarks:
             print(f"[ebs] the clash boxes stopped blinking: {e}")
             self._stop_pulse()
 
-    def _stop_pulse(self) -> None:
-        """깜박임 구독을 놓는다"""
+    def _stop_pulse(self, stage=None) -> None:
+        """깜박임 구독을 놓고 투명도를 제자리로 돌린다
+
+        안 되돌리면 깜박이다 멈춘 그 밝기에 굳는다. 예전에는 다음 collide 가
+        머티리얼을 새로 세우며 저절로 고쳐졌는데, 이제 같은 값이면 다시 안
+        쓰므로 여기서 되돌려야 한다
+        """
+        inputs, self._pulse_inputs = self._pulse_inputs, ()
         self._pulse = None
-        self._pulse_inputs = ()
+        if not inputs:
+            return
+        stage = stage if stage is not None else self._stage_of()
+        if stage is None:
+            return
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for attribute, full in inputs:
+                    attribute.Set(CLASH_PULSE_HIGH * full)
+        except Exception as e:
+            print(f"[ebs] could not settle the clash opacity: {e}")
 
 
     @staticmethod
