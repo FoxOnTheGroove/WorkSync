@@ -32,8 +32,15 @@ class EbsSimulateService:
 
     @classmethod
     def begin_work(cls, label):
-        """그 일이 시작됐다고 세운다. 띄우기 전에 그 자리에서 세운다"""
+        """그 일이 시작됐다고 세운다. 띄우기 전에 그 자리에서 세운다
+
+        진행도도 여기서 0 으로 되돌린다. 앞 동작이 끝나며 100 을 찍어 두고
+        가므로, 안 되돌리면 표가 뜨자마자 100 으로 보였다가 다시 채워진다
+        구간을 여럿 쓰는 동작은 제 코루틴 안에서 set_legs 로 다시 잡는다
+        """
         cls._busy = label or "Working"
+        if cls._simulate:
+            cls._simulate.set_legs(1)
         return cls._busy
 
     @classmethod
@@ -258,8 +265,11 @@ class EbsSimulateService:
 
     @classmethod
     def get_progress(cls):
-        """지금 도는 단계가 얼마나 왔나. 0.00 에서 100.00"""
-        return cls._simulate.get_progress()
+        """지금 도는 동작이 얼마나 왔나. 0.00 에서 100.00
+
+        작업중 표가 프레임마다 묻는 길이다. 아직 없을 때도 안 터져야 한다
+        """
+        return cls._simulate.get_progress() if cls._simulate else 0.0
 
     @classmethod
     def get_verdict(cls):
