@@ -770,9 +770,12 @@ class EbsSimulate:
     def wear_skin(self, prim=None) -> bool:
         """미리 챙겨 둔 머티리얼을 대상 장비에 건다. align 이 부른다
 
-        세 걸음이다. 한 자도 안 쓰고 어디에 걸지 정하고(_skin_plan),
-        풀 것이 있으면 한 덩이로 풀고(_open_instances), 한 덩이로 건다
-        세션 레이어에만 쓴다. 원본 USD 는 안 건드린다
+        한 자도 안 쓰고 어디에 걸지 정하고(_skin_plan), 풀 것이 있으면 한
+        덩이로 풀고(_open_instances), 더 풀 것이 없을 때까지 되풀이한 뒤에
+        한 덩이로 건다. 세션 레이어에만 쓴다. 원본 USD 는 안 건드린다
+        되풀이  인스턴스 안쪽의 인스턴스는 바깥을 풀기 전에는 프록시라서
+                 안 보인다. 한 번만 훑으면 그것들이 프록시로 남고, 프록시에
+                 걸려다 터져서 그 장비의 첫 SIM 은 아무것도 안 칠해졌다
         _skin_worn  같은 장비에 같은 것을 이미 걸어 뒀으면 손대지 않는다
         """
         if not self._skin_use:
@@ -801,9 +804,12 @@ class EbsSimulate:
             return False
         try:
             with self._phase("skin"):
-                with self._stage_timer("skin: plan"):
-                    roots, meshes = self._skin_plan(prim)
-                if roots:
+                meshes = []
+                for _ in range(SKIN_DEEP):
+                    with self._stage_timer("skin: plan"):
+                        roots, meshes = self._skin_plan(prim)
+                    if not roots:
+                        break
                     with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
                 with self._stage_timer("skin: bind"):
@@ -886,18 +892,28 @@ class EbsSimulate:
         """정해 둔 메시에 한 덩이로 건다. 통지가 한 번만 간다
 
         프림은 블록 밖에서 미리 집는다. 블록 안에서는 스테이지를 안 읽는다
+        하나가 안 걸려도 나머지는 건다. 프록시가 하나 섞여 있다고 그 장비를
+        통째로 안 칠하면 안 된다
         """
         ready = []
         for path in meshes:
             one = stage.GetPrimAtPath(path)
             if one is not None and one.IsValid():
                 ready.append((path, one))
+        missed = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             with Sdf.ChangeBlock():
                 for path, one in ready:
-                    self._bind_skin(one, material)
+                    try:
+                        self._bind_skin(one, material)
+                    except Exception:
+                        missed += 1
+                        continue
                     self._skin_wrote.append(path)
-        return len(ready)
+        if missed:
+            self._loud(f"skin: {missed} of {len(ready)} place(s) refused the "
+                       f"binding")
+        return len(ready) - missed
 
     @staticmethod
     def _skin_colour(text: str):
