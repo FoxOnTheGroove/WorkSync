@@ -198,6 +198,9 @@ class EbsSimulate:
         self._leg: int = 0
         self._settled: float = 0.0
         self._spent: dict = {}
+        self._waited: dict = {}
+        self._counts: dict = {}
+        self._on_step: str = ""
         self._shares: dict = {}
         self._results: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
@@ -602,15 +605,17 @@ class EbsSimulate:
         if stage is None:
             return False
         try:
-            with self._phase("skin"), self._stage_timer("skin: unbind"):
-                picked = [one for one in
-                          (stage.GetPrimAtPath(path) for path in wrote)
-                          if one is not None and one.IsValid()]
-                with Usd.EditContext(stage, stage.GetSessionLayer()):
-                    with Sdf.ChangeBlock():
-                        for one in picked:
-                            UsdShade.MaterialBindingAPI(
-                                one).UnbindAllBindings()
+            with self._phase("skin"):
+                with self._stage_timer(f"skin: pick {len(wrote)}"):
+                    picked = [one for one in
+                              (stage.GetPrimAtPath(path) for path in wrote)
+                              if one is not None and one.IsValid()]
+                with self._stage_timer(f"skin: unbind {len(picked)}"):
+                    with Usd.EditContext(stage, stage.GetSessionLayer()):
+                        with Sdf.ChangeBlock():
+                            for one in picked:
+                                UsdShade.MaterialBindingAPI(
+                                    one).UnbindAllBindings()
         except Exception as e:
             self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
@@ -654,11 +659,12 @@ class EbsSimulate:
         app = omni.kit.app.get_app()
         guess = self._settled or SETTLE_GUESS
         started = last = time.perf_counter()
-        busy, calm = started, 0
+        busy, calm, frames = started, 0, 0
         before, self._doing = self._doing, name
         try:
             for _ in range(SETTLE_MOST):
                 await app.next_update_async()
+                frames += 1
                 now = time.perf_counter()
                 self._progress = min(99.0, (now - started) / guess * 100.0)
                 if now - last > SETTLE_FRAME:
@@ -673,6 +679,8 @@ class EbsSimulate:
         spent = max(0.0, busy - started)
         self._progress = 100.0
         self.add_phase(name, spent)
+        self._waited[f"settle {name} ({frames} frames, "
+                     f"{last - started:.2f}s to calm)"] = spent
         return spent
 
     async def settle_skin(self) -> float:
@@ -802,14 +810,14 @@ class EbsSimulate:
         try:
             with self._phase("skin"):
                 meshes = []
-                for _ in range(SKIN_DEEP):
-                    with self._stage_timer("skin: plan"):
+                for at in range(SKIN_DEEP):
+                    with self._stage_timer(f"skin: plan {at}"):
                         roots, meshes = self._skin_plan(prim)
                     if not roots:
                         break
-                    with self._stage_timer("skin: open"):
+                    with self._stage_timer(f"skin: open {at} ({len(roots)})"):
                         self._open_instances(stage, roots)
-                with self._stage_timer("skin: bind"):
+                with self._stage_timer(f"skin: bind {len(meshes)}"):
                     self._bind_all(stage, material, meshes)
         except Exception as e:
             self._loud(f"skin: could not bind {self._skin}: "
@@ -1042,6 +1050,9 @@ class EbsSimulate:
         self._step = step
         self._progress = 0.0
         self._spent = {}
+        self._waited = {}
+        self._counts = {}
+        self._on_step = ""
         self._boxed = {}
         self._timings = []
         self._notes = []
@@ -1087,10 +1098,41 @@ class EbsSimulate:
         return (f"[ebs] {self._step or 'step'} : {spent:.2f}s"
                 + (f" | {parts}" if parts else ""))
 
+    def detail_lines(self) -> list:
+        """단계 안을 셋으로 쪼갠 줄. 도는 시간, 기다린 시간, 구간별 시간
+
+        run   _spending 이 잰 순수 연산. 프레임을 기다린 시간은 안 든다
+        wait  단계 사이에 프레임을 넘긴 시간과 settle. 화면이 다시 매끄러워
+              지기를 기다린 값이라 우리 코드를 고쳐도 안 줄어드는 쪽이다
+        part  _stage_timer 가 잰 구간. run 과 wait 에 걸쳐 있다
+        """
+        whole = time.perf_counter() - self._started
+
+        def cut(title: str, pairs: list) -> str:
+            """제목 하나에 이름 시간 비율. 넘을 것이 없으면 빈 칸"""
+            parts = [f"{name} {spent:.2f}s {spent / whole * 100.0:.0f}%"
+                     for name, spent in pairs if spent >= DETAIL_LEAST]
+            return f"[ebs]   {title} : " + " | ".join(parts) if parts else ""
+
+        run = [(name + self._count_of(name), self._spent.get(name, 0.0))
+               for name, _ in COLLIDE_STEPS]
+        wait = sorted(self._waited.items(), key=lambda one: -one[1])
+        part = [(label, spent / 1000.0) for label, spent in self._timings]
+        return [line for line in (cut("run ", run), cut("wait", wait),
+                                  cut("part", part)) if line]
+
+    def _count_of(self, step: str) -> str:
+        """그 단계가 몇 개를 다뤘나. 안 적어 뒀으면 빈 칸"""
+        got = self._counts.get(step)
+        return f"({got})" if got is not None else ""
+
     def say_phases(self) -> str:
         """단계 한 줄을 찍고 그대로 돌려준다"""
         line = self.phase_line()
         print(line)
+        if DETAIL:
+            for extra in self.detail_lines():
+                print(extra)
         return line
 
     def _note(self, text: str) -> None:
@@ -1457,7 +1499,6 @@ class EbsSimulate:
 
     async def simulate_async(self, equipment: str = "") -> dict:
         """simulate 인데 collide 만 프레임에 나눠 돈다. 나머지는 짧다"""
-        import omni.kit.app
         self._begin("simulate")
         self.set_legs(3)
         if not self._ready:
@@ -1476,7 +1517,7 @@ class EbsSimulate:
         self.next_leg()
         self.show_ebs(self._target["ebs"])
         for _ in self._collide_steps():
-            await omni.kit.app.get_app().next_update_async()
+            await self._wait_frame()
         self.next_leg()
         result = self._result
         if not result["ok"]:
@@ -1632,11 +1673,10 @@ class EbsSimulate:
 
     async def collide_async(self) -> dict:
         """collide 를 프레임마다 한 단계씩. 도는 동안 화면이 안 멈춘다"""
-        import omni.kit.app
         self._begin("collide")
         self.set_legs(2)
         for _ in self._collide_steps():
-            await omni.kit.app.get_app().next_update_async()
+            await self._wait_frame()
         self.next_leg()
         return self._done(self._result)
 
@@ -1678,10 +1718,20 @@ class EbsSimulate:
             before += weights.get(name, 0.0)
         share = weights.get(step, 0.0) * max(0.0, min(done, 1.0))
         self._progress = min(before + share, 100.0)
+        self._on_step = step
 
     def _reached(self, step: str) -> None:
         """그 단계가 끝났다고 적는다"""
         self._at(step, 1.0)
+
+    async def _wait_frame(self) -> None:
+        """단계 사이에서 프레임 하나를 넘긴다. 기다린 시간은 그 단계 앞으로 단다"""
+        import omni.kit.app
+        started = time.perf_counter()
+        await omni.kit.app.get_app().next_update_async()
+        step = self._on_step or "?"
+        self._waited[step] = (self._waited.get(step, 0.0)
+                              + time.perf_counter() - started)
 
     @contextmanager
     def _spending(self, step: str):
@@ -1729,7 +1779,7 @@ class EbsSimulate:
             return
         with self._spending("warm"):
             inside, _ = Collide._index_inside(self, cache, search, skip)
-        self._note(f"warming {len(inside)} prims around the EBS")
+        self._counts["warm"] = len(inside)
         for at, prim in enumerate(inside, 1):
             with self._spending("warm"):
                 Collide._gather_nearby(self, stage, cache, search, skip, [prim])
@@ -1766,6 +1816,7 @@ class EbsSimulate:
 
             with self._spending("sides"):
                 roots = Collide._side_roots(self)
+                self._counts["sides"] = len(roots) if roots else 0
             self._reached("sides")
             yield
 
@@ -1773,6 +1824,7 @@ class EbsSimulate:
                 cells = Collide.check_collision(self, self._target["ebs"], exclude=apart,
                                              cache=bounds, roots=roots)
                 hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+                self._counts["faces"] = hit_count
             self._reached("faces")
             yield
 
@@ -1803,6 +1855,7 @@ class EbsSimulate:
                 except Exception as e:
                     self._note(f"interference check failed: "
                                f"{type(e).__name__}: {e}")
+                self._counts["equipment"] = meeting.get("tests", 0)
                 if meeting["hit"]:
                     names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
                     self._note(f"the EBS runs through the equipment at "
@@ -1833,8 +1886,9 @@ class EbsSimulate:
 
         with self._phase("overlay"), self._spending("markers"), \
                 self._stage_timer("markers: draw"):
-            self.show_markers(self._target["ebs"], cells,
-                              verdict.get("marks"), verdict.get("boxes"))
+            self._counts["markers"] = self.show_markers(
+                self._target["ebs"], cells,
+                verdict.get("marks"), verdict.get("boxes"))
         self._verdict = verdict
 
         name = self._keep_result(verdict, meeting)
@@ -3058,7 +3112,7 @@ class EbsSimulate:
                             ("overlay", self.clear_sweep),
                             ("camera", self.release_camera),
                             ("place", self.hide_ebs)):
-            with self._phase(phase):
+            with self._phase(phase), self._stage_timer(work.__name__):
                 try:
                     work()
                 except Exception as e:
