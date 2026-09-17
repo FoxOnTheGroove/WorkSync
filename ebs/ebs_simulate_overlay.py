@@ -807,7 +807,12 @@ class EbsSimulateGrip:
         return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
-        """그 상태 색으로 몸통 하나와 화살촉 둘. 뿌리가 EBS 를 따라간다"""
+        """그 상태 색으로 몸통 하나와 화살촉 둘. 뿌리가 EBS 를 따라간다
+
+        머티리얼은 상태마다 두지 않고 하나를 색만 바꿔 쓴다. 새로 세우면
+        OmniPBR 인스턴스가 하나 더 생겨 RTX 가 MDL 을 그 자리에서 컴파일한다.
+        잡는 순간 그 값을 물면 처음 잡을 때만 몇 초씩 멈춘다
+        """
         stage = self._stage()
         if stage is None or self._ends is None:
             return False
@@ -822,7 +827,7 @@ class EbsSimulateGrip:
                 root = UsdGeom.Xform.Define(stage, self._root)
                 if self._matrix is not None:
                     EbsSimulateMarks._moved(root, self._matrix)
-                skin = self._paint._material(stage, f"grip_{state}", colour,
+                skin = self._paint._material(stage, "grip", colour,
                                              1.0, 0.0, glow=False)
                 self._paint._gap_line(stage, f"{self._root}/shaft", body[0],
                                       body[1], thick, skin, colour)
@@ -851,12 +856,14 @@ class EbsSimulateGrip:
             return False
         if not self._hit(x, y):
             return False
+        clock = time.perf_counter()
         self._from = x
         self._was = EbsSimulateService.get_nudge()
         self._told = False
-        EbsSimulateService.mark_move()
+        EbsSimulateService.mark_move(clock)
         EbsSimulateService.hold_clash(False)
         self._draw(GRIP_HOLD)
+        EbsSimulateService.mark_grabbed(time.perf_counter() - clock)
         return True
 
     def drag(self, x: float, y: float) -> bool:

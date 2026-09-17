@@ -354,6 +354,7 @@ class EbsSimulate:
         self._moves: int = 0
         self._move_from: dict = {}
         self._move_clock: float = 0.0
+        self._move_grab: float = 0.0
         self._settled: float = 0.0
         self._spent: dict = {}
         self._shares: dict = {}
@@ -522,12 +523,18 @@ class EbsSimulate:
                 told[root] = 0
         return told
 
-    def mark_move(self) -> None:
+    def mark_move(self, clock: float = 0.0) -> None:
         """손잡이를 잡은 순간의 프림 수를 적어 둔다. 민 뒤와 견준다"""
         if self._moves >= GRIP_WATCH:
             return
         self._move_from = self._ours_now()
-        self._move_clock = time.perf_counter()
+        self._move_clock = clock or time.perf_counter()
+        self._move_grab = 0.0
+
+    def mark_grabbed(self, spent: float) -> None:
+        """잡는 손질 하나에 걸린 시간. 미는 데까지와 갈라 봐야 한다"""
+        if self._moves < GRIP_WATCH:
+            self._move_grab = float(spent)
 
     async def watch_move(self) -> None:
         """처음 민 뒤 무엇이 남았는지 한 줄로 찍는다. 몇 번만 찍고 만다
@@ -546,7 +553,8 @@ class EbsSimulate:
             f"{root.rsplit('/', 1)[-1]} {after.get(root, 0) - before.get(root, 0):+d}"
             f"({after.get(root, 0)})"
             for root in (MARKER_ROOT, GRIP_ROOT) if root in after)
-        print(f"[ebs] 손잡이 {turn}번째 | 파이썬 {spent:.2f}s · 정착 {calm:.2f}s"
+        print(f"[ebs] 손잡이 {turn}번째 | 그랩 {self._move_grab:.2f}s"
+              f" · 잡고민뒤 {spent:.2f}s · 정착 {calm:.2f}s"
               + (f" · 프림 {grew}" if grew else ""))
 
     def hold_clash(self, on: bool) -> bool:

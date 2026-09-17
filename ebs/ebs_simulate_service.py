@@ -42,10 +42,16 @@ class EbsSimulateService:
         cls._busy = ""
 
     @classmethod
-    def mark_move(cls):
+    def mark_move(cls, clock=0.0):
         """손잡이를 잡은 순간을 적어 둔다. 처음 민 뒤 보고에 쓴다"""
         if cls._simulate:
-            cls._simulate.mark_move()
+            cls._simulate.mark_move(clock)
+
+    @classmethod
+    def mark_grabbed(cls, spent):
+        """잡는 손질 하나에 걸린 시간을 적어 둔다"""
+        if cls._simulate:
+            cls._simulate.mark_grabbed(spent)
 
     @classmethod
     async def watch_move(cls):
