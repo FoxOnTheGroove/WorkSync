@@ -806,23 +806,30 @@ class EbsSimulate:
         저작이 끝나도 Hydra 는 다음 프레임부터 메인 스레드에서 rprim 을
         다시 짓는다. 멈춘 것처럼 보이는 구간이 거기고, 우리 호출이 돌아온
         뒤라 어떤 계측에도 안 잡힌다. 마지막 느린 프레임까지를 잰다
+        _doing  도는 동안 그 단계의 이름을 세워 둔다. 작업중 표가 이걸 읽는다.
+                 안 세우면 SIM 이 이름 없이 한 번, 충돌연산으로 또 한 번
+                 차올라서 같은 일이 두 번 도는 것처럼 보인다
         """
         import omni.kit.app
         app = omni.kit.app.get_app()
         guess = self._settled or SETTLE_GUESS
         started = last = time.perf_counter()
         busy, calm = started, 0
-        for _ in range(SETTLE_MOST):
-            await app.next_update_async()
-            now = time.perf_counter()
-            self._progress = min(99.0, (now - started) / guess * 100.0)
-            if now - last > SETTLE_FRAME:
-                busy, calm = now, 0
-            else:
-                calm += 1
-            last = now
-            if calm >= SETTLE_CALM:
-                break
+        before, self._doing = self._doing, name
+        try:
+            for _ in range(SETTLE_MOST):
+                await app.next_update_async()
+                now = time.perf_counter()
+                self._progress = min(99.0, (now - started) / guess * 100.0)
+                if now - last > SETTLE_FRAME:
+                    busy, calm = now, 0
+                else:
+                    calm += 1
+                last = now
+                if calm >= SETTLE_CALM:
+                    break
+        finally:
+            self._doing = before
         spent = max(0.0, busy - started)
         self._settled = spent or self._settled
         self._progress = 100.0

@@ -86,6 +86,8 @@ LEAD_OVER   = 0.01
 COLOR_LEAD  = (1.0, 1.0, 1.0)
 
 WORK_WIDE     = 260
+WORK_HIGH     = 66
+WORK_LINE     = 22
 WORK_BAR      = 8
 WORK_PAD      = 10
 WORK_PCT      = "{0:.0f}%"
@@ -196,8 +198,9 @@ class EbsSimulateOverlay:
         try:
             self._frame = window.get_frame(FRAME_ID)
             with self._frame:
-                self._stack = ui.ZStack()
-                self._build_work()
+                with ui.ZStack():
+                    self._stack = ui.ZStack()
+                    self._build_work()
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
             return False
@@ -218,17 +221,19 @@ class EbsSimulateOverlay:
 
         매번 다시 지으면 글자가 깜빡인다. 글줄은 모양마다 하나씩 두고
         하나만 켠다. ui.Label 은 처음 글로 잡아 둔 자리를 계속 쓴다
+        크기는 전부 못 박는다. 글이 길어질 때마다 판이 늘었다 줄면 눈에 띈다
         """
         self._work = ui.Placer(draggable=False, offset_x=0, offset_y=0)
         with self._work:
-            self._work_panel = ui.ZStack(width=ui.Pixel(WORK_WIDE), height=0)
+            self._work_panel = ui.ZStack(width=ui.Pixel(WORK_WIDE),
+                                         height=ui.Pixel(WORK_HIGH))
             with self._work_panel:
                 ui.Rectangle(style={"background_color": COLOR_WORK,
                                     "border_radius": 6})
-                with ui.VStack(spacing=6,
+                with ui.VStack(spacing=0,
                                style={"margin_width": WORK_PAD,
                                       "margin_height": WORK_PAD}):
-                    self._work_hold = ui.ZStack(height=0)
+                    self._work_hold = ui.ZStack(height=ui.Pixel(WORK_LINE))
                     with ui.ZStack(height=ui.Pixel(WORK_BAR)):
                         ui.Rectangle(style={"background_color": COLOR_TRACK,
                                             "border_radius": 3})
@@ -238,7 +243,7 @@ class EbsSimulateOverlay:
                                 style={"background_color": COLOR_FILL,
                                        "border_radius": 3})
                             ui.Spacer()
-                    self._work_pct_hold = ui.ZStack(height=0)
+                    self._work_pct_hold = ui.ZStack(height=ui.Pixel(WORK_LINE))
         self._work_panel.visible = False
 
     def _work_word(self, hold, store: dict, text: str) -> None:
@@ -249,7 +254,8 @@ class EbsSimulateOverlay:
         label = store.get(shape)
         if label is None:
             with hold:
-                label = ui.Label(text, height=0,
+                label = ui.Label(text, height=ui.Pixel(WORK_LINE),
+                                 width=ui.Pixel(WORK_WIDE - WORK_PAD * 2),
                                  alignment=ui.Alignment.CENTER,
                                  style={"color": COLOR_TEXT,
                                         "font_size": WORK_SIZE})
@@ -282,7 +288,7 @@ class EbsSimulateOverlay:
         except Exception:
             return
         self._work.offset_x = (width - WORK_WIDE) * 0.5
-        self._work.offset_y = (height - panel.computed_height) * 0.5
+        self._work.offset_y = (height - WORK_HIGH) * 0.5
         panel.visible = True
 
     def refresh(self, place: bool = True) -> bool:
