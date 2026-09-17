@@ -611,8 +611,10 @@ class EbsSimulate:
                           (stage.GetPrimAtPath(path) for path in wrote)
                           if one is not None and one.IsValid()]
                 with Usd.EditContext(stage, stage.GetSessionLayer()):
-                    for one in picked:
-                        UsdShade.MaterialBindingAPI(one).UnbindAllBindings()
+                    with Sdf.ChangeBlock():
+                        for one in picked:
+                            UsdShade.MaterialBindingAPI(
+                                one).UnbindAllBindings()
         except Exception as e:
             self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
@@ -802,7 +804,7 @@ class EbsSimulate:
             return False
         try:
             with self._phase("skin"):
-                meshes, roots = [], []
+                meshes = []
                 for _ in range(SKIN_DEEP):
                     with self._stage_timer("skin: plan"):
                         roots, meshes = self._skin_plan(prim)
@@ -810,9 +812,6 @@ class EbsSimulate:
                         break
                     with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
-                if roots:
-                    self._loud(f"skin: {len(roots)} instance(s) would not open "
-                               f"in {SKIN_DEEP} passes")
                 with self._stage_timer("skin: bind"):
                     self._bind_all(stage, material, meshes)
         except Exception as e:
@@ -890,11 +889,9 @@ class EbsSimulate:
         return len(roots)
 
     def _bind_all(self, stage, material, meshes) -> int:
-        """정해 둔 메시에 하나씩 건다. 살아 있는 스테이지에 대고 쓴다
+        """정해 둔 메시에 한 덩이로 건다. 통지가 한 번만 간다
 
-        묶어 쓰려고 블록으로 감싸면 안 된다. 거는 일은 스키마를 얹고 관계를
-        만드느라 스테이지를 읽는데, 블록 안에서는 스테이지가 안 맞춰져 있어
-        될 때도 있고 안 될 때도 있다. 어쩌다 색이 안 들어가던 것이 이것이다
+        프림은 블록 밖에서 미리 집는다. 블록 안에서는 스테이지를 안 읽는다
         하나가 안 걸려도 나머지는 건다. 프록시가 하나 섞여 있다고 그 장비를
         통째로 안 칠하면 안 된다
         """
@@ -905,13 +902,14 @@ class EbsSimulate:
                 ready.append((path, one))
         missed = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            for path, one in ready:
-                try:
-                    self._bind_skin(one, material)
-                except Exception:
-                    missed += 1
-                    continue
-                self._skin_wrote.append(path)
+            with Sdf.ChangeBlock():
+                for path, one in ready:
+                    try:
+                        self._bind_skin(one, material)
+                    except Exception:
+                        missed += 1
+                        continue
+                    self._skin_wrote.append(path)
         if missed:
             self._loud(f"skin: {missed} of {len(ready)} place(s) refused the "
                        f"binding")
