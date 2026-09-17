@@ -6,9 +6,22 @@ import omni.ui as ui
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 
 from .ebs_simulate_camera import viewport_window
-from .ebs_simulate_service import EbsSimulateService, WORK_SETTLE
+from .ebs_simulate_shared import WORK_SETTLE
 
-__all__ = ["EbsSimulateOverlay", "EbsSimulateMarks", "EbsSimulateGrip"]
+__all__ = ["EbsSimulateOverlay", "EbsSimulateMarks", "EbsSimulateGrip", "attach"]
+
+_SIM = None
+
+
+def attach(simulate) -> None:
+    """오버레이가 쓸 EbsSimulate 하나를 건다. 익스텐션이 시작할 때 부른다"""
+    global _SIM
+    _SIM = simulate
+
+
+def sim():
+    """걸어 둔 EbsSimulate. 아직 없으면 None"""
+    return _SIM
 
 STATE_CLEAR = "clear"
 STATE_TIGHT = "tight"
@@ -281,13 +294,13 @@ class EbsSimulateOverlay:
         판 크기는 프레임마다 도로 못 박는다. 무엇이 밀어도 되돌아온다
         """
         panel = self._work_panel
-        if panel is None or self._work is None:
+        if panel is None or self._work is None or sim() is None:
             return
-        busy = EbsSimulateService.busy()
+        busy = sim().busy()
         if not busy:
             panel.visible = False
             return
-        done = max(0.0, min(EbsSimulateService.get_progress(), 100.0))
+        done = max(0.0, min(sim().get_progress(), 100.0))
         self._work_word(self._work_hold, self._work_words, busy)
         self._work_word(self._work_pct_hold, self._work_pcts,
                         WORK_PCT.format(done))
@@ -306,7 +319,7 @@ class EbsSimulateOverlay:
 
     def refresh(self, place: bool = True) -> bool:
         """판정을 읽어 판을 새로 그린다"""
-        said = EbsSimulateService.get_verdict()
+        said = sim().get_verdict() if sim() is not None else None
         self.clear()
         if not said or self._stack is None:
             return False
@@ -442,7 +455,7 @@ class EbsSimulateOverlay:
 
     def _restate(self) -> None:
         """끄는 동안. 판을 다시 만들지 않고 자리와 글자만 고친다"""
-        said = EbsSimulateService.get_verdict()
+        said = sim().get_verdict() if sim() is not None else None
         if not said:
             return
         spots = {("verdict", "centre"): said.get("centre"),
@@ -720,7 +733,7 @@ class EbsSimulateGrip:
 
     프림으로 그린다. 마우스는 카메라의 입력 판이 먼저 받아 이리로 넘긴다
     _hit  화면에 비친 몸통에서 GRIP_PICK 픽셀 안이면 잡은 것으로 본다
-    EbsSimulateService.slide  끈 만큼을 넘긴다. 다시 재지 않고 산수로 따라간다
+    sim().slide  끈 만큼을 넘긴다. 다시 재지 않고 산수로 따라간다
     """
 
     _one = None
@@ -804,7 +817,7 @@ class EbsSimulateGrip:
             end[side] += self._reach * way
             ends.append(tuple(end))
         self._ends = tuple(ends)
-        EbsSimulateService.watch_grip(self)
+        sim().watch_grip(self)
         return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
@@ -857,24 +870,24 @@ class EbsSimulateGrip:
         도는 일이 있으면 안 받는다. 재는 중에 밀면 판정 한 벌을 바깥에서
         갈아엎게 된다
         """
-        if self._ends is None or EbsSimulateService.busy():
+        if self._ends is None or sim().busy():
             return False
         if not self._hit(x, y):
             return False
         self._from = x
-        self._was = EbsSimulateService.get_nudge()
-        EbsSimulateService.hold_clash(False)
+        self._was = sim().get_nudge()
+        sim().hold_clash(False)
         self._draw(GRIP_HOLD)
         return True
 
     def drag(self, x: float, y: float) -> bool:
         """끄는 중이면 그만큼 민다"""
-        if self._from is None or EbsSimulateService.busy():
+        if self._from is None or sim().busy():
             return False
         per = self._unit_pixels()
         if per:
             metres = (x - self._from) / per * self._unit
-            EbsSimulateService.slide(self._was + metres)
+            sim().slide(self._was + metres)
             EbsSimulateOverlay.restate()
         return True
 
@@ -890,13 +903,13 @@ class EbsSimulateGrip:
             return
         self._from = None
         self._draw(GRIP_IDLE)
-        if EbsSimulateService.busy():
+        if sim().busy():
             EbsSimulateOverlay.restate()
             return
         EbsSimulateGrip._again = True
         EbsSimulateOverlay.restate()
         EbsSimulateOverlay.wake()
-        EbsSimulateService.begin_work(WORK_SETTLE)
+        sim().begin_work(WORK_SETTLE)
         asyncio.ensure_future(self._settle())
 
     async def _settle(self) -> None:
@@ -909,14 +922,14 @@ class EbsSimulateGrip:
         try:
             import omni.kit.app
             await omni.kit.app.get_app().next_update_async()
-            EbsSimulateService.hold_clash(True)
-            await EbsSimulateService.settle()
+            sim().hold_clash(True)
+            await sim().settle()
         except Exception as e:
             print(f"[ebs] could not retest after the grip: {e}")
         finally:
             EbsSimulateGrip._again = False
             EbsSimulateOverlay.restate()
-            EbsSimulateService.end_work()
+            sim().end_work()
 
     @property
     def holding(self) -> bool:

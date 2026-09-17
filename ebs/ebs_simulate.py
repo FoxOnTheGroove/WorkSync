@@ -178,6 +178,7 @@ class EbsSimulate:
         self._stage_index = None
         self._ebs_box = None
         self._lasers: bool = False
+        self._busy: str = ""
         self._laser_at: set = set()
         self._laser_lit: dict = {}
         self._outer: bool = True
@@ -189,7 +190,7 @@ class EbsSimulate:
         self._skin_wrote: list = []
         self._skin_opened: list = []
         self._phases: dict = {}
-        self._skin_use: bool = False
+        self._skin_use: bool = True
         self._nudge: float = 0.0
         self._base = None
         self._verdict: dict = {}
@@ -549,20 +550,6 @@ class EbsSimulate:
         """
         self._outer = bool(outer)
         self._inner = bool(inner)
-
-    def set_skin_use(self, on: bool) -> bool:
-        """머티리얼을 갈아입힐지. 끄면 걷고, 켜도 그 자리에서 안 입힌다
-
-        거는 값이 싸지 않다. 세션 레이어에 쓸 때마다 스테이지가 다시 짜인다.
-        그래서 입히는 자리를 align 하나로 못 박는다. 이 함수는 끄는 쪽만 한다
-        """
-        want = bool(on)
-        if want == self._skin_use:
-            return want
-        self._skin_use = want
-        if not want:
-            self.strip_skin()
-        return want
 
     def set_skin(self, url: str) -> str:
         """대상 장비에 입힐 것. 빈 칸이면 원래 색 그대로
@@ -1091,6 +1078,29 @@ class EbsSimulate:
         return (f"[ebs] {self._step or 'step'} : {spent:.2f}s"
                 + (f" | {parts}" if parts else ""))
 
+    def busy(self) -> str:
+        """지금 도는 일의 이름. 아무것도 안 돌면 빈 칸
+
+        도는 동안 버튼도 손잡이도 안 받는다. 도중에 끼어들면 판정 한 벌을
+        바깥에서 갈아엎게 된다
+        """
+        return self._busy
+
+    def begin_work(self, label: str) -> str:
+        """그 일이 시작됐다고 세운다. 띄우기 전에 그 자리에서 세운다
+
+        진행도도 여기서 0 으로 되돌린다. 앞 동작이 끝나며 100 을 찍어 두고
+        가므로, 안 되돌리면 표가 뜨자마자 100 으로 보였다가 다시 채워진다
+        구간을 여럿 쓰는 동작은 제 코루틴 안에서 set_legs 로 다시 잡는다
+        """
+        self._busy = label or "Working"
+        self.set_legs(1)
+        return self._busy
+
+    def end_work(self) -> None:
+        """일이 끝났다고 내린다. finally 에서 부른다"""
+        self._busy = ""
+
     def say_phases(self) -> str:
         """단계 한 줄을 찍고 그대로 돌려준다"""
         line = self.phase_line()
@@ -1458,6 +1468,61 @@ class EbsSimulate:
         result["notes"] = list(self._notes)
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
         return self._done(result)
+
+    def _panel(self):
+        """뷰포트 오버레이. 순환 임포트를 피하려 여기서 늦게 들인다"""
+        from .ebs_simulate_overlay import EbsSimulateOverlay
+        return EbsSimulateOverlay
+
+    def _paint(self, work) -> None:
+        """오버레이를 세우거나 내리고, 그 시간을 이번 단계 보고에 얹는다"""
+        started = time.perf_counter()
+        try:
+            work()
+        finally:
+            self.add_phase("overlay", time.perf_counter() - started)
+
+    async def run_simulate(self, equipment: str = "") -> dict:
+        """SIM 한 번이 하는 일 전부. 부르는 쪽은 이 한 줄이면 된다
+
+        바쁨 세우기와 내리기, 오버레이 내렸다 올리기, 화면이 잦아들 때까지
+        기다리기, 한 줄 보고까지 여기서 한다. 절차를 부르는 쪽에 두면 웹이든
+        더미든 그 순서를 각자 다시 짜야 하고, 하나만 틀려도 바쁨이 갇힌다
+        """
+        if self._busy:
+            return self._payload(False, f"Busy: {self._busy}")
+        panel = self._panel()
+        self.set_nudge(0.0)
+        self._paint(panel.hide)
+        self._paint(panel.wake)
+        self.begin_work(WORK_SIM)
+        try:
+            told = await self.simulate_async(equipment)
+            self._paint(panel.show)
+            await self.settle()
+            self.say_phases()
+            return told
+        finally:
+            self.end_work()
+
+    async def run_clear(self) -> dict:
+        """Clear 한 번이 하는 일 전부. 부르는 쪽은 이 한 줄이면 된다
+
+        오버레이가 먼저 내려가야 지우는 동안 빈 자리를 가리키고 있지 않다
+        """
+        if self._busy:
+            return self._payload(False, f"Busy: {self._busy}")
+        panel = self._panel()
+        self._paint(panel.wake)
+        self.begin_work(WORK_CLEAR)
+        try:
+            self._paint(panel.hide)
+            told = await self.clear_all_async()
+            self.say_phases()
+            self.set_nudge(0.0)
+            return told
+        finally:
+            self.end_work()
 
     async def simulate_async(self, equipment: str = "") -> dict:
         """simulate 인데 collide 만 프레임에 나눠 돈다. 나머지는 짧다"""

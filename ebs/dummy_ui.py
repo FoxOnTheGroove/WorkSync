@@ -4,9 +4,9 @@ import time
 
 import omni.ui as ui
 
-from .ebs_simulate_service import (EbsSimulateService, WORK_ALIGN,
-                                   WORK_CAMERA, WORK_CLEAR, WORK_COLLIDE,
-                                   WORK_REFRESH, WORK_SIM)
+from .ebs_simulate_shared import (WORK_ALIGN, WORK_CAMERA, WORK_COLLIDE,
+                                  WORK_REFRESH)
+from .ebs_simulate_service import EbsSimulateService
 from .ebs_simulate_overlay import EbsSimulateOverlay
 
 __all__ = ["EbsDummyUI", "SweepLog"]
@@ -27,7 +27,6 @@ VIEW_PATHS = (("Ceiling:", "", False),
 
 EQP_PREFIX = "EQP_"
 SKIN_URL   = ""
-SKIN_ON    = False
 
 NEAR_SPAN = 2.5
 NEAR_MIN, NEAR_MAX = 0.0, 5.0
@@ -103,8 +102,13 @@ class SweepLog:
 class EbsDummyUI:
     """서비스 API 만 보고 도는 시험용 창. 속을 직접 만지지 않는다"""
 
-    def __init__(self):
-        """위젯 참조 자리만. 구성은 build_ui"""
+    def __init__(self, simulate):
+        """위젯 참조 자리만. 구성은 build_ui
+
+        simulate  디버그 버튼과 체크박스가 직접 잡는 속. 서비스 표면에는
+                  사용자가 부르는 것만 남기려고 이쪽으로 뚫어 둔다
+        """
+        self._sim = simulate
         self._window = None
         self._usd_field = None
         self._xml_field = None
@@ -116,7 +120,6 @@ class EbsDummyUI:
         self._docked = False
         self._eqp_field = None
         self._skin_field = None
-        self._skin_on = None
         self._side_field = None
         self._ceiling_field = None
         self._status_label = None
@@ -151,9 +154,6 @@ class EbsDummyUI:
                     # self._scale = ui.ComboBox(0, "puls + snap", "fixed 100000",
                     #                           "length / puls", width=126)
                     ui.Label("Collide:", width=90)
-                    ui.Label("skin", width=30)
-                    self._skin_on = ui.CheckBox(width=20)
-                    self._skin_on.model.set_value(SKIN_ON)
                     ui.Label("Debug laser:", width=76)
                     self._lasers = ui.CheckBox(width=20)
                     self._lasers.model.set_value(False)
@@ -215,7 +215,7 @@ class EbsDummyUI:
     def auto_init(self) -> dict:
         """버튼 없이 도는 init. 입력칸의 사전값을 그대로 쓴다"""
         self._apply_settings()
-        result = EbsSimulateService.init()
+        result = EbsSimulateService.auto_init()
         self._apply_views()
         self._reset_nudge()
         self._render(result)
@@ -241,7 +241,7 @@ class EbsDummyUI:
         for field, box in self._views:
             path = field.model.get_value_as_string().strip()
             if path:
-                done += EbsSimulateService.set_visible(
+                done += self._sim.set_visible(
                     path, box.model.get_value_as_bool())
         return done
 
@@ -252,7 +252,7 @@ class EbsDummyUI:
             self._set_status("Path is empty")
             return
         on = model.get_value_as_bool()
-        touched = EbsSimulateService.set_visible(path, on)
+        touched = self._sim.set_visible(path, on)
         self._set_status(f"{path}: {'visible' if on else 'hidden'} ({touched})")
 
     def dock_right(self) -> bool:
@@ -271,7 +271,7 @@ class EbsDummyUI:
 
     def _on_pick_selected(self):
         """뷰포트 선택에서 장비 이름을 가져와 입력칸에 넣는다"""
-        path = EbsSimulateService.get_selected_equipment()
+        path = self._sim.get_selected_equipment()
         if not path:
             self._set_status("No equipment found in selection")
             return
@@ -283,29 +283,18 @@ class EbsDummyUI:
         self._set_status(f"Selected: {name}")
 
     def _on_simulate(self):
-        """카메라 -> 자리 -> 충돌. collide 가 길어 프레임에 나눠 돈다"""
+        """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다"""
         self._apply_settings()
-        self._reset_nudge()
-        EbsSimulateOverlay.hide()
-        self._start(self._simulate_task, WORK_SIM)
+        self._spawn(EbsSimulateService.simulate(
+            self._eqp_field.model.get_value_as_string()))
 
-    async def _simulate_task(self):
-        """도는 동안 진행률을 적고, 끝나면 오버레이를 켠다"""
-        self._render(await self._watched(EbsSimulateService.simulate_async(
-            self._eqp_field.model.get_value_as_string())))
-        self._overlay(EbsSimulateOverlay.show)
-        await EbsSimulateService.settle()
-        EbsSimulateService.say_phases()
-
-    @staticmethod
-    def _overlay(work):
+    def _overlay(self, work):
         """오버레이 세우는 시간을 재서 같은 줄에 얹는다"""
         started = time.perf_counter()
         try:
             work()
         finally:
-            EbsSimulateService.add_phase(
-                "overlay", time.perf_counter() - started)
+            self._sim.add_phase("overlay", time.perf_counter() - started)
 
     def _on_align(self):
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
@@ -315,10 +304,10 @@ class EbsDummyUI:
 
     async def _aligning(self):
         """align 을 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
-        self._render(await EbsSimulateService.align_async(
+        self._render(await self._sim.align_async(
             self._eqp_field.model.get_value_as_string()))
         self._overlay(EbsSimulateOverlay.hide)
-        EbsSimulateService.say_phases()
+        self._sim.say_phases()
 
     def _on_camera(self):
         """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
@@ -327,10 +316,10 @@ class EbsDummyUI:
 
     async def _focusing(self):
         """카메라를 잡고 한 줄 찍는다. 도는 동안은 다른 것을 안 받는다"""
-        self._render(EbsSimulateService.focus(
+        self._render(self._sim.focus(
             self._eqp_field.model.get_value_as_string()))
         self._overlay(EbsSimulateOverlay.hide)
-        EbsSimulateService.say_phases()
+        self._sim.say_phases()
 
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""
@@ -340,10 +329,10 @@ class EbsDummyUI:
     async def _collide_task(self):
         """도는 동안 진행률을 적고, 끝나면 오버레이를 띄운다"""
         self._mark_nudge(busy=True)
-        self._render(await self._watched(EbsSimulateService.collide_async()))
+        self._render(await self._watched(self._sim.collide_async()))
         self._overlay(EbsSimulateOverlay.show)
-        await EbsSimulateService.settle()
-        EbsSimulateService.say_phases()
+        await self._sim.settle()
+        self._sim.say_phases()
         self._mark_nudge()
 
     def _on_near_span(self):
@@ -360,7 +349,7 @@ class EbsDummyUI:
 
     def _reset_nudge(self):
         """민 거리를 0 으로. 지금 장비 이름을 기억해 둔다"""
-        EbsSimulateService.set_nudge(0.0)
+        self._sim.set_nudge(0.0)
         self._nudge_for = self._eqp_field.model.get_value_as_string().strip()
         self._mark_nudge()
 
@@ -368,7 +357,7 @@ class EbsDummyUI:
         """어느 쪽으로 얼마나 밀어 뒀나. 미는 것은 뷰포트 손잡이가 한다"""
         if self._nudge_label is None:
             return
-        metres = EbsSimulateService.get_nudge()
+        metres = self._sim.get_nudge()
         if not metres:
             text = NUDGE_HOME
         else:
@@ -382,22 +371,23 @@ class EbsDummyUI:
 
     async def _refreshing(self):
         """되돌리고 한 줄 찍는다"""
-        self._render(EbsSimulateService.refresh_camera())
+        self._render(self._sim.refresh_camera())
 
     def _on_clear_markers(self):
-        """그린 것, 레이저, 카메라, EBS, 오버레이를 전부 놓는다"""
-        self._start(self._clearing, WORK_CLEAR)
+        """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다"""
+        self._spawn(EbsSimulateService.clear())
 
-    async def _clearing(self):
-        """오버레이부터 내리고 Clear 를 돌린다. 화면이 잦아들 때까지 기다린다
+    def _spawn(self, work):
+        """서비스 한 줄을 띄우고 결과만 상태 줄에 적는다
 
-        오버레이가 먼저 내려가야 지우는 동안 빈 자리를 가리키고 있지 않다
+        바쁨도 오버레이도 정착도 서비스 안에서 한다. 여기 남는 것은 도는
+        동안 상태 줄에 진행률을 적는 것뿐이고, 그건 더미 위젯 일이다
         """
-        self._overlay(EbsSimulateOverlay.hide)
-        await EbsSimulateService.clear_all_async()
-        EbsSimulateService.say_phases()
-        self._reset_nudge()
-        self._set_status("Markers and lasers cleared, camera released, EBS hidden")
+        self._task = asyncio.ensure_future(self._spun(work))
+
+    async def _spun(self, work):
+        """띄운 일을 지켜보다 끝나면 결과를 적는다"""
+        self._render(await self._watched(work))
 
     def _start(self, make, label: str):
         """일 하나를 띄운다. 이미 도는 것이 있으면 아예 안 만든다
@@ -407,12 +397,12 @@ class EbsDummyUI:
         begin_work  띄우기 전에 그 자리에서 세운다. 한 프레임 안에 두 번
                  눌러도 뒤엣것이 막힌다. 손잡이도 같은 것을 본다
         """
-        busy = EbsSimulateService.busy()
+        busy = self._sim.busy()
         if busy:
             self._set_status(f"Busy: {busy}")
             return
         self._overlay(EbsSimulateOverlay.wake)
-        EbsSimulateService.begin_work(label)
+        self._sim.begin_work(label)
         self._task = asyncio.ensure_future(self._working(make))
 
     async def _working(self, make):
@@ -420,7 +410,7 @@ class EbsDummyUI:
         try:
             await make()
         finally:
-            EbsSimulateService.end_work()
+            self._sim.end_work()
 
     async def _watched(self, work):
         """일이 도는 동안 이름과 진행률과 흐른 시간을 상태 줄에 적는다"""
@@ -429,8 +419,8 @@ class EbsDummyUI:
         task = asyncio.ensure_future(work)
         while not task.done():
             self._set_status(
-                f"{EbsSimulateService.busy()}"
-                f" {EbsSimulateService.get_progress():3.0f}%"
+                f"{self._sim.busy()}"
+                f" {self._sim.get_progress():3.0f}%"
                 f"   {time.monotonic() - started:.1f}s")
             await omni.kit.app.get_app().next_update_async()
         return task.result()
@@ -445,15 +435,7 @@ class EbsDummyUI:
         )
         EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
         EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
-        # 콤보를 접어 둔 동안은 서비스 기본값을 그대로 쓴다
-        # modes = ("mesh", "triangle")
-        # index = self._precision.model.get_item_value_model().get_value_as_int()
-        # EbsSimulateService.set_precision(modes[max(0, min(index, 1))])
-        # scales = ("snap", "fixed", "puls")
-        # index = self._scale.model.get_item_value_model().get_value_as_int()
-        # EbsSimulateService.set_offset_scale(scales[max(0, min(index, 2))])
-        EbsSimulateService.set_show_lasers(self._lasers.model.get_value_as_bool())
-        EbsSimulateService.set_skin_use(self._skin_on.model.get_value_as_bool())
+        self._sim.set_show_lasers(self._lasers.model.get_value_as_bool())
         EbsSimulateService.set_near_span(self._near_span())
         EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))

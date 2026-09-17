@@ -1,7 +1,9 @@
 import omni.ext
 import omni.ui as ui
 
+from .ebs_simulate import EbsSimulate
 from .ebs_simulate_service import EbsSimulateService
+from .ebs_simulate_overlay import attach as attach_overlay
 from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
@@ -12,9 +14,15 @@ class EbsExtension(omni.ext.IExt):
     """킷이 잡는 진입점. 서비스와 창을 세우고 내린다"""
 
     def on_startup(self, ext_id):
-        """익스텐션 시작"""
-        EbsSimulateService.initialize()
-        self._ui = EbsDummyUI()
+        """익스텐션 시작. EbsSimulate 하나를 세 곳에 같이 건넨다
+
+        서비스는 사용자가 부르는 문만 열고, 창과 오버레이는 이것을 직접
+        잡는다. 창과 오버레이가 쓰는 것이 서비스 표면에 안 섞이게 한다
+        """
+        self._sim = EbsSimulate()
+        EbsSimulateService.attach(self._sim)
+        attach_overlay(self._sim)
+        self._ui = EbsDummyUI(self._sim)
         self._ui.build_ui()
         self._raise = None
         self._frames = 0
@@ -77,4 +85,6 @@ class EbsExtension(omni.ext.IExt):
         if self._ui:
             self._ui.destroy()
             self._ui = None
-        EbsSimulateService.finalize()
+        if self._sim:
+            self._sim.teardown()
+            self._sim = None

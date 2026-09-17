@@ -4,6 +4,13 @@ from pxr import Usd
 
 from .ebs_simulate_camera import CAMERA_PATH
 
+WORK_SIM     = "Simulate"
+WORK_CAMERA  = "Camera"
+WORK_ALIGN   = "Align"
+WORK_COLLIDE = "Collide"
+WORK_CLEAR   = "Clear"
+WORK_REFRESH = "Refresh"
+WORK_SETTLE  = "Collision Check"
 EQP_PREFIX = "EQP_"
 PORT_ID_KEY = "port-id"
 OFFSET_KEY  = "offset"
