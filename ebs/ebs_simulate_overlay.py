@@ -28,8 +28,8 @@ GRIP_FLARE = 0.25 * 0.75
 GRIP_PICK  = 14.0
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
-GRIP_COLORS = {GRIP_IDLE: (1.0, 0.92, 0.35),
-               GRIP_HOLD: (0.85, 0.58, 0.05)}
+GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
+               GRIP_HOLD: (1.0, 0.92, 0.35)}
 
 SAID = set()
 
