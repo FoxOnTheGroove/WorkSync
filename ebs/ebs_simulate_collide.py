@@ -491,12 +491,24 @@ class EbsSimulateCollide:
 
     @classmethod
     def _forget_ebs(cls, sim, paths=()) -> None:
-        """EBS 상자 캐시를 버린다. 옮겼거나 켜고 껐을 때"""
+        """EBS 상자 캐시를 버린다. 옮겼거나 켜고 껐을 때
+
+        잎 캐시는 건드린 자리만 버린다. EBS 는 _stage_index 에도 잎 캐시에도
+        없으니 EBS 를 껐다 켜는 것만으로는 아무것도 안 버린다
+        """
         sim._ebs_box = None
-        if paths:
-            sim._leaves = {}
+        cls._forget_leaves(sim, paths)
         for path in paths:
             sim._visible.pop(path, None)
+
+    @classmethod
+    def _forget_leaves(cls, sim, roots=()) -> None:
+        """그 자리를 낀 잎 캐시를 버린다. 인스턴스를 열고 닫으면 프림이 바뀐다"""
+        for root in roots:
+            for path in [p for p in sim._leaves
+                         if p == root or p.startswith(root + "/")
+                         or root.startswith(p + "/")]:
+                del sim._leaves[path]
 
     @classmethod
     def _forget_triangles(cls, sim, prim: Usd.Prim) -> None:
@@ -557,7 +569,6 @@ class EbsSimulateCollide:
                 found.append((path, box))
         return found, visited
 
-    @classmethod
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
         """삼각형들을 칸에 나눠 담은 격자. 후보를 줄이는 데 쓴다"""
@@ -1197,7 +1208,8 @@ class EbsSimulateCollide:
 
         _gather_nearby  상자로 거르는 것은 꺼낼 때 한다. 훑기가 collide 마다
                      되풀이되던 자리다. 움직이는 EBS 는 캐시를 안 탄다
-        _leaves  단계 하나 도는 동안만 산다. _begin 이 버린다
+        _leaves  _stage_index 와 수명이 같다. init 과 인스턴스를 열고 닫는
+                 자리, 장비 보임이 바뀌는 자리에서만 버린다
         """
         path = str(root.GetPath())
         shared = cache is sim._bounds
@@ -1308,7 +1320,6 @@ class EbsSimulateCollide:
                     return False
         return True
 
-    @classmethod
     @classmethod
     def _triangles_meet(cls, a, b) -> bool:
         """두 삼각형이 실제로 만나나. 모서리를 상대 면에 쏜다"""

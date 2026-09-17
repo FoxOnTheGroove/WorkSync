@@ -637,6 +637,7 @@ class EbsSimulate:
             self._loud(f"skin: could not close the instances: "
                        f"{type(e).__name__}: {e}")
             return False
+        Collide._forget_leaves(self, opened)
         return True
 
     async def settle(self, name: str = "overlay") -> float:
@@ -879,6 +880,7 @@ class EbsSimulate:
                 spec = Sdf.CreatePrimInLayer(layer, path)
                 if spec is not None:
                     spec.SetInfo("instanceable", False)
+        Collide._forget_leaves(self, roots)
         already = set(self._skin_opened)
         self._skin_opened.extend(p for p in roots if p not in already)
         self._loud(f"skin: opened {len(roots)} instance(s) in one block")
@@ -1031,8 +1033,12 @@ class EbsSimulate:
 
 
     def _begin(self, step: str = "") -> None:
-        """한 단계를 시작한다. 시간과 로그를 비운다. 훑어 둔 잎도 버린다"""
-        self._leaves = {}
+        """한 단계를 시작한다. 시간과 로그만 비운다
+
+        _leaves  여기서 안 버린다. 훑은 결과는 _stage_index 와 같은 것을
+                 보고 있으니 수명도 같다. 버리는 자리는 init 과 인스턴스를
+                 열고 닫는 자리, 장비 보임이 바뀌는 자리뿐이다
+        """
         self._step = step
         self._progress = 0.0
         self._spent = {}
