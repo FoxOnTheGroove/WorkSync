@@ -337,7 +337,7 @@ class EbsDummyUI:
 
     def _on_near_span(self):
         """슬라이더를 끄는 그 자리에서 카메라에 반영한다"""
-        span = self._sim.set_near_span(self._near_span())
+        span = EbsSimulateService.set_near_span(self._near_span())
         self._set_status(f"Near plane at {span:.2f} x half the EBS width")
 
     def _near_span(self) -> float:
@@ -375,7 +375,7 @@ class EbsDummyUI:
 
     def _on_clear_markers(self):
         """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다"""
-        self._spawn(self._sim.run_clear())
+        self._spawn(EbsSimulateService.clear())
 
     def _spawn(self, work):
         """서비스 한 줄을 띄우고 결과만 상태 줄에 적는다
@@ -427,19 +427,19 @@ class EbsDummyUI:
 
     def _apply_settings(self):
         """입력칸과 콤보의 값을 서비스 설정으로 넘긴다"""
-        self._sim.set_usd_path(self._usd_field.model.get_value_as_string())
-        self._sim.set_xml_path(self._xml_field.model.get_value_as_string())
-        self._sim.set_ebs_paths(
+        EbsSimulateService.set_usd_path(self._usd_field.model.get_value_as_string())
+        EbsSimulateService.set_xml_path(self._xml_field.model.get_value_as_string())
+        EbsSimulateService.set_ebs_paths(
             self._ebs2_field.model.get_value_as_string(),
             self._ebs3_field.model.get_value_as_string(),
         )
-        self._sim.set_search_root(self._root_field.model.get_value_as_string())
-        self._sim.set_rail_root(self._rail_field.model.get_value_as_string())
+        EbsSimulateService.set_search_root(self._root_field.model.get_value_as_string())
+        EbsSimulateService.set_rail_root(self._rail_field.model.get_value_as_string())
         self._sim.set_show_lasers(self._lasers.model.get_value_as_bool())
-        self._sim.set_near_span(self._near_span())
-        self._sim.set_min_gaps(self._number(self._side_field, MIN_SIDE),
+        EbsSimulateService.set_near_span(self._near_span())
+        EbsSimulateService.set_min_gaps(self._number(self._side_field, MIN_SIDE),
                                         self._number(self._ceiling_field, MIN_CEILING))
-        self._sim.set_skin(
+        EbsSimulateService.set_skin(
             self._skin_field.model.get_value_as_string().strip())
 
     @staticmethod
