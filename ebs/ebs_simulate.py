@@ -543,8 +543,6 @@ class EbsSimulate:
         self._skin = want
         self._skin_made = ""
         self.strip_skin()
-        if want and self._skin_use:
-            self.warm_skin()
         return self._skin
 
 
@@ -647,21 +645,6 @@ class EbsSimulate:
         self._settled = spent or self._settled
         return spent
 
-    def warm_skin(self) -> bool:
-        """적어 둔 머티리얼을 미리 챙겨 둔다. init 이 부른다
-
-        .mdl 이면 세션 레이어에 프림을 세워 그 자리에서 읽는다. SIM 때는
-        바인딩만 걸면 되므로 기다릴 일이 없다. 씬 안 프림이면 읽을 것도 없다
-        """
-        if not self._skin or not self._skin_use:
-            return False
-        if self._skin_colour(self._skin) is not None:
-            return False
-        stage = self._get_stage()
-        if stage is None:
-            return False
-        with self._phase("skin"), self._stage_timer("skin: load"):
-            return self._make_skin(stage) is not None
 
     def _skin_material(self, stage):
         """걸 머티리얼 하나. 색이면 세우고, 씬 프림이면 그것, .mdl 이면 받은 것"""
@@ -706,8 +689,17 @@ class EbsSimulate:
         return material
 
     def _make_skin(self, stage):
-        """적어 둔 자리의 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다"""
+        """적어 둔 .mdl 로 머티리얼 하나. 같은 경로면 있던 것을 그대로 쓴다
+
+        씬 안 프림 경로를 여기 넣으면 그 경로를 .mdl 모듈로 찾으려 들어
+        sdrShaderNode 를 못 찾는다. 그 갈래는 _skin_material 이 가른다
+        걸 때가 되어서야 세운다. 앱이 켜지는 동안 세우면 RTX 가 아직 MDL
+        레지스트리를 안 올려서, 그때 못 푼 머티리얼이 그대로 굳는다
+        """
         url = self._skin
+        if url.startswith("/"):
+            self._loud(f"skin: {url} is a prim path, not an .mdl")
+            return None
         where = f"{SKIN_ROOT}/{SKIN_NAME}"
         if self._skin_made == url:
             made = stage.GetPrimAtPath(where)
@@ -1109,7 +1101,6 @@ class EbsSimulate:
             self._note(f"camera {CAMERA_PATH} created (the viewport switches "
                        f"to it when the camera step runs)")
 
-        self.warm_skin()
         self.hide_ebs()
         equipment = self.build_index()
         Collide._stage_boxes(self)
