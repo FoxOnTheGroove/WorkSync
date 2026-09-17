@@ -92,7 +92,6 @@ WORK_GAP      = 4
 WORK_ROOM     = WORK_WIDE - WORK_PAD * 2
 WORK_HIGH     = WORK_PAD * 2 + WORK_LINE * 2 + WORK_GAP * 2 + WORK_BAR
 WORK_PCT      = "{0:.0f}%"
-WORK_JOIN     = " / "
 COLOR_WORK    = 0xE6141414
 COLOR_TRACK   = 0x33FFFFFF
 COLOR_FILL    = 0xFF20C8FF
@@ -281,6 +280,8 @@ class EbsSimulateOverlay:
     def _work_place(self) -> None:
         """작업중이면 가운데에 앉히고 진행도를 고친다. 아니면 감춘다
 
+        글은 동작 이름 하나뿐이다. 여러 구간을 도는 동작이면 막대가 구간마다
+        제 몫 안에서 차오른다. 두 구간이면 앞이 0~50, 뒤가 50~100 이다
         막대는 제 자리 안에서만 찬다. 다 차도 WORK_ROOM 이라 판보다 좁다
         판 크기는 프레임마다 도로 못 박는다. 무엇이 밀어도 되돌아온다
         """
@@ -291,10 +292,8 @@ class EbsSimulateOverlay:
         if not busy:
             panel.visible = False
             return
-        step = EbsSimulateService.get_step()
         done = max(0.0, min(EbsSimulateService.get_progress(), 100.0))
-        self._work_word(self._work_hold, self._work_words,
-                        busy + WORK_JOIN + step if step else busy)
+        self._work_word(self._work_hold, self._work_words, busy)
         self._work_word(self._work_pct_hold, self._work_pcts,
                         WORK_PCT.format(done))
         if self._work_fill is not None:

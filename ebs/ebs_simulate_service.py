@@ -10,7 +10,7 @@ WORK_ALIGN   = "Align"
 WORK_COLLIDE = "Collide"
 WORK_CLEAR   = "Clear"
 WORK_REFRESH = "Refresh"
-WORK_SETTLE  = "Recheck"
+WORK_SETTLE  = "Collision Check"
 
 
 class EbsSimulateService:
@@ -63,11 +63,6 @@ class EbsSimulateService:
     def settle(cls, name="overlay"):
         """그린 것이 화면에 다 뜰 때까지 기다린다. 작업중 표가 그때까지 선다"""
         return cls._simulate.settle(name)
-
-    @classmethod
-    def get_step(cls):
-        """지금 도는 단계의 이름. 진행도 옆에 적을 것"""
-        return cls._simulate.get_step() if cls._simulate else ""
 
     # -- 수명주기 ------------------------------------------------------------
 

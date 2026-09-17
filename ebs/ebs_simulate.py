@@ -271,8 +271,6 @@ SKIN_SPENT = (("plan", "계획"), ("open", "열기"), ("bind", "걸기"),
 PHASES = (("camera", "카메라셋"), ("place", "EBS식립"),
           ("skin", "머티리얼"), ("collide", "충돌연산"),
           ("overlay", "UI·기즈모"))
-STEPS = {"camera": "Camera", "place": "Placing", "skin": "Material",
-         "collide": "Collision", "overlay": "Overlay"}
 
 LOOKS = "Looks"
 SHADER_TYPE = "Shader"
@@ -351,6 +349,8 @@ class EbsSimulate:
         self._verdict: dict = {}
         self._progress: float = 0.0
         self._doing: str = ""
+        self._legs: int = 1
+        self._leg: int = 0
         self._moves: int = 0
         self._move_from: dict = {}
         self._move_clock: float = 0.0
@@ -1259,6 +1259,8 @@ class EbsSimulate:
         self._blocked = ""
         self._phases = {}
         self._skin_told = {}
+        self._legs = 1
+        self._leg = 0
         self._moves = 0
         self._started = time.perf_counter()
 
@@ -1284,13 +1286,6 @@ class EbsSimulate:
             self._doing = before
             self._phases[name] = (self._phases.get(name, 0.0)
                                   + time.perf_counter() - started)
-
-    def get_step(self) -> str:
-        """지금 도는 단계의 이름. 아무것도 안 돌면 빈 칸
-
-        STEPS  화면에 뜨는 이름은 영어다. PHASES 의 한글은 콘솔 한 줄 몫
-        """
-        return STEPS.get(self._doing, "")
 
     def add_phase(self, name: str, spent: float) -> None:
         """바깥에서 잰 시간을 같은 줄에 얹는다. UI 가 오버레이 시간을 준다"""
@@ -1700,6 +1695,7 @@ class EbsSimulate:
         """simulate 인데 collide 만 프레임에 나눠 돈다. 나머지는 짧다"""
         import omni.kit.app
         self._begin("simulate")
+        self.set_legs(3)
         if not self._ready:
             return self._done(self._payload(False, "Run Init first"))
         result = self._do_prepare(equipment)
@@ -1713,9 +1709,11 @@ class EbsSimulate:
             return self._done(told)
         if self.wear_skin():
             await self.settle_skin()
+        self.next_leg()
         self.show_ebs(self._target["ebs"])
         for _ in self._collide_steps():
             await omni.kit.app.get_app().next_update_async()
+        self.next_leg()
         result = self._result
         if not result["ok"]:
             return self._done(result)
@@ -1899,8 +1897,10 @@ class EbsSimulate:
         """collide 를 프레임마다 한 단계씩. 도는 동안 화면이 안 멈춘다"""
         import omni.kit.app
         self._begin("collide")
+        self.set_legs(2)
         for _ in self._collide_steps():
             await omni.kit.app.get_app().next_update_async()
+        self.next_leg()
         return self._done(self._result)
 
     def get_progress(self) -> float:
@@ -1914,8 +1914,22 @@ class EbsSimulate:
         _learn_shares  한 번 돌고 나면 실제로 걸린 시간의 비율로 몫을 다시 잡는다
         settle_skin  머티리얼은 정착만 길다. 지난번 걸린 시간으로 어림잡아
                      올리고 99 에서 기다리다 끝나면 100 을 찍는다
+        _leg  한 동작이 여러 구간이면 구간마다 제 몫 안에서만 돈다. 두 구간
+                     이면 앞이 0~50, 뒤가 50~100 이다. 막대는 하나로 이어진다
         """
-        return self._progress
+        inner = max(0.0, min(self._progress, 100.0))
+        return (self._leg + inner / 100.0) / self._legs * 100.0
+
+    def set_legs(self, legs: int) -> None:
+        """이 동작이 몇 구간인지. 막대 하나를 그만큼 나눠 쓴다"""
+        self._legs = max(1, int(legs))
+        self._leg = 0
+        self._progress = 0.0
+
+    def next_leg(self) -> None:
+        """다음 구간으로 넘어간다. 그 구간의 진행도는 0 부터 다시 센다"""
+        self._leg = min(self._leg + 1, self._legs - 1)
+        self._progress = 0.0
 
     def _at(self, step: str, done: float = 1.0) -> None:
         """그 단계가 done(0~1) 만큼 왔다고 적는다"""

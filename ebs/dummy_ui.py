@@ -423,14 +423,14 @@ class EbsDummyUI:
             EbsSimulateService.end_work()
 
     async def _watched(self, work):
-        """일이 도는 동안 단계와 진행률과 흐른 시간을 상태 줄에 적는다"""
+        """일이 도는 동안 이름과 진행률과 흐른 시간을 상태 줄에 적는다"""
         import omni.kit.app
         started = time.monotonic()
         task = asyncio.ensure_future(work)
         while not task.done():
-            step = EbsSimulateService.get_step() or EbsSimulateService.busy()
             self._set_status(
-                f"{step} {EbsSimulateService.get_progress():3.0f}%"
+                f"{EbsSimulateService.busy()}"
+                f" {EbsSimulateService.get_progress():3.0f}%"
                 f"   {time.monotonic() - started:.1f}s")
             await omni.kit.app.get_app().next_update_async()
         return task.result()
