@@ -694,9 +694,10 @@ class EbsSimulate:
             return f"settle {name}"
         ranked = sorted(marks)
         slow = sum(1 for one in marks if one > SETTLE_FRAME)
+        worst = max(range(len(marks)), key=lambda i: marks[i])
         return (f"settle {name} ({len(marks)} frames, mid "
                 f"{ranked[len(ranked) // 2] * 1000.0:.0f}ms, worst "
-                f"{ranked[-1] * 1000.0:.0f}ms, {slow} over "
+                f"{ranked[-1] * 1000.0:.0f}ms at frame {worst + 1}, {slow} over "
                 f"{SETTLE_FRAME * 1000.0:.0f}ms, whole {whole:.2f}s)")
 
     async def settle_skin(self) -> float:
@@ -1694,6 +1695,8 @@ class EbsSimulate:
         self.set_legs(2)
         for _ in self._collide_steps():
             await self._wait_frame()
+        if DETAIL and self._result.get("ok"):
+            await self.settle("markers")
         self.next_leg()
         return self._done(self._result)
 
@@ -3116,32 +3119,52 @@ class EbsSimulate:
         cylinder.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         cylinder.AddTranslateOp().Set(Gf.Vec3d(centre[0], centre[1], centre[2]))
 
-    def clear_all(self) -> dict:
-        """Clear 버튼이 하는 일 전부. 어디서 얼마가 걸렸는지 한 줄로 찍는다
+    def _clear_work(self) -> tuple:
+        """Clear 가 치우는 차례. 머티리얼이 맨 앞이다
 
         strip_skin  제일 먼저 푼다. 장비 전체를 다시 그리게 만드는 일이라,
                  뒤에 두면 앞에서 지운 것까지 같은 파동에 얹혀 늦어진다
         """
-        self._begin("clear")
-        for phase, work in (("skin", self.strip_skin),
-                            ("overlay", self.clear_markers),
-                            ("overlay", self.clear_port_lasers),
-                            ("overlay", self.clear_sweep),
-                            ("camera", self.release_camera),
-                            ("place", self.hide_ebs)):
-            with self._phase(phase), self._stage_timer(work.__name__):
+        return (("skin", self.strip_skin),
+                ("overlay", self.clear_markers),
+                ("overlay", self.clear_port_lasers),
+                ("overlay", self.clear_sweep),
+                ("camera", self.release_camera),
+                ("place", self.hide_ebs))
+
+    def _clear_run(self, work) -> None:
+        """그 차례만 돈다. 하나가 터져도 나머지는 돈다"""
+        for phase, one in work:
+            with self._phase(phase), self._stage_timer(one.__name__):
                 try:
-                    work()
+                    one()
                 except Exception as e:
                     self._note(f"clear failed at {phase}: "
                                f"{type(e).__name__}: {e}")
+
+    def clear_all(self) -> dict:
+        """Clear 버튼이 하는 일 전부. 어디서 얼마가 걸렸는지 한 줄로 찍는다"""
+        self._begin("clear")
+        self._clear_run(self._clear_work())
         return self._done(self._payload(True, "cleared"))
 
     async def clear_all_async(self) -> dict:
-        """clear_all 인데 화면이 잦아들 때까지 기다려 그 시간까지 담는다"""
-        told = self.clear_all()
-        await self.settle_skin()
-        return told
+        """clear_all 인데 화면이 잦아들 때까지 기다려 그 시간까지 담는다
+
+        DETAIL 이면 머티리얼을 푼 자리에서 한 번 끊어 재고, 나머지를 치운
+        뒤에 또 잰다. 멈추는 프레임이 둘 중 어느 쪽 것인지 가른다
+        """
+        if not DETAIL:
+            told = self.clear_all()
+            await self.settle_skin()
+            return told
+        self._begin("clear")
+        work = self._clear_work()
+        self._clear_run(work[:1])
+        await self.settle("unbind")
+        self._clear_run(work[1:])
+        await self.settle("rest")
+        return self._done(self._payload(True, "cleared"))
 
     def clear_markers(self) -> None:
         """그린 것을 오버레이에게 지우게 하고 판정도 놓는다"""
