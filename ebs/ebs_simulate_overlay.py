@@ -22,14 +22,14 @@ HOME   = "원점"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
 
-GRIP_HEAD  = 0.3
-GRIP_THICK = 0.175
-GRIP_FLARE = 0.5
+GRIP_HEAD  = 0.6
+GRIP_THICK = 0.175 / 3.0
+GRIP_FLARE = 0.25
 GRIP_PICK  = 14.0
 
 GRIP_IDLE, GRIP_HOT, GRIP_HOLD = "idle", "hot", "hold"
 GRIP_COLORS = {GRIP_IDLE: (1.0, 0.78, 0.20),
-               GRIP_HOT:  (1.0, 0.93, 0.62),
+               GRIP_HOT:  (1.0, 1.0, 1.0),
                GRIP_HOLD: (0.45, 1.0, 0.65)}
 
 SAID = set()
