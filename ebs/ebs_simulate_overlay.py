@@ -31,15 +31,6 @@ GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
                GRIP_HOLD: (1.0, 0.92, 0.35)}
 
-SAID = set()
-
-
-def once(line: str) -> None:
-    """같은 말을 두 번 안 찍는다. 매 프레임 도는 길에서 쓴다"""
-    if line not in SAID:
-        SAID.add(line)
-        print(f"[ebs] {line}")
-
 CLASH = "충돌"
 GAP   = "여유"
 TIGHT = "간섭"
@@ -314,8 +305,6 @@ class EbsSimulateOverlay:
         said = EbsSimulateService.get_verdict()
         self.clear()
         if not said or self._stack is None:
-            once(f"nothing to draw: verdict {bool(said)}, stack "
-                 f"{self._stack is not None}")
             return False
         try:
             with self._stack:
@@ -774,7 +763,6 @@ class EbsSimulateGrip:
         self._state = ""
         self._from = None
         self._was = 0.0
-        self._told = True
 
     @staticmethod
     def _stage():
@@ -834,7 +822,7 @@ class EbsSimulateGrip:
                     self._paint._gap_head(stage, f"{self._root}/head_{name}",
                                           tip, back, skin, colour, high, wide)
         except Exception as e:
-            once(f"could not draw the grip: {e}")
+            print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
 
@@ -855,14 +843,10 @@ class EbsSimulateGrip:
             return False
         if not self._hit(x, y):
             return False
-        clock = time.perf_counter()
         self._from = x
         self._was = EbsSimulateService.get_nudge()
-        self._told = False
-        EbsSimulateService.mark_move(clock)
         EbsSimulateService.hold_clash(False)
         self._draw(GRIP_HOLD)
-        EbsSimulateService.mark_grabbed(time.perf_counter() - clock)
         return True
 
     def drag(self, x: float, y: float) -> bool:
@@ -874,12 +858,6 @@ class EbsSimulateGrip:
             metres = (x - self._from) / per * self._unit
             EbsSimulateService.slide(self._was + metres)
             EbsSimulateOverlay.restate()
-            if not self._told:
-                self._told = True
-                try:
-                    asyncio.ensure_future(EbsSimulateService.watch_move())
-                except Exception as e:
-                    once(f"cannot watch the first grip move: {e}")
         return True
 
     def release(self) -> None:

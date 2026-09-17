@@ -259,18 +259,13 @@ LEAD_ROOM   = 0.05
 
 GRID = 1
 FADE_OTHERS = False
-GRIP_WATCH   = 3
 SETTLE_GUESS = 2.0
 SETTLE_FRAME = 0.02
 SETTLE_CALM  = 3
 SETTLE_MOST  = 600
-SKIN_TELL = (("roots", "뿌리"), ("meshes", "메시"), ("bound", "바인드"),
-             ("undone", "언바인드"), ("opened", "열린채"))
-SKIN_SPENT = (("plan", "계획"), ("open", "열기"), ("bind", "걸기"),
-              ("close", "걷기"), ("settle", "정착"))
-PHASES = (("camera", "카메라셋"), ("place", "EBS식립"),
-          ("skin", "머티리얼"), ("collide", "충돌연산"),
-          ("overlay", "UI·기즈모"))
+PHASES = (("camera", "Camera"), ("place", "Place"),
+          ("skin", "Material"), ("collide", "Collision"),
+          ("overlay", "Overlay"))
 
 LOOKS = "Looks"
 SHADER_TYPE = "Shader"
@@ -341,7 +336,6 @@ class EbsSimulate:
         self._skin_worn: tuple = ()
         self._skin_wrote: list = []
         self._skin_opened: list = []
-        self._skin_told: dict = {}
         self._phases: dict = {}
         self._skin_use: bool = False
         self._nudge: float = 0.0
@@ -351,10 +345,6 @@ class EbsSimulate:
         self._doing: str = ""
         self._legs: int = 1
         self._leg: int = 0
-        self._moves: int = 0
-        self._move_from: dict = {}
-        self._move_clock: float = 0.0
-        self._move_grab: float = 0.0
         self._settled: float = 0.0
         self._spent: dict = {}
         self._shares: dict = {}
@@ -507,55 +497,6 @@ class EbsSimulate:
     def hold_camera(self, on: bool) -> None:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         self._camera.hold(on)
-
-    def _ours_now(self) -> dict:
-        """우리가 그린 프림이 뿌리마다 몇 개인가. 손잡이 보고에만 쓴다"""
-        stage = self._get_stage()
-        told = {}
-        if stage is None:
-            return told
-        for root in (MARKER_ROOT, GRIP_ROOT):
-            one = stage.GetPrimAtPath(root)
-            try:
-                told[root] = (sum(1 for _ in Usd.PrimRange(one))
-                              if one is not None and one.IsValid() else 0)
-            except Exception:
-                told[root] = 0
-        return told
-
-    def mark_move(self, clock: float = 0.0) -> None:
-        """손잡이를 잡은 순간의 프림 수를 적어 둔다. 민 뒤와 견준다"""
-        if self._moves >= GRIP_WATCH:
-            return
-        self._move_from = self._ours_now()
-        self._move_clock = clock or time.perf_counter()
-        self._move_grab = 0.0
-
-    def mark_grabbed(self, spent: float) -> None:
-        """잡는 손질 하나에 걸린 시간. 미는 데까지와 갈라 봐야 한다"""
-        if self._moves < GRIP_WATCH:
-            self._move_grab = float(spent)
-
-    async def watch_move(self) -> None:
-        """처음 민 뒤 무엇이 남았는지 한 줄로 찍는다. 몇 번만 찍고 만다
-
-        파이썬 구간은 0.0x 로 나왔다. 그러면 남는 것은 그 뒤 프레임이고,
-        프레임을 무겁게 만드는 것은 새로 생긴 프림이다. 둘을 같이 적는다
-        """
-        if self._moves >= GRIP_WATCH:
-            return
-        self._moves += 1
-        turn, before = self._moves, dict(self._move_from)
-        spent = time.perf_counter() - self._move_clock
-        calm = await self.settle("overlay")
-        after = self._ours_now()
-        grew = " · ".join(
-            f"{root.rsplit('/', 1)[-1]} {after.get(root, 0) - before.get(root, 0):+d}"
-            f"({after.get(root, 0)})"
-            for root in (MARKER_ROOT, GRIP_ROOT) if root in after)
-        print(f"[ebs] 손잡이 {turn}번째 | 그랩 {self._move_grab:.2f}s"
-              f" · 잡고민뒤 {spent:.2f}s · 정착 {calm:.2f}s"
-              + (f" · 프림 {grew}" if grew else ""))
 
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
@@ -815,7 +756,6 @@ class EbsSimulate:
             return False
         try:
             with self._phase("skin"), self._stage_timer("skin: unbind"):
-                started = time.perf_counter()
                 picked = [one for one in
                           (stage.GetPrimAtPath(path) for path in wrote)
                           if one is not None and one.IsValid()]
@@ -824,10 +764,6 @@ class EbsSimulate:
                         for one in picked:
                             UsdShade.MaterialBindingAPI(
                                 one).UnbindAllBindings()
-                self._skin_told = {"what": "머티리얼 걷기",
-                                   "undone": len(picked),
-                                   "opened": len(self._skin_opened),
-                                   "close": time.perf_counter() - started}
         except Exception as e:
             self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
@@ -895,7 +831,6 @@ class EbsSimulate:
         """머티리얼이 정착할 때까지. 걸린 시간을 다음 진행도의 눈금으로 쓴다"""
         spent = await self.settle("skin")
         self._settled = spent or self._settled
-        self._skin_told["settle"] = spent
         return spent
 
     def warm_skin(self) -> bool:
@@ -1013,27 +948,19 @@ class EbsSimulate:
         if material is None:
             self._loud(f"skin: could not resolve {self._skin}")
             return False
-        told = {"what": "머티리얼"}
         try:
             with self._phase("skin"):
-                clock = time.perf_counter()
                 with self._stage_timer("skin: plan"):
                     roots, meshes = self._skin_plan(prim)
-                told["roots"], told["meshes"] = len(roots), len(meshes)
-                told["plan"], clock = time.perf_counter() - clock, time.perf_counter()
                 if roots:
                     with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
-                    told["open"], clock = (time.perf_counter() - clock,
-                                           time.perf_counter())
                 with self._stage_timer("skin: bind"):
-                    told["bound"] = self._bind_all(stage, material, meshes)
-                told["bind"] = time.perf_counter() - clock
+                    self._bind_all(stage, material, meshes)
         except Exception as e:
             self._loud(f"skin: could not bind {self._skin}: "
                        f"{type(e).__name__}: {e}")
             return False
-        self._skin_told = told
         if not self._skin_wrote:
             self._loud(f"skin: no mesh under {worn[0]} to bind")
             return False
@@ -1175,7 +1102,7 @@ class EbsSimulate:
         if mode in (PRECISION_BBOX, PRECISION_MESH, PRECISION_TRI):
             self._precision = mode
         else:
-            print(f"[ebs] unknown precision '{mode}', keeping {self._precision}")
+            self._note(f"unknown precision '{mode}', keeping {self._precision}")
 
     def set_offset_scale(self, mode: str) -> None:
         """포트 offset 을 거리로 바꾸는 방식
@@ -1258,10 +1185,8 @@ class EbsSimulate:
         self._notes = []
         self._blocked = ""
         self._phases = {}
-        self._skin_told = {}
         self._legs = 1
         self._leg = 0
-        self._moves = 0
         self._started = time.perf_counter()
 
     def _done(self, payload: dict) -> dict:
@@ -1272,7 +1197,7 @@ class EbsSimulate:
     def _fail(self, key: str, reason: str, short: str = ""):
         """실패 사유를 적고 None. 부른 쪽이 payload 로 감싼다"""
         self._why = short or reason
-        print(f"[ebs] {key}: {reason}")
+        self._note(f"{key}: {reason}")
         return None
 
     @contextmanager
@@ -1292,35 +1217,18 @@ class EbsSimulate:
         self._phases[name] = self._phases.get(name, 0.0) + float(spent)
 
     def phase_line(self) -> str:
-        """이번 단계에 어디서 얼마나 걸렸나. 한 줄이면 된다"""
+        """단계 이름과 걸린 시간. 콘솔에 남기는 것은 이 한 줄뿐이다"""
         spent = time.perf_counter() - self._started
-        parts = " | ".join(f"{label} {self._phases[key]:.2f}"
+        parts = " | ".join(f"{label} : {self._phases[key]:.2f}s"
                            for key, label in PHASES
                            if self._phases.get(key, 0.0) >= 0.005)
-        return (f"[ebs] {self._step or 'step'} {spent:.2f}s"
+        return (f"[ebs] {self._step or 'step'} : {spent:.2f}s"
                 + (f" | {parts}" if parts else ""))
 
-    def skin_line(self) -> str:
-        """머티리얼을 어디에 몇 개 걸고 어디서 얼마나 걸렸나. 한 줄이면 된다"""
-        told = self._skin_told
-        if not told:
-            return ""
-        counts = " · ".join(f"{label} {told[key]}"
-                            for key, label in SKIN_TELL if told.get(key))
-        spent = " · ".join(f"{label} {told[key]:.2f}s"
-                           for key, label in SKIN_SPENT
-                           if told.get(key, 0.0) >= 0.005)
-        parts = [one for one in (counts, spent) if one]
-        return (f"[ebs] {told.get('what', 'skin')}"
-                + (" | " + " | ".join(parts) if parts else ""))
-
     def say_phases(self) -> str:
-        """단계 한 줄을 찍는다. 머티리얼이 한 일이 있으면 그것도 한 줄"""
+        """단계 한 줄을 찍고 그대로 돌려준다"""
         line = self.phase_line()
         print(line)
-        skin = self.skin_line()
-        if skin:
-            print(skin)
         return line
 
     def _note(self, text: str) -> None:
@@ -1970,11 +1878,8 @@ class EbsSimulate:
         rest = ", ".join(f"{name} {self._spent.get(name, 0.0):.2f}"
                          for name, _ in COLLIDE_STEPS
                          if name not in OUTER_STEPS and name not in INNER_STEPS)
-        detail = "; ".join(f"{name} {spent:.2f}" for name, spent in self._timings
-                           if spent >= 0.05)
-        return (f"[ebs] collide: outer {spent(OUTER_STEPS, self._outer)}, "
-                f"inner {spent(INNER_STEPS, self._inner)}, {rest}"
-                + (f"\n[ebs] collide detail: {detail}" if detail else ""))
+        return (f"collide: outer {spent(OUTER_STEPS, self._outer)}, "
+                f"inner {spent(INNER_STEPS, self._inner)}, {rest}")
 
     def _learn_shares(self) -> None:
         """이번에 걸린 시간으로 다음 번 몫을 잡는다. 첫 번은 COLLIDE_STEPS"""
@@ -5014,13 +4919,6 @@ class EbsSimulate:
         told = self.clear_all()
         await self.settle_skin()
         return told
-
-    def _timing_line(self, what: str) -> str:
-        """이번 단계의 구간별 시간 한 줄. 0.05 초 밑은 안 적는다"""
-        detail = "; ".join(f"{name} {spent / 1000.0:.2f}"
-                           for name, spent in self._timings
-                           if spent >= 50.0)
-        return f"[ebs] {what} detail: {detail or 'nothing over 0.05s'}"
 
     def clear_markers(self) -> None:
         """그린 것을 오버레이에게 지우게 하고 판정도 놓는다"""

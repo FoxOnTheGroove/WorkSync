@@ -12,7 +12,6 @@ class EbsExtension(omni.ext.IExt):
 
     def on_startup(self, ext_id):
         """익스텐션 시작"""
-        print("[ebs] startup")
         EbsSimulateService.initialize()
         self._ui = EbsDummyUI()
         self._ui.build_ui()
@@ -67,13 +66,11 @@ class EbsExtension(omni.ext.IExt):
         if window is not None and not window.visible and not self._shown:
             window.visible = True
             self._shown = True
-            print("[ebs] the layout hid the window, showing it again")
         if self._ui.dock_right() or self._frames >= RAISE_FRAMES:
             self._raise = None
 
     def on_shutdown(self):
         """익스텐션 종료"""
-        print("[ebs] shutdown")
         self._raise = None
         self._stage = None
         if self._ui:

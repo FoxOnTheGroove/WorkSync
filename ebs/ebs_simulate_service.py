@@ -49,24 +49,6 @@ class EbsSimulateService:
         cls._busy = ""
 
     @classmethod
-    def mark_move(cls, clock=0.0):
-        """손잡이를 잡은 순간을 적어 둔다. 처음 민 뒤 보고에 쓴다"""
-        if cls._simulate:
-            cls._simulate.mark_move(clock)
-
-    @classmethod
-    def mark_grabbed(cls, spent):
-        """잡는 손질 하나에 걸린 시간을 적어 둔다"""
-        if cls._simulate:
-            cls._simulate.mark_grabbed(spent)
-
-    @classmethod
-    async def watch_move(cls):
-        """처음 민 뒤 무엇이 남았는지 한 줄로 찍는다"""
-        if cls._simulate:
-            await cls._simulate.watch_move()
-
-    @classmethod
     def settle(cls, name="overlay"):
         """그린 것이 화면에 다 뜰 때까지 기다린다. 작업중 표가 그때까지 선다"""
         return cls._simulate.settle(name)
