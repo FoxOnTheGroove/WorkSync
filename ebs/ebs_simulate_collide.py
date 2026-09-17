@@ -77,60 +77,44 @@ class EbsSimulateCollide:
 
     @classmethod
     def _build_cells(cls, sim, box: Gf.Range3d) -> dict:
-        """EBS 세 면을 칸으로 쪼갠다. 칸마다 상자와 사각형"""
+        """EBS 세 면 앞의 상자와 사각형. 면마다 하나씩
+
+        면을 더 쪼개지 않는다. 한 면이 걸렸나만 보면 되고, 쪼개 봐야 늘
+        한 칸이라 행과 열을 세던 것이 값만 하고 아무것도 안 바꿨다
+        """
         up_axis = 1 if UsdGeom.GetStageUpAxis(sim._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis
         side_axis = 3 - up_axis - front_axis
         t = cls._probe_depth(box)
         lo, hi = box.GetMin(), box.GetMax()
-        extent = [hi[i] - lo[i] for i in range(3)]
-        unit = max(extent) / GRID if max(extent) > 0 else 1.0
-        divisions = [max(1, int(round(extent[i] / unit))) if unit > 0 else 1
-                     for i in range(3)]
-
         cells = {}
-        shapes = {}
         faces = {}
 
         def make(fixed_axis, outward, row_axis, col_axis):
-            """한 면을 칸으로 나눈다"""
-            rows, cols = divisions[row_axis], divisions[col_axis]
-            out = []
-            row_lo, row_hi = lo[row_axis], hi[row_axis]
-            col_lo, col_hi = lo[col_axis], hi[col_axis]
-            row_step = (row_hi - row_lo) / rows
-            col_step = (col_hi - col_lo) / cols
-            for r in range(rows):
-                for c in range(cols):
-                    cmin, cmax = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-                    cmin[row_axis] = row_hi - (r + 1) * row_step
-                    cmax[row_axis] = row_hi - r * row_step
-                    cmin[col_axis] = col_lo + c * col_step
-                    cmax[col_axis] = col_lo + (c + 1) * col_step
-                    if outward > 0:
-                        surface = hi[fixed_axis]
-                        cmin[fixed_axis], cmax[fixed_axis] = surface, surface + t
-                    else:
-                        surface = lo[fixed_axis]
-                        cmin[fixed_axis], cmax[fixed_axis] = surface - t, surface
+            """한 면 앞의 얇은 상자 하나와 그 면의 네 점"""
+            cmin, cmax = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+            for axis in (row_axis, col_axis):
+                cmin[axis], cmax[axis] = lo[axis], hi[axis]
+            surface = hi[fixed_axis] if outward > 0 else lo[fixed_axis]
+            if outward > 0:
+                cmin[fixed_axis], cmax[fixed_axis] = surface, surface + t
+            else:
+                cmin[fixed_axis], cmax[fixed_axis] = surface - t, surface
 
-                    quad = []
-                    for r_end, c_end in ((0, 0), (0, 1), (1, 1), (1, 0)):
-                        corner = [0.0, 0.0, 0.0]
-                        corner[fixed_axis] = surface
-                        corner[row_axis] = cmax[row_axis] if r_end else cmin[row_axis]
-                        corner[col_axis] = cmax[col_axis] if c_end else cmin[col_axis]
-                        quad.append(tuple(corner))
-                    out.append((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad))
-            return out, (rows, cols), (fixed_axis, outward,
-                                       hi[fixed_axis] if outward > 0 else lo[fixed_axis],
-                                       row_axis, col_axis)
+            quad = []
+            for r_end, c_end in ((0, 0), (0, 1), (1, 1), (1, 0)):
+                corner = [0.0, 0.0, 0.0]
+                corner[fixed_axis] = surface
+                corner[row_axis] = cmax[row_axis] if r_end else cmin[row_axis]
+                corner[col_axis] = cmax[col_axis] if c_end else cmin[col_axis]
+                quad.append(tuple(corner))
+            return ((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad),
+                    (fixed_axis, outward, surface, row_axis, col_axis))
 
         for face, args in ((FACE_RIGHT,   (side_axis, +1, up_axis, front_axis)),
                            (FACE_LEFT,    (side_axis, -1, up_axis, front_axis)),
                            (FACE_CEILING, (up_axis,   +1, front_axis, side_axis))):
-            cells[face], shapes[face], faces[face] = make(*args)
-        sim._grid_shape = shapes
+            cells[face], faces[face] = make(*args)
         sim._face_planes = faces
         return cells
 
@@ -145,12 +129,11 @@ class EbsSimulateCollide:
         beside, visited = cls._gather_nearby(sim, stage, cache, search, skip, roots)
         candidates = [(path, box, sides) for path, box in beside]
 
-        top = cells.get(FACE_CEILING) or []
-        if top:
-            whole = cls._union(top)
+        top = cells.get(FACE_CEILING)
+        if top is not None:
             above, seen = cls._gather_nearby(
                 sim, stage, cache,
-                Gf.Range3d(whole.GetMin() - margin, whole.GetMax() + margin),
+                Gf.Range3d(top.GetMin() - margin, top.GetMax() + margin),
                 skip)
             visited += seen
             candidates += [(path, box, (FACE_CEILING,)) for path, box in above]
@@ -343,7 +326,7 @@ class EbsSimulateCollide:
                      "min_gap": least, "at": world(surface), "stale": False,
                      "from": None, "to": None, "lead": None, "spot": None,
                      "tick": None}
-            hit = bool(any(cells.get(face, [])))
+            hit = bool(cells.get(face))
             found = distances.get(face) or {}
             at = found.get("at")
             reach = found.get("distance")
@@ -1407,7 +1390,7 @@ class EbsSimulateCollide:
     @classmethod
     def check_collision(cls, sim, ebs_prim: Usd.Prim, exclude: list = None,
                         cache=None, roots: list = None) -> dict:
-        """EBS 좌/우/천장 세 면의 칸마다 닿았나 본다"""
+        """EBS 좌/우/천장 세 면이 닿았나 본다. 면마다 참 거짓 하나"""
         stage = sim._get_stage()
         if stage is None:
             return {face: [] for face in FACES}
@@ -1420,13 +1403,12 @@ class EbsSimulateCollide:
             to_world = ebs_bbox.GetMatrix()
             world_box = ebs_bbox.ComputeAlignedRange()
         if local_box.IsEmpty():
-            return {face: [] for face in FACES}
+            return {face: False for face in FACES}
 
         with sim._stage_timer("faces: search"):
             cells = {
-                face: [Gf.BBox3d(rng, to_world).ComputeAlignedRange()
-                       for rng, _ in boxes]
-                for face, boxes in cls._build_cells(sim, local_box).items()
+                face: Gf.BBox3d(rng, to_world).ComputeAlignedRange()
+                for face, (rng, _) in cls._build_cells(sim, local_box).items()
             }
 
         with sim._stage_timer("faces: search"):
@@ -1443,27 +1425,25 @@ class EbsSimulateCollide:
                    f"EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
         sim._note(f"EBS local box {tuple(round(v, 3) for v in local_box.GetMin())} .. "
                    f"{tuple(round(v, 3) for v in local_box.GetMax())} "
-                   f"(the cells tile exactly this)")
+                   f"(each face patch covers one side of this)")
         sim._note(f"EBS world box {tuple(round(v, 2) for v in world_box.GetMin())} .. "
                    f"{tuple(round(v, 2) for v in world_box.GetMax())}")
         sim._note(f"visited {visited} prims, {coarse} meshes within the probe, "
                    f"skipping {skip}")
 
         with sim._stage_timer("faces: detect"):
-            result = {face: [False] * len(boxes) for face, boxes in cells.items()}
+            result = {face: False for face in cells}
             hits = {}
             sim._blockers = {}
             triangle_tests = 0
             boxed_only = set()
-            flat = [(face, i, cell,
-                     tuple(cell.GetMin()), tuple(cell.GetMax()))
-                    for face, boxes in cells.items() for i, cell in enumerate(boxes)]
+            flat = [(face, cell, tuple(cell.GetMin()), tuple(cell.GetMax()))
+                    for face, cell in cells.items()]
 
             for path, box, mine in candidates:
                 targets = [entry for entry in flat
-                           if entry[0] in mine
-                           and not result[entry[0]][entry[1]]
-                           and cls._overlaps(box, entry[2])]
+                           if entry[0] in mine and not result[entry[0]]
+                           and cls._overlaps(box, entry[1])]
                 if not targets:
                     continue
 
@@ -1472,26 +1452,25 @@ class EbsSimulateCollide:
                 if triangles:
                     triangle_tests += len(triangles)
                     for triangle, lo, hi in triangles:
-                        remaining = [e for e in targets if not result[e[0]][e[1]]]
+                        remaining = [e for e in targets if not result[e[0]]]
                         if not remaining:
                             break
-                        for face, i, cell, edge, far in remaining:
+                        for face, cell, edge, far in remaining:
                             if (lo[0] <= far[0] and hi[0] >= edge[0]
                                     and lo[1] <= far[1] and hi[1] >= edge[1]
                                     and lo[2] <= far[2] and hi[2] >= edge[2]
                                     and cls._triangle_hits_box(triangle, cell)):
-                                result[face][i] = True
+                                result[face] = True
                                 sim._blockers.setdefault(face, path)
-                                hits.setdefault(path.rsplit("/", 1)[-1], []).append(
-                                    f"{face}[{i}]")
+                                hits.setdefault(path.rsplit("/", 1)[-1], []).append(face)
                     continue
 
                 if sim._precision == PRECISION_TRI:
                     boxed_only.add(path)
-                for face, i, _, _, _ in targets:
-                    result[face][i] = True
+                for face, _, _, _ in targets:
+                    result[face] = True
                     sim._blockers.setdefault(face, path)
-                    hits.setdefault(path.rsplit("/", 1)[-1], []).append(f"{face}[{i}]")
+                    hits.setdefault(path.rsplit("/", 1)[-1], []).append(face)
 
             if triangle_tests:
                 sim._note(f"{triangle_tests} triangle tests")
@@ -1585,11 +1564,6 @@ class EbsSimulateCollide:
                 "tests": tests}
 
     @classmethod
-    def get_grid_shape(cls, sim) -> dict:
-        """면마다 칸이 몇 줄 몇 칸인지"""
-        return dict(sim._grid_shape)
-
-    @classmethod
     def measure_faces(cls, sim, ebs_prim: Usd.Prim, cells: dict,
                       exclude: list = None, cache=None, roots: list = None) -> dict:
         """면마다 거리. 안 막혔으면 바깥으로 여유, 막혔으면 안으로 파고든 깊이"""
@@ -1609,7 +1583,7 @@ class EbsSimulateCollide:
         with sim._stage_timer("clearance: search"):
             wanted = {}
             for face, (axis, outward, coord, _, _) in sim._face_planes.items():
-                deep = bool(any(cells.get(face, [])))
+                deep = bool(cells.get(face))
                 way = -outward if deep else outward
                 span = (local_box.GetMax()[axis] - local_box.GetMin()[axis]
                         if deep else reach)

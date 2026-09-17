@@ -212,7 +212,6 @@ class EbsSimulate:
         self._parts: dict = {}
         self._boxed: dict = {}
         self._visible: dict = {}
-        self._grid_shape: dict = {}
         self._port_world: dict = {}
         self._port_rail_z: float = 0.0
         self._face_planes: dict = {}
@@ -439,7 +438,7 @@ class EbsSimulate:
     def _slid_cells(self) -> dict:
         """지금 판정에서 면마다 막혔나. 그린 판 색에만 쓴다"""
         marks = {mark["face"]: mark for mark in self._verdict.get("marks") or ()}
-        return {face: [marks.get(face, {}).get("state") == STATE_CLASH]
+        return {face: marks.get(face, {}).get("state") == STATE_CLASH
                 for face in FACES}
 
     def _slide_marks(self, shift: float, box) -> None:
@@ -1821,7 +1820,7 @@ class EbsSimulate:
         apart = [self._target["ebs"], self._target["equipment"]]
         skip = [str(p.GetPath()) for p in apart if p and p.IsValid()]
         bounds = Collide._bounds_cache(self)
-        cells = {face: [] for face in FACES}
+        cells = {face: False for face in FACES}
         distances = {}
         hit_count = 0
         if not self._outer:
@@ -1843,7 +1842,7 @@ class EbsSimulate:
             with self._spending("faces"):
                 cells = Collide.check_collision(self, self._target["ebs"], exclude=apart,
                                              cache=bounds, roots=roots)
-                hit_count = sum(sum(1 for c in v if c) for v in cells.values())
+                hit_count = sum(1 for one in cells.values() if one)
             self._reached("faces")
             yield
 
@@ -1913,7 +1912,7 @@ class EbsSimulate:
             told = self.get_result(name)["reason"]
         else:
             told = ("No collision" if hit_count == 0
-                    else f"{hit_count} cell(s) blocked")
+                    else f"{hit_count} face(s) blocked")
             if meeting["hit"]:
                 told += ", and through the equipment"
         self._payload(
@@ -2043,8 +2042,7 @@ class EbsSimulate:
             "inside": bool(inside),
             "boxes": list(boxes or ()),
             "faces": blocked,
-            "blocked": sum(sum(1 for c in cells.get(face, []) if c)
-                           for face in FACES),
+            "blocked": sum(1 for face in FACES if cells.get(face)),
             "placeable": not inside and not blocked,
         }
 
@@ -2975,14 +2973,11 @@ class EbsSimulate:
         tight = {mark["face"] for mark in marks or ()
                  if mark.get("state") == STATE_TIGHT}
         sheets = []
-        for face, boxes in built.items():
-            flags = ([True] * len(boxes) if face in tight
-                     else cells.get(face, []))
-            for i, (_, quad) in enumerate(boxes):
-                points = [tuple(to_world.Transform(Gf.Vec3d(*corner)))
-                          for corner in quad]
-                sheets.append((f"{face}_{i}", points,
-                               bool(i < len(flags) and flags[i])))
+        for face, (_, quad) in built.items():
+            points = [tuple(to_world.Transform(Gf.Vec3d(*corner)))
+                      for corner in quad]
+            sheets.append((face, points,
+                           bool(face in tight or cells.get(face))))
         return sheets
 
     def _marks(self):
@@ -3252,7 +3247,6 @@ class EbsSimulate:
             "anchor": str(anchor.GetPath()) if anchor else "",
             "cells": cells,
             "hit_count": hit_count,
-            "grid": dict(self._grid_shape),
             "distances": distances or {},
             "rows": rows or [],
             "equipment_hit": equipment_hit or {"hit": False, "pairs": [],
