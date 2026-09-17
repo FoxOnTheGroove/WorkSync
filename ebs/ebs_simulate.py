@@ -14,7 +14,7 @@ from .ebs_simulate_camera import EbsSimulateCamera
 from .ebs_simulate_shared import *
 from .ebs_simulate_collide import EbsSimulateCollide as Collide
 
-__all__ = ["EbsSimulate"]
+__all__ = ["EbsSimulate", "instance", "forget"]
 
 def _remote(path: str) -> bool:
     """omniverse:// 같은 원격 경로인가"""
@@ -3262,3 +3262,25 @@ class EbsSimulate:
             "total_ms": (time.perf_counter() - self._started) * 1000.0,
         }
         return dict(self._result)
+
+
+_ONE = None
+
+
+def instance():
+    """이 킷앱이 쓰는 EbsSimulate 하나. 없으면 그 자리에서 만든다
+
+    서비스도 창도 오버레이도 이것을 본다. 누가 먼저 부르든 같은 것이 나온다
+    """
+    global _ONE
+    if _ONE is None:
+        _ONE = EbsSimulate()
+    return _ONE
+
+
+def forget() -> None:
+    """들고 있던 것을 치우고 놓는다. 익스텐션이 내려갈 때 한 번"""
+    global _ONE
+    if _ONE is not None:
+        _ONE.teardown()
+    _ONE = None
