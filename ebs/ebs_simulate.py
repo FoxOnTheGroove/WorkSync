@@ -11,32 +11,11 @@ from contextlib import contextmanager, nullcontext, redirect_stdout
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 import omni.usd
 
-from .ebs_simulate_camera import EbsSimulateCamera, CAMERA_PATH
+from .ebs_simulate_camera import EbsSimulateCamera
+from .ebs_simulate_shared import *
+from .ebs_simulate_collide import EbsSimulateCollide as Collide
 
 __all__ = ["EbsSimulate"]
-
-EQP_PREFIX = "EQP_"
-PORT_ID_KEY = "port-id"
-OFFSET_KEY  = "offset"
-CADX_KEY    = "cad-x"
-CADY_KEY    = "cad-y"
-NEXT_KEY    = "next-address"
-PULS_KEY    = "distance-puls"
-ADDR_PATTERN = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
-PORT_PATTERN = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
-CACHE_SUFFIX  = ".ebscache.json"
-CACHE_VERSION = 1
-READ_BLOCK    = 8 << 20
-CAD_PER_UNIT    = 100.0 / 3.0
-CAD_SLACK       = 0.1
-OFFSET_PER_UNIT = 100000.0
-RAIL_PREFIX = "rail_"
-
-SCALE_FIXED = "fixed"
-SCALE_PULS  = "puls"
-SCALE_SNAP  = "snap"
-SCALE_MODES = (SCALE_FIXED, SCALE_PULS, SCALE_SNAP)
-
 
 def _remote(path: str) -> bool:
     """omniverse:// 같은 원격 경로인가"""
@@ -171,138 +150,6 @@ class _PortScan:
     def close(self):
         """거둔 포트 표"""
         return self.found
-
-
-try:
-    _EVERY_CHILD = Usd.TraverseInstanceProxies()
-except Exception:
-    _EVERY_CHILD = None
-
-
-def _children(prim):
-    """자식 프림. 인스턴스 안쪽까지 본다"""
-    if _EVERY_CHILD is not None:
-        try:
-            return prim.GetFilteredChildren(_EVERY_CHILD)
-        except Exception:
-            pass
-    return prim.GetChildren()
-
-SKIP_TYPES = frozenset({"Material", "Shader", "NodeGraph", "GeomSubset", "Camera"})
-
-CUBE_TYPE = "Cube"
-CUBE_QUADS = ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1),
-              (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3))
-
-GEOMETRY_TYPES = frozenset({
-    "Mesh", "Points", "BasisCurves", "NurbsCurves",
-    "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
-})
-
-VERDICT_HEIGHT = 0.8
-GRIP_HEIGHT   = 0.3
-OFFSET_HEIGHT = 0.25
-GRIP_WIDE   = 1.5 / 8.0
-GRIP_TALL   = 1.0 / 16.0
-CLASH_HEIGHT   = 0.45
-NEIGHBOUR_REACH = 1.5
-GROUP_NAMES = ("AMH", "Construction")
-
-STATE_CLASH = "clash"
-STATE_TIGHT = "tight"
-STATE_CLEAR = "clear"
-
-MIN_GAP_CEILING = 0.1
-MIN_GAP_SIDE = 0.6
-
-
-MARKER_ROOT    = "/EbsCollisionMarkers"
-GRIP_ROOT      = "/EbsGrip"
-
-LASER_ROOT     = "/EbsPortLasers"
-LASER_COLOR    = (1.0, 0.05, 0.05)
-LASER_COLOR_0  = (1.0, 0.75, 0.0)
-LASER_RADIUS   = 0.0013
-
-SWEEP_ROOT     = "/EbsPortSweep"
-SWEEP_COLOR_PORT = LASER_COLOR
-SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
-
-
-SKIN_ROOT      = "/EbsSkin"
-SKIN_NAME      = "M_skin"
-
-OURS = (MARKER_ROOT, GRIP_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH, SKIN_ROOT)
-OURS_UNDER = tuple(p + "/" for p in OURS)
-NOW = Usd.TimeCode.Default()
-
-FACE_LEFT    = "left"
-FACE_RIGHT   = "right"
-FACE_CEILING = "ceiling"
-FACES = (FACE_LEFT, FACE_CEILING, FACE_RIGHT)
-
-LEAD_FACES  = FACES
-
-RESULT_ORDER  = (FACE_LEFT, FACE_RIGHT, FACE_CEILING)
-RESULT_INSIDE = "inside"
-
-COLLIDE_STEPS = (("warm", 50.0), ("sides", 2.0), ("faces", 12.0),
-                 ("clearance", 8.0), ("equipment", 12.0), ("verdict", 2.0),
-                 ("markers", 14.0))
-NUDGE_LIMIT = 1.0
-
-OUTER_STEPS = ("warm", "sides", "faces", "clearance")
-INNER_STEPS = ("equipment",)
-WARM_CHUNK = 40
-LEAD_FRONT  = -1
-LEAD_TOL    = 0.001
-LEAD_PATCH  = 4000
-LEAD_ROOM   = 0.05
-
-GRID = 1
-FADE_OTHERS = False
-SETTLE_GUESS = 2.0
-SETTLE_FRAME = 0.02
-SETTLE_CALM  = 3
-SETTLE_MOST  = 600
-PHASES = (("camera", "Camera"), ("place", "Place"),
-          ("skin", "Material"), ("collide", "Collision"),
-          ("overlay", "Overlay"))
-
-LOOKS = "Looks"
-SHADER_TYPE = "Shader"
-GONE_THRESHOLD = 0.5
-GONE_LAYER = "ebs_hidden.usda"
-GONE = (("inputs:opacity", "Float", 0.0),
-        ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
-        ("inputs:enable_opacity", "Bool", True),
-        ("inputs:opacity_constant", "Float", 0.0),
-        ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
-
-CLASH_MARKS   = 200
-MEET_WIDE     = 256
-
-GRID_CELLS = 24
-OVERLAP_EPS = 1e-6
-PROBE_RATIO = 0.01
-REACH_RATIO = 1.5
-FLAT_TOL    = 0.01
-PRECISION_BBOX = "bbox"
-PRECISION_MESH = "mesh"
-PRECISION_TRI  = "triangle"
-
-PRUNE_TYPES = frozenset({
-    "Mesh", "Points", "BasisCurves", "NurbsCurves", "Capsule", "Cone", "Cube",
-    "Cylinder", "Sphere", "Plane", "GeomSubset",
-    "Material", "Shader", "NodeGraph", "Camera",
-})
-ANCHOR_DEPTH = 6
-PASS_TYPES  = ("Scope",)
-MIN_PORTS = 2
-MAX_PORTS = 3
-
-PIVOT_TOLERANCE = 1.0
-PIVOT_ACROSS = 0.5
 
 
 class EbsSimulate:
@@ -482,7 +329,7 @@ class EbsSimulate:
                         done += 1
         except Exception as e:
             self._note(f"could not set the EBS visibility ({e})")
-        self._forget_ebs(touched)
+        Collide._forget_ebs(self, touched)
         return done
 
     def nudge(self, step: float) -> float:
@@ -525,7 +372,7 @@ class EbsSimulate:
             return False
         with self._stage_timer("equipment: retest"):
             try:
-                meeting = self.check_equipment(self._target["ebs"],
+                meeting = Collide.check_equipment(self, self._target["ebs"],
                                                self._target["equipment"])
             except Exception as e:
                 self._note(f"interference check failed: "
@@ -558,7 +405,7 @@ class EbsSimulate:
         shift = self.set_nudge(metres) - was
         if not shift:
             return self._payload(True, f"offset {self._nudge:+.3f}")
-        box = self._ebs_bound(self._target["ebs"])
+        box = Collide._ebs_bound(self, self._target["ebs"])
         if not self._place_nudged():
             return self._payload(False, "EBS could not be moved")
         self._slid_box(box, shift)
@@ -1091,12 +938,6 @@ class EbsSimulate:
                          FACE_LEFT: max(0.0, float(side)),
                          FACE_RIGHT: max(0.0, float(side))}
 
-    @staticmethod
-    def _probe_depth(box: Gf.Range3d) -> float:
-        """닿았다고 볼 깊이. EBS 최장변 대비 PROBE_RATIO"""
-        longest = max(box.GetMax()[i] - box.GetMin()[i] for i in range(3))
-        return max(longest * PROBE_RATIO, 1e-6)
-
     def set_precision(self, mode: str) -> None:
         """충돌 판정 정밀도. 모르는 값이면 그대로 둔다
 
@@ -1302,7 +1143,7 @@ class EbsSimulate:
         self.warm_skin()
         self.hide_ebs()
         equipment = self.build_index()
-        self._stage_boxes()
+        Collide._stage_boxes(self)
         ports = self.load_ports()
         self._ready = equipment > 0 and ports > 0
         self._note(f"indexed {equipment} equipment, {ports} port entries")
@@ -1762,7 +1603,7 @@ class EbsSimulate:
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
 
-        self._forget_triangles(self._target["ebs"])
+        Collide._forget_triangles(self, self._target["ebs"])
         self._ebs_box = None
         if wear:
             self.wear_skin()
@@ -1778,25 +1619,6 @@ class EbsSimulate:
         else:
             self.clear_port_lasers()
         return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
-
-    def _side_roots(self) -> list:
-        """좌우 판정에 쓸 옆 장비들. 고르는 것은 side_band"""
-        stage = self._get_stage()
-        if stage is None:
-            return []
-        found = self.side_band(stage, self._target["ebs"],
-                               self._target["equipment"])
-        beside = found.get("beside", []) if found else []
-        roots = []
-        for path in beside:
-            prim = stage.GetPrimAtPath(path)
-            if prim and prim.IsValid():
-                roots.append(prim)
-        self._note("left and right judged against "
-                   + (", ".join(str(p).rsplit("/", 1)[-1] for p in beside)
-                      if beside else "nothing -- no machine beside this one")
-                   + "; the ceiling still walks the stage")
-        return roots
 
     def _do_collide(self) -> dict:
         """3면 충돌, 빈 면 거리, 내부 간섭을 재고 판정과 마커까지"""
@@ -1898,42 +1720,20 @@ class EbsSimulate:
         stage = self._get_stage()
         if stage is None:
             return
-        cache = self._bounds_cache()
-        search = self._reach_box(ebs_prim)
+        cache = Collide._bounds_cache(self)
+        search = Collide._reach_box(self, ebs_prim)
         if search is None:
             return
         with self._spending("warm"):
-            inside, _ = self._index_inside(cache, search, skip)
+            inside, _ = Collide._index_inside(self, cache, search, skip)
         self._note(f"warming {len(inside)} prims around the EBS")
         for at, prim in enumerate(inside, 1):
             with self._spending("warm"):
-                self._gather_nearby(stage, cache, search, skip, [prim])
+                Collide._gather_nearby(self, stage, cache, search, skip, [prim])
             if at % WARM_CHUNK and at != len(inside):
                 continue
             self._at("warm", at / len(inside))
             yield
-
-    def _reach_box(self, ebs_prim):
-        """collide 가 실제로 뒤지는 범위. 세 면의 프리즘과 EBS 상자를 합친 것
-
-        _warm_steps  이 안쪽만 미리 잰다. 바깥은 어차피 아무도 안 묻는다
-        measure_faces / check_collision / check_equipment  묻는 범위가 다 여기 든다
-        """
-        bbox = self._ebs_bound(ebs_prim)
-        whole = bbox.ComputeAlignedRange()
-        if whole.IsEmpty():
-            return None
-        local, to_world = bbox.GetRange(), bbox.GetMatrix()
-        if local.IsEmpty():
-            return None
-        self._build_cells(local)
-        reach = max(local.GetMax()[i] - local.GetMin()[i]
-                    for i in range(3)) * REACH_RATIO
-        boxes = [whole]
-        for axis, outward, coord, _, _ in self._face_planes.values():
-            prism = self._face_prism(local, axis, outward, coord, reach)
-            boxes.append(Gf.BBox3d(prism, to_world).ComputeAlignedRange())
-        return self._union(boxes)
 
     def _collide_steps(self):
         """collide 를 단계로 쪼갠 것. 단계마다 진행률을 올리고 한 번 멈춘다"""
@@ -1946,7 +1746,7 @@ class EbsSimulate:
 
         apart = [self._target["ebs"], self._target["equipment"]]
         skip = [str(p.GetPath()) for p in apart if p and p.IsValid()]
-        bounds = self._bounds_cache()
+        bounds = Collide._bounds_cache(self)
         cells = {face: [] for face in FACES}
         distances = {}
         hit_count = 0
@@ -1962,19 +1762,19 @@ class EbsSimulate:
             yield
 
             with self._spending("sides"):
-                roots = self._side_roots()
+                roots = Collide._side_roots(self)
             self._reached("sides")
             yield
 
             with self._spending("faces"):
-                cells = self.check_collision(self._target["ebs"], exclude=apart,
+                cells = Collide.check_collision(self, self._target["ebs"], exclude=apart,
                                              cache=bounds, roots=roots)
                 hit_count = sum(sum(1 for c in v if c) for v in cells.values())
             self._reached("faces")
             yield
 
             with self._spending("clearance"):
-                distances = self.measure_faces(self._target["ebs"], cells,
+                distances = Collide.measure_faces(self, self._target["ebs"], cells,
                                                exclude=apart, cache=bounds,
                                                roots=roots)
                 for face, found in distances.items():
@@ -1994,7 +1794,7 @@ class EbsSimulate:
         else:
             with self._spending("equipment"):
                 try:
-                    meeting = self.check_equipment(self._target["ebs"],
+                    meeting = Collide.check_equipment(self, self._target["ebs"],
                                                    self._target["equipment"],
                                                    cache=bounds)
                 except Exception as e:
@@ -2143,7 +1943,7 @@ class EbsSimulate:
     def build_verdict(self, ebs_prim, cells: dict, distances: dict,
                       inside: bool, boxes: list = None) -> dict:
         """오버레이가 읽을 판정 한 벌. 세울 수 있나, 왜 못 세우나"""
-        bbox = self._ebs_bound(ebs_prim)
+        bbox = Collide._ebs_bound(self, ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
             return {}
@@ -2155,7 +1955,7 @@ class EbsSimulate:
         middle = to_world.Transform(Gf.Vec3d(*spot))
         spot[up_axis] = lo[up_axis] + tall * CLASH_HEIGHT
         lower = to_world.Transform(Gf.Vec3d(*spot))
-        marks = self._face_marks(local_box, to_world, cells, distances)
+        marks = Collide._face_marks(self, local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
                    for mark in marks if mark["state"] != STATE_CLEAR]
@@ -2215,184 +2015,6 @@ class EbsSimulate:
         way = axes[which]
         return (way[0], way[1], way[2])
 
-    def _face_marks(self, local_box, to_world, cells: dict,
-                    distances: dict) -> list:
-        """면마다 상태·거리·선 두 끝. 선은 앞 모서리 중점에서, 잰 자리는 안내선으로"""
-        stage = self._get_stage()
-        try:
-            per_unit = UsdGeom.GetStageMetersPerUnit(stage)
-        except Exception:
-            per_unit = 1.0
-        lo, hi = local_box.GetMin(), local_box.GetMax()
-        middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-        up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
-        front_axis = 3 - up_axis
-
-        def world(point):
-            """로컬 점을 월드로"""
-            got = to_world.Transform(Gf.Vec3d(*point))
-            return (got[0], got[1], got[2])
-
-        marks = []
-        for face in FACES:
-            plane = self._face_planes.get(face)
-            if plane is None:
-                continue
-            axis, outward, coord, _, _ = plane
-            surface = list(middle)
-            surface[axis] = coord
-            surface[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
-
-            least = self._min_gap.get(face, 0.0)
-            way = self._outward_way(surface, axis, outward, world)
-            blank = {"face": face, "distance": None, "name": "", "way": way,
-                     "min_gap": least, "at": world(surface), "stale": False,
-                     "from": None, "to": None, "lead": None, "spot": None,
-                     "tick": None}
-            hit = bool(any(cells.get(face, [])))
-            found = distances.get(face) or {}
-            at = found.get("at")
-            reach = found.get("distance")
-            if at is None or reach is None:
-                blank["state"] = STATE_CLASH if hit else STATE_CLEAR
-                if hit:
-                    blank["name"] = self.owner_name(self._blockers.get(face, ""))
-                marks.append(blank)
-                continue
-            start, end = list(at), list(at)
-            start[axis] = coord
-            end[axis] = coord + (reach if outward > 0 else -reach)
-            spot = list(end)
-            lead, tick = None, None
-            if face in LEAD_FACES:
-                start = list(middle)
-                start[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
-                start[axis] = coord
-                end = list(start)
-                end[axis] = coord + (reach if outward > 0 else -reach)
-                turn_axis = 3 - axis - front_axis
-                corner = list(end)
-                corner[front_axis] = spot[front_axis]
-                patch = self._lead_patch([end, corner, spot], to_world,
-                                         axis, end[axis])
-                walk = self._lead_path(end, spot, turn_axis, front_axis,
-                                       axis, patch)
-                lead = [world(point) for point in walk]
-                tick = self._tick_way(end, axis, world)
-            near, far = world(start), world(end)
-            span = (sum((far[i] - near[i]) ** 2 for i in range(3)) ** 0.5) * per_unit
-            gap = -span if reach < 0 else span
-            marks.append({
-                "face": face, "tick": tick, "way": way, "stale": False,
-                "state": (STATE_CLASH if hit else
-                          STATE_TIGHT if gap < least else STATE_CLEAR),
-                "distance": gap, "min_gap": least,
-                "name": self.owner_name(found.get("prim", "")
-                                        or self._blockers.get(face, "")),
-                "at": tuple((near[i] + far[i]) * 0.5 for i in range(3)),
-                "from": near, "to": far, "lead": lead, "spot": world(spot),
-            })
-        return marks
-
-    @staticmethod
-    def _outward_way(surface, axis: int, outward: int, world) -> tuple:
-        """그 면이 바라보는 바깥 방향. 월드 단위 벡터"""
-        ahead = [surface[i] + (1.0 if i == axis else 0.0) for i in range(3)]
-        here, there = world(surface), world(ahead)
-        step = [(there[i] - here[i]) * (1.0 if outward > 0 else -1.0)
-                for i in range(3)]
-        size = sum(one * one for one in step) ** 0.5
-        return tuple(one / size for one in step) if size else None
-
-    @staticmethod
-    def _tick_way(end, axis: int, world):
-        """멈춘 자리에 그을 눈금의 방향. 면에 수직, 장비 기준 좌우"""
-        ahead = [end[i] + (1.0 if i == axis else 0.0) for i in range(3)]
-        here, there = world(end), world(ahead)
-        return tuple(there[i] - here[i] for i in range(3))
-
-    @staticmethod
-    def _lead_path(end, spot, turn_axis: int, front_axis: int, axis: int,
-                   patch) -> list:
-        """선 끝에서 잰 자리로. 가다가 아무 메시에나 닿으면 거기서 멈춘다"""
-        corner = list(end)
-        corner[front_axis] = spot[front_axis]
-        legs = [corner]
-        if abs(spot[turn_axis] - corner[turn_axis]) > LEAD_TOL:
-            legs.append(list(spot))
-        path, here = [], list(end)
-        for leg in legs:
-            stop = EbsSimulate._stop_at(here, leg, axis, patch)
-            if stop is None:
-                path.append(leg)
-                here = leg
-                continue
-            if any(abs(stop[i] - here[i]) > LEAD_TOL for i in range(3)):
-                path.append(stop)
-            break
-        return path
-
-    @staticmethod
-    def _stop_at(one, two, axis: int, patch):
-        """선분이 그 모양들에 처음 닿는 자리. 아무 데도 안 닿으면 None"""
-        if not patch:
-            return None
-        u, v = [i for i in range(3) if i != axis]
-        flat_one, flat_two = (one[u], one[v]), (two[u], two[v])
-        best = None
-        for shape in patch:
-            hit = (EbsSimulate._enter(flat_one, flat_two, shape)
-                   if len(shape) == 3
-                   else EbsSimulate._cross(flat_one, flat_two, shape))
-            if hit is not None and (best is None or hit < best):
-                best = hit
-        if best is None:
-            return None
-        return [one[i] + (two[i] - one[i]) * best for i in range(3)]
-
-    @staticmethod
-    def _cross(one, two, edge):
-        """두 선분이 만나는 t. 안 만나면 None"""
-        rx, ry = two[0] - one[0], two[1] - one[1]
-        sx, sy = edge[1][0] - edge[0][0], edge[1][1] - edge[0][1]
-        turn = rx * sy - ry * sx
-        if abs(turn) <= 1e-12:
-            return None
-        dx, dy = edge[0][0] - one[0], edge[0][1] - one[1]
-        along = (dx * sy - dy * sx) / turn
-        across = (dx * ry - dy * rx) / turn
-        if (-OVERLAP_EPS <= along <= 1.0 + OVERLAP_EPS
-                and -OVERLAP_EPS <= across <= 1.0 + OVERLAP_EPS):
-            return min(max(along, 0.0), 1.0)
-        return None
-
-    @staticmethod
-    def _enter(one, two, triangle):
-        """선분이 그 삼각형 안으로 처음 들어가는 t. 스치지도 않으면 None"""
-        turn = ((triangle[1][0] - triangle[0][0]) * (triangle[2][1] - triangle[0][1])
-                - (triangle[1][1] - triangle[0][1]) * (triangle[2][0] - triangle[0][0]))
-        if abs(turn) <= 1e-12:
-            return None
-        way = -1.0 if turn > 0 else 1.0
-        low, high = 0.0, 1.0
-        for at in range(3):
-            a, b = triangle[at], triangle[(at + 1) % 3]
-            nx, ny = (b[1] - a[1]) * way, (a[0] - b[0]) * way
-            here = nx * (one[0] - a[0]) + ny * (one[1] - a[1])
-            step = nx * (two[0] - one[0]) + ny * (two[1] - one[1])
-            if abs(step) <= 1e-12:
-                if here < -OVERLAP_EPS:
-                    return None
-                continue
-            hit = -here / step
-            if step > 0:
-                low = max(low, hit)
-            else:
-                high = min(high, hit)
-            if low > high:
-                return None
-        return low
-
     def get_verdict(self) -> dict:
         """마지막 collide 가 만든 판정
 
@@ -2451,7 +2073,7 @@ class EbsSimulate:
             return self._eqp_boxes
         with self._stage_timer(f"measure {len(self._eqp_index)} equipment"):
             by_path = {path: box
-                       for path, _, _, box, _, _ in self._stage_boxes()}
+                       for path, _, _, box, _, _ in Collide._stage_boxes(self)}
             boxes = {name: by_path[path]
                      for name, path in self._eqp_index.items() if path in by_path}
         self._eqp_boxes = boxes
@@ -2638,7 +2260,7 @@ class EbsSimulate:
     def _sideways(self, ebs_prim) -> tuple:
         """그 상자가 EBS 의 좌우 어느 쪽에 얼마나 걸치나"""
         try:
-            row = self._ebs_bound(ebs_prim).GetMatrix().GetRow(0)
+            row = Collide._ebs_bound(self, ebs_prim).GetMatrix().GetRow(0)
             length = math.sqrt(row[0] ** 2 + row[1] ** 2)
             if length > 1e-9:
                 return (row[0] / length, row[1] / length)
@@ -3358,425 +2980,6 @@ class EbsSimulate:
         return Gf.Vec3d(*[v if v > 1e-12 else 1.0 for v in scale])
 
 
-    @staticmethod
-    def _moving_cache():
-        """매번 새로 만드는 바운드 캐시. 움직이는 EBS 전용"""
-        return UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        )
-
-    def _bounds_cache(self):
-        """공유 바운드 캐시. 안 움직이는 것만 이걸로 잰다"""
-        if self._bounds is None:
-            self._bounds = UsdGeom.BBoxCache(
-                Usd.TimeCode.Default(),
-                includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-                useExtentsHint=True,
-            )
-        return self._bounds
-
-    def check_collision(self, ebs_prim: Usd.Prim, exclude: list = None,
-                        cache=None, roots: list = None) -> dict:
-        """EBS 좌/우/천장 세 면의 칸마다 닿았나 본다"""
-        stage = self._get_stage()
-        if stage is None:
-            return {face: [] for face in FACES}
-        self._visible = {}
-        cache = cache if cache is not None else self._bounds_cache()
-
-        with self._stage_timer("faces: search"):
-            ebs_bbox = self._ebs_bound(ebs_prim)
-            local_box = ebs_bbox.GetRange()
-            to_world = ebs_bbox.GetMatrix()
-            world_box = ebs_bbox.ComputeAlignedRange()
-        if local_box.IsEmpty():
-            return {face: [] for face in FACES}
-
-        with self._stage_timer("faces: search"):
-            cells = {
-                face: [Gf.BBox3d(rng, to_world).ComputeAlignedRange()
-                       for rng, _ in boxes]
-                for face, boxes in self._build_cells(local_box).items()
-            }
-
-        with self._stage_timer("faces: search"):
-            depth = self._probe_depth(local_box)
-            margin = Gf.Vec3d(depth, depth, depth)
-            search = Gf.Range3d(world_box.GetMin() - margin, world_box.GetMax() + margin)
-            skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-            candidates, visited = self._by_face(stage, cache, search, skip,
-                                                roots, cells, margin)
-        coarse = len(candidates)
-
-        size = local_box.GetMax() - local_box.GetMin()
-        self._note(f"precision {self._precision}, probe depth {depth:.4f}, "
-                   f"EBS size ({size[0]:.3f}, {size[1]:.3f}, {size[2]:.3f})")
-        self._note(f"EBS local box {tuple(round(v, 3) for v in local_box.GetMin())} .. "
-                   f"{tuple(round(v, 3) for v in local_box.GetMax())} "
-                   f"(the cells tile exactly this)")
-        self._note(f"EBS world box {tuple(round(v, 2) for v in world_box.GetMin())} .. "
-                   f"{tuple(round(v, 2) for v in world_box.GetMax())}")
-        self._note(f"visited {visited} prims, {coarse} meshes within the probe, "
-                   f"skipping {skip}")
-
-        with self._stage_timer("faces: detect"):
-            result = {face: [False] * len(boxes) for face, boxes in cells.items()}
-            hits = {}
-            self._blockers = {}
-            triangle_tests = 0
-            boxed_only = set()
-            flat = [(face, i, cell,
-                     tuple(cell.GetMin()), tuple(cell.GetMax()))
-                    for face, boxes in cells.items() for i, cell in enumerate(boxes)]
-
-            for path, box, mine in candidates:
-                targets = [entry for entry in flat
-                           if entry[0] in mine
-                           and not result[entry[0]][entry[1]]
-                           and self._overlaps(box, entry[2])]
-                if not targets:
-                    continue
-
-                triangles = (self._mesh_triangles(stage, path)
-                             if self._precision == PRECISION_TRI else None)
-                if triangles:
-                    triangle_tests += len(triangles)
-                    for triangle, lo, hi in triangles:
-                        remaining = [e for e in targets if not result[e[0]][e[1]]]
-                        if not remaining:
-                            break
-                        for face, i, cell, edge, far in remaining:
-                            if (lo[0] <= far[0] and hi[0] >= edge[0]
-                                    and lo[1] <= far[1] and hi[1] >= edge[1]
-                                    and lo[2] <= far[2] and hi[2] >= edge[2]
-                                    and self._triangle_hits_box(triangle, cell)):
-                                result[face][i] = True
-                                self._blockers.setdefault(face, path)
-                                hits.setdefault(path.rsplit("/", 1)[-1], []).append(
-                                    f"{face}[{i}]")
-                    continue
-
-                if self._precision == PRECISION_TRI:
-                    boxed_only.add(path)
-                for face, i, _, _, _ in targets:
-                    result[face][i] = True
-                    self._blockers.setdefault(face, path)
-                    hits.setdefault(path.rsplit("/", 1)[-1], []).append(f"{face}[{i}]")
-
-            if triangle_tests:
-                self._note(f"{triangle_tests} triangle tests")
-            elif self._precision == PRECISION_TRI and candidates:
-                self._note("no candidate reached a cell, so no triangle was tested")
-            if boxed_only:
-                self._note(f"{len(boxed_only)} of the blocking prims had no triangles, "
-                           f"judged by box: "
-                           f"{', '.join(sorted(p.rsplit('/', 1)[-1] for p in boxed_only))}")
-
-        if hits:
-            self._note(f"blocked by {len(hits)}: "
-                       + "; ".join(f"{name} {', '.join(where)}"
-                                   for name, where in sorted(hits.items())[:4])
-                       + (" ..." if len(hits) > 4 else ""))
-        elif candidates:
-            self._note("candidates were near but none reached a cell")
-        else:
-            self._note("nothing within clearance - raise it if that looks wrong")
-
-        return result
-
-    def _forget_triangles(self, prim: Usd.Prim) -> None:
-        """그 프림의 월드 삼각형 캐시를 버린다. align 이 부른다"""
-        if prim is None or not prim.IsValid():
-            return
-        root = str(prim.GetPath())
-        for path in [p for p in self._triangles
-                     if p == root or p.startswith(root + "/")]:
-            del self._triangles[path]
-
-    def _mesh_local(self, stage, path: str):
-        """메시의 점과 면 색인. 메시가 아니면 None"""
-        if path in self._local:
-            return self._local[path]
-        prim = stage.GetPrimAtPath(path) if stage else None
-        mesh = UsdGeom.Mesh(prim) if prim and prim.IsValid() else None
-        data = None
-        if mesh:
-            tc = Usd.TimeCode.Default()
-            points = self._attr_value(mesh.GetPointsAttr(), tc)
-            counts = self._attr_value(mesh.GetFaceVertexCountsAttr(), tc)
-            indices = self._attr_value(mesh.GetFaceVertexIndicesAttr(), tc)
-            if points is None or counts is None or indices is None:
-                self._boxed.setdefault("no point data", []).append(path)
-            else:
-                data = (points, counts, indices)
-        elif prim and prim.IsValid():
-            data = self._cube_local(prim)
-            if data is None:
-                self._boxed.setdefault(f"a {prim.GetTypeName()}",
-                                       []).append(path)
-        self._local[path] = data
-        return data
-
-    @staticmethod
-    def _cube_local(prim):
-        """Cube 프림의 점과 면. size 로 만들어 프림의 변환이 그대로 실린다"""
-        if str(prim.GetTypeName()) != CUBE_TYPE:
-            return None
-        try:
-            size = UsdGeom.Cube(prim).GetSizeAttr().Get(NOW)
-        except Exception:
-            size = None
-        half = (float(size) if size else 2.0) * 0.5
-        points = [(x * half, y * half, z * half)
-                  for x in (-1.0, 1.0) for y in (-1.0, 1.0) for z in (-1.0, 1.0)]
-        return points, [4] * 6, [i for quad in CUBE_QUADS for i in quad]
-
-    @staticmethod
-    def _to_world(stage, path: str):
-        """그 프림의 로컬->월드 행렬"""
-        prim = stage.GetPrimAtPath(path) if stage else None
-        if prim is None or not prim.IsValid():
-            return None
-        try:
-            return UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
-                Usd.TimeCode.Default())
-        except Exception:
-            return None
-
-    def _mesh_triangles(self, stage, path: str) -> list:
-        """그 메시의 월드 삼각형 전부. 한 번 만들고 캐시한다"""
-        if path in self._triangles:
-            return self._triangles[path]
-        triangles = []
-        data = self._mesh_local(stage, path)
-        to_world = self._to_world(stage, path)
-        if data and to_world is not None:
-            points, counts, indices = data
-            world = [to_world.Transform(Gf.Vec3d(p[0], p[1], p[2])) for p in points]
-            cursor = 0
-            for count in counts:
-                if count >= 3 and cursor + count <= len(indices):
-                    fan = [world[indices[cursor + k]] for k in range(count)]
-                    for k in range(1, count - 1):
-                        triangles.append(self._with_box(
-                            (fan[0], fan[k], fan[k + 1])))
-                cursor += count
-        self._triangles[path] = triangles
-        return triangles
-
-    @staticmethod
-    def _with_box(triangle):
-        """삼각형에 제 상자를 붙여 둔다"""
-        a, b, c = triangle
-        return (triangle,
-                (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
-                 min(a[2], b[2], c[2])),
-                (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
-                 max(a[2], b[2], c[2])))
-
-    def _triangles_reaching(self, stage, path: str, box: Gf.Range3d) -> list:
-        """그 상자에 닿는 삼각형만. 면 격자로 먼저 거른다"""
-        lo_box, hi_box = box.GetMin(), box.GetMax()
-        x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
-        x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
-
-        cached = self._triangles.get(path)
-        if cached is not None:
-            return [(path, tri, lo, hi) for tri, lo, hi in cached
-                    if lo[0] <= x1 and hi[0] >= x0 and lo[1] <= y1
-                    and hi[1] >= y0 and lo[2] <= z1 and hi[2] >= z0]
-
-        data = self._mesh_local(stage, path)
-        to_world = self._to_world(stage, path)
-        if not data or to_world is None:
-            return []
-        near = self._pulled_back(box, to_world)
-        if near is None:
-            return []
-        wanted = self._faces_near(path, data, near)
-        if not wanted:
-            return []
-
-        points, counts, indices = data
-        start, size = self._faces[path][0], self._faces[path][1]
-        move = self._mover(to_world, points, path)
-
-        kept = []
-        for at in wanted:
-            first, count = start[at], size[at]
-            fan = [move(points[indices[first + k]]) for k in range(count)]
-            for k in range(1, count - 1):
-                a, b, c = fan[0], fan[k], fan[k + 1]
-                low = (min(a[0], b[0], c[0]), min(a[1], b[1], c[1]),
-                       min(a[2], b[2], c[2]))
-                high = (max(a[0], b[0], c[0]), max(a[1], b[1], c[1]),
-                        max(a[2], b[2], c[2]))
-                if (low[0] <= x1 and high[0] >= x0 and low[1] <= y1
-                        and high[1] >= y0 and low[2] <= z1 and high[2] >= z0):
-                    kept.append((path, (a, b, c), low, high))
-        return kept
-
-    def _mover(self, to_world, points, path: str):
-        """로컬 점을 월드로. 행렬을 펼 수 있으면 파이썬 산술로 돈다"""
-        try:
-            r0, r1, r2, r3 = (to_world.GetRow(0), to_world.GetRow(1),
-                              to_world.GetRow(2), to_world.GetRow(3))
-            a00, a01, a02 = r0[0], r0[1], r0[2]
-            a10, a11, a12 = r1[0], r1[1], r1[2]
-            a20, a21, a22 = r2[0], r2[1], r2[2]
-            a30, a31, a32 = r3[0], r3[1], r3[2]
-            if points:
-                x, y, z = points[0][0], points[0][1], points[0][2]
-                mine = (x * a00 + y * a10 + z * a20 + a30,
-                        x * a01 + y * a11 + z * a21 + a31,
-                        x * a02 + y * a12 + z * a22 + a32)
-                theirs = to_world.Transform(Gf.Vec3d(x, y, z))
-                span = max(abs(theirs[i]) for i in range(3)) or 1.0
-                if all(abs(mine[i] - theirs[i]) <= span * 1e-9 for i in range(3)):
-                    return lambda p: (p[0] * a00 + p[1] * a10 + p[2] * a20 + a30,
-                                      p[0] * a01 + p[1] * a11 + p[2] * a21 + a31,
-                                      p[0] * a02 + p[1] * a12 + p[2] * a22 + a32)
-                self._boxed.setdefault("an unexpected transform", []).append(path)
-        except Exception:
-            pass
-        return lambda p: to_world.Transform(Gf.Vec3d(p[0], p[1], p[2]))
-
-    def _face_grid(self, path: str, data):
-        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로"""
-        made = self._faces.get(path)
-        if made is not None:
-            return made
-        points, counts, indices = data
-        start, size = array.array("i"), array.array("i")
-        lows = [array.array("d") for _ in range(3)]
-        highs = [array.array("d") for _ in range(3)]
-        cursor, total = 0, len(indices)
-        for count in counts:
-            end = cursor + count
-            if count < 3 or end > total:
-                cursor = end
-                continue
-            corner = points[indices[cursor]]
-            lo = [corner[0], corner[1], corner[2]]
-            hi = [corner[0], corner[1], corner[2]]
-            for k in range(cursor + 1, end):
-                corner = points[indices[k]]
-                for i in range(3):
-                    v = corner[i]
-                    if v < lo[i]:
-                        lo[i] = v
-                    elif v > hi[i]:
-                        hi[i] = v
-            start.append(cursor)
-            size.append(count)
-            for i in range(3):
-                lows[i].append(lo[i])
-                highs[i].append(hi[i])
-            cursor = end
-
-        faces = len(start)
-        if not faces:
-            made = (start, size, lows, highs, (0.0, 0.0, 0.0),
-                    (1.0, 1.0, 1.0), 1, {})
-            self._faces[path] = made
-            return made
-        origin = tuple(min(lows[i]) for i in range(3))
-        far = tuple(max(highs[i]) for i in range(3))
-        spread = max(1, min(GRID_CELLS, int(round(faces ** (1.0 / 3.0)))))
-        step = tuple(max((far[i] - origin[i]) / spread, 1e-9) for i in range(3))
-        grid = {}
-        for at in range(faces):
-            for key in self._cells_of([lows[i][at] for i in range(3)],
-                                      [highs[i][at] for i in range(3)],
-                                      origin, step, spread):
-                grid.setdefault(key, []).append(at)
-        made = (start, size, lows, highs, origin, step, spread, grid)
-        self._faces[path] = made
-        return made
-
-    def _faces_near(self, path: str, data, near) -> list:
-        """면 격자에서 그 상자 근처 면 번호들 (1차 필터)"""
-        start, size, lows, highs, origin, step, spread, grid = \
-            self._face_grid(path, data)
-        if not grid:
-            return []
-        (lx, ly, lz), (hx, hy, hz) = near
-        seen = set()
-        for key in self._cells_of((lx, ly, lz), (hx, hy, hz),
-                                  origin, step, spread):
-            seen.update(grid.get(key, ()))
-        lo0, lo1, lo2 = lows
-        hi0, hi1, hi2 = highs
-        return [at for at in seen
-                if lo0[at] <= hx and hi0[at] >= lx and lo1[at] <= hy
-                and hi1[at] >= ly and lo2[at] <= hz and hi2[at] >= lz]
-
-    @staticmethod
-    def _pulled_back(box: Gf.Range3d, to_world):
-        """월드 상자를 메시 로컬로 끌어온다"""
-        try:
-            inverse = to_world.GetInverse()
-        except Exception:
-            return None
-        lo, hi = box.GetMin(), box.GetMax()
-        corners = [inverse.Transform(Gf.Vec3d(x, y, z))
-                   for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
-                   for z in (lo[2], hi[2])]
-        return (tuple(min(c[i] for c in corners) for i in range(3)),
-                tuple(max(c[i] for c in corners) for i in range(3)))
-
-    @staticmethod
-    def _attr_value(attr, tc):
-        """속성 값. 없으면 빈 목록"""
-        if not attr or not attr.IsValid():
-            return None
-        value = attr.Get(tc)
-        if value is None or len(value) == 0:
-            samples = attr.GetTimeSamples()
-            if samples:
-                value = attr.Get(samples[0])
-        return value if value is not None and len(value) else None
-
-    @staticmethod
-    def _triangle_hits_box(triangle, box: Gf.Range3d) -> bool:
-        """삼각형과 상자가 실제로 겹치나 (분리축 정리)"""
-        lo, hi = box.GetMin(), box.GetMax()
-        centre = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
-        half = [(hi[i] - lo[i]) * 0.5 for i in range(3)]
-        v = [[triangle[j][i] - centre[i] for i in range(3)] for j in range(3)]
-
-        for i in range(3):
-            if min(v[0][i], v[1][i], v[2][i]) > half[i] or \
-               max(v[0][i], v[1][i], v[2][i]) < -half[i]:
-                return False
-
-        edges = [[v[1][i] - v[0][i] for i in range(3)],
-                 [v[2][i] - v[1][i] for i in range(3)],
-                 [v[0][i] - v[2][i] for i in range(3)]]
-
-        normal = [edges[0][1] * edges[1][2] - edges[0][2] * edges[1][1],
-                  edges[0][2] * edges[1][0] - edges[0][0] * edges[1][2],
-                  edges[0][0] * edges[1][1] - edges[0][1] * edges[1][0]]
-        reach = sum(half[i] * abs(normal[i]) for i in range(3))
-        distance = sum(normal[i] * v[0][i] for i in range(3))
-        if abs(distance) > reach:
-            return False
-
-        for edge in edges:
-            for i in range(3):
-                j, k = (i + 1) % 3, (i + 2) % 3
-                axis = [0.0, 0.0, 0.0]
-                axis[j], axis[k] = -edge[k], edge[j]
-                if abs(axis[j]) < 1e-12 and abs(axis[k]) < 1e-12:
-                    continue
-                projected = [sum(axis[m] * v[n][m] for m in range(3)) for n in range(3)]
-                reach = sum(half[m] * abs(axis[m]) for m in range(3))
-                if min(projected) > reach or max(projected) < -reach:
-                    return False
-        return True
-
     def _is_visible(self, prim, path: str) -> bool:
         """그 프림이 화면에 보이나. collide 마다 다시 푼다"""
         known = self._visible.get(path)
@@ -3792,946 +2995,12 @@ class EbsSimulate:
         return visible
 
     @staticmethod
-    def _overlaps(a: Gf.Range3d, b: Gf.Range3d) -> bool:
-        """두 상자가 겹치나"""
-        overlap = Gf.Range3d.GetIntersection(a, b)
-        if overlap.IsEmpty():
-            return False
-        extent = overlap.GetMax() - overlap.GetMin()
-        return all(extent[i] > OVERLAP_EPS for i in range(3))
-
-    def _ebs_bound(self, prim: Usd.Prim):
-        """EBS 의 월드 상자. collide 한 번에 한 번만 잰다"""
-        path = self._path_of(prim)
-        if self._ebs_box is not None and self._ebs_box[0] == path:
-            return self._ebs_box[1]
-        exact = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=False,
-        ).ComputeWorldBound(prim)
-
-        hinted = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(),
-            includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
-            useExtentsHint=True,
-        ).ComputeWorldBound(prim).ComputeAlignedRange()
-        measured = exact.ComputeAlignedRange()
-        if not hinted.IsEmpty() and not measured.IsEmpty():
-            slack = max(abs(hinted.GetMin()[i] - measured.GetMin()[i]) for i in range(3))
-            slack = max(slack, max(abs(hinted.GetMax()[i] - measured.GetMax()[i])
-                                   for i in range(3)))
-            span = max(measured.GetMax()[i] - measured.GetMin()[i] for i in range(3))
-            if span > 0 and slack > span * 0.01:
-                self._note(f"the EBS extentsHint is off by {slack:.3f}, "
-                           f"using the measured bound")
-        if path:
-            self._ebs_box = (path, exact)
-        return exact
-
-    @staticmethod
     def _path_of(prim) -> str:
         """프림이든 문자열이든 경로 문자열로"""
         try:
             return str(prim.GetPath()) if prim.IsValid() else ""
         except AttributeError:
             return ""
-
-    def _forget_ebs(self, paths=()) -> None:
-        """EBS 상자 캐시를 버린다. 옮겼거나 켜고 껐을 때"""
-        self._ebs_box = None
-        if paths:
-            self._leaves = {}
-        for path in paths:
-            self._visible.pop(path, None)
-
-    def _stage_boxes(self, cache=None) -> list:
-        """스테이지의 상자 목록. Init 에 한 번 만든다. EBS 는 뺀다"""
-        if self._stage_index is not None:
-            return self._stage_index
-        stage = self._get_stage()
-        if stage is None:
-            return []
-        cache = cache if cache is not None else self._bounds_cache()
-        ours_ebs = frozenset(p for p in (self._ebs_path_2port,
-                                         self._ebs_path_3port) if p)
-        under_ebs = tuple(p + "/" for p in ours_ebs)
-        index = []
-        with self._stage_timer("stage: index"):
-            stack = [(prim, ()) for prim in _children(stage.GetPseudoRoot())]
-            while stack:
-                prim, chain = stack.pop()
-                path = str(prim.GetPath())
-                if path in OURS or path.startswith(OURS_UNDER):
-                    continue
-                if path in ours_ebs or path.startswith(under_ebs):
-                    continue
-                type_name = prim.GetTypeName()
-                if type_name in SKIP_TYPES or type_name.endswith("Light"):
-                    continue
-                box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-                if box.IsEmpty():
-                    continue
-                if (type_name in GEOMETRY_TYPES
-                        or prim.GetName().upper().startswith(EQP_PREFIX)):
-                    lo, hi = box.GetMin(), box.GetMax()
-                    index.append((path,
-                                  (lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]),
-                                  box, prim, chain))
-                    continue
-                stack.extend((kid, chain + ((prim, path),))
-                             for kid in _children(prim))
-        self._stage_index = index
-        self._note(f"stage index: {len(index)} boxes")
-        return index
-
-    def _index_inside(self, cache, search: Gf.Range3d, skip: list) -> tuple:
-        """색인에서 검색 상자에 걸리고 보이는 프림들. 몇 개를 봤는지도"""
-        skip_exact = frozenset(skip)
-        skip_under = tuple(s + "/" for s in skip)
-        low, high = search.GetMin(), search.GetMax()
-        lo0, lo1, lo2 = low[0], low[1], low[2]
-        hi0, hi1, hi2 = high[0], high[1], high[2]
-        eps = OVERLAP_EPS
-        inside, visited = [], 0
-        for path, lo, hi, box, prim, chain in self._stage_boxes(cache):
-            if path in skip_exact or (skip_under and path.startswith(skip_under)):
-                continue
-            visited += 1
-            if (min(hi[0], hi0) - max(lo[0], lo0) <= eps
-                    or min(hi[1], hi1) - max(lo[1], lo1) <= eps
-                    or min(hi[2], hi2) - max(lo[2], lo2) <= eps):
-                continue
-            if any(not self._is_visible(one, where) for one, where in chain):
-                continue
-            inside.append(prim)
-        return inside, visited
-
-    def _from_index(self, stage, cache, search: Gf.Range3d, skip: list) -> tuple:
-        """그 상자 목록에서 검색 상자에 걸리는 것만 꺼낸다"""
-        inside, visited = self._index_inside(cache, search, skip)
-        found = []
-        for prim in inside:
-            got, seen = self._gather_nearby(stage, cache, search, skip, [prim])
-            found.extend(got)
-            visited += seen
-        return found, visited
-
-    def _by_face(self, stage, cache, search, skip, roots, cells, margin):
-        """면마다 후보를 나눠 담는다"""
-        if roots is None:
-            found, visited = self._gather_nearby(stage, cache, search, skip)
-            return [(path, box, FACES) for path, box in found], visited
-
-        sides = tuple(face for face in cells if face != FACE_CEILING)
-        beside, visited = self._gather_nearby(stage, cache, search, skip, roots)
-        candidates = [(path, box, sides) for path, box in beside]
-
-        top = cells.get(FACE_CEILING) or []
-        if top:
-            whole = self._union(top)
-            above, seen = self._gather_nearby(
-                stage, cache,
-                Gf.Range3d(whole.GetMin() - margin, whole.GetMax() + margin),
-                skip)
-            visited += seen
-            candidates += [(path, box, (FACE_CEILING,)) for path, box in above]
-        return candidates, visited
-
-    def _gather_nearby(self, stage, cache, search: Gf.Range3d, skip: list,
-                       roots: list = None) -> tuple:
-        """검색 상자 근처의 메시들. roots 를 주면 그 아래만 훑는다"""
-        if roots is None:
-            return self._from_index(stage, cache, search, skip)
-        found, visited = [], 0
-        skip_exact = frozenset(skip)
-        skip_under = tuple(s + "/" for s in skip)
-        for root in roots:
-            for path, box, prim, chain in self._subtree_leaves(stage, cache, root):
-                visited += 1
-                if path in skip_exact or (skip_under
-                                          and path.startswith(skip_under)):
-                    continue
-                if not self._overlaps(box, search):
-                    continue
-                if any(not self._is_visible(one, where) for one, where in chain):
-                    continue
-                if not self._is_visible(prim, path):
-                    continue
-                found.append((path, box))
-        return found, visited
-
-    def _subtree_leaves(self, stage, cache, root) -> list:
-        """그 프림 아래 지오메트리 잎들. 한 번 훑어 두고 다시 안 훑는다
-
-        _gather_nearby  상자로 거르는 것은 꺼낼 때 한다. 훑기가 collide 마다
-                     되풀이되던 자리다. 움직이는 EBS 는 캐시를 안 탄다
-        _leaves  단계 하나 도는 동안만 산다. _begin 이 버린다
-        """
-        path = str(root.GetPath())
-        shared = cache is self._bounds
-        got = self._leaves.get(path) if shared else None
-        if got is not None:
-            return got
-        found = []
-        stack = [(root, ())]
-        while stack:
-            prim, chain = stack.pop()
-            where = str(prim.GetPath())
-            if where in OURS or where.startswith(OURS_UNDER):
-                continue
-            type_name = prim.GetTypeName()
-            if type_name in SKIP_TYPES or type_name.endswith("Light"):
-                continue
-            box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-            if box.IsEmpty():
-                continue
-            if type_name in GEOMETRY_TYPES:
-                found.append((where, box, prim, chain))
-                continue
-            stack.extend((kid, chain + ((prim, where),))
-                         for kid in _children(prim))
-        if shared:
-            self._leaves[path] = found
-        return found
-
-    def check_equipment(self, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
-                        cache=None) -> dict:
-        """EBS 와 대상 장비만 본다. 옆 장비(3면 검사 몫)는 여기 들어오지 않는다"""
-        stage = self._get_stage()
-        blank = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
-        if stage is None or eqp_prim is None or not eqp_prim.IsValid():
-            return blank
-
-        cache = cache if cache is not None else self._bounds_cache()
-        world_box = self._ebs_bound(ebs_prim).ComputeAlignedRange()
-        if world_box.IsEmpty():
-            return blank
-
-        with self._stage_timer("equipment: search"):
-            ours, _ = self._gather_nearby(stage, self._moving_cache(), world_box,
-                                          [], roots=[ebs_prim])
-            theirs, _ = self._gather_nearby(stage, cache, world_box, [],
-                                            roots=[eqp_prim])
-        if not ours or not theirs:
-            self._note(f"no interference test: {len(ours)} EBS meshes against "
-                       f"{len(theirs)} on the equipment")
-            return blank
-
-        pairs, tests = [], 0
-        boxed = self._boxed_pairs(stage, ours, theirs)
-        pairs.extend(boxed)
-        if boxed:
-            self._note(f"{len(boxed)} pair(s) judged by box: not a mesh, so no "
-                       f"triangle to test (Cube/Capsule/etc)")
-
-        whole = self._union([box for _, box in ours])
-        with self._stage_timer("equipment: read"):
-            mine, ebs_read = self._triangles_near(stage, ours, whole)
-        self._note(f"read: EBS {ebs_read['meshes']} mesh, {ebs_read['faces']} "
-                   f"faces, {ebs_read['built']} grid built, "
-                   f"{ebs_read['world']} from the world cache")
-        if not mine:
-            if not pairs:
-                self._note(f"clear of the equipment: nothing of the EBS reaches "
-                           f"its own box ({len(ours)} meshes)")
-        else:
-            with self._stage_timer("equipment: detect"):
-                mesh_pairs, tests, read = self._meetings(stage, mine, theirs,
-                                                         whole, pairs)
-            for pair in mesh_pairs:
-                if pair not in pairs:
-                    pairs.append(pair)
-            self._note(f"interference: {len(mine)} EBS triangles against "
-                       f"{read} on the equipment, {tests} pairs tested")
-
-        self._missed(theirs, pairs, world_box)
-        where = dict(theirs)
-        boxes, seen = [], set()
-        for _, eqp_path in pairs:
-            if eqp_path in seen:
-                continue
-            at = self._mesh_box(stage, eqp_path)
-            if at is None:
-                if eqp_path not in where:
-                    continue
-                box = where[eqp_path]
-                at = (box.GetMin(), box.GetMax())
-            seen.add(eqp_path)
-            lo, hi = at
-            boxes.append((eqp_path, (lo[0], lo[1], lo[2]),
-                          (hi[0], hi[1], hi[2])))
-        return {"hit": bool(pairs), "pairs": pairs, "boxes": boxes,
-                "tests": tests}
-
-    def _mesh_box(self, stage, path: str):
-        """그 메시의 점으로 직접 잰 상자. 삼각형이 없으면 None"""
-        triangles = self._mesh_triangles(stage, path)
-        if not triangles:
-            return None
-        _, first, _ = triangles[0]
-        lo = [first[0], first[1], first[2]]
-        hi = [first[0], first[1], first[2]]
-        for _, low, high in triangles:
-            for i in range(3):
-                if low[i] < lo[i]:
-                    lo[i] = low[i]
-                if high[i] > hi[i]:
-                    hi[i] = high[i]
-        return lo, hi
-
-    def _boxed_pairs(self, stage, ours: list, theirs: list) -> list:
-        """삼각형이 없는 프리미티브는 상자 겹침으로 판정한다. 상대가 메시면 면 격자로"""
-        found = []
-        for a_path, a_box in ours:
-            a_mesh = not self._is_boxed_shape(stage, a_path)
-            for b_path, b_box in theirs:
-                b_mesh = not self._is_boxed_shape(stage, b_path)
-                if a_mesh and b_mesh:
-                    continue
-                if a_mesh:
-                    hit = self._mesh_reaches(stage, a_path, b_box)
-                elif b_mesh:
-                    hit = self._mesh_reaches(stage, b_path, a_box)
-                else:
-                    hit = self._overlaps(a_box, b_box)
-                if hit:
-                    found.append((a_path, b_path))
-        return found
-
-    def _mesh_reaches(self, stage, path: str, piece_box) -> bool:
-        """메시 path 의 표면이 piece_box 에 실제로 닿는가"""
-        data = self._mesh_local(stage, path)
-        to_world = self._to_world(stage, path)
-        if not data or to_world is None:
-            return False
-        near = self._pulled_back(piece_box, to_world)
-        if near is None:
-            return False
-        candidates = self._faces_near(path, data, near)
-        if not candidates:
-            return False
-        points, counts, indices = data
-        start, size = self._faces[path][0], self._faces[path][1]
-        box = Gf.Range3d(Gf.Vec3d(*near[0]), Gf.Vec3d(*near[1]))
-        for at in candidates:
-            first, count = start[at], size[at]
-            fan = [points[indices[first + k]] for k in range(count)]
-            for k in range(1, count - 1):
-                triangle = (fan[0], fan[k], fan[k + 1])
-                if self._triangle_hits_box(triangle, box):
-                    return True
-        return False
-
-    def _is_boxed_shape(self, stage, path: str) -> bool:
-        """삼각형이 하나도 안 나오는 조각인가. 캐시를 먼저 믿고 모르면 물어본다"""
-        cached = self._triangles.get(path)
-        if cached is not None:
-            return not cached
-        try:
-            return self._mesh_local(stage, path) is None
-        except AttributeError:
-            return False
-
-    def _missed(self, theirs: list, pairs: list, world_box) -> None:
-        """EBS 상자 안에 들어와 있는데 표면이 안 만난 조각을 센다"""
-        if len(pairs) >= CLASH_MARKS:
-            self._note(f"interference stopped at the {CLASH_MARKS} piece cap - "
-                       f"there may be more")
-        met = {path for _, path in pairs}
-        deep = []
-        for path, box in theirs:
-            if path in met:
-                continue
-            shared = Gf.Range3d.GetIntersection(box, world_box)
-            if shared.IsEmpty():
-                continue
-            lo, hi = box.GetMin(), box.GetMax()
-            span = [hi[i] - lo[i] for i in range(3)]
-            near, far = shared.GetMin(), shared.GetMax()
-            covered = [(far[i] - near[i]) / span[i] if span[i] > 1e-9 else 1.0
-                       for i in range(3)]
-            if min(covered) > 0.5:
-                deep.append(path.rsplit("/", 1)[-1])
-        if deep:
-            self._note(f"{len(deep)} piece(s) sit well inside the EBS box but "
-                       f"never touch its surface: " + ", ".join(deep[:6])
-                       + (" ..." if len(deep) > 6 else ""))
-
-    @staticmethod
-    def _union(boxes: list) -> Gf.Range3d:
-        """상자 여러 개를 하나로 감싼다"""
-        lo = [min(b.GetMin()[i] for b in boxes) for i in range(3)]
-        hi = [max(b.GetMax()[i] for b in boxes) for i in range(3)]
-        return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
-
-    def _triangles_near(self, stage, meshes: list, box: Gf.Range3d) -> tuple:
-        """양쪽에서 그 상자에 닿는 삼각형만 읽어 온다"""
-        kept, tally = [], {"meshes": 0, "built": 0, "world": 0, "faces": 0}
-        for path, mesh_box in meshes:
-            if Gf.Range3d.GetIntersection(mesh_box, box).IsEmpty():
-                continue
-            tally["meshes"] += 1
-            if path in self._triangles:
-                tally["world"] += 1
-            elif path not in self._faces:
-                tally["built"] += 1
-            kept.extend(self._triangles_reaching(stage, path, box))
-            made = self._faces.get(path)
-            if made:
-                tally["faces"] += len(made[0])
-        return kept, tally
-
-    def _meetings(self, stage, mine: list, theirs: list, whole: Gf.Range3d,
-                  known_pairs: list) -> tuple:
-        """장비 메시마다 EBS 와 겹치는 데만 보고, 걸리면 그 메시는 더 안 본다
-
-        _grid_of  EBS 삼각형은 한 번만 격자에 담는다. 장비 메시마다 다시 안 담는다
-        _triangles_reaching  장비 쪽은 겹치는 조각에 닿는 삼각형만 읽는다
-        """
-        grid, origin, step, spread = self._grid_of(mine, whole)
-        known = {path for _, path in known_pairs}
-        pairs, tests, read = [], 0, 0
-        for path, box in theirs:
-            if path in known or len(pairs) + len(known) >= CLASH_MARKS:
-                continue
-            region = Gf.Range3d.GetIntersection(box, whole)
-            if region.IsEmpty():
-                continue
-            near = set()
-            for key in self._cells_of(region.GetMin(), region.GetMax(),
-                                      origin, step, spread):
-                near.update(grid.get(key, ()))
-            if not near:
-                continue
-            yours = self._triangles_reaching(stage, path, region)
-            read += len(yours)
-            if not yours:
-                continue
-            met, spent = self._meets_mesh(mine, yours, near, grid, origin,
-                                          step, spread)
-            tests += spent
-            if met:
-                pairs.append((met, path))
-        return pairs, tests, read
-
-    def _meets_mesh(self, mine: list, yours: list, near, grid, origin, step,
-                    spread) -> tuple:
-        """그 장비 메시가 EBS 를 뚫나. 처음 만난 EBS 메시 경로와 검사 횟수
-
-        near  그 조각에 걸친 EBS 삼각형 번호들. 조각이 좁으면 이것만 보면 된다
-        MEET_WIDE  그보다 넓으면 삼각형마다 다시 격자를 탄다
-        """
-        tests = 0
-        close = list(near) if len(near) <= MEET_WIDE else None
-        for _, triangle, lo, hi in yours:
-            spots = close
-            if spots is None:
-                spots = set()
-                for key in self._cells_of(lo, hi, origin, step, spread):
-                    spots.update(grid.get(key, ()))
-            for index in spots:
-                ebs_path, other, other_lo, other_hi = mine[index]
-                if (lo[0] > other_hi[0] or hi[0] < other_lo[0]
-                        or lo[1] > other_hi[1] or hi[1] < other_lo[1]
-                        or lo[2] > other_hi[2] or hi[2] < other_lo[2]):
-                    continue
-                tests += 1
-                if self._triangles_meet(triangle, other):
-                    return ebs_path, tests
-        return "", tests
-
-    @classmethod
-    def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
-        """삼각형들을 칸에 나눠 담은 격자. 후보를 줄이는 데 쓴다"""
-        low, high = box.GetMin(), box.GetMax()
-        origin = (low[0], low[1], low[2])
-        size = [max(high[i] - origin[i], 1e-9) for i in range(3)]
-        spread = max(1, min(GRID_CELLS, int(round(len(items) ** (1.0 / 3.0)))))
-        step = [size[i] / spread for i in range(3)]
-        grid = {}
-        for index, (_, _, lo, hi) in enumerate(items):
-            for key in cls._cells_of(lo, hi, origin, step, spread):
-                grid.setdefault(key, []).append(index)
-        return grid, origin, step, spread
-
-    @staticmethod
-    def _cells_of(lo, hi, origin, step, spread):
-        """그 상자가 걸치는 격자 칸들"""
-        spans = []
-        for i in range(3):
-            first = int((lo[i] - origin[i]) / step[i])
-            last = int((hi[i] - origin[i]) / step[i])
-            spans.append(range(max(0, min(first, spread - 1)),
-                               max(0, min(last, spread - 1)) + 1))
-        return [(x, y, z) for x in spans[0] for y in spans[1] for z in spans[2]]
-
-    @classmethod
-    def _triangles_meet(cls, a, b) -> bool:
-        """두 삼각형이 실제로 만나나. 모서리를 상대 면에 쏜다"""
-        for edge in ((a[0], a[1]), (a[1], a[2]), (a[2], a[0])):
-            if cls._segment_hits_triangle(edge[0], edge[1], b):
-                return True
-        for edge in ((b[0], b[1]), (b[1], b[2]), (b[2], b[0])):
-            if cls._segment_hits_triangle(edge[0], edge[1], a):
-                return True
-        return False
-
-    @staticmethod
-    def _segment_hits_triangle(start, end, triangle) -> bool:
-        """선분이 삼각형을 뚫나"""
-        v0, v1, v2 = triangle
-        direction = [end[i] - start[i] for i in range(3)]
-        edge1 = [v1[i] - v0[i] for i in range(3)]
-        edge2 = [v2[i] - v0[i] for i in range(3)]
-
-        def cross(p, q):
-            """외적"""
-            return [p[1] * q[2] - p[2] * q[1],
-                    p[2] * q[0] - p[0] * q[2],
-                    p[0] * q[1] - p[1] * q[0]]
-
-        def dot(p, q):
-            """내적"""
-            return p[0] * q[0] + p[1] * q[1] + p[2] * q[2]
-
-        pitch = cross(direction, edge2)
-        slope = dot(edge1, pitch)
-        if abs(slope) < 1e-12:
-            return False
-        scale = 1.0 / slope
-        offset = [start[i] - v0[i] for i in range(3)]
-        u = scale * dot(offset, pitch)
-        if u < 0.0 or u > 1.0:
-            return False
-        turn = cross(offset, edge1)
-        v = scale * dot(direction, turn)
-        if v < 0.0 or u + v > 1.0:
-            return False
-        along = scale * dot(edge2, turn)
-        return 0.0 <= along <= 1.0
-
-    def _build_cells(self, box: Gf.Range3d) -> dict:
-        """EBS 세 면을 칸으로 쪼갠다. 칸마다 상자와 사각형"""
-        up_axis = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
-        front_axis = 3 - up_axis
-        side_axis = 3 - up_axis - front_axis
-        t = self._probe_depth(box)
-        lo, hi = box.GetMin(), box.GetMax()
-        extent = [hi[i] - lo[i] for i in range(3)]
-        unit = max(extent) / GRID if max(extent) > 0 else 1.0
-        divisions = [max(1, int(round(extent[i] / unit))) if unit > 0 else 1
-                     for i in range(3)]
-
-        cells = {}
-        shapes = {}
-        faces = {}
-
-        def make(fixed_axis, outward, row_axis, col_axis):
-            """한 면을 칸으로 나눈다"""
-            rows, cols = divisions[row_axis], divisions[col_axis]
-            out = []
-            row_lo, row_hi = lo[row_axis], hi[row_axis]
-            col_lo, col_hi = lo[col_axis], hi[col_axis]
-            row_step = (row_hi - row_lo) / rows
-            col_step = (col_hi - col_lo) / cols
-            for r in range(rows):
-                for c in range(cols):
-                    cmin, cmax = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-                    cmin[row_axis] = row_hi - (r + 1) * row_step
-                    cmax[row_axis] = row_hi - r * row_step
-                    cmin[col_axis] = col_lo + c * col_step
-                    cmax[col_axis] = col_lo + (c + 1) * col_step
-                    if outward > 0:
-                        surface = hi[fixed_axis]
-                        cmin[fixed_axis], cmax[fixed_axis] = surface, surface + t
-                    else:
-                        surface = lo[fixed_axis]
-                        cmin[fixed_axis], cmax[fixed_axis] = surface - t, surface
-
-                    quad = []
-                    for r_end, c_end in ((0, 0), (0, 1), (1, 1), (1, 0)):
-                        corner = [0.0, 0.0, 0.0]
-                        corner[fixed_axis] = surface
-                        corner[row_axis] = cmax[row_axis] if r_end else cmin[row_axis]
-                        corner[col_axis] = cmax[col_axis] if c_end else cmin[col_axis]
-                        quad.append(tuple(corner))
-                    out.append((Gf.Range3d(Gf.Vec3d(*cmin), Gf.Vec3d(*cmax)), quad))
-            return out, (rows, cols), (fixed_axis, outward,
-                                       hi[fixed_axis] if outward > 0 else lo[fixed_axis],
-                                       row_axis, col_axis)
-
-        for face, args in ((FACE_RIGHT,   (side_axis, +1, up_axis, front_axis)),
-                           (FACE_LEFT,    (side_axis, -1, up_axis, front_axis)),
-                           (FACE_CEILING, (up_axis,   +1, front_axis, side_axis))):
-            cells[face], shapes[face], faces[face] = make(*args)
-        self._grid_shape = shapes
-        self._face_planes = faces
-        return cells
-
-    def get_grid_shape(self) -> dict:
-        """면마다 칸이 몇 줄 몇 칸인지"""
-        return dict(self._grid_shape)
-
-    def measure_faces(self, ebs_prim: Usd.Prim, cells: dict,
-                      exclude: list = None, cache=None, roots: list = None) -> dict:
-        """면마다 거리. 안 막혔으면 바깥으로 여유, 막혔으면 안으로 파고든 깊이"""
-        stage = self._get_stage()
-        if stage is None:
-            return {}
-        bbox = self._ebs_bound(ebs_prim)
-        local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
-        if local_box.IsEmpty() or not self._face_planes:
-            return {}
-
-        reach = max(local_box.GetMax()[i] - local_box.GetMin()[i]
-                    for i in range(3)) * REACH_RATIO
-        skip = [str(p.GetPath()) for p in (exclude or []) if p and p.IsValid()]
-        cache = cache if cache is not None else self._bounds_cache()
-
-        with self._stage_timer("clearance: search"):
-            wanted = {}
-            for face, (axis, outward, coord, _, _) in self._face_planes.items():
-                deep = bool(any(cells.get(face, [])))
-                way = -outward if deep else outward
-                span = (local_box.GetMax()[axis] - local_box.GetMin()[axis]
-                        if deep else reach)
-                prism = self._face_prism(local_box, axis, way, coord, span)
-                wanted[face] = (prism,
-                                Gf.BBox3d(prism, to_world).ComputeAlignedRange(),
-                                axis, outward, coord, deep)
-            candidates = self._reach_by_face(stage, cache, skip, roots, wanted)
-        if not wanted:
-            return {}
-
-        with self._stage_timer("clearance: detect"):
-            results = {}
-            for face, (prism, world_prism, axis, outward,
-                       coord, deep) in wanted.items():
-                near = [(path, box) for path, box in candidates.get(face, ())
-                        if self._overlaps(box, world_prism)]
-                found = self._nearest_in_prism(stage, near, prism, to_world,
-                                               axis, outward, coord, deep)
-                if found is not None and deep:
-                    found["distance"] = -found["distance"]
-                results[face] = found or {"distance": None, "prim": "",
-                                          "reach": reach}
-        return results
-
-    def _reach_by_face(self, stage, cache, skip, roots, wanted) -> dict:
-        """면마다 거리 잴 후보를 모은다. 천장만 스테이지 전체"""
-        if not wanted:
-            return {}
-        if roots is None:
-            whole = self._union([one[1] for one in wanted.values()])
-            found, _ = self._gather_nearby(stage, cache, whole, skip)
-            return {face: found for face in wanted}
-
-        by_face = {}
-        sides = {face: one for face, one in wanted.items() if face != FACE_CEILING}
-        if sides:
-            whole = self._union([one[1] for one in sides.values()])
-            found, _ = self._gather_nearby(stage, cache, whole, skip, roots)
-            by_face.update({face: found for face in sides})
-        top = wanted.get(FACE_CEILING)
-        if top is not None:
-            found, _ = self._gather_nearby(stage, cache, top[1], skip)
-            by_face[FACE_CEILING] = found
-        return by_face
-
-    @staticmethod
-    def _face_prism(box: Gf.Range3d, axis: int, outward: int, coord: float,
-                    reach: float) -> Gf.Range3d:
-        """그 면에서 바깥으로 reach 만큼 뻗은 직육면체"""
-        lo = [box.GetMin()[i] for i in range(3)]
-        hi = [box.GetMax()[i] for i in range(3)]
-        if outward > 0:
-            lo[axis], hi[axis] = coord, coord + reach
-        else:
-            lo[axis], hi[axis] = coord - reach, coord
-        return Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
-
-    def _nearest_in_prism(self, stage, candidates, prism, to_world,
-                          axis, outward, coord, deep: bool = False):
-        """가장 가까운 것 하나. deep 이면 가장 깊이 파고든 것 하나"""
-        if not candidates:
-            return None
-
-        inverse = to_world.GetInverse()
-        bounded = []
-        for path, box in candidates:
-            local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
-            gap = self._gap_along(local, axis, outward, coord, deep)
-            if gap is not None:
-                bounded.append((gap, path, local))
-        bounded.sort(key=lambda item: item[0], reverse=deep)
-
-        best, best_path, best_at = None, "", None
-        for gap, path, local in bounded:
-            if best is not None and (gap <= best if deep else gap >= best):
-                break
-            way = -outward if deep else outward
-            if self._precision != PRECISION_TRI:
-                best, best_path = gap, path
-                best_at = self._box_point(local, prism, axis, way, coord, gap)
-                continue
-            triangles = self._mesh_triangles(stage, path)
-            if not triangles:
-                best, best_path = gap, path
-                best_at = self._box_point(local, prism, axis, way, coord, gap)
-                continue
-            local_tris = [[inverse.Transform(Gf.Vec3d(*v)) for v in triangle]
-                         for triangle, _, _ in triangles]
-            found = self._flat_gap(local_tris, prism, axis, outward, coord,
-                                   self._flat_slack(local, axis),
-                                   self._parts_of(path, local_tris), deep)
-            if found is not None and (best is None
-                                      or (found[0] > best if deep
-                                          else found[0] < best)):
-                best, best_path, best_at = found[0], path, found[1]
-        if best is None:
-            return None
-        return {"distance": max(best, 0.0), "prim": best_path, "at": best_at}
-
-    def _lead_patch(self, walk, to_world, axis: int, plane: float) -> list:
-        """안내선이 지날 자리 언저리의 메시를 스테이지 전체에서 훑어 잘라 둔다"""
-        stage = self._get_stage()
-        if stage is None or not walk:
-            return []
-        lo = [min(point[i] for point in walk) - LEAD_ROOM for i in range(3)]
-        hi = [max(point[i] for point in walk) + LEAD_ROOM for i in range(3)]
-        room = Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi))
-        skip = [str(prim.GetPath()) for prim in
-                (self._target.get("ebs"), self._target.get("equipment"))
-                if prim is not None and prim.IsValid()]
-        found, _ = self._gather_nearby(
-            stage, self._bounds_cache(),
-            Gf.BBox3d(room, to_world).ComputeAlignedRange(), skip)
-        inverse = to_world.GetInverse()
-        across = []
-        for path, box in found:
-            local = Gf.BBox3d(box, inverse).ComputeAlignedRange()
-            if (local.GetMin()[axis] - LEAD_TOL <= plane
-                    <= local.GetMax()[axis] + LEAD_TOL):
-                across.append((path, local))
-        return self._same_patch(stage, across, room, inverse, axis, plane)
-
-    def _same_patch(self, stage, nearby, room, inverse, axis: int,
-                    plane: float) -> list:
-        """그 깊이에서 잘라낸 모양들. 평평하면 면, 걸치면 단면 선, 점이 없으면 상자"""
-        lo, hi = room.GetMin(), room.GetMax()
-        u, v = [i for i in range(3) if i != axis]
-        patch = []
-        for path, local in nearby:
-            if len(patch) >= LEAD_PATCH:
-                break
-            triangles = self._mesh_triangles(stage, path) or ()
-            if self._precision != PRECISION_TRI or not triangles:
-                patch += self._box_patch(local, room, u, v)
-                continue
-            slack = max(min(self._flat_slack(local, axis),
-                            self._flat_slack(room, axis)), LEAD_TOL)
-            for triangle, _, _ in triangles:
-                if len(patch) >= LEAD_PATCH:
-                    break
-                here = [inverse.Transform(Gf.Vec3d(*w)) for w in triangle]
-                if any(max(w[i] for w in here) < lo[i] - OVERLAP_EPS
-                       or min(w[i] for w in here) > hi[i] + OVERLAP_EPS
-                       for i in (u, v)):
-                    continue
-                shape = self._sliced(here, axis, plane, slack, u, v)
-                if shape:
-                    patch.append(shape)
-        return patch
-
-    @staticmethod
-    def _sliced(triangle, axis: int, plane: float, slack: float, u: int, v: int):
-        """그 삼각형을 깊이 plane 에서 자른 모양. 평평하면 면, 가로지르면 선"""
-        if all(abs(w[axis] - plane) <= slack for w in triangle):
-            return tuple((w[u], w[v]) for w in triangle)
-        cut = []
-        for at in range(3):
-            a, b = triangle[at], triangle[(at + 1) % 3]
-            step = b[axis] - a[axis]
-            if abs(step) <= 1e-12:
-                continue
-            hit = (plane - a[axis]) / step
-            if 0.0 <= hit <= 1.0:
-                cut.append((a[u] + (b[u] - a[u]) * hit,
-                            a[v] + (b[v] - a[v]) * hit))
-        best = None
-        for at in range(len(cut)):
-            for other in range(at + 1, len(cut)):
-                span = ((cut[at][0] - cut[other][0]) ** 2
-                        + (cut[at][1] - cut[other][1]) ** 2)
-                if best is None or span > best[0]:
-                    best = (span, cut[at], cut[other])
-        if best is None or best[0] <= 1e-18:
-            return None
-        return best[1], best[2]
-
-    @staticmethod
-    def _box_patch(local, room, u: int, v: int) -> list:
-        """상자로만 잴 때는 그 상자의 옆넓이를 면으로 본다"""
-        lo = [max(local.GetMin()[i], room.GetMin()[i]) for i in (u, v)]
-        hi = [min(local.GetMax()[i], room.GetMax()[i]) for i in (u, v)]
-        if lo[0] > hi[0] or lo[1] > hi[1]:
-            return []
-        corners = ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]))
-        return [(corners[0], corners[1], corners[2]),
-                (corners[0], corners[2], corners[3])]
-
-    def _parts_of(self, path: str, triangles) -> list:
-        """그 메시의 덩어리 표. 한 번 만들고 캐시한다"""
-        found = self._parts.get(path)
-        if found is None or len(found) != len(triangles):
-            found = self._mesh_parts(triangles)
-            self._parts[path] = found
-        return found
-
-    @staticmethod
-    def _mesh_parts(triangles) -> list:
-        """삼각형마다 몇 번째 덩어리인지. 꼭짓점을 나눠 쓰면 이어진 것으로 본다"""
-        joins = {}
-        for at, triangle in enumerate(triangles):
-            for vertex in triangle:
-                joins.setdefault(tuple(round(v, 9) for v in vertex),
-                                 []).append(at)
-        parts = [-1] * len(triangles)
-        part = 0
-        for start in range(len(triangles)):
-            if parts[start] >= 0:
-                continue
-            waiting = [start]
-            parts[start] = part
-            while waiting:
-                at = waiting.pop()
-                for vertex in triangles[at]:
-                    for other in joins.get(tuple(round(v, 9) for v in vertex), ()):
-                        if parts[other] < 0:
-                            parts[other] = part
-                            waiting.append(other)
-            part += 1
-        return parts
-
-    @staticmethod
-    def _flat_slack(local, axis: int) -> float:
-        """'같은 평면'으로 볼 깊이 오차. 넓은 면일수록 조금 기울어도 한 면이다"""
-        span = max(local.GetMax()[i] - local.GetMin()[i]
-                   for i in range(3) if i != axis)
-        return max(span * FLAT_TOL, OVERLAP_EPS)
-
-    @staticmethod
-    def _box_point(local, prism, axis: int, outward: int, coord: float, gap: float):
-        """그 상자의 중심에서 선을 뽑는다. 프리즘 안으로 눌러 담는다"""
-        lo, hi = prism.GetMin(), prism.GetMax()
-        point = [0.0, 0.0, 0.0]
-        point[axis] = coord + (gap if outward > 0 else -gap)
-        for i in range(3):
-            if i == axis:
-                continue
-            middle = (local.GetMin()[i] + local.GetMax()[i]) * 0.5
-            point[i] = min(max(middle, lo[i]), hi[i])
-        return tuple(point)
-
-    @staticmethod
-    def _gap_along(box, axis: int, outward: int, coord: float,
-                   deep: bool = False) -> "float | None":
-        """면에서 상자까지의 거리. deep 이면 안으로 파고든 깊이"""
-        if deep:
-            depth = (coord - box.GetMin()[axis] if outward > 0
-                     else box.GetMax()[axis] - coord)
-            return None if depth <= 0 else depth
-        if outward > 0:
-            gap = box.GetMin()[axis] - coord
-        else:
-            gap = coord - box.GetMax()[axis]
-        return None if gap < 0 else gap
-
-    @staticmethod
-    def _triangle_gap(triangle, prism, axis: int, outward: int, coord: float,
-                      deep: bool = False):
-        """삼각형 하나에서 가장 가까운 점과 거리. deep 이면 가장 깊이 든 점"""
-        lo, hi = prism.GetMin(), prism.GetMax()
-        best, at = None, None
-        for vertex in triangle:
-            inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
-                         for i in range(3) if i != axis)
-            if not inside:
-                continue
-            if deep:
-                gap = (coord - vertex[axis]) if outward > 0 else (vertex[axis] - coord)
-            else:
-                gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
-            if gap >= 0 and (best is None or (gap > best if deep else gap < best)):
-                best, at = gap, vertex
-        if best is None:
-            return None
-        middle = tuple(sum(v[i] for v in triangle) / 3.0 for i in range(3))
-        if all(lo[i] - OVERLAP_EPS <= middle[i] <= hi[i] + OVERLAP_EPS
-               for i in range(3) if i != axis):
-            at = middle
-        return best, at
-
-    @staticmethod
-    def _flat_gap(triangles, prism, axis: int, outward: int, coord: float,
-                  slack: float = OVERLAP_EPS, parts: list = None,
-                  deep: bool = False):
-        """한 덩어리 안에서 같은 높이인 면들을 한 면으로 보고 그 중점을 찍는다"""
-        lo, hi = prism.GetMin(), prism.GetMax()
-        best, seed = None, -1
-        for at, triangle in enumerate(triangles):
-            found = EbsSimulate._triangle_gap(triangle, prism, axis, outward,
-                                              coord, deep)
-            if found is not None and (best is None
-                                      or (found[0] > best if deep
-                                          else found[0] < best)):
-                best, seed = found[0], at
-        if best is None:
-            return None
-
-        picked = {}
-        for at, triangle in enumerate(triangles):
-            keep = []
-            for vertex in triangle:
-                inside = all(lo[i] - OVERLAP_EPS <= vertex[i] <= hi[i] + OVERLAP_EPS
-                             for i in range(3) if i != axis)
-                if not inside:
-                    continue
-                if deep:
-                    gap = (coord - vertex[axis]) if outward > 0 else (vertex[axis] - coord)
-                else:
-                    gap = (vertex[axis] - coord) if outward > 0 else (coord - vertex[axis])
-                if gap >= 0 and abs(gap - best) <= slack:
-                    keep.append(vertex)
-            if keep:
-                picked[at] = keep
-        if seed not in picked:
-            return None
-
-        if parts is None:
-            parts = EbsSimulate._mesh_parts(triangles)
-        here = parts[seed]
-        mins, maxs = [None, None, None], [None, None, None]
-        for at, kept in picked.items():
-            if parts[at] != here:
-                continue
-            for vertex in kept:
-                for i in range(3):
-                    if i == axis:
-                        continue
-                    mins[i] = vertex[i] if mins[i] is None else min(mins[i], vertex[i])
-                    maxs[i] = vertex[i] if maxs[i] is None else max(maxs[i], vertex[i])
-        if mins[0] is None and mins[1] is None and mins[2] is None:
-            return None
-        point = [0.0, 0.0, 0.0]
-        for i in range(3):
-            if i != axis:
-                point[i] = min(max((mins[i] + maxs[i]) * 0.5, lo[i]), hi[i])
-        way = -outward if deep else outward
-        point[axis] = coord + (best if way > 0 else -best)
-        return best, tuple(point)
-
 
     def show_markers(self, ebs_prim: Usd.Prim, cells: dict,
                      marks: list = None, marks_boxes: list = None,
@@ -4740,7 +3009,7 @@ class EbsSimulate:
 
         fresh  False 면 지우지 않고 있던 프림을 고쳐 그린다. 미는 동안 쓴다
         """
-        bbox = self._ebs_bound(ebs_prim)
+        bbox = Collide._ebs_bound(self, ebs_prim)
         local_box, to_world = bbox.GetRange(), bbox.GetMatrix()
         if local_box.IsEmpty():
             return 0
@@ -4751,7 +3020,7 @@ class EbsSimulate:
     def _face_sheets(self, local_box, to_world, cells: dict,
                      marks: list) -> list:
         """면 판마다 (이름, 월드 네 점, 막혔나)"""
-        built = self._build_cells(local_box)
+        built = Collide._build_cells(self, local_box)
         tight = {mark["face"] for mark in marks or ()
                  if mark.get("state") == STATE_TIGHT}
         sheets = []
