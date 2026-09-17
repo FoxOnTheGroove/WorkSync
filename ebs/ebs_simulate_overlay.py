@@ -819,6 +819,7 @@ class EbsSimulateGrip:
             return False
         self._state = state
         colour = GRIP_COLORS[state]
+        self._paint._drawn = set()
         one, two = self._ends
         thick = self._high * GRIP_THICK
         high, wide = self._reach * GRIP_HEAD, self._high * GRIP_FLARE
@@ -830,11 +831,14 @@ class EbsSimulateGrip:
                     EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, "grip", colour,
                                              1.0, 0.0, glow=False)
-                self._paint._gap_line(stage, f"{self._root}/shaft", body[0],
-                                      body[1], thick, skin, colour)
+                self._paint._gap_line(
+                    stage, self._paint._keep(f"{self._root}/shaft"),
+                    body[0], body[1], thick, skin, colour)
                 for name, tip, back in (("a", one, two), ("b", two, one)):
-                    self._paint._gap_head(stage, f"{self._root}/head_{name}",
-                                          tip, back, skin, colour, high, wide)
+                    self._paint._gap_head(
+                        stage, self._paint._keep(f"{self._root}/head_{name}"),
+                        tip, back, skin, colour, high, wide)
+                self._paint._show_only(stage)
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
             return False
@@ -987,6 +991,9 @@ class EbsSimulateMarks:
         self._clash_at: dict = {}
         self._clash_lit: bool = True
         self._looks: dict = {}
+        self._standing: set = set()
+        self._drawn: set = set()
+        self._lit: dict = {}
 
     def draw(self, sheets: list, marks: list = None, boxes: list = None,
              fresh: bool = True) -> int:
@@ -999,14 +1006,52 @@ class EbsSimulateMarks:
         if stage is None:
             return 0
         if fresh:
-            self.clear()
+            self._stop_pulse()
         drawn = 0
+        self._drawn = set()
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, self._root)
             drawn += self._sheets(stage, sheets)
             drawn += self._gap_lines(stage, marks)
             drawn += self._clash_boxes(stage, boxes)
+            self._show_only(stage)
         return drawn
+
+    def _keep(self, path: str) -> str:
+        """이번 판에 그린 자리로 적어 둔다. 그 경로를 그대로 돌려준다"""
+        self._drawn.add(path)
+        self._standing.add(path)
+        return path
+
+    def _light(self, stage, path: str, on: bool) -> bool:
+        """그 자리 하나를 켜고 끈다. 지금과 같으면 한 자도 안 쓴다
+
+        _lit  지금 켜 둔 상태. 달라질 때만 쓴다. 안 그러면 안 바뀐 것에도
+              프레임마다 가시성을 써서 미는 동안 통지가 그만큼 늘어난다
+        처음 보는 자리를 켜는 것은 안 쓴다. 우리가 방금 세운 프림이라 이미
+        보이는 상태다. 감추는 쪽만 실제로 쓸 일이 있다
+        """
+        want = UsdGeom.Tokens.inherited if on else UsdGeom.Tokens.invisible
+        was = self._lit.get(path)
+        if was == want:
+            return on
+        if was is None and on:
+            self._lit[path] = want
+            return on
+        prim = stage.GetPrimAtPath(path)
+        if prim is None or not prim.IsValid():
+            return False
+        imageable = UsdGeom.Imageable(prim)
+        if not imageable:
+            return on
+        imageable.GetVisibilityAttr().Set(want)
+        self._lit[path] = want
+        return on
+
+    def _show_only(self, stage) -> None:
+        """이번에 그린 것만 보이고 나머지는 감춘다. 지우지는 않는다"""
+        for path in self._standing:
+            self._light(stage, path, path in self._drawn)
 
     def hide_clash(self) -> bool:
         """내부충돌연출을 걷는다. 지우지 않고 뿌리 하나만 감춘다
@@ -1032,37 +1077,42 @@ class EbsSimulateMarks:
             prim = stage.GetPrimAtPath(where)
             if prim is None or not prim.IsValid():
                 return False
-            UsdGeom.Imageable(prim).GetVisibilityAttr().Set(
+            imageable = UsdGeom.Imageable(prim)
+            if not imageable:
+                return False
+            imageable.GetVisibilityAttr().Set(
                 UsdGeom.Tokens.inherited if on else UsdGeom.Tokens.invisible)
         self._clash_lit = on
         return True
 
     def clear(self) -> None:
-        """그린 것만 지우고 깜박임도 놓는다. Looks 는 두고 간다
+        """그린 것을 감춘다. 프림도 머티리얼도 두고 간다
 
-        머티리얼까지 지우면 다음에 그릴 때 OmniPBR 을 새로 세우게 되고 RTX 가
-        그 자리에서 MDL 을 다시 컴파일한다. collide 뒤와 Clear 뒤에 화면이
-        잦아들기를 기다리던 시간의 대부분이 거기였다
-        _looks  남겨 둔 것을 다시 안 쓰려고 적어 둔 값. 같이 살아 있어야 한다
+        지우면 프림마다 rprim 이 사라지고 다음에 그릴 때 그만큼 다시 짓는다.
+        이름이 자리마다 정해져 있어 Define 이 있던 것을 돌려주므로, 감춰
+        뒀다가 속성만 새로 써도 화면은 똑같다. hide_clash 가 상자 뿌리
+        하나로 하던 것을 그린 것 전부로 넓힌 것이다
+        _clash_at  상자는 장비 자리에 서 있어 EBS 를 밀어도 안 움직인다.
+                 여기서 안 버려야 다음 판에 그 자리를 그대로 다시 쓴다
         """
         self._stop_pulse()
-        self._clash_at = {}
-        self._clash_lit = True
         stage = self._stage_of()
         if stage is None:
             return
-        root = stage.GetPrimAtPath(self._root)
-        if root is None or not root.IsValid():
-            return
+        self._drawn = set()
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            for kid in list(root.GetChildren()):
-                if kid.GetName() != LOOKS_NAME:
-                    stage.RemovePrim(kid.GetPath())
+            self._light_clash(False)
+            self._show_only(stage)
 
     def drop_looks(self) -> None:
-        """남겨 둔 머티리얼까지 치운다. teardown 만 여기까지 간다"""
+        """세워 둔 것을 머티리얼까지 통째로 치운다. teardown 만 여기까지 간다"""
         self.clear()
         self._looks = {}
+        self._standing = set()
+        self._drawn = set()
+        self._lit = {}
+        self._clash_at = {}
+        self._clash_lit = True
         stage = self._stage_of()
         if stage is None:
             return
@@ -1083,8 +1133,9 @@ class EbsSimulateMarks:
         drawn = 0
         for name, points, blocked in sheets or ():
             material, colour, alpha = looks[bool(blocked)]
-            self._sheet(stage, f"{self._root}/{name}", points, material,
-                        colour, alpha)
+            self._sheet(stage, self._keep(f"{self._root}/{name}"), points,
+                        material, colour, alpha)
+            self._keep(f"{self._root}/{name}_back")
             drawn += 1
         return drawn
 
@@ -1102,7 +1153,8 @@ class EbsSimulateMarks:
                     stage, "tight" if warn else "gap", colour,
                     GAP_OPACITY, GAP_EMISSION)
             shaft = self._gap_shaft(mark["from"], mark["to"])
-            if self._gap_line(stage, f"{self._root}/{mark['face']}_gap",
+            if self._gap_line(stage,
+                              self._keep(f"{self._root}/{mark['face']}_gap"),
                               shaft[0], shaft[1], GAP_RADIUS,
                               threads[colour], colour):
                 drawn += 1
@@ -1120,9 +1172,9 @@ class EbsSimulateMarks:
             threads[COLOR_LEAD] = self._material(
                 stage, "lead", COLOR_LEAD, GAP_OPACITY, GAP_EMISSION)
         one, two = self._stretched(mark["to"], lead[-1], LEAD_OVER)
-        drawn = int(self._gap_line(stage, f"{self._root}/{mark['face']}_lead_0",
-                                   one, two, LEAD_RADIUS, threads[COLOR_LEAD],
-                                   COLOR_LEAD))
+        drawn = int(self._gap_line(
+            stage, self._keep(f"{self._root}/{mark['face']}_lead_0"),
+            one, two, LEAD_RADIUS, threads[COLOR_LEAD], COLOR_LEAD))
         # 꺾어 가며 마디마다 긋던 것. 멈출 자리를 고르는 _lead_path 는 그대로라
         # 아래를 되살리면 다시 꺾어 그린다 (마디마다 프림 하나)
         # drawn = 0
@@ -1148,7 +1200,7 @@ class EbsSimulateMarks:
             return 0
         step = [v / span * LEAD_OVER for v in way]
         return int(self._gap_line(
-            stage, f"{self._root}/{mark['face']}_tick",
+            stage, self._keep(f"{self._root}/{mark['face']}_tick"),
             tuple(spot[i] - step[i] for i in range(3)),
             tuple(spot[i] + step[i] for i in range(3)),
             LEAD_RADIUS, material, COLOR_LEAD))
@@ -1187,13 +1239,7 @@ class EbsSimulateMarks:
             show.add(name)
         drawn = 0
         for name in self._clash_at.values():
-            prim = stage.GetPrimAtPath(name)
-            if prim is None or not prim.IsValid():
-                continue
-            on = name in show
-            UsdGeom.Imageable(prim).GetVisibilityAttr().Set(
-                UsdGeom.Tokens.inherited if on else UsdGeom.Tokens.invisible)
-            drawn += int(on)
+            drawn += int(self._light(stage, name, name in show))
         if drawn:
             self._start_pulse(stage)
         else:
@@ -1326,7 +1372,8 @@ class EbsSimulateMarks:
         """선 양 끝에 원뿔을 붙여 화살표로 보이게 한다"""
         made = 0
         for name, tip, back in (("a", start, end), ("b", end, start)):
-            if self._gap_head(stage, f"{self._root}/{face}_head_{name}",
+            if self._gap_head(stage,
+                              self._keep(f"{self._root}/{face}_head_{name}"),
                               tip, back, material, colour):
                 made += 1
         return made
