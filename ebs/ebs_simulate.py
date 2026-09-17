@@ -1022,6 +1022,7 @@ class EbsSimulate:
         self.strip_skin()
         self.drop_skin()
         self._camera.remove(self._get_stage())
+        self._marks().drop_looks()
         self.clear_markers()
         self.clear_port_lasers()
         self.clear_sweep()

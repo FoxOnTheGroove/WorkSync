@@ -89,6 +89,8 @@ COLOR_FILL    = 0xFF20C8FF
 WORK_SIZE     = 17
 
 CLASH_ROOT    = "{0}/Clash"
+LOOKS_ROOT    = "{0}/Looks"
+LOOKS_NAME    = "Looks"
 CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002
 COLOR_CLASH   = (0.95, 0.15, 0.15)
@@ -752,8 +754,12 @@ class EbsSimulateGrip:
 
     @classmethod
     def destroy(cls) -> None:
-        """지우고 손을 뗀다"""
-        cls.hide()
+        """지우고 손을 뗀다. 세워 둔 머티리얼까지 치운다"""
+        if cls._one is not None:
+            cls._one.wipe()
+            paint = getattr(cls._one, "_paint", None)
+            if paint is not None:
+                paint.drop_looks()
         cls._again = False
         cls._one = None
 
@@ -835,7 +841,7 @@ class EbsSimulateGrip:
         return True
 
     def wipe(self) -> None:
-        """그린 것을 지우고 잡은 것도 놓는다"""
+        """그린 것을 지우고 잡은 것도 놓는다. 머티리얼은 두고 간다"""
         self._from = None
         self._ends = None
         self._matrix = None
@@ -980,6 +986,7 @@ class EbsSimulateMarks:
         self._pulse_from: float = 0.0
         self._clash_at: dict = {}
         self._clash_lit: bool = True
+        self._looks: dict = {}
 
     def draw(self, sheets: list, marks: list = None, boxes: list = None,
              fresh: bool = True) -> int:
@@ -1031,10 +1038,31 @@ class EbsSimulateMarks:
         return True
 
     def clear(self) -> None:
-        """뿌리를 통째로 지우고 깜박임도 놓는다"""
+        """그린 것만 지우고 깜박임도 놓는다. Looks 는 두고 간다
+
+        머티리얼까지 지우면 다음에 그릴 때 OmniPBR 을 새로 세우게 되고 RTX 가
+        그 자리에서 MDL 을 다시 컴파일한다. collide 뒤와 Clear 뒤에 화면이
+        잦아들기를 기다리던 시간의 대부분이 거기였다
+        _looks  남겨 둔 것을 다시 안 쓰려고 적어 둔 값. 같이 살아 있어야 한다
+        """
         self._stop_pulse()
         self._clash_at = {}
         self._clash_lit = True
+        stage = self._stage_of()
+        if stage is None:
+            return
+        root = stage.GetPrimAtPath(self._root)
+        if root is None or not root.IsValid():
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for kid in list(root.GetChildren()):
+                if kid.GetName() != LOOKS_NAME:
+                    stage.RemovePrim(kid.GetPath())
+
+    def drop_looks(self) -> None:
+        """남겨 둔 머티리얼까지 치운다. teardown 만 여기까지 간다"""
+        self.clear()
+        self._looks = {}
         stage = self._stage_of()
         if stage is None:
             return
@@ -1418,10 +1446,16 @@ class EbsSimulateMarks:
 
         glow  색을 발광으로 낸다. 끄면 빛을 받는 diffuse 로 낸다
         """
-        path = f"{self._root}/Looks/{name}"
+        path = LOOKS_ROOT.format(self._root) + f"/{name}"
+        want = (tuple(color), opacity, emission, bool(glow))
+        if self._looks.get(path) == want:
+            standing = stage.GetPrimAtPath(path)
+            if standing is not None and standing.IsValid():
+                return UsdShade.Material(standing)
         material = UsdShade.Material.Define(stage, path)
         self._preview_shader(stage, material, path, color, opacity, glow)
         self._mdl_shader(stage, material, path, color, opacity, emission, glow)
+        self._looks[path] = want
         return material
 
     @staticmethod
