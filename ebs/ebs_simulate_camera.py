@@ -326,8 +326,6 @@ class EbsSimulateCamera:
                 lambda x, y, button, mod: self._pressed(x, y, button))
             self._catch.set_mouse_moved_fn(
                 lambda x, y, mod, held: self._moved(x, y))
-            self._catch.set_mouse_hovered_fn(
-                lambda on: self._hovered(on))
             self._catch.set_mouse_released_fn(
                 lambda x, y, button, mod: self._end_drag())
             self._catch.set_mouse_double_clicked_fn(
@@ -366,23 +364,14 @@ class EbsSimulateCamera:
         self._start_drag()
         self._at = (x, y)
 
-    def _hovered(self, on: bool) -> None:
-        """커서가 판에 들어오고 나간다. 나가면 손잡이 색을 되돌린다
-
-        이걸 걸어 두어야 킷이 버튼을 안 누른 채 움직인 것도 _moved 로 준다.
-        안 걸면 누른 동안만 와서 hover 색이 안 바뀐다
-        """
-        if not on and self._watcher is not None:
-            self._watcher.away()
-
     def _moved(self, x, y) -> None:
-        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다. 기즈모가 먼저다"""
-        watcher = self._watcher
-        if watcher is not None:
-            if watcher.drag(x, y):
-                return
-            if self._from is None:
-                watcher.over(x, y)
+        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다. 기즈모가 먼저다
+
+        킷은 버튼을 누른 동안만 여기로 준다. 그래서 손잡이는 hover 를 안 쓰고
+        잡았을 때만 색이 바뀐다
+        """
+        if self._watcher is not None and self._watcher.drag(x, y):
+            return
         if self._held or self._from is None or self._at is None:
             return
         dx, dy = x - self._at[0], y - self._at[1]

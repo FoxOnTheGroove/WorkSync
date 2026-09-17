@@ -200,7 +200,7 @@ GEOMETRY_TYPES = frozenset({
 VERDICT_HEIGHT = 0.8
 GRIP_HEIGHT   = 0.3
 OFFSET_HEIGHT = 0.25
-GRIP_WIDE   = 1.0 / 8.0
+GRIP_WIDE   = 1.5 / 8.0
 GRIP_TALL   = 1.0 / 16.0
 CLASH_HEIGHT   = 0.45
 NEIGHBOUR_REACH = 1.5
@@ -259,6 +259,7 @@ LEAD_ROOM   = 0.05
 
 GRID = 1
 FADE_OTHERS = False
+GRIP_WATCH   = 3
 SETTLE_GUESS = 2.0
 SETTLE_FRAME = 0.02
 SETTLE_CALM  = 3
@@ -350,6 +351,9 @@ class EbsSimulate:
         self._verdict: dict = {}
         self._progress: float = 0.0
         self._doing: str = ""
+        self._moves: int = 0
+        self._move_from: dict = {}
+        self._move_clock: float = 0.0
         self._settled: float = 0.0
         self._spent: dict = {}
         self._shares: dict = {}
@@ -502,6 +506,48 @@ class EbsSimulate:
     def hold_camera(self, on: bool) -> None:
         """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
         self._camera.hold(on)
+
+    def _ours_now(self) -> dict:
+        """우리가 그린 프림이 뿌리마다 몇 개인가. 손잡이 보고에만 쓴다"""
+        stage = self._get_stage()
+        told = {}
+        if stage is None:
+            return told
+        for root in (MARKER_ROOT, GRIP_ROOT):
+            one = stage.GetPrimAtPath(root)
+            try:
+                told[root] = (sum(1 for _ in Usd.PrimRange(one))
+                              if one is not None and one.IsValid() else 0)
+            except Exception:
+                told[root] = 0
+        return told
+
+    def mark_move(self) -> None:
+        """손잡이를 잡은 순간의 프림 수를 적어 둔다. 민 뒤와 견준다"""
+        if self._moves >= GRIP_WATCH:
+            return
+        self._move_from = self._ours_now()
+        self._move_clock = time.perf_counter()
+
+    async def watch_move(self) -> None:
+        """처음 민 뒤 무엇이 남았는지 한 줄로 찍는다. 몇 번만 찍고 만다
+
+        파이썬 구간은 0.0x 로 나왔다. 그러면 남는 것은 그 뒤 프레임이고,
+        프레임을 무겁게 만드는 것은 새로 생긴 프림이다. 둘을 같이 적는다
+        """
+        if self._moves >= GRIP_WATCH:
+            return
+        self._moves += 1
+        turn, before = self._moves, dict(self._move_from)
+        spent = time.perf_counter() - self._move_clock
+        calm = await self.settle("overlay")
+        after = self._ours_now()
+        grew = " · ".join(
+            f"{root.rsplit('/', 1)[-1]} {after.get(root, 0) - before.get(root, 0):+d}"
+            f"({after.get(root, 0)})"
+            for root in (MARKER_ROOT, GRIP_ROOT) if root in after)
+        print(f"[ebs] 손잡이 {turn}번째 | 파이썬 {spent:.2f}s · 정착 {calm:.2f}s"
+              + (f" · 프림 {grew}" if grew else ""))
 
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
@@ -1205,6 +1251,7 @@ class EbsSimulate:
         self._blocked = ""
         self._phases = {}
         self._skin_told = {}
+        self._moves = 0
         self._started = time.perf_counter()
 
     def _done(self, payload: dict) -> dict:

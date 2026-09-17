@@ -22,18 +22,16 @@ HOME   = "원점"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
 
-GRIP_HEAD  = 0.6
-GRIP_THICK = 0.175 / 3.0
-GRIP_FLARE = 0.25
+GRIP_HEAD  = 0.3
+GRIP_THICK = 0.175 / 3.0 * 0.75
+GRIP_FLARE = 0.25 * 0.75
 GRIP_PICK  = 14.0
 
-GRIP_IDLE, GRIP_HOT, GRIP_HOLD = "idle", "hot", "hold"
-GRIP_COLORS = {GRIP_IDLE: (1.0, 0.78, 0.20),
-               GRIP_HOT:  (1.0, 1.0, 1.0),
-               GRIP_HOLD: (0.45, 1.0, 0.65)}
+GRIP_IDLE, GRIP_HOLD = "idle", "hold"
+GRIP_COLORS = {GRIP_IDLE: (1.0, 0.92, 0.35),
+               GRIP_HOLD: (0.85, 0.58, 0.05)}
 
 SAID = set()
-CURSOR = None
 
 
 def once(line: str) -> None:
@@ -568,7 +566,6 @@ class EbsSimulateOverlay:
     def _tick(self) -> None:
         """한 프레임 몫. 표를 보고, hover 를 묻고, 판을 카메라에 맞춘다"""
         self._work_place()
-        EbsSimulateGrip.sweep()
         self._place()
 
     def _start(self) -> bool:
@@ -748,44 +745,6 @@ class EbsSimulateGrip:
         return cls._one.stand(grip, to_screen)
 
     @classmethod
-    def sweep(cls) -> None:
-        """프레임마다 커서 자리를 물어 hover 를 판단한다
-
-        킷은 버튼을 안 누른 채 움직인 것을 위젯 콜백으로 안 준다. 눌러야
-        _moved 가 온다. set_mouse_hovered_fn 을 걸어도 마찬가지다. 그래서
-        hover 만은 이벤트가 아니라 프레임마다 묻는 쪽으로 돈다
-        """
-        one = cls._one
-        if one is None or one._ends is None or one._from is not None:
-            return
-        spot = cls._cursor()
-        if spot is not None:
-            one.over(spot[0], spot[1])
-
-    @staticmethod
-    def _cursor():
-        """앱 창 기준 커서 자리. 한 번 못 물으면 다시 안 묻는다"""
-        global CURSOR
-        if CURSOR is False:
-            return None
-        try:
-            if CURSOR is None:
-                import carb.input
-                import omni.appwindow
-                CURSOR = (carb.input.acquire_input_interface(),
-                          omni.appwindow.get_default_app_window().get_mouse(),
-                          carb.input.MouseInput.MOUSE_POSITION_X,
-                          carb.input.MouseInput.MOUSE_POSITION_Y)
-                once("grip hover asks the cursor every frame")
-            reader, mouse, across, down = CURSOR
-            return (reader.get_mouse_value(mouse, across),
-                    reader.get_mouse_value(mouse, down))
-        except Exception as e:
-            CURSOR = False
-            once(f"cannot ask where the cursor is: {type(e).__name__}: {e}")
-            return None
-
-    @classmethod
     def held(cls) -> bool:
         """지금 손잡이를 잡고 있나. 판정 표를 내릴지 여기로 묻는다"""
         return cls._one is not None and cls._one.holding
@@ -816,6 +775,7 @@ class EbsSimulateGrip:
         self._state = ""
         self._from = None
         self._was = 0.0
+        self._told = True
 
     @staticmethod
     def _stage():
@@ -844,8 +804,7 @@ class EbsSimulateGrip:
             ends.append(tuple(end))
         self._ends = tuple(ends)
         EbsSimulateService.watch_grip(self)
-        return self._draw(GRIP_HOLD if self._from is not None else
-                          GRIP_HOT if self._state == GRIP_HOT else GRIP_IDLE)
+        return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
         """그 상태 색으로 몸통 하나와 화살촉 둘. 뿌리가 EBS 를 따라간다"""
@@ -882,30 +841,6 @@ class EbsSimulateGrip:
         self._matrix = None
         self._paint.clear()
 
-    def over(self, x: float, y: float) -> bool:
-        """커서가 위에 있나. 있으면 색을 바꾼다
-
-        버튼을 안 누른 채 움직인 것이 여기까지 오는지부터가 관건이다.
-        한 번도 안 오면 hover 색이 안 바뀐다. 그래서 첫 걸음을 적어 둔다
-        """
-        if self._ends is None:
-            return False
-        once("grip hover reaches over()")
-        if EbsSimulateService.busy():
-            return False
-        want = GRIP_HOT if self._hit(x, y) else GRIP_IDLE
-        if want != self._state:
-            once(f"grip hover paints {want}")
-            self._draw(want)
-        return want == GRIP_HOT
-
-    def away(self) -> None:
-        """커서가 뷰포트 판을 떠났다. 잡고 있지 않으면 색을 되돌린다"""
-        if self._ends is None or self._from is not None:
-            return
-        if self._state != GRIP_IDLE:
-            self._draw(GRIP_IDLE)
-
     def press(self, x: float, y: float) -> bool:
         """여기서 눌렸나. 눌렸으면 끌기를 시작한다
 
@@ -918,6 +853,8 @@ class EbsSimulateGrip:
             return False
         self._from = x
         self._was = EbsSimulateService.get_nudge()
+        self._told = False
+        EbsSimulateService.mark_move()
         EbsSimulateService.hold_clash(False)
         self._draw(GRIP_HOLD)
         return True
@@ -931,6 +868,12 @@ class EbsSimulateGrip:
             metres = (x - self._from) / per * self._unit
             EbsSimulateService.slide(self._was + metres)
             EbsSimulateOverlay.restate()
+            if not self._told:
+                self._told = True
+                try:
+                    asyncio.ensure_future(EbsSimulateService.watch_move())
+                except Exception as e:
+                    once(f"cannot watch the first grip move: {e}")
         return True
 
     def release(self) -> None:
