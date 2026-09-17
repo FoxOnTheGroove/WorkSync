@@ -85,6 +85,15 @@ LEAD_RADIUS = 0.001
 LEAD_OVER   = 0.01
 COLOR_LEAD  = (1.0, 1.0, 1.0)
 
+WORK_WIDE     = 260
+WORK_BAR      = 8
+WORK_PAD      = 10
+WORK_PCT      = "{0:.0f}%"
+COLOR_WORK    = 0xE6141414
+COLOR_TRACK   = 0x33FFFFFF
+COLOR_FILL    = 0xFF20C8FF
+WORK_SIZE     = 17
+
 CLASH_ROOT    = "{0}/Clash"
 CLASH_OPACITY = 0.35
 CLASH_PAD     = 0.002
@@ -121,6 +130,11 @@ class EbsSimulateOverlay:
             if vp_name in (None, name):
                 overlay._place()
                 overlay._start()
+
+    @classmethod
+    def wake(cls, vp_name: str = None):
+        """프레임만 세워 둔다. 작업중 표가 뜰 자리를 미리 잡는 것"""
+        return cls._get(vp_name)
 
     @classmethod
     def hide(cls, vp_name: str = None):
@@ -169,6 +183,13 @@ class EbsSimulateOverlay:
         self._grounds = {}
         self._from = None
         self._was = 0.0
+        self._work = None
+        self._work_hold = None
+        self._work_pct_hold = None
+        self._work_words = {}
+        self._work_pcts = {}
+        self._work_fill = None
+        self._work_panel = None
 
     def _build(self, window) -> bool:
         """뷰포트에 프레임을 걸고 투영에 쓸 viewport api 를 잡는다"""
@@ -176,6 +197,7 @@ class EbsSimulateOverlay:
             self._frame = window.get_frame(FRAME_ID)
             with self._frame:
                 self._stack = ui.ZStack()
+                self._build_work()
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
             return False
@@ -188,7 +210,80 @@ class EbsSimulateOverlay:
                 print(f"[ebs] the overlay has no viewport to project through: {e}")
                 return False
         self._window = window
+        self._start()
         return True
+
+    def _build_work(self) -> None:
+        """작업중 표를 한 번만 지어 둔다. 보이고 감추는 것만 나중에 한다
+
+        매번 다시 지으면 글자가 깜빡인다. 글줄은 모양마다 하나씩 두고
+        하나만 켠다. ui.Label 은 처음 글로 잡아 둔 자리를 계속 쓴다
+        """
+        self._work = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+        with self._work:
+            self._work_panel = ui.ZStack(width=ui.Pixel(WORK_WIDE), height=0)
+            with self._work_panel:
+                ui.Rectangle(style={"background_color": COLOR_WORK,
+                                    "border_radius": 6})
+                with ui.VStack(spacing=6,
+                               style={"margin_width": WORK_PAD,
+                                      "margin_height": WORK_PAD}):
+                    self._work_hold = ui.ZStack(height=0)
+                    with ui.ZStack(height=ui.Pixel(WORK_BAR)):
+                        ui.Rectangle(style={"background_color": COLOR_TRACK,
+                                            "border_radius": 3})
+                        with ui.HStack():
+                            self._work_fill = ui.Rectangle(
+                                width=ui.Pixel(0),
+                                style={"background_color": COLOR_FILL,
+                                       "border_radius": 3})
+                            ui.Spacer()
+                    self._work_pct_hold = ui.ZStack(height=0)
+        self._work_panel.visible = False
+
+    def _work_word(self, hold, store: dict, text: str) -> None:
+        """그 글 모양의 글줄만 켠다. 없으면 그때 하나 만든다"""
+        if hold is None:
+            return
+        shape = "".join("0" if one.isdigit() else one for one in text)
+        label = store.get(shape)
+        if label is None:
+            with hold:
+                label = ui.Label(text, height=0,
+                                 alignment=ui.Alignment.CENTER,
+                                 style={"color": COLOR_TEXT,
+                                        "font_size": WORK_SIZE})
+            store[shape] = label
+        label.text = text
+        for key, one in store.items():
+            one.visible = key == shape
+
+    def _work_place(self) -> None:
+        """작업중이면 가운데에 앉히고 진행도를 고친다. 아니면 감춘다"""
+        panel = self._work_panel
+        if panel is None or self._work is None:
+            return
+        busy = EbsSimulateService.busy()
+        if not busy:
+            panel.visible = False
+            return
+        step = EbsSimulateService.get_step()
+        done = max(0.0, min(EbsSimulateService.get_progress(), 100.0))
+        self._work_word(self._work_hold, self._work_words,
+                        f"{busy} · {step}" if step else busy)
+        self._work_word(self._work_pct_hold, self._work_pcts,
+                        WORK_PCT.format(done))
+        if self._work_fill is not None:
+            self._work_fill.width = ui.Pixel(
+                (WORK_WIDE - WORK_PAD * 2) * done / 100.0)
+        try:
+            width = self._frame.computed_width
+            height = self._frame.computed_height
+        except Exception:
+            return
+        self._work.offset_x = (width - WORK_WIDE) * 0.5
+        self._work.offset_y = (height - panel.computed_height) * 0.5
+        panel.visible = True
 
     def refresh(self, place: bool = True) -> bool:
         """판정을 읽어 판을 새로 그린다"""
@@ -443,12 +538,19 @@ class EbsSimulateOverlay:
         """미터로 잰 값을 밀리미터로. 판에 적는 단위다"""
         return (metres or 0.0) * MM_PER_M
 
+    def _tick(self) -> None:
+        """한 프레임 몫. 작업중 표를 먼저 보고 판을 카메라에 맞춘다"""
+        self._work_place()
+        self._place()
+
     def _start(self) -> bool:
-        """매 프레임 _place 를 부르도록 Kit 업데이트에 붙는다"""
+        """매 프레임 _tick 을 부르도록 Kit 업데이트에 붙는다. 한 번만 붙는다"""
+        if self._follow is not None:
+            return True
         try:
             import omni.kit.app
             self._follow = omni.kit.app.get_app().get_update_event_stream() \
-                .create_subscription_to_pop(lambda e: self._place(),
+                .create_subscription_to_pop(lambda e: self._tick(),
                                             name="ebs overlay follow")
         except Exception as e:
             print(f"[ebs] the overlay will not follow the camera: {e}")
@@ -560,9 +662,12 @@ class EbsSimulateOverlay:
 
 
     def clear(self) -> None:
-        """그린 판과 카메라 추적을 놓는다"""
+        """그린 판을 놓는다. 프레임 구독은 그대로 둔다
+
+        _follow  작업중 표도 여기서 돈다. Clear 가 맨 먼저 이걸 부르므로
+                 여기서 놓으면 지우는 동안 표가 안 보인다
+        """
         EbsSimulateGrip.hide()
-        self._follow = None
         self._marks = []
         self._texts = {}
         self._dials = {}
@@ -578,6 +683,14 @@ class EbsSimulateOverlay:
         """프레임과 api 참조까지 전부 놓는다"""
         self.clear()
         EbsSimulateGrip.destroy()
+        self._follow = None
+        self._work = None
+        self._work_hold = None
+        self._work_pct_hold = None
+        self._work_words = {}
+        self._work_pcts = {}
+        self._work_fill = None
+        self._work_panel = None
         self._stack = None
         self._frame = None
         self._api = None
@@ -706,11 +819,11 @@ class EbsSimulateGrip:
         """커서가 위에 있나. 있으면 색을 바꾼다"""
         if self._ends is None:
             return False
+        if EbsSimulateService.busy():
+            return False
         want = GRIP_HOT if self._hit(x, y) else GRIP_IDLE
         if want != self._state:
-            clock = time.perf_counter()
             self._draw(want)
-            EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return want == GRIP_HOT
 
     def press(self, x: float, y: float) -> bool:
@@ -726,9 +839,7 @@ class EbsSimulateGrip:
         self._from = x
         self._was = EbsSimulateService.get_nudge()
         EbsSimulateService.hold_clash(False)
-        clock = time.perf_counter()
         self._draw(GRIP_HOLD)
-        EbsSimulateService.add_grip("손잡이색", time.perf_counter() - clock)
         return True
 
     def drag(self, x: float, y: float) -> bool:
@@ -739,10 +850,7 @@ class EbsSimulateGrip:
         if per:
             metres = (x - self._from) / per * self._unit
             EbsSimulateService.slide(self._was + metres)
-            clock = time.perf_counter()
             EbsSimulateOverlay.restate()
-            EbsSimulateService.add_grip("패널", time.perf_counter() - clock)
-            EbsSimulateService.say_grip()
         return True
 
     def release(self) -> None:
@@ -758,6 +866,7 @@ class EbsSimulateGrip:
         EbsSimulateOverlay.restate()
         if EbsSimulateService.busy():
             return
+        EbsSimulateOverlay.wake()
         EbsSimulateService.begin_work(WORK_SETTLE)
         asyncio.ensure_future(self._settle())
 

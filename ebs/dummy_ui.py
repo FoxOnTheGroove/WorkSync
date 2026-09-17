@@ -409,6 +409,7 @@ class EbsDummyUI:
         if busy:
             self._set_status(f"Busy: {busy}")
             return
+        self._overlay(EbsSimulateOverlay.wake)
         EbsSimulateService.begin_work(label)
         self._task = asyncio.ensure_future(self._working(make))
 
