@@ -1,13 +1,8 @@
-"""EBS 와 주변 장비의 충돌을 재는 쪽."""
-
 import array
-import math
 
 from pxr import Usd, UsdGeom, Gf
 
 from .ebs_simulate_shared import *
-
-__all__ = ["EbsSimulateCollide"]
 
 
 class EbsSimulateCollide:
@@ -153,8 +148,8 @@ class EbsSimulateCollide:
         top = cells.get(FACE_CEILING) or []
         if top:
             whole = cls._union(top)
-            above, seen = cls._gather_nearby(sim, 
-                stage, cache,
+            above, seen = cls._gather_nearby(
+                sim, stage, cache,
                 Gf.Range3d(whole.GetMin() - margin, whole.GetMax() + margin),
                 skip)
             visited += seen
@@ -629,8 +624,8 @@ class EbsSimulateCollide:
         skip = [str(prim.GetPath()) for prim in
                 (sim._target.get("ebs"), sim._target.get("equipment"))
                 if prim is not None and prim.IsValid()]
-        found, _ = cls._gather_nearby(sim, 
-            stage, cls._bounds_cache(sim),
+        found, _ = cls._gather_nearby(
+            sim, stage, cls._bounds_cache(sim),
             Gf.BBox3d(room, to_world).ComputeAlignedRange(), skip)
         inverse = to_world.GetInverse()
         across = []
@@ -1157,7 +1152,7 @@ class EbsSimulateCollide:
         under_ebs = tuple(p + "/" for p in ours_ebs)
         index = []
         with sim._stage_timer("stage: index"):
-            stack = [(prim, ()) for prim in _children(stage.GetPseudoRoot())]
+            stack = [(prim, ()) for prim in children(stage.GetPseudoRoot())]
             while stack:
                 prim, chain = stack.pop()
                 path = str(prim.GetPath())
@@ -1179,7 +1174,7 @@ class EbsSimulateCollide:
                                   box, prim, chain))
                     continue
                 stack.extend((kid, chain + ((prim, path),))
-                             for kid in _children(prim))
+                             for kid in children(prim))
         sim._stage_index = index
         sim._note(f"stage index: {len(index)} boxes")
         return index
@@ -1233,7 +1228,7 @@ class EbsSimulateCollide:
                 found.append((where, box, prim, chain))
                 continue
             stack.extend((kid, chain + ((prim, where),))
-                         for kid in _children(prim))
+                         for kid in children(prim))
         if shared:
             sim._leaves[path] = found
         return found

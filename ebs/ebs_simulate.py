@@ -1,4 +1,3 @@
-import array
 import io
 import json
 import math
@@ -179,6 +178,8 @@ class EbsSimulate:
         self._stage_index = None
         self._ebs_box = None
         self._lasers: bool = False
+        self._laser_at: set = set()
+        self._laser_lit: dict = {}
         self._outer: bool = True
         self._inner: bool = True
         self._clash_on: bool = True
@@ -198,9 +199,6 @@ class EbsSimulate:
         self._leg: int = 0
         self._settled: float = 0.0
         self._spent: dict = {}
-        self._waited: dict = {}
-        self._counts: dict = {}
-        self._on_step: str = ""
         self._shares: dict = {}
         self._results: dict = {}
         self._min_gap = {FACE_CEILING: MIN_GAP_CEILING,
@@ -606,12 +604,11 @@ class EbsSimulate:
             return False
         try:
             with self._phase("skin"):
-                with self._stage_timer(f"skin: pick {len(wrote)}"):
+                with self._stage_timer("skin: pick"):
                     picked = [one for one in
                               (stage.GetPrimAtPath(path) for path in wrote)
                               if one is not None and one.IsValid()]
-                with self._stage_timer(f"skin: unbind {len(picked)} "
-                                       f"({len(self._skin_opened)} open)"):
+                with self._stage_timer("skin: unbind"):
                     with Usd.EditContext(stage, stage.GetSessionLayer()):
                         with Sdf.ChangeBlock():
                             for one in picked:
@@ -660,13 +657,12 @@ class EbsSimulate:
         app = omni.kit.app.get_app()
         guess = self._settled or SETTLE_GUESS
         started = last = time.perf_counter()
-        busy, calm, marks = started, 0, []
+        busy, calm = started, 0
         before, self._doing = self._doing, name
         try:
             for _ in range(SETTLE_MOST):
                 await app.next_update_async()
                 now = time.perf_counter()
-                marks.append(now - last)
                 self._progress = min(99.0, (now - started) / guess * 100.0)
                 if now - last > SETTLE_FRAME:
                     busy, calm = now, 0
@@ -680,26 +676,7 @@ class EbsSimulate:
         spent = max(0.0, busy - started)
         self._progress = 100.0
         self.add_phase(name, spent)
-        self._waited[self._settle_label(name, marks, last - started)] = spent
         return spent
-
-    @staticmethod
-    def _settle_label(name: str, marks: list, whole: float) -> str:
-        """정착에 몇 프레임이 들었고 그 프레임들이 얼마나 느렸나
-
-        가운뎃값이 SETTLE_FRAME 언저리면 우리가 그린 것 때문이 아니라 킷의
-        평소 프레임이 문턱을 못 넘긴 것이다. 그때는 셋 연속 빠른 프레임이
-        안 나와 루프가 늘어질 뿐, 앱은 이미 멀쩡하다
-        """
-        if not marks:
-            return f"settle {name}"
-        ranked = sorted(marks)
-        slow = sum(1 for one in marks if one > SETTLE_FRAME)
-        worst = max(range(len(marks)), key=lambda i: marks[i])
-        return (f"settle {name} ({len(marks)} frames, mid "
-                f"{ranked[len(ranked) // 2] * 1000.0:.0f}ms, worst "
-                f"{ranked[-1] * 1000.0:.0f}ms at frame {worst + 1}, {slow} over "
-                f"{SETTLE_FRAME * 1000.0:.0f}ms, whole {whole:.2f}s)")
 
     async def settle_skin(self) -> float:
         """머티리얼이 정착할 때까지. 걸린 시간을 다음 진행도의 눈금으로 쓴다"""
@@ -828,14 +805,14 @@ class EbsSimulate:
         try:
             with self._phase("skin"):
                 meshes = []
-                for at in range(SKIN_DEEP):
-                    with self._stage_timer(f"skin: plan {at}"):
+                for _ in range(SKIN_DEEP):
+                    with self._stage_timer("skin: plan"):
                         roots, meshes = self._skin_plan(prim)
                     if not roots:
                         break
-                    with self._stage_timer(f"skin: open {at} ({len(roots)})"):
+                    with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
-                with self._stage_timer(f"skin: bind {len(meshes)}"):
+                with self._stage_timer("skin: bind"):
                     self._bind_all(stage, material, meshes)
         except Exception as e:
             self._loud(f"skin: could not bind {self._skin}: "
@@ -891,7 +868,7 @@ class EbsSimulate:
             if one.GetTypeName() in GEOMETRY_TYPES:
                 meshes.append(where)
                 continue
-            stack.extend(_children(one))
+            stack.extend(children(one))
         return roots, meshes
 
     def _open_instances(self, stage, roots) -> int:
@@ -1042,7 +1019,7 @@ class EbsSimulate:
         self._camera.remove(self._get_stage())
         self._marks().drop_looks()
         self.clear_markers()
-        self.clear_port_lasers()
+        self.drop_port_lasers()
         self.clear_sweep()
         self.hide_ebs()
         self._eqp_index = {}
@@ -1069,9 +1046,6 @@ class EbsSimulate:
         self._step = step
         self._progress = 0.0
         self._spent = {}
-        self._waited = {}
-        self._counts = {}
-        self._on_step = ""
         self._boxed = {}
         self._timings = []
         self._notes = []
@@ -1117,41 +1091,10 @@ class EbsSimulate:
         return (f"[ebs] {self._step or 'step'} : {spent:.2f}s"
                 + (f" | {parts}" if parts else ""))
 
-    def detail_lines(self) -> list:
-        """단계 안을 셋으로 쪼갠 줄. 도는 시간, 기다린 시간, 구간별 시간
-
-        run   _spending 이 잰 순수 연산. 프레임을 기다린 시간은 안 든다
-        wait  단계 사이에 프레임을 넘긴 시간과 settle. 화면이 다시 매끄러워
-              지기를 기다린 값이라 우리 코드를 고쳐도 안 줄어드는 쪽이다
-        part  _stage_timer 가 잰 구간. run 과 wait 에 걸쳐 있다
-        """
-        whole = time.perf_counter() - self._started
-
-        def cut(title: str, pairs: list) -> str:
-            """제목 하나에 이름 시간 비율. 넘을 것이 없으면 빈 칸"""
-            parts = [f"{name} {spent:.2f}s {spent / whole * 100.0:.0f}%"
-                     for name, spent in pairs if spent >= DETAIL_LEAST]
-            return f"[ebs]   {title} : " + " | ".join(parts) if parts else ""
-
-        run = [(name + self._count_of(name), self._spent.get(name, 0.0))
-               for name, _ in COLLIDE_STEPS]
-        wait = sorted(self._waited.items(), key=lambda one: -one[1])
-        part = [(label, spent / 1000.0) for label, spent in self._timings]
-        return [line for line in (cut("run ", run), cut("wait", wait),
-                                  cut("part", part)) if line]
-
-    def _count_of(self, step: str) -> str:
-        """그 단계가 몇 개를 다뤘나. 안 적어 뒀으면 빈 칸"""
-        got = self._counts.get(step)
-        return f"({got})" if got is not None else ""
-
     def say_phases(self) -> str:
         """단계 한 줄을 찍고 그대로 돌려준다"""
         line = self.phase_line()
         print(line)
-        if DETAIL:
-            for extra in self.detail_lines():
-                print(extra)
         return line
 
     def _note(self, text: str) -> None:
@@ -1696,8 +1639,6 @@ class EbsSimulate:
         self.set_legs(2)
         for _ in self._collide_steps():
             await self._wait_frame()
-        if DETAIL and self._result.get("ok"):
-            await self.settle("markers")
         self.next_leg()
         return self._done(self._result)
 
@@ -1739,20 +1680,15 @@ class EbsSimulate:
             before += weights.get(name, 0.0)
         share = weights.get(step, 0.0) * max(0.0, min(done, 1.0))
         self._progress = min(before + share, 100.0)
-        self._on_step = step
 
     def _reached(self, step: str) -> None:
         """그 단계가 끝났다고 적는다"""
         self._at(step, 1.0)
 
     async def _wait_frame(self) -> None:
-        """단계 사이에서 프레임 하나를 넘긴다. 기다린 시간은 그 단계 앞으로 단다"""
+        """단계 사이에서 프레임 하나를 넘긴다"""
         import omni.kit.app
-        started = time.perf_counter()
         await omni.kit.app.get_app().next_update_async()
-        step = self._on_step or "?"
-        self._waited[step] = (self._waited.get(step, 0.0)
-                              + time.perf_counter() - started)
 
     @contextmanager
     def _spending(self, step: str):
@@ -1800,7 +1736,6 @@ class EbsSimulate:
             return
         with self._spending("warm"):
             inside, _ = Collide._index_inside(self, cache, search, skip)
-        self._counts["warm"] = len(inside)
         for at, prim in enumerate(inside, 1):
             with self._spending("warm"):
                 Collide._gather_nearby(self, stage, cache, search, skip, [prim])
@@ -1837,7 +1772,6 @@ class EbsSimulate:
 
             with self._spending("sides"):
                 roots = Collide._side_roots(self)
-                self._counts["sides"] = len(roots) if roots else 0
             self._reached("sides")
             yield
 
@@ -1845,7 +1779,6 @@ class EbsSimulate:
                 cells = Collide.check_collision(self, self._target["ebs"], exclude=apart,
                                              cache=bounds, roots=roots)
                 hit_count = sum(sum(1 for c in v if c) for v in cells.values())
-                self._counts["faces"] = hit_count
             self._reached("faces")
             yield
 
@@ -1876,7 +1809,6 @@ class EbsSimulate:
                 except Exception as e:
                     self._note(f"interference check failed: "
                                f"{type(e).__name__}: {e}")
-                self._counts["equipment"] = meeting.get("tests", 0)
                 if meeting["hit"]:
                     names = [b.rsplit("/", 1)[-1] for _, b in meeting["pairs"]]
                     self._note(f"the EBS runs through the equipment at "
@@ -1907,9 +1839,8 @@ class EbsSimulate:
 
         with self._phase("overlay"), self._spending("markers"), \
                 self._stage_timer("markers: draw"):
-            self._counts["markers"] = self.show_markers(
-                self._target["ebs"], cells,
-                verdict.get("marks"), verdict.get("boxes"))
+            self.show_markers(self._target["ebs"], cells,
+                              verdict.get("marks"), verdict.get("boxes"))
         self._verdict = verdict
 
         name = self._keep_result(verdict, meeting)
@@ -2133,7 +2064,7 @@ class EbsSimulate:
                 self._note(f"search root not found, scanning the whole stage: "
                       f"{self._search_root}")
                 root = None
-        stack = list(_children(root or stage.GetPseudoRoot()))
+        stack = list(children(root or stage.GetPseudoRoot()))
         while stack:
             prim = stack.pop()
             name = prim.GetName().upper()
@@ -2143,7 +2074,7 @@ class EbsSimulate:
             type_name = prim.GetTypeName()
             if type_name in PRUNE_TYPES or type_name.endswith("Light"):
                 continue
-            stack.extend(_children(prim))
+            stack.extend(children(prim))
 
     def equipment_boxes(self, stage) -> dict:
         """장비 이름 -> 월드 상자. 상자 목록에서 꺼내 쓴다"""
@@ -2291,10 +2222,10 @@ class EbsSimulate:
         """피봇으로 쓸 프림. ANCHOR_DEPTH 만큼 내려가 본다"""
         current, level = prim, 0
         while level < depth:
-            children = _children(current) if current and current.IsValid() else []
-            if not children:
+            kids = children(current) if current and current.IsValid() else []
+            if not kids:
                 return current, False
-            first = children[0]
+            first = kids[0]
             if first.GetTypeName() in PASS_TYPES:
                 current = first
                 continue
@@ -2501,7 +2432,7 @@ class EbsSimulate:
             self._rail_index = {}
             root = stage.GetPrimAtPath(self._rail_root) if self._rail_root else None
             if root is not None and root.IsValid():
-                source = _children(root)
+                source = children(root)
             else:
                 if self._rail_root:
                     self._note(f"no rails under {self._rail_root}, scanning the stage")
@@ -3008,34 +2939,61 @@ class EbsSimulate:
         return max(span * LASER_RADIUS, 1e-5)
 
     def show_port_lasers(self, points: dict = None) -> int:
-        """포트 자리에 확인용 세로 레이저를 세운다"""
+        """포트 자리에 확인용 세로 레이저를 세운다. 지우지 않고 고쳐 세운다
+
+        포트마다 이름이 정해져 있어 Define 이 있던 것을 돌려준다. 지웠다
+        다시 지으면 rprim 이 사라졌다 다시 서고, 그 값이 SIM 과 Clear 에
+        그대로 붙는다
+        """
         stage = self._get_stage()
         if stage is None:
             return 0
-        self.clear_port_lasers()
-
         points = self._port_world if points is None else points
-        if not points:
-            return 0
-
         top = self._port_rail_z
         radius = self._thread_radius()
-
         drawn = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             UsdGeom.Scope.Define(stage, LASER_ROOT)
-            for index in sorted(points):
+            for index in sorted(points or {}):
                 colour = LASER_COLOR_0 if index == 0 else LASER_COLOR
                 spot = points[index]
                 bottom = spot[2]
                 height = max(abs(top - bottom), 1e-3)
-                self._laser_cylinder(stage, f"{LASER_ROOT}/port_{index}",
+                path = f"{LASER_ROOT}/port_{index}"
+                self._laser_cylinder(stage, path,
                                      Gf.Vec3d(spot[0], spot[1], (top + bottom) / 2.0),
                                      radius, height, colour)
+                self._laser_at.add(path)
                 drawn += 1
+            self._light_lasers(stage, {f"{LASER_ROOT}/port_{i}"
+                                       for i in (points or {})})
         self._note(f"drew {drawn} port lasers under {LASER_ROOT}, "
               f"radius {radius:.4f}, rail z {top:.4f} down to the EBS z")
         return drawn
+
+    def _light_lasers(self, stage, want: set) -> None:
+        """세워 둔 레이저 중 want 에 든 것만 보인다. 지우지 않는다
+
+        처음 세운 자리를 켜는 것은 안 쓴다. 방금 세운 프림은 이미 보인다
+        """
+        for path in self._laser_at:
+            on = path in want
+            token = (UsdGeom.Tokens.inherited if on
+                     else UsdGeom.Tokens.invisible)
+            was = self._laser_lit.get(path)
+            if was == token:
+                continue
+            if was is None and on:
+                self._laser_lit[path] = token
+                continue
+            prim = stage.GetPrimAtPath(path)
+            if prim is None or not prim.IsValid():
+                continue
+            imageable = UsdGeom.Imageable(prim)
+            if not imageable:
+                continue
+            imageable.GetVisibilityAttr().Set(token)
+            self._laser_lit[path] = token
 
     def show_sweep(self, spots: dict) -> int:
         """sweep_ports 가 잰 자리를 씬에 표시한다 (진단용)"""
@@ -3098,7 +3056,19 @@ class EbsSimulate:
                 stage.RemovePrim(SWEEP_ROOT)
 
     def clear_port_lasers(self) -> None:
-        """포트 레이저를 지운다"""
+        """포트 레이저를 감춘다. 세워 둔 것은 그대로 둔다"""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        if not self._laser_at:
+            return
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            self._light_lasers(stage, set())
+
+    def drop_port_lasers(self) -> None:
+        """세워 둔 레이저까지 치운다. teardown 만 여기까지 간다"""
+        self._laser_at = set()
+        self._laser_lit = {}
         stage = self._get_stage()
         if stage is None:
             return
@@ -3136,7 +3106,7 @@ class EbsSimulate:
     def _clear_run(self, work) -> None:
         """그 차례만 돈다. 하나가 터져도 나머지는 돈다"""
         for phase, one in work:
-            with self._phase(phase), self._stage_timer(one.__name__):
+            with self._phase(phase):
                 try:
                     one()
                 except Exception as e:
@@ -3150,28 +3120,15 @@ class EbsSimulate:
         return self._done(self._payload(True, "cleared"))
 
     async def clear_all_async(self) -> dict:
-        """clear_all 인데 화면이 잦아들 때까지 기다려 그 시간까지 담는다
-
-        DETAIL 이면 머티리얼을 푼 자리에서 한 번 끊어 재고, 나머지를 치운
-        뒤에 또 잰다. 멈추는 프레임이 둘 중 어느 쪽 것인지 가른다
-        """
-        if not DETAIL:
-            told = self.clear_all()
-            await self.settle_skin()
-            return told
-        self._begin("clear")
-        work = self._clear_work()
-        self._clear_run(work[:1])
-        await self.settle("unbind")
-        self._clear_run(work[1:])
-        await self.settle("rest")
-        return self._done(self._payload(True, "cleared"))
+        """clear_all 인데 화면이 잦아들 때까지 기다려 그 시간까지 담는다"""
+        told = self.clear_all()
+        await self.settle_skin()
+        return told
 
     def clear_markers(self) -> None:
         """그린 것을 오버레이에게 지우게 하고 판정도 놓는다"""
         self._verdict = {}
         self._marks().clear()
-
 
 
     def release_camera(self) -> None:

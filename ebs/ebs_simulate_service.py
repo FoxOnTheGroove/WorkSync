@@ -1,5 +1,3 @@
-"""EBS 시뮬레이션 공개 API"""
-
 from .ebs_simulate import EbsSimulate
 
 __all__ = ["EbsSimulateService"]
