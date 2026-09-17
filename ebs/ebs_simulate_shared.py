@@ -22,9 +22,9 @@ __all__ = [
     "FACE_RIGHT", "FACE_CEILING", "FACES", "LEAD_FACES", "RESULT_ORDER",
     "RESULT_INSIDE", "COLLIDE_STEPS", "NUDGE_LIMIT", "OUTER_STEPS",
     "INNER_STEPS", "WARM_CHUNK", "LEAD_FRONT", "LEAD_TOL", "LEAD_PATCH",
-    "LEAD_ROOM", "GRID", "FADE_OTHERS", "SETTLE_GUESS", "SETTLE_FRAME",
+    "LEAD_ROOM", "GRID", "SETTLE_GUESS", "SETTLE_FRAME",
     "SETTLE_CALM", "SETTLE_MOST", "PHASES", "LOOKS", "SHADER_TYPE",
-    "GONE_THRESHOLD", "GONE_LAYER", "GONE", "CLASH_MARKS", "MEET_WIDE",
+    "CLASH_MARKS", "MEET_WIDE",
     "GRID_CELLS", "OVERLAP_EPS", "PROBE_RATIO", "REACH_RATIO",
     "FLAT_TOL", "PRECISION_BBOX", "PRECISION_MESH", "PRECISION_TRI",
     "PRUNE_TYPES", "ANCHOR_DEPTH", "PASS_TYPES", "MIN_PORTS",
@@ -106,7 +106,6 @@ LEAD_TOL    = 0.001
 LEAD_PATCH  = 4000
 LEAD_ROOM   = 0.05
 GRID = 1
-FADE_OTHERS = False
 SETTLE_GUESS = 2.0
 SETTLE_FRAME = 0.02
 SETTLE_CALM  = 3
@@ -116,13 +115,6 @@ PHASES = (("camera", "Camera"), ("place", "Place"),
           ("overlay", "Overlay"))
 LOOKS = "Looks"
 SHADER_TYPE = "Shader"
-GONE_THRESHOLD = 0.5
-GONE_LAYER = "ebs_hidden.usda"
-GONE = (("inputs:opacity", "Float", 0.0),
-        ("inputs:opacityThreshold", "Float", GONE_THRESHOLD),
-        ("inputs:enable_opacity", "Bool", True),
-        ("inputs:opacity_constant", "Float", 0.0),
-        ("inputs:opacity_threshold", "Float", GONE_THRESHOLD))
 CLASH_MARKS   = 200
 MEET_WIDE     = 256
 GRID_CELLS = 24
