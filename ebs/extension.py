@@ -9,6 +9,7 @@ RAISE_FRAMES = 300
 
 
 class EbsExtension(omni.ext.IExt):
+    """킷이 잡는 진입점. 서비스와 창을 세우고 내린다"""
 
     def on_startup(self, ext_id):
         """익스텐션 시작"""

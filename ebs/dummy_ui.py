@@ -38,7 +38,7 @@ NUDGE_BUSY  = " · 갱신 중"
 
 
 class SweepLog:
-    """The sweep's rows as a spreadsheet."""
+    """스윕이 낸 줄을 표로 떨군다. 검증용이라 단계와 무관하다"""
 
     COLUMNS = ("equipment", "pivot_ok", "axis",
                "pivot_coord", "pivot_offset", "pivot_offset_puls",
@@ -59,7 +59,7 @@ class SweepLog:
 
     @classmethod
     def write(cls, path: str, rows: list) -> str:
-        """Write the table where `path` points, and say where it went."""
+        """적어 둔 자리에 표를 쓰고 어디에 썼는지 돌려준다"""
         path = (path or "").strip()
         if not path or not rows:
             return ""
@@ -75,7 +75,7 @@ class SweepLog:
 
     @classmethod
     def note(cls, row: dict) -> str:
-        """One row's note: why it could not be read, or which bucket it is in."""
+        """한 줄에 붙일 비고. 왜 못 읽었는지, 아니면 어느 갈래인지"""
         state = str(row.get("pivot_ok", ""))
         why = row.get("why", "")
         if why and state in ("error", "xml-invalid"):
@@ -96,12 +96,12 @@ class SweepLog:
 
     @staticmethod
     def _cell(value):
-        """Numbers rounded enough to read, everything else as it stands."""
+        """숫자는 읽을 만큼만 반올림하고 나머지는 그대로"""
         return f"{value:.4f}" if isinstance(value, float) else value
 
 
 class EbsDummyUI:
-    """Dummy UI driven only by the public API (EbsSimulateService)."""
+    """서비스 API 만 보고 도는 시험용 창. 속을 직접 만지지 않는다"""
 
     def __init__(self):
         """위젯 참조 자리만. 구성은 build_ui"""

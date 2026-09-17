@@ -111,6 +111,8 @@ def _as_float(text) -> "float | None":
 
 
 class _PortScan:
+    """XML 한 번 훑어 모은 것. 주소별 CAD 값과 다음 칸을 같이 들고 있다"""
+
     def __init__(self):
         """XML 을 훑으며 모은 것을 담을 자리"""
         self.addr_cad = {}
@@ -304,6 +306,8 @@ PIVOT_ACROSS = 0.5
 
 
 class EbsSimulate:
+    """EBS 시뮬레이션의 속. 서비스가 이것 하나를 들고 있다"""
+
     def __init__(self):
         """설정, 색인, 캐시 자리를 전부 비워 둔다"""
         self._xml_path: str = ""

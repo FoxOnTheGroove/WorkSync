@@ -98,6 +98,8 @@ CLASH_PULSE_HIGH = 1.0
 
 
 class EbsSimulateOverlay:
+    """뷰포트에 얹는 판. 뷰포트마다 하나씩 들고 프레임마다 자리를 고친다"""
+
     _instances = {}
 
 

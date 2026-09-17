@@ -81,6 +81,7 @@ def viewport_window(name: str = None):
 
 
 class EbsSimulateCamera:
+    """우리 카메라와 뷰포트 입력. 궤도와 줌을 직접 받는다"""
 
     def __init__(self):
         """원래 카메라, 궤도 상태, 입력 가로채기 자리를 비워 둔다"""
