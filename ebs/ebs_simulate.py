@@ -659,13 +659,13 @@ class EbsSimulate:
         app = omni.kit.app.get_app()
         guess = self._settled or SETTLE_GUESS
         started = last = time.perf_counter()
-        busy, calm, frames = started, 0, 0
+        busy, calm, marks = started, 0, []
         before, self._doing = self._doing, name
         try:
             for _ in range(SETTLE_MOST):
                 await app.next_update_async()
-                frames += 1
                 now = time.perf_counter()
+                marks.append(now - last)
                 self._progress = min(99.0, (now - started) / guess * 100.0)
                 if now - last > SETTLE_FRAME:
                     busy, calm = now, 0
@@ -679,9 +679,25 @@ class EbsSimulate:
         spent = max(0.0, busy - started)
         self._progress = 100.0
         self.add_phase(name, spent)
-        self._waited[f"settle {name} ({frames} frames, "
-                     f"{last - started:.2f}s to calm)"] = spent
+        self._waited[self._settle_label(name, marks, last - started)] = spent
         return spent
+
+    @staticmethod
+    def _settle_label(name: str, marks: list, whole: float) -> str:
+        """정착에 몇 프레임이 들었고 그 프레임들이 얼마나 느렸나
+
+        가운뎃값이 SETTLE_FRAME 언저리면 우리가 그린 것 때문이 아니라 킷의
+        평소 프레임이 문턱을 못 넘긴 것이다. 그때는 셋 연속 빠른 프레임이
+        안 나와 루프가 늘어질 뿐, 앱은 이미 멀쩡하다
+        """
+        if not marks:
+            return f"settle {name}"
+        ranked = sorted(marks)
+        slow = sum(1 for one in marks if one > SETTLE_FRAME)
+        return (f"settle {name} ({len(marks)} frames, mid "
+                f"{ranked[len(ranked) // 2] * 1000.0:.0f}ms, worst "
+                f"{ranked[-1] * 1000.0:.0f}ms, {slow} over "
+                f"{SETTLE_FRAME * 1000.0:.0f}ms, whole {whole:.2f}s)")
 
     async def settle_skin(self) -> float:
         """머티리얼이 정착할 때까지. 걸린 시간을 다음 진행도의 눈금으로 쓴다"""
