@@ -610,7 +610,8 @@ class EbsSimulate:
                     picked = [one for one in
                               (stage.GetPrimAtPath(path) for path in wrote)
                               if one is not None and one.IsValid()]
-                with self._stage_timer(f"skin: unbind {len(picked)}"):
+                with self._stage_timer(f"skin: unbind {len(picked)} "
+                                       f"({len(self._skin_opened)} open)"):
                     with Usd.EditContext(stage, stage.GetSessionLayer()):
                         with Sdf.ChangeBlock():
                             for one in picked:
