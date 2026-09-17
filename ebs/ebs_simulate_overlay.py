@@ -720,6 +720,7 @@ class EbsSimulateGrip:
     """
 
     _one = None
+    _again = False
 
     @classmethod
     def place(cls, said: dict, to_screen) -> bool:
@@ -734,8 +735,12 @@ class EbsSimulateGrip:
 
     @classmethod
     def held(cls) -> bool:
-        """지금 손잡이를 잡고 있나. 판정 표를 내릴지 여기로 묻는다"""
-        return cls._one is not None and cls._one.holding
+        """잡고 있거나, 놓고 다시 재는 중인가. 판정 표를 내릴지 여기로 묻는다
+
+        _again  놓은 뒤 다시 재기 전까지는 판정이 민 자리 것이 아니다. 그
+                 사이에 표를 올리면 없어질 충돌이 잠깐 떴다 사라진다
+        """
+        return cls._again or (cls._one is not None and cls._one.holding)
 
     @classmethod
     def hide(cls) -> None:
@@ -747,6 +752,7 @@ class EbsSimulateGrip:
     def destroy(cls) -> None:
         """지우고 손을 뗀다"""
         cls.hide()
+        cls._again = False
         cls._one = None
 
     def __init__(self):
@@ -865,14 +871,18 @@ class EbsSimulateGrip:
 
         마우스 이벤트 안에서 재면 그동안 킷이 멈춘다. 띄워 놓고 바로
         돌려주면 그 사이에 화면이 한 번 그려진다
+        _again  다시 재기 전에 세운다. 그래야 그 사이 restate 가 낡은 판정
+                 으로 표를 올리지 않는다
         """
         if self._from is None:
             return
         self._from = None
         self._draw(GRIP_IDLE)
-        EbsSimulateOverlay.restate()
         if EbsSimulateService.busy():
+            EbsSimulateOverlay.restate()
             return
+        EbsSimulateGrip._again = True
+        EbsSimulateOverlay.restate()
         EbsSimulateOverlay.wake()
         EbsSimulateService.begin_work(WORK_SETTLE)
         asyncio.ensure_future(self._settle())
@@ -882,16 +892,18 @@ class EbsSimulateGrip:
 
         다시 켠 상자가 실제로 빛나기 시작할 때까지 표를 세워 둔다. 저작이
         끝난 자리에서 내리면 표가 사라지고도 한참 아무것도 안 보인다
+        판정 표는 다 재고 나서 한 번에 올린다. 터져도 finally 가 올린다
         """
         try:
             import omni.kit.app
             await omni.kit.app.get_app().next_update_async()
             EbsSimulateService.hold_clash(True)
-            EbsSimulateOverlay.restate()
             await EbsSimulateService.settle()
         except Exception as e:
             print(f"[ebs] could not retest after the grip: {e}")
         finally:
+            EbsSimulateGrip._again = False
+            EbsSimulateOverlay.restate()
             EbsSimulateService.end_work()
 
     @property
