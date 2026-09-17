@@ -91,6 +91,7 @@ WORK_LINE     = 22
 WORK_BAR      = 8
 WORK_PAD      = 10
 WORK_PCT      = "{0:.0f}%"
+WORK_SLIVER   = 0.001
 COLOR_WORK    = 0xE6141414
 COLOR_TRACK   = 0x33FFFFFF
 COLOR_FILL    = 0xFF20C8FF
@@ -191,6 +192,7 @@ class EbsSimulateOverlay:
         self._work_words = {}
         self._work_pcts = {}
         self._work_fill = None
+        self._work_gap = None
         self._work_panel = None
 
     def _build(self, window) -> bool:
@@ -221,7 +223,8 @@ class EbsSimulateOverlay:
 
         매번 다시 지으면 글자가 깜빡인다. 글줄은 모양마다 하나씩 두고
         하나만 켠다. ui.Label 은 처음 글로 잡아 둔 자리를 계속 쓴다
-        크기는 전부 못 박는다. 글이 길어질 때마다 판이 늘었다 줄면 눈에 띈다
+        판 크기는 못 박고 속은 비율로 나눈다. 픽셀 폭을 주면 안쪽 여백보다
+        넓어지는 순간 판을 밀어낸다. 비율은 있는 공간을 나누기만 한다
         """
         self._work = ui.Placer(draggable=False, offset_x=0, offset_y=0)
         with self._work:
@@ -239,10 +242,11 @@ class EbsSimulateOverlay:
                                             "border_radius": 3})
                         with ui.HStack():
                             self._work_fill = ui.Rectangle(
-                                width=ui.Pixel(0),
+                                width=ui.Fraction(WORK_SLIVER),
                                 style={"background_color": COLOR_FILL,
                                        "border_radius": 3})
-                            ui.Spacer()
+                            self._work_gap = ui.Spacer(
+                                width=ui.Fraction(1.0))
                     self._work_pct_hold = ui.ZStack(height=ui.Pixel(WORK_LINE))
         self._work_panel.visible = False
 
@@ -255,7 +259,7 @@ class EbsSimulateOverlay:
         if label is None:
             with hold:
                 label = ui.Label(text, height=ui.Pixel(WORK_LINE),
-                                 width=ui.Pixel(WORK_WIDE - WORK_PAD * 2),
+                                 width=ui.Fraction(1.0),
                                  alignment=ui.Alignment.CENTER,
                                  style={"color": COLOR_TEXT,
                                         "font_size": WORK_SIZE})
@@ -265,7 +269,11 @@ class EbsSimulateOverlay:
             one.visible = key == shape
 
     def _work_place(self) -> None:
-        """작업중이면 가운데에 앉히고 진행도를 고친다. 아니면 감춘다"""
+        """작업중이면 가운데에 앉히고 진행도를 고친다. 아니면 감춘다
+
+        막대는 찬 쪽과 빈 쪽의 비율만 바꾼다. 둘을 더하면 늘 100 이라
+        퍼센트가 올라가도 판은 안 늘어난다
+        """
         panel = self._work_panel
         if panel is None or self._work is None:
             return
@@ -279,9 +287,9 @@ class EbsSimulateOverlay:
                         f"{busy} · {step}" if step else busy)
         self._work_word(self._work_pct_hold, self._work_pcts,
                         WORK_PCT.format(done))
-        if self._work_fill is not None:
-            self._work_fill.width = ui.Pixel(
-                (WORK_WIDE - WORK_PAD * 2) * done / 100.0)
+        if self._work_fill is not None and self._work_gap is not None:
+            self._work_fill.width = ui.Fraction(max(done, WORK_SLIVER))
+            self._work_gap.width = ui.Fraction(max(100.0 - done, WORK_SLIVER))
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
@@ -696,6 +704,7 @@ class EbsSimulateOverlay:
         self._work_words = {}
         self._work_pcts = {}
         self._work_fill = None
+        self._work_gap = None
         self._work_panel = None
         self._stack = None
         self._frame = None
