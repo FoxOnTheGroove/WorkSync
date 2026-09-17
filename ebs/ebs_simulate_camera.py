@@ -124,16 +124,6 @@ class EbsSimulateCamera:
             self._settle(hold, hold[3], hold[4])
 
     @property
-    def previous(self):
-        """이 카메라로 바꾸기 전에 쓰던 뷰포트 카메라 경로"""
-        return self._previous
-
-    @property
-    def orbit(self) -> bool:
-        """지금 궤도 조작을 잡고 있나"""
-        return self._orbit
-
-    @property
     def interest(self):
         """궤도가 도는 중심점"""
         return self._interest

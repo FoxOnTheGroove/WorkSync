@@ -329,22 +329,11 @@ class EbsSimulate:
         Collide._forget_ebs(self, touched)
         return done
 
-    def nudge(self, step: float) -> float:
-        """놓을 자리를 EBS 좌우로 step(m) 만큼 더 민다. 누적 거리를 돌려준다
-
-        _do_align  목표점에 이만큼 더해서 놓는다. 다음 align 도 민 자리다
-        set_nudge  0 으로 되돌리는 곳. SIM, Clear, Camera 가 부른다
-        NUDGE_LIMIT  좌우로 이 거리까지만. 넘으면 거기서 멈춘다
-        """
-        return self.set_nudge(self._nudge + float(step))
 
     def watch_grip(self, grip) -> None:
         """뷰포트 기즈모가 마우스를 먼저 보도록 카메라에 걸어 둔다"""
         self._camera.watch(grip)
 
-    def hold_camera(self, on: bool) -> None:
-        """궤도 조작을 잠깐 놓는다. 뷰포트 손잡이를 끄는 동안"""
-        self._camera.hold(on)
 
     def hold_clash(self, on: bool) -> bool:
         """내부충돌연출을 켜고 끈다. 손잡이를 잡는 동안 끈다
@@ -540,15 +529,6 @@ class EbsSimulate:
         """
         return self._camera.set_near_span(span)
 
-    def set_checks(self, outer: bool, inner: bool) -> None:
-        """collide 가 무엇을 잴지
-
-        _collide_steps  끄면 그 단계를 건너뛴다. 진행률과 판정은 그대로 돈다
-        outer  좌/우/천장 세 면과 스테이지. warm, sides, faces, clearance
-        inner  EBS 와 대상 장비끼리. equipment
-        """
-        self._outer = bool(outer)
-        self._inner = bool(inner)
 
     def set_skin(self, url: str) -> str:
         """대상 장비에 입힐 것. 빈 칸이면 원래 색 그대로
@@ -567,9 +547,6 @@ class EbsSimulate:
             self.warm_skin()
         return self._skin
 
-    def get_skin(self) -> str:
-        """지금 적어 둔 머티리얼 경로"""
-        return self._skin
 
     def strip_skin(self) -> bool:
         """건 것을 푼다. 푼 인스턴스는 열어 둔 채로 둔다
@@ -941,25 +918,6 @@ class EbsSimulate:
                          FACE_LEFT: max(0.0, float(side)),
                          FACE_RIGHT: max(0.0, float(side))}
 
-    def set_precision(self, mode: str) -> None:
-        """충돌 판정 정밀도. 모르는 값이면 그대로 둔다
-
-        check_collision     bbox<->triangle 전환 지점 (PRECISION_TRI 비교)
-        _nearest_in_prism   빈 면 거리 쪽의 같은 전환
-        """
-        if mode in (PRECISION_BBOX, PRECISION_MESH, PRECISION_TRI):
-            self._precision = mode
-        else:
-            self._note(f"unknown precision '{mode}', keeping {self._precision}")
-
-    def set_offset_scale(self, mode: str) -> None:
-        """포트 offset 을 거리로 바꾸는 방식
-
-        _coords_by_offset / _coords_by_puls / _snap_shift  세 방식의 본체
-        SCALE_MODES  모드를 늘리려면 여기 + dummy_ui 콤보
-        """
-        mode = (mode or "").strip().lower()
-        self._offset_scale = mode if mode in SCALE_MODES else SCALE_FIXED
 
     def set_show_lasers(self, on: bool) -> None:
         """align 이 확인용 레이저를 그릴지
@@ -987,13 +945,6 @@ class EbsSimulate:
             self._ready = False
         self._search_root = path
 
-    def get_payload(self) -> dict:
-        """마지막 단계가 남긴 결과. 장비별 판정 기록은 get_result 쪽"""
-        return dict(self._result)
-
-    def get_timings(self) -> list:
-        """마지막 단계의 구간별 시간"""
-        return [list(t) for t in self._timings]
 
     def teardown(self) -> None:
         """그린 것, 카메라, 색인, 캐시를 전부 놓는다
@@ -1114,13 +1065,6 @@ class EbsSimulate:
         """notes 에 남긴다. 한 줄 보고만 콘솔에 나간다"""
         self._notes.append(text)
 
-    def get_notes(self) -> list:
-        """이번 단계에 남긴 자세한 기록
-
-        _note   콘솔에 안 찍는다. 단계마다 _done 이 한 줄만 찍는다
-        _done   무엇을 했고 얼마나 걸렸나. 자세한 것은 여기로
-        """
-        return list(self._notes)
 
     def _hush(self, loud: bool):
         """loud 가 아니면 그 안의 print 를 삼킨다"""
