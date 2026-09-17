@@ -760,21 +760,26 @@ class EbsSimulate:
         try:
             with self._phase("skin"):
                 meshes = []
-                for _ in range(SKIN_DEEP):
+                for turn in range(SKIN_DEEP):
                     with self._stage_timer("skin: plan"):
                         roots, meshes = self._skin_plan(prim)
+                    print(f"[ebs] skin plan {turn}: {len(roots)} instance(s), "
+                          f"{len(meshes)} mesh(es)")
                     if not roots:
                         break
                     with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
                 with self._stage_timer("skin: bind"):
-                    self._bind_all(stage, material, meshes)
+                    ready = self._bind_all(stage, material, meshes)
+                print(f"[ebs] skin bind: {ready} of {len(meshes)} bound")
         except Exception as e:
-            self._loud(f"skin: could not bind {self._skin}: "
-                       f"{type(e).__name__}: {e}")
+            import traceback
+            print(f"[ebs] skin: could not bind {self._skin}: "
+                  f"{type(e).__name__}: {e}")
+            traceback.print_exc()
             return False
         if not self._skin_wrote:
-            self._loud(f"skin: no mesh under {worn[0]} to bind")
+            print(f"[ebs] skin: nothing bound under {worn[0]}")
             return False
         self._skin_worn = worn
         self._loud(f"skin: bound {self._skin} on {len(self._skin_wrote)} "
@@ -869,6 +874,11 @@ class EbsSimulate:
         if missed:
             self._loud(f"skin: {missed} of {len(ready)} place(s) refused the "
                        f"binding")
+            print(f"[ebs] skin: {missed} of {len(ready)} place(s) refused the "
+                  f"binding, first {ready[0][0] if ready else '-'}")
+        if len(ready) != len(meshes):
+            print(f"[ebs] skin: {len(meshes) - len(ready)} of {len(meshes)} "
+                  f"path(s) were not on the stage")
         return len(ready) - missed
 
     @staticmethod
