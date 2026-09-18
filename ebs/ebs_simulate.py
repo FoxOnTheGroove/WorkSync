@@ -2437,18 +2437,19 @@ class EbsSimulate:
         return spacing
 
     def pivot_target(self, anchor: Usd.Prim):
-        """피봇에서 나란히축으로 PIVOT_SHIFT 만큼 간 자리. 나머지 두 축은 피봇 그대로"""
+        """피봇에서 왼쪽으로 PIVOT_SHIFT 만큼 간 자리. 수직축과 높이는 피봇 그대로"""
         if anchor is None or not anchor.IsValid():
             return None
         try:
             here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
                 Usd.TimeCode.Default()).ExtractTranslation()
-            along = self._camera.axes(self._get_stage(), anchor)[0]
+            right = self._camera.axes(self._get_stage(), anchor)[0]
         except Exception:
             return None
+        along = Gf.Vec3d(-right[0], -right[1], -right[2])
         target = Gf.Vec3d(*[here[i] + along[i] * PIVOT_SHIFT for i in range(3)])
         self._note(f"pivot ({here[0]:.4f}, {here[1]:.4f}, {here[2]:.4f}) "
-                   f"+ {PIVOT_SHIFT:+.4f} along ({along[0]:+.3f}, {along[1]:+.3f}, "
+                   f"+ {PIVOT_SHIFT:.4f} left ({along[0]:+.3f}, {along[1]:+.3f}, "
                    f"{along[2]:+.3f})")
         self._note(f"  target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})")
         return target
