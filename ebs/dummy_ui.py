@@ -202,6 +202,40 @@ class EbsDummyUI:
                     self._nudge_label = ui.Label(NUDGE_HOME)
 
                 self._status_label = ui.Label("Ready", height=20)
+        self._watch_settings()
+
+    def _watch_settings(self):
+        """입력칸이 바뀌는 그 자리에서 설정에 넘긴다
+
+        버튼이 누를 때마다 설정을 다시 밀지 않게 한다. 웹도 설정은 바뀔 때
+        한 번 보내고 동작만 부르므로, 더미도 같은 꼴이 된다
+        """
+        for field, put in ((self._usd_field, EbsSimulateService.set_usd_path),
+                           (self._xml_field, EbsSimulateService.set_xml_path),
+                           (self._root_field, EbsSimulateService.set_search_root),
+                           (self._rail_field, EbsSimulateService.set_rail_root),
+                           (self._skin_field, EbsSimulateService.set_skin)):
+            field.model.add_value_changed_fn(
+                lambda model, one=field, work=put: work(
+                    one.model.get_value_as_string().strip()))
+        for field in (self._ebs2_field, self._ebs3_field):
+            field.model.add_value_changed_fn(lambda model: self._put_ebs())
+        for field in (self._side_field, self._ceiling_field):
+            field.model.add_value_changed_fn(lambda model: self._put_gaps())
+        self._lasers.model.add_value_changed_fn(
+            lambda model: self._sim.set_show_lasers(model.get_value_as_bool()))
+
+    def _put_ebs(self):
+        """EBS 프림 둘은 짝이라 같이 넘긴다"""
+        EbsSimulateService.set_ebs_paths(
+            self._ebs2_field.model.get_value_as_string(),
+            self._ebs3_field.model.get_value_as_string())
+
+    def _put_gaps(self):
+        """최소 여유 둘도 짝이라 같이 넘긴다"""
+        EbsSimulateService.set_min_gaps(
+            self._number(self._side_field, MIN_SIDE),
+            self._number(self._ceiling_field, MIN_CEILING))
 
     def _path_row(self, label: str, value: str = ""):
         """라벨 + 입력칸 한 줄"""
@@ -283,8 +317,10 @@ class EbsDummyUI:
         self._set_status(f"Selected: {name}")
 
     def _on_simulate(self):
-        """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다"""
-        self._apply_settings()
+        """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다
+
+        설정은 입력칸이 바뀔 때 이미 넘어갔다. 연타는 서비스가 막는다
+        """
         self._spawn(EbsSimulateService.simulate(
             self._eqp_field.model.get_value_as_string()))
 
@@ -298,7 +334,6 @@ class EbsDummyUI:
 
     def _on_align(self):
         """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
-        self._apply_settings()
         self._reset_nudge()
         self._start(self._aligning, WORK_ALIGN)
 
@@ -311,7 +346,6 @@ class EbsDummyUI:
 
     def _on_camera(self):
         """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
-        self._apply_settings()
         self._start(self._focusing, WORK_CAMERA)
 
     async def _focusing(self):
@@ -323,7 +357,6 @@ class EbsDummyUI:
 
     def _on_collide(self):
         """3단계. 충돌을 재고 오버레이를 띄운다"""
-        self._apply_settings()
         self._start(self._collide_task, WORK_COLLIDE)
 
     async def _collide_task(self):
