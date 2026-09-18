@@ -1440,7 +1440,7 @@ class EbsSimulate:
         더미든 그 순서를 각자 다시 짜야 하고, 하나만 틀려도 바쁨이 갇힌다
         """
         if self._busy:
-            return self._payload(False, f"Busy: {self._busy}")
+            return
         panel = self._panel()
         self.set_nudge(0.0)
         self._paint(panel.hide)
