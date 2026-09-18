@@ -3,7 +3,6 @@ import omni.ui as ui
 
 from .ebs_simulate import instance, forget
 from .ebs_simulate_overlay import attach as attach_overlay
-from .ebs_simulate_messaging import EbsSimulateMessaging
 from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
@@ -21,8 +20,6 @@ class EbsExtension(omni.ext.IExt):
         """
         self._sim = instance()
         attach_overlay(self._sim)
-        self._wire = EbsSimulateMessaging()
-        self._wire.start()
         self._ui = EbsDummyUI(self._sim)
         self._ui.build_ui()
         self._raise = None
@@ -83,9 +80,6 @@ class EbsExtension(omni.ext.IExt):
         """익스텐션 종료"""
         self._raise = None
         self._stage = None
-        if self._wire:
-            self._wire.stop()
-            self._wire = None
         if self._ui:
             self._ui.destroy()
             self._ui = None
