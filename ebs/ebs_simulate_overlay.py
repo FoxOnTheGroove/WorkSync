@@ -14,7 +14,7 @@ _SIM = None
 
 
 def attach(simulate) -> None:
-    """오버레이가 쓸 EbsSimulate 하나를 건다. 익스텐션이 시작할 때 부른다"""
+    """오버레이가 쓸 EbsSimulate 하나를 건다"""
     global _SIM
     _SIM = simulate
 
@@ -113,7 +113,7 @@ CLASH_PULSE_HIGH = 0.99
 
 
 class EbsSimulateOverlay:
-    """뷰포트에 얹는 판. 뷰포트마다 하나씩 들고 프레임마다 자리를 고친다"""
+    """뷰포트에 얹는 판"""
 
     _instances = {}
 
@@ -144,7 +144,7 @@ class EbsSimulateOverlay:
 
     @classmethod
     def wake(cls, vp_name: str = None):
-        """프레임만 세워 둔다. 작업중 표가 뜰 자리를 미리 잡는 것"""
+        """프레임만 세워 둔다"""
         return cls._get(vp_name)
 
     @classmethod
@@ -180,7 +180,7 @@ class EbsSimulateOverlay:
     _window = staticmethod(viewport_window)
 
     def __init__(self, vp_name):
-        """뷰포트마다 하나. _get 이 만들어 들고 있는다"""
+        """뷰포트마다 하나"""
         self._vp_name = vp_name
         self._window = None
         self._api = None
@@ -227,14 +227,7 @@ class EbsSimulateOverlay:
         return True
 
     def _build_work(self) -> None:
-        """작업중 표를 한 번만 지어 둔다. 보이고 감추는 것만 나중에 한다
-
-        매번 다시 지으면 글자가 깜빡인다. 글줄은 모양마다 하나씩 두고
-        하나만 켠다. ui.Label 은 처음 글로 잡아 둔 자리를 계속 쓴다
-        여백은 Spacer 로 깐다. 스타일의 margin_width 는 자손까지 흘러내려
-        막대 하나에도 좌우로 붙는다. 그러면 막대가 찰수록 판이 밀려난다
-        속은 전부 판보다 좁게 못 박아서 무엇도 판을 밀 수 없게 한다
-        """
+        """작업중 표를 한 번 지어 둔다"""
         self._work = ui.Placer(draggable=False, offset_x=0, offset_y=0)
         with self._work:
             self._work_panel = ui.ZStack(width=ui.Pixel(WORK_WIDE),
@@ -264,10 +257,7 @@ class EbsSimulateOverlay:
         self._work_panel.visible = False
 
     def _work_word(self, hold, store: dict, text: str) -> None:
-        """그 글 모양의 글줄만 켠다. 없으면 그때 하나 만든다
-
-        글줄 폭은 판 폭과 같다. 좁게 잡으면 그만큼 왼쪽으로 치우친다
-        """
+        """그 글 모양의 글줄만 켠다"""
         if hold is None:
             return
         shape = "".join("0" if one.isdigit() else one for one in text)
@@ -286,13 +276,7 @@ class EbsSimulateOverlay:
             one.visible = key == shape
 
     def _work_place(self) -> None:
-        """작업중이면 가운데에 앉히고 진행도를 고친다. 아니면 감춘다
-
-        글은 동작 이름 하나뿐이다. 여러 구간을 도는 동작이면 막대가 구간마다
-        제 몫 안에서 차오른다. 두 구간이면 앞이 0~50, 뒤가 50~100 이다
-        막대는 제 자리 안에서만 찬다. 다 차도 WORK_ROOM 이라 판보다 좁다
-        판 크기는 프레임마다 도로 못 박는다. 무엇이 밀어도 되돌아온다
-        """
+        """작업중이면 가운데에 앉히고 진행도를 고친다"""
         panel = self._work_panel
         if panel is None or self._work is None or sim() is None:
             return
@@ -342,11 +326,7 @@ class EbsSimulateOverlay:
     def _floating(self, at, fill, ground, anchor=MIDDLE, step: float = 0.0,
                   share: int = 1, group=None, key=None, on: bool = True,
                   wide: int = 0):
-        """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다
-
-        wide  판 폭을 픽셀로 못 박는다. _place 가 computed_width 대신 이것을
-              쓰므로 글이 바뀌어도 판이 제자리에서 안 흔들린다
-        """
+        """월드 좌표에 매달 판 하나. 같은 group 끼리 나란히 세운다"""
         if at is None:
             return
         placer = ui.Placer(draggable=False, offset_x=0, offset_y=0)
@@ -363,12 +343,7 @@ class EbsSimulateOverlay:
                             share, group, key, on, wide])
 
     def _verdict_panel(self, said: dict) -> None:
-        """못 세울 때만 보이는 한 줄. 판은 늘 만들어 둔다
-
-        on  끄는 동안 세울 수 있게 바뀌면 _restate 가 이 표만 내린다. 판을
-                  그때 만들면 마우스를 받고 있는 판을 갈아엎게 된다
-        끄는 동안에는 둘 다 내린다. 손을 뗀 자리에서 다시 재고 올린다
-        """
+        """못 세울 때만 보이는 한 줄"""
         held = EbsSimulateGrip.held()
         self._floating(said.get("centre"), self._one(CANNOT), COLOR_CANNOT,
                        key=("verdict", "centre"),
@@ -390,7 +365,7 @@ class EbsSimulateOverlay:
     def _offset_panel(self, said: dict) -> None:
         """손잡이 아래 OFFSET_HEIGHT 높이에 다는 이격 표"""
         def fill():
-            """글줄을 담을 빈 칸 하나. 채우는 것은 _dial 이 한다"""
+            """글줄을 담을 빈 칸 하나"""
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
                 self._dial_hold = ui.ZStack(
@@ -401,12 +376,7 @@ class EbsSimulateOverlay:
         self._dial(said)
 
     def _dial(self, said: dict) -> None:
-        """이격 글줄. 글자 모양마다 제 글줄을 하나씩 두고 하나만 켠다
-
-        ui.Label 은 text 만 갈아 끼우면 처음 글로 잡아 둔 그리기 자리를
-        그대로 쓴다. 자릿수가 같은 글끼리만 한 글줄을 쓰면 가운데가 계속
-        맞는다. 모양은 숫자를 0 으로 바꾼 꼴로 센다
-        """
+        """이격 글줄. 글자 모양마다 제 글줄을 하나씩 둔다"""
         hold = self._dial_hold
         if hold is None:
             return
@@ -424,12 +394,7 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _grip_at(said: dict, which: str = "at"):
-        """손잡이 쪽 월드 자리. 손잡이가 없으면 None
-
-        자리는 EBS 안 좌표라 뿌리 변환을 태워야 월드가 된다. 미는 동안에는
-        그 변환만 바뀌므로 표도 저절로 따라간다
-        which  at 은 손잡이가 선 자리, under 는 그 아래 이격 표 자리
-        """
+        """손잡이 쪽 월드 자리. 손잡이가 없으면 None"""
         grip = said.get("grip") or {}
         at, matrix = grip.get(which), grip.get("matrix")
         if at is None:
@@ -448,13 +413,13 @@ class EbsSimulateOverlay:
 
     @classmethod
     def restate(cls, vp_name: str = None) -> None:
-        """판을 다시 만들지 않고 자리와 글자만 고친다. 손잡이가 끌 때 부른다"""
+        """판을 다시 만들지 않고 자리와 글자만 고친다"""
         for name, overlay in list(cls._instances.items()):
             if vp_name in (None, name):
                 overlay._restate()
 
     def _restate(self) -> None:
-        """끄는 동안. 판을 다시 만들지 않고 자리와 글자만 고친다"""
+        """판의 자리와 글자만 고친다"""
         said = sim().get_verdict() if sim() is not None else None
         if not said:
             return
@@ -500,7 +465,7 @@ class EbsSimulateOverlay:
             label.text = text
 
     def _repaint(self, key, state: str) -> None:
-        """그 면의 판 색을 지금 상태에 맞춘다. 끄는 동안 여유가 충돌로 바뀐다"""
+        """그 면의 판 색을 지금 상태에 맞춘다"""
         ground = COLOR_CAN if state == STATE_CLEAR else COLOR_CANNOT
         ink = COLOR_INK if state == STATE_CLEAR else COLOR_TEXT
         for behind in self._grounds.get(key, ()):
@@ -518,7 +483,7 @@ class EbsSimulateOverlay:
                 TIGHT if state == STATE_TIGHT else GAP)
 
     def _face_panel(self, mark: dict) -> None:
-        """한쪽에 상태, 다른 쪽에 거리와 최소 여유. 막힌 면도 똑같이 붙인다"""
+        """한쪽에 상태, 다른 쪽에 거리와 최소 여유"""
         state = mark.get("state")
         ground = COLOR_CAN if state == STATE_CLEAR else COLOR_CANNOT
         ink = COLOR_INK if state == STATE_CLEAR else COLOR_TEXT
@@ -526,10 +491,7 @@ class EbsSimulateOverlay:
         least = mark.get("min_gap")
 
         def block(lines, key=None, wide: int = 0):
-            """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다
-
-            wide  글줄 칸을 이만큼으로. 자릿수가 바뀌어도 판이 안 들썩인다
-            """
+            """_floating 에 넘길 그리기 함수"""
             def fill():
                 """판 속 글줄을 채운다"""
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
@@ -565,7 +527,7 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _mm(metres: float) -> float:
-        """미터로 잰 값을 밀리미터로. 판에 적는 단위다"""
+        """미터로 잰 값을 밀리미터로"""
         return (metres or 0.0) * MM_PER_M
 
     def _tick(self) -> None:
@@ -574,7 +536,7 @@ class EbsSimulateOverlay:
         self._place()
 
     def _start(self) -> bool:
-        """매 프레임 _tick 을 부르도록 Kit 업데이트에 붙는다. 한 번만 붙는다"""
+        """매 프레임 _tick 을 부르도록 Kit 업데이트에 붙는다"""
         if self._follow is not None:
             return True
         try:
@@ -676,11 +638,7 @@ class EbsSimulateOverlay:
                 (0.5 - ndc[1] * 0.5) * height)
 
     def _to_window(self, point):
-        """월드 점을 창 좌표로. 마우스 콜백이 주는 좌표계와 같다
-
-        _to_screen 은 판 안 좌표라 판이 창 안쪽에 있으면 그만큼 어긋난다
-        손잡이를 집을 때는 이쪽을 쓴다
-        """
+        """월드 점을 창 좌표로"""
         at = self._to_screen(point)
         if at is None:
             return None
@@ -692,11 +650,7 @@ class EbsSimulateOverlay:
 
 
     def clear(self) -> None:
-        """그린 판을 놓는다. 프레임 구독은 그대로 둔다
-
-        _follow  작업중 표도 여기서 돈다. Clear 가 맨 먼저 이걸 부르므로
-                 여기서 놓으면 지우는 동안 표가 안 보인다
-        """
+        """그린 판을 놓는다. 프레임 구독은 그대로 둔다"""
         EbsSimulateGrip.hide()
         self._marks = []
         self._texts = {}
@@ -729,12 +683,7 @@ class EbsSimulateOverlay:
 
 
 class EbsSimulateGrip:
-    """EBS 앞 공중에 뜬 양방향 화살표. 끌면 EBS 가 좌우로 간다
-
-    프림으로 그린다. 마우스는 카메라의 입력 판이 먼저 받아 이리로 넘긴다
-    _hit  화면에 비친 몸통에서 GRIP_PICK 픽셀 안이면 잡은 것으로 본다
-    sim().slide  끈 만큼을 넘긴다. 다시 재지 않고 산수로 따라간다
-    """
+    """EBS 앞 공중에 뜬 양방향 화살표. 끌면 EBS 가 좌우로 간다"""
 
     _one = None
     _again = False
@@ -752,11 +701,7 @@ class EbsSimulateGrip:
 
     @classmethod
     def held(cls) -> bool:
-        """잡고 있거나, 놓고 다시 재는 중인가. 판정 표를 내릴지 여기로 묻는다
-
-        _again  놓은 뒤 다시 재기 전까지는 판정이 민 자리 것이 아니다. 그
-                 사이에 표를 올리면 없어질 충돌이 잠깐 떴다 사라진다
-        """
+        """잡고 있거나, 놓고 다시 재는 중인가"""
         return cls._again or (cls._one is not None and cls._one.holding)
 
     @classmethod
@@ -777,7 +722,7 @@ class EbsSimulateGrip:
         cls._one = None
 
     def __init__(self):
-        """자리만. 세우는 것은 stand. 뿌리는 충돌에서 빼는 쪽과 같아야 한다"""
+        """자리만. 세우는 것은 stand"""
         from .ebs_simulate import GRIP_ROOT
         self._root = GRIP_ROOT
         self._paint = EbsSimulateMarks(self._stage, self._root)
@@ -801,10 +746,7 @@ class EbsSimulateGrip:
             return None
 
     def stand(self, grip: dict, to_screen) -> bool:
-        """EBS 안 좌표로 눕힌다. 뿌리에 EBS 변환을 걸어 같이 움직인다
-
-        몸통 중점은 EBS 상자 앞면에 정확히 앉는다. 앞으로 띄우지 않는다
-        """
+        """EBS 안 좌표로 눕힌다"""
         self._to_screen = to_screen
         self._matrix = grip.get("matrix")
         self._high = max(grip.get("high") or 0.0, 1e-6)
@@ -821,12 +763,7 @@ class EbsSimulateGrip:
         return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
-        """그 상태 색으로 몸통 하나와 화살촉 둘. 뿌리가 EBS 를 따라간다
-
-        머티리얼은 상태마다 두지 않고 하나를 색만 바꿔 쓴다. 새로 세우면
-        OmniPBR 인스턴스가 하나 더 생겨 RTX 가 MDL 을 그 자리에서 컴파일한다.
-        잡는 순간 그 값을 물면 처음 잡을 때만 몇 초씩 멈춘다
-        """
+        """그 상태 색으로 몸통 하나와 화살촉 둘"""
         stage = self._stage()
         if stage is None or self._ends is None:
             return False
@@ -865,11 +802,7 @@ class EbsSimulateGrip:
         self._paint.clear()
 
     def press(self, x: float, y: float) -> bool:
-        """여기서 눌렸나. 눌렸으면 끌기를 시작한다
-
-        도는 일이 있으면 안 받는다. 재는 중에 밀면 판정 한 벌을 바깥에서
-        갈아엎게 된다
-        """
+        """여기서 눌렸나. 눌렸으면 끌기를 시작한다"""
         if self._ends is None or sim().busy():
             return False
         if not self._hit(x, y):
@@ -892,13 +825,7 @@ class EbsSimulateGrip:
         return True
 
     def release(self) -> None:
-        """놓는다. 다시 재는 것은 다음 프레임부터 따로 돈다
-
-        마우스 이벤트 안에서 재면 그동안 킷이 멈춘다. 띄워 놓고 바로
-        돌려주면 그 사이에 화면이 한 번 그려진다
-        _again  다시 재기 전에 세운다. 그래야 그 사이 restate 가 낡은 판정
-                 으로 표를 올리지 않는다
-        """
+        """놓는다. 다시 재는 것은 다음 프레임부터 따로 돈다"""
         if self._from is None:
             return
         self._from = None
@@ -913,12 +840,7 @@ class EbsSimulateGrip:
         asyncio.ensure_future(self._settle())
 
     async def _settle(self) -> None:
-        """손을 뗀 자리에서 내부 충돌을 다시 재고 연출을 되켠다
-
-        다시 켠 상자가 실제로 빛나기 시작할 때까지 표를 세워 둔다. 저작이
-        끝난 자리에서 내리면 표가 사라지고도 한참 아무것도 안 보인다
-        판정 표는 다 재고 나서 한 번에 올린다. 터져도 finally 가 올린다
-        """
+        """손을 뗀 자리에서 내부 충돌을 다시 재고 연출을 되켠다"""
         try:
             import omni.kit.app
             await omni.kit.app.get_app().next_update_async()
@@ -952,19 +874,13 @@ class EbsSimulateGrip:
         return (x - near_x) ** 2 + (y - near_y) ** 2 <= pick * pick
 
     def _pick_pixels(self, pixels: float) -> float:
-        """집을 수 있는 반지름. 가까이 가서 굵게 그려지면 그만큼 넓게 잡는다
-
-        굵기와 길이는 둘 다 EBS 안 길이라 비로 두면 크기가 얼마든 맞는다
-        """
+        """집을 수 있는 반지름"""
         fat = max(GRIP_THICK, GRIP_FLARE) * self._high
         drawn = pixels * fat / (self._reach * 2.0) if self._reach else 0.0
         return max(GRIP_PICK, drawn)
 
     def _unit_pixels(self) -> float:
-        """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0
-
-        몸통을 화면에서 재고 월드에서 재서 나눈다. EBS 크기가 얼마든 맞는다
-        """
+        """스테이지 한 단위가 화면에서 몇 픽셀인가. 못 재면 0"""
         spots, ends = self._screen_ends(), self._world_ends()
         if spots is None or ends is None:
             return 0.0
@@ -974,7 +890,7 @@ class EbsSimulateGrip:
         return pixels / reach if pixels and reach else 0.0
 
     def _world_ends(self):
-        """몸통 양 끝의 월드 좌표. EBS 변환을 태워서 낸다"""
+        """몸통 양 끝의 월드 좌표"""
         if self._ends is None:
             return None
         if self._matrix is None:
@@ -1010,11 +926,7 @@ class EbsSimulateMarks:
 
     def draw(self, sheets: list, marks: list = None, boxes: list = None,
              fresh: bool = True) -> int:
-        """판정 한 벌을 씬에 그린다. fresh 면 먼저 지우고, 아니면 고쳐 그린다
-
-        fresh=False  프림을 지웠다 다시 만들지 않는다. 이름이 같으니 Define 이
-                  있던 것을 돌려주고 속성만 새로 쓴다. 미는 동안 이 길로 온다
-        """
+        """판정 한 벌을 씬에 그린다. fresh 면 먼저 지운다"""
         stage = self._stage_of()
         if stage is None:
             return 0
@@ -1037,13 +949,7 @@ class EbsSimulateMarks:
         return path
 
     def _light(self, stage, path: str, on: bool) -> bool:
-        """그 자리 하나를 켜고 끈다. 지금과 같으면 한 자도 안 쓴다
-
-        _lit  지금 켜 둔 상태. 달라질 때만 쓴다. 안 그러면 안 바뀐 것에도
-              프레임마다 가시성을 써서 미는 동안 통지가 그만큼 늘어난다
-        처음 보는 자리를 켜는 것은 안 쓴다. 우리가 방금 세운 프림이라 이미
-        보이는 상태다. 감추는 쪽만 실제로 쓸 일이 있다
-        """
+        """그 자리 하나를 켜고 끈다. 지금과 같으면 안 쓴다"""
         want = UsdGeom.Tokens.inherited if on else UsdGeom.Tokens.invisible
         was = self._lit.get(path)
         if was == want:
@@ -1067,14 +973,7 @@ class EbsSimulateMarks:
             self._light(stage, path, path in self._drawn)
 
     def hide_clash(self) -> bool:
-        """내부충돌연출을 걷는다. 지우지 않고 뿌리 하나만 감춘다
-
-        지우면 상자마다 rprim 이 사라지고, 켤 때 그만큼 다시 지어야 한다.
-        손잡이를 잡을 때마다 그 값을 물면 잡는 순간이 걸린다
-        뿌리 하나를 invisible 로 두면 Hydra 는 깃발만 뒤집는다. 지어 둔 것도
-        _clash_at 도 그대로라 켤 때는 걸린 것만 다시 보이면 된다
-        머티리얼은 Looks 아래 그대로 두어 다시 켤 때 만들 일이 없게 한다
-        """
+        """내부충돌연출을 걷는다. 뿌리 하나만 감춘다"""
         self._stop_pulse()
         return self._light_clash(False)
 
@@ -1099,15 +998,7 @@ class EbsSimulateMarks:
         return True
 
     def clear(self) -> None:
-        """그린 것을 감춘다. 프림도 머티리얼도 두고 간다
-
-        지우면 프림마다 rprim 이 사라지고 다음에 그릴 때 그만큼 다시 짓는다.
-        이름이 자리마다 정해져 있어 Define 이 있던 것을 돌려주므로, 감춰
-        뒀다가 속성만 새로 써도 화면은 똑같다. hide_clash 가 상자 뿌리
-        하나로 하던 것을 그린 것 전부로 넓힌 것이다
-        _clash_at  상자는 장비 자리에 서 있어 EBS 를 밀어도 안 움직인다.
-                 여기서 안 버려야 다음 판에 그 자리를 그대로 다시 쓴다
-        """
+        """그린 것을 감춘다. 프림도 머티리얼도 두고 간다"""
         self._stop_pulse()
         stage = self._stage_of()
         if stage is None:
@@ -1118,7 +1009,7 @@ class EbsSimulateMarks:
             self._show_only(stage)
 
     def drop_looks(self) -> None:
-        """세워 둔 것을 머티리얼까지 통째로 치운다. teardown 만 여기까지 간다"""
+        """세워 둔 것을 머티리얼까지 통째로 치운다"""
         self.clear()
         self._looks = {}
         self._standing = set()
@@ -1229,14 +1120,7 @@ class EbsSimulateMarks:
                 tuple(end[i] + step[i] for i in range(3)))
 
     def _clash_boxes(self, stage, boxes) -> int:
-        """걸린 장비 메쉬마다 빨간 반투명 상자 하나
-
-        상자는 장비 메쉬의 자리라 EBS 를 밀어도 안 움직인다. 그래서 한 번
-        세워 두고 걸린 것만 보이게 한다. 다시 지을 일이 없으니 깜박임도
-        안 끊긴다
-        boxes  None 이면 손대지 않는다. 빈 목록이면 전부 감춘다
-        _light_clash  잡는 동안 감춰 둔 뿌리를 도로 켠다
-        """
+        """걸린 장비 메쉬마다 빨간 반투명 상자 하나"""
         if boxes is None:
             return 0
         where = CLASH_ROOT.format(self._root)
@@ -1260,7 +1144,7 @@ class EbsSimulateMarks:
         return drawn
 
     def _clash_cube(self, stage, path: str, lo, hi) -> None:
-        """그 자리에 상자 하나를 세운다. 한 번 세우면 다시 안 건드린다"""
+        """그 자리에 상자 하나를 세운다"""
         pad = self._clash_pad(stage)
         middle = [(lo[i] + hi[i]) * 0.5 for i in range(3)]
         half = [(hi[i] - lo[i]) * 0.5 + pad for i in range(3)]
@@ -1280,10 +1164,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _moved(shape, matrix) -> None:
-        """그 프림의 변환을 쓴다. 있던 것이면 갈아 끼운다
-
-        fresh=False 로 다시 그릴 때 AddTransformOp 를 또 부르면 USD 가 막는다
-        """
+        """그 프림의 변환을 쓴다. 있던 것이면 갈아 끼운다"""
         xformable = UsdGeom.Xformable(shape)
         op = next((one for one in xformable.GetOrderedXformOps()
                    if one.GetOpName() == "xformOp:transform"), None)
@@ -1294,7 +1175,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _clash_pad(stage) -> float:
-        """CLASH_PAD 는 m 다. 씬 단위로 바꿔 준다"""
+        """CLASH_PAD 를 씬 단위로 바꾼다"""
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
         except Exception:
@@ -1303,10 +1184,7 @@ class EbsSimulateMarks:
 
 
     def _start_pulse(self, stage) -> bool:
-        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다. clear 가 멈춘다
-
-        이미 돌고 있으면 그대로 둔다. 다시 걸면 깜박임이 처음으로 되돌아간다
-        """
+        """내부 충돌 상자를 CLASH_PULSE 주기로 깜박인다"""
         if self._pulse is not None:
             return True
         self._stop_pulse()
@@ -1330,12 +1208,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _pulse_inputs_of(stage, root: str) -> tuple:
-        """깜박일 때 건드릴 속성과 파동이 1 일 때의 값. 투명도만 건드린다
-
-        CLASH_PULSE_HIGH 가 1.0 이 아닌 이유가 여기다. RTX 는 opacity 가 꼭
-        1.0 이면 그 머티리얼을 불투명으로 분류한다. 파동이 1.0 을 스치면
-        주기마다 불투명과 반투명을 오가며 다시 분류된다
-        """
+        """깜박일 때 건드릴 속성과 파동이 1 일 때의 값"""
         looks = f"{root}/Looks/clash"
         wanted = ((f"{looks}/shader", "inputs:opacity", 1.0),
                   (f"{looks}/mdl", "inputs:opacity_constant", 1.0))
@@ -1370,12 +1243,7 @@ class EbsSimulateMarks:
             self._stop_pulse()
 
     def _stop_pulse(self, stage=None) -> None:
-        """깜박임 구독을 놓고 투명도를 제자리로 돌린다
-
-        안 되돌리면 깜박이다 멈춘 그 밝기에 굳는다. 예전에는 다음 collide 가
-        머티리얼을 새로 세우며 저절로 고쳐졌는데, 이제 같은 값이면 다시 안
-        쓰므로 여기서 되돌려야 한다
-        """
+        """깜박임 구독을 놓고 투명도를 제자리로 돌린다"""
         inputs, self._pulse_inputs = self._pulse_inputs, ()
         self._pulse = None
         if not inputs:
@@ -1393,7 +1261,7 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _gap_shaft(start, end, head: float = GAP_HEAD_HIGH):
-        """선은 원뿔 중점에서 시작한다. 뭉툭한 끝이 뾰족한 끝을 먹지 않게"""
+        """원뿔 중점에서 시작하는 선"""
         along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         span = along.GetLength()
         if span <= head:
@@ -1490,7 +1358,7 @@ class EbsSimulateMarks:
     @classmethod
     def _sheet(cls, stage, path: str, points: list, material, color,
                opacity: float = MARKER_OPACITY) -> None:
-        """면 판 한 장. 발광이 양면이 안 돼서 앞뒤 두 장을 겹친다"""
+        """면 판 한 장. 앞뒤 두 장을 겹친다"""
         normal = cls._face_normal(points)
         diagonal = math.sqrt(sum((points[2][i] - points[0][i]) ** 2
                                  for i in range(3)))
@@ -1523,10 +1391,7 @@ class EbsSimulateMarks:
 
     def _material(self, stage, name: str, color, opacity: float = MARKER_OPACITY,
                   emission: float = MARKER_EMISSION, glow: bool = True):
-        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다
-
-        glow  색을 발광으로 낸다. 끄면 빛을 받는 diffuse 로 낸다
-        """
+        """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다"""
         path = LOOKS_ROOT.format(self._root) + f"/{name}"
         want = (tuple(color), opacity, emission, bool(glow))
         if self._looks.get(path) == want:

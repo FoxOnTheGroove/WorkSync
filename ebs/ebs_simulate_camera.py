@@ -37,7 +37,7 @@ LEFT_BUTTON, RIGHT_BUTTON, MIDDLE_BUTTON = 0, 1, 2
 
 
 def viewport_window(name: str = None):
-    """뷰포트 창을 찾는다. Kit 빌드마다 헬퍼가 달라 차례로 물어본다"""
+    """뷰포트 창을 찾는다"""
     try:
         import omni.kit.viewport.utility as vp_util
     except Exception as e:
@@ -47,7 +47,7 @@ def viewport_window(name: str = None):
     tried = []
 
     def ask(helper_name, call):
-        """그 헬퍼가 이 빌드에 있으면 불러 보고, 실패는 적어 둔다"""
+        """그 헬퍼가 이 빌드에 있으면 불러 본다"""
         helper = getattr(vp_util, helper_name, None)
         if helper is None:
             tried.append(f"{helper_name}: not in this build")
@@ -81,7 +81,7 @@ def viewport_window(name: str = None):
 
 
 class EbsSimulateCamera:
-    """우리 카메라와 뷰포트 입력. 궤도와 줌을 직접 받는다"""
+    """우리 카메라와 뷰포트 입력"""
 
     def __init__(self):
         """원래 카메라, 궤도 상태, 입력 가로채기 자리를 비워 둔다"""
@@ -102,23 +102,23 @@ class EbsSimulateCamera:
         self._watcher = None
 
     def watch(self, grip) -> None:
-        """마우스를 먼저 볼 것. 뷰포트 기즈모가 자기를 걸어 둔다"""
+        """마우스 구독 순서. 낮을수록 먼저 본다"""
         self._watcher = grip
 
     def hold(self, on: bool) -> None:
-        """궤도 조작을 잠깐 놓는다. 기즈모를 끄는 동안 카메라가 안 따라 돌게"""
+        """궤도 조작을 잠깐 놓는다"""
         self._held = bool(on)
         if self._held:
             self._end_drag()
 
     def set_near_span(self, span: float) -> float:
-        """근평면을 EBS 폭 절반의 몇 배 앞에 둘지. 지금 자리에 바로 반영한다"""
+        """근평면을 EBS 폭 절반의 몇 배 앞에 둘지"""
         self._span = max(0.0, float(span))
         self.restate()
         return self._span
 
     def restate(self) -> None:
-        """지금 자리 그대로 다시 쓴다. 근평면만 바뀔 때"""
+        """지금 자리 그대로 다시 쓴다"""
         hold = self._hold()
         if hold is not None:
             self._settle(hold, hold[3], hold[4])
@@ -146,7 +146,7 @@ class EbsSimulateCamera:
         return bool(prim.IsValid() and UsdGeom.Camera(prim))
 
     def make(self, stage) -> bool:
-        """세션 레이어에 카메라 프림을 만든다. 있으면 안 만든다"""
+        """세션 레이어에 카메라 프림을 만든다"""
         if stage is None or self.exists(stage):
             return False
         with Usd.EditContext(stage, stage.GetSessionLayer()):
@@ -342,7 +342,7 @@ class EbsSimulateCamera:
         self._frame_ui = None
 
     def _pressed(self, x, y, button) -> None:
-        """왼쪽 버튼이면 드래그 시작. 기즈모가 먼저 가져가면 궤도는 쉰다"""
+        """왼쪽 버튼이면 드래그 시작"""
         if button != LEFT_BUTTON:
             self._from = None
             return
@@ -356,11 +356,7 @@ class EbsSimulateCamera:
         self._at = (x, y)
 
     def _moved(self, x, y) -> None:
-        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다. 기즈모가 먼저다
-
-        킷은 버튼을 누른 동안만 여기로 준다. 그래서 손잡이는 hover 를 안 쓰고
-        잡았을 때만 색이 바뀐다
-        """
+        """누른 채 움직인 만큼을 궤도 회전으로 넘긴다"""
         if self._watcher is not None and self._watcher.drag(x, y):
             return
         if self._held or self._from is None or self._at is None:
@@ -374,7 +370,7 @@ class EbsSimulateCamera:
         self._from = (0.0, 0.0)
 
     def _end_drag(self) -> None:
-        """드래그 상태를 놓는다. 기즈모를 잡고 있었으면 그것도 놓는다"""
+        """드래그 상태를 놓는다"""
         if self._watcher is not None:
             self._watcher.release()
         self._from = self._at = None
@@ -413,7 +409,7 @@ class EbsSimulateCamera:
         return (u * 2.0 - 1.0, 1.0 - v * 2.0)
 
     def _picked(self, path, position=None, *rest) -> None:
-        """물어본 답이 오면 그 점을 궤도 중심으로 삼는다. 우리 것은 뺀다"""
+        """물어본 답이 오면 그 점을 궤도 중심으로 삼는다"""
         if not path or position is None:
             return
         try:
@@ -426,7 +422,7 @@ class EbsSimulateCamera:
         self._look_at(Gf.Vec3d(position[0], position[1], position[2]))
 
     def _look_at(self, target) -> None:
-        """궤도 중심만 그 점으로 옮기고 거리는 그대로 둔다"""
+        """궤도 중심만 그 점으로 옮긴다"""
         hold = self._hold()
         if hold is None:
             return
@@ -439,11 +435,7 @@ class EbsSimulateCamera:
             self._zoom(notches)
 
     def _drag(self, dx: float, dy: float) -> None:
-        """끈 만큼 좌우와 상하를 한 번에 돌린다
-
-        EbsSimulateCamera._turn  yaw 를 먼저 걸고 그 팔에 pitch 를 건다.
-                     한 번에 앉히므로 두 축이 섞여 돈다
-        """
+        """끈 만큼 좌우와 상하를 한 번에 돌린다"""
         if self._from is None or not self._orbit:
             return
         self._from = (self._from[0] + dx, self._from[1] + dy)
@@ -478,7 +470,7 @@ class EbsSimulateCamera:
         self._write(stage, cam_prim, camera, x_cam, y_cam, z_cam, eye, radius)
 
     def _turn(self, yaw: float = 0.0, pitch: float = 0.0) -> None:
-        """팔을 좌우(yaw)·상하(pitch)로 돌린다. 상하는 한계까지만"""
+        """팔을 좌우(yaw)·상하(pitch)로 돌린다"""
         hold = self._hold()
         if hold is None:
             return
@@ -495,7 +487,7 @@ class EbsSimulateCamera:
         self._settle(hold, arm, radius)
 
     def _zoom(self, notches: float) -> None:
-        """팔 길이를 늘이고 줄인다. 가깝고 먼 한계 안으로"""
+        """팔 길이를 늘이고 줄인다"""
         hold = self._hold()
         if hold is None:
             return
@@ -509,7 +501,7 @@ class EbsSimulateCamera:
 
     @staticmethod
     def _room(arm, up, pitch: float) -> float:
-        """지금 각도에서 상하로 더 돌 수 있는 몫. 위아래 한계가 따로다"""
+        """지금 각도에서 상하로 더 돌 수 있는 몫"""
         height = Gf.Dot(arm.GetNormalized(), up)
         now = math.degrees(math.asin(max(-1.0, min(1.0, height))))
         return max(-PITCH_DOWN, min(PITCH_UP, now + pitch)) - now
@@ -542,7 +534,7 @@ class EbsSimulateCamera:
 
     @classmethod
     def axes(cls, stage, facing) -> tuple:
-        """그 프림이 보는 방향으로 만든 세 축. x 가 화면 좌우다"""
+        """그 프림이 보는 방향으로 만든 세 축"""
         return cls._frame(stage, facing)
 
     @staticmethod
@@ -559,7 +551,7 @@ class EbsSimulateCamera:
         return x_cam, y_cam, z_cam
 
     def _near(self, x_cam, distance: float) -> float:
-        """EBS 폭 절반의 set_near_span 배만큼 앞에서부터. 그보다 앞은 잘린다"""
+        """EBS 폭 절반의 set_near_span 배만큼 앞에 둘 근평면 거리"""
         if self._box is None:
             return CAMERA_NEAR
         low, high = self._box.GetMin(), self._box.GetMax()

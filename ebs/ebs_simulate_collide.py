@@ -6,7 +6,7 @@ from .ebs_simulate_shared import *
 
 
 class EbsSimulateCollide:
-    """충돌 기하와 여유 거리. 상태는 sim 이 들고 여기는 재기만 한다"""
+    """충돌 기하와 여유 거리를 잰다"""
 
     @classmethod
     def _attr_value(cls, attr, tc):
@@ -22,7 +22,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _bounds_cache(cls, sim):
-        """공유 바운드 캐시. 안 움직이는 것만 이걸로 잰다"""
+        """안 움직이는 것에 쓰는 공유 바운드 캐시"""
         if sim._bounds is None:
             sim._bounds = UsdGeom.BBoxCache(
                 Usd.TimeCode.Default(),
@@ -77,11 +77,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _build_cells(cls, sim, box: Gf.Range3d) -> dict:
-        """EBS 세 면 앞의 상자와 사각형. 면마다 하나씩
-
-        면을 더 쪼개지 않는다. 한 면이 걸렸나만 보면 되고, 쪼개 봐야 늘
-        한 칸이라 행과 열을 세던 것이 값만 하고 아무것도 안 바꿨다
-        """
+        """EBS 세 면 앞의 상자와 사각형. 면마다 하나씩"""
         up_axis = 1 if UsdGeom.GetStageUpAxis(sim._get_stage()) == UsdGeom.Tokens.y else 2
         front_axis = 3 - up_axis
         side_axis = 3 - up_axis - front_axis
@@ -168,7 +164,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _cube_local(cls, prim):
-        """Cube 프림의 점과 면. size 로 만들어 프림의 변환이 그대로 실린다"""
+        """Cube 프림의 점과 면"""
         if str(prim.GetTypeName()) != CUBE_TYPE:
             return None
         try:
@@ -182,7 +178,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _ebs_bound(cls, sim, prim: Usd.Prim):
-        """EBS 의 월드 상자. collide 한 번에 한 번만 잰다"""
+        """EBS 의 월드 상자"""
         path = sim._path_of(prim)
         if sim._ebs_box is not None and sim._ebs_box[0] == path:
             return sim._ebs_box[1]
@@ -239,7 +235,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _face_grid(cls, sim, path: str, data):
-        """면마다 로컬 상자를 한 번 재고 격자에 담는다. 메시가 안 변하면 그대로"""
+        """면마다 로컬 상자를 재서 격자에 담는다"""
         made = sim._faces.get(path)
         if made is not None:
             return made
@@ -294,7 +290,7 @@ class EbsSimulateCollide:
     @classmethod
     def _face_marks(cls, sim, local_box, to_world, cells: dict,
                     distances: dict) -> list:
-        """면마다 상태·거리·선 두 끝. 선은 앞 모서리 중점에서, 잰 자리는 안내선으로"""
+        """면마다 상태·거리·선 두 끝"""
         stage = sim._get_stage()
         try:
             per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -462,18 +458,14 @@ class EbsSimulateCollide:
 
     @classmethod
     def _flat_slack(cls, local, axis: int) -> float:
-        """'같은 평면'으로 볼 깊이 오차. 넓은 면일수록 조금 기울어도 한 면이다"""
+        """'같은 평면'으로 볼 깊이 오차"""
         span = max(local.GetMax()[i] - local.GetMin()[i]
                    for i in range(3) if i != axis)
         return max(span * FLAT_TOL, OVERLAP_EPS)
 
     @classmethod
     def _forget_ebs(cls, sim, paths=()) -> None:
-        """EBS 상자 캐시를 버린다. 옮겼거나 켜고 껐을 때
-
-        잎 캐시는 건드린 자리만 버린다. EBS 는 _stage_index 에도 잎 캐시에도
-        없으니 EBS 를 껐다 켜는 것만으로는 아무것도 안 버린다
-        """
+        """EBS 상자 캐시를 버린다"""
         sim._ebs_box = None
         cls._forget_leaves(sim, paths)
         for path in paths:
@@ -481,7 +473,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _forget_leaves(cls, sim, roots=()) -> None:
-        """그 자리를 낀 잎 캐시를 버린다. 인스턴스를 열고 닫으면 프림이 바뀐다"""
+        """그 자리를 낀 잎 캐시를 버린다"""
         for root in roots:
             for path in [p for p in sim._leaves
                          if p == root or p.startswith(root + "/")
@@ -490,7 +482,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _forget_triangles(cls, sim, prim: Usd.Prim) -> None:
-        """그 프림의 월드 삼각형 캐시를 버린다. align 이 부른다"""
+        """그 프림의 월드 삼각형 캐시를 버린다"""
         if prim is None or not prim.IsValid():
             return
         root = str(prim.GetPath())
@@ -549,7 +541,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _grid_of(cls, items: list, box: Gf.Range3d) -> tuple:
-        """삼각형들을 칸에 나눠 담은 격자. 후보를 줄이는 데 쓴다"""
+        """삼각형들을 칸에 나눠 담은 격자"""
         low, high = box.GetMin(), box.GetMax()
         origin = (low[0], low[1], low[2])
         size = [max(high[i] - origin[i], 1e-9) for i in range(3)]
@@ -586,7 +578,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _is_boxed_shape(cls, sim, stage, path: str) -> bool:
-        """삼각형이 하나도 안 나오는 조각인가. 캐시를 먼저 믿고 모르면 물어본다"""
+        """삼각형이 하나도 안 나오는 조각인가"""
         cached = sim._triangles.get(path)
         if cached is not None:
             return not cached
@@ -643,11 +635,7 @@ class EbsSimulateCollide:
     @classmethod
     def _meetings(cls, sim, stage, mine: list, theirs: list, whole: Gf.Range3d,
                   known_pairs: list) -> tuple:
-        """장비 메시마다 EBS 와 겹치는 데만 보고, 걸리면 그 메시는 더 안 본다
-
-        _grid_of  EBS 삼각형은 한 번만 격자에 담는다. 장비 메시마다 다시 안 담는다
-        _triangles_reaching  장비 쪽은 겹치는 조각에 닿는 삼각형만 읽는다
-        """
+        """장비 메시마다 EBS 와 겹치는 데만 본다"""
         grid, origin, step, spread = cls._grid_of(mine, whole)
         known = {path for _, path in known_pairs}
         pairs, tests, read = [], 0, 0
@@ -677,11 +665,7 @@ class EbsSimulateCollide:
     @classmethod
     def _meets_mesh(cls, mine: list, yours: list, near, grid, origin, step,
                     spread) -> tuple:
-        """그 장비 메시가 EBS 를 뚫나. 처음 만난 EBS 메시 경로와 검사 횟수
-
-        near  그 조각에 걸친 EBS 삼각형 번호들. 조각이 좁으면 이것만 보면 된다
-        MEET_WIDE  그보다 넓으면 삼각형마다 다시 격자를 탄다
-        """
+        """그 장비 메시가 EBS 를 뚫나. 처음 만난 EBS 메시 경로와 검사 횟수"""
         tests = 0
         close = list(near) if len(near) <= MEET_WIDE else None
         for _, triangle, lo, hi in yours:
@@ -795,7 +779,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _mesh_triangles(cls, sim, stage, path: str) -> list:
-        """그 메시의 월드 삼각형 전부. 한 번 만들고 캐시한다"""
+        """그 메시의 월드 삼각형 전부"""
         if path in sim._triangles:
             return sim._triangles[path]
         triangles = []
@@ -843,7 +827,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _mover(cls, sim, to_world, points, path: str):
-        """로컬 점을 월드로. 행렬을 펼 수 있으면 파이썬 산술로 돈다"""
+        """로컬 점을 월드로"""
         try:
             r0, r1, r2, r3 = (to_world.GetRow(0), to_world.GetRow(1),
                               to_world.GetRow(2), to_world.GetRow(3))
@@ -869,7 +853,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _moving_cache(cls, ):
-        """매번 새로 만드는 바운드 캐시. 움직이는 EBS 전용"""
+        """움직이는 EBS 에 쓰는 바운드 캐시"""
         return UsdGeom.BBoxCache(
             Usd.TimeCode.Default(),
             includedPurposes=[UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
@@ -940,7 +924,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _parts_of(cls, sim, path: str, triangles) -> list:
-        """그 메시의 덩어리 표. 한 번 만들고 캐시한다"""
+        """그 메시의 덩어리 표"""
         found = sim._parts.get(path)
         if found is None or len(found) != len(triangles):
             found = cls._mesh_parts(triangles)
@@ -969,11 +953,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _reach_box(cls, sim, ebs_prim):
-        """collide 가 실제로 뒤지는 범위. 세 면의 프리즘과 EBS 상자를 합친 것
-
-        _warm_steps  이 안쪽만 미리 잰다. 바깥은 어차피 아무도 안 묻는다
-        measure_faces / check_collision / check_equipment  묻는 범위가 다 여기 든다
-        """
+        """collide 가 뒤지는 범위. 세 면의 프리즘과 EBS 상자를 합친 것"""
         bbox = cls._ebs_bound(sim, ebs_prim)
         whole = bbox.ComputeAlignedRange()
         if whole.IsEmpty():
@@ -1077,7 +1057,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _side_roots(cls, sim) -> list:
-        """좌우 판정에 쓸 옆 장비들. 고르는 것은 side_band"""
+        """좌우 판정에 쓸 옆 장비들"""
         stage = sim._get_stage()
         if stage is None:
             return []
@@ -1123,7 +1103,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _stage_boxes(cls, sim, cache=None) -> list:
-        """스테이지의 상자 목록. Init 에 한 번 만든다. EBS 는 뺀다"""
+        """스테이지의 상자 목록. EBS 는 뺀다"""
         if sim._stage_index is not None:
             return sim._stage_index
         stage = sim._get_stage()
@@ -1182,13 +1162,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _subtree_leaves(cls, sim, stage, cache, root) -> list:
-        """그 프림 아래 지오메트리 잎들. 한 번 훑어 두고 다시 안 훑는다
-
-        _gather_nearby  상자로 거르는 것은 꺼낼 때 한다. 훑기가 collide 마다
-                     되풀이되던 자리다. 움직이는 EBS 는 캐시를 안 탄다
-        _leaves  _stage_index 와 수명이 같다. init 과 인스턴스를 열고 닫는
-                 자리, 장비 보임이 바뀌는 자리에서만 버린다
-        """
+        """그 프림 아래 지오메트리 잎들"""
         path = str(root.GetPath())
         shared = cache is sim._bounds
         got = sim._leaves.get(path) if shared else None
@@ -1329,7 +1303,7 @@ class EbsSimulateCollide:
 
     @classmethod
     def _triangles_reaching(cls, sim, stage, path: str, box: Gf.Range3d) -> list:
-        """그 상자에 닿는 삼각형만. 면 격자로 먼저 거른다"""
+        """그 상자에 닿는 삼각형만"""
         lo_box, hi_box = box.GetMin(), box.GetMax()
         x0, y0, z0 = lo_box[0], lo_box[1], lo_box[2]
         x1, y1, z1 = hi_box[0], hi_box[1], hi_box[2]
@@ -1496,7 +1470,7 @@ class EbsSimulateCollide:
     @classmethod
     def check_equipment(cls, sim, ebs_prim: Usd.Prim, eqp_prim: Usd.Prim,
                         cache=None) -> dict:
-        """EBS 와 대상 장비만 본다. 옆 장비(3면 검사 몫)는 여기 들어오지 않는다"""
+        """EBS 와 대상 장비만 본다"""
         stage = sim._get_stage()
         blank = {"hit": False, "pairs": [], "boxes": [], "tests": 0}
         if stage is None or eqp_prim is None or not eqp_prim.IsValid():

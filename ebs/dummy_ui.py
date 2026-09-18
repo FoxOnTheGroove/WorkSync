@@ -37,7 +37,7 @@ NUDGE_BUSY  = " · 갱신 중"
 
 
 class SweepLog:
-    """스윕이 낸 줄을 표로 떨군다. 검증용이라 단계와 무관하다"""
+    """스윕이 낸 줄을 표로 떨군다"""
 
     COLUMNS = ("equipment", "pivot_ok", "axis",
                "pivot_coord", "pivot_offset", "pivot_offset_puls",
@@ -74,7 +74,7 @@ class SweepLog:
 
     @classmethod
     def note(cls, row: dict) -> str:
-        """한 줄에 붙일 비고. 왜 못 읽었는지, 아니면 어느 갈래인지"""
+        """한 줄에 붙일 비고"""
         state = str(row.get("pivot_ok", ""))
         why = row.get("why", "")
         if why and state in ("error", "xml-invalid"):
@@ -100,14 +100,10 @@ class SweepLog:
 
 
 class EbsDummyUI:
-    """서비스 API 만 보고 도는 시험용 창. 속을 직접 만지지 않는다"""
+    """시험용 창"""
 
     def __init__(self, simulate):
-        """위젯 참조 자리만. 구성은 build_ui
-
-        simulate  디버그 버튼과 체크박스가 직접 잡는 속. 서비스 표면에는
-                  사용자가 부르는 것만 남기려고 이쪽으로 뚫어 둔다
-        """
+        """위젯 참조 자리만. 구성은 build_ui"""
         self._sim = simulate
         self._window = None
         self._usd_field = None
@@ -205,11 +201,7 @@ class EbsDummyUI:
         self._watch_settings()
 
     def _watch_settings(self):
-        """입력칸이 바뀌는 그 자리에서 설정에 넘긴다
-
-        버튼이 누를 때마다 설정을 다시 밀지 않게 한다. 웹도 설정은 바뀔 때
-        한 번 보내고 동작만 부르므로, 더미도 같은 꼴이 된다
-        """
+        """입력칸이 바뀌는 그 자리에서 설정에 넘긴다"""
         for field, put in ((self._usd_field, EbsSimulateService.set_usd_path),
                            (self._xml_field, EbsSimulateService.set_xml_path),
                            (self._root_field, EbsSimulateService.set_search_root),
@@ -226,13 +218,13 @@ class EbsDummyUI:
             lambda model: self._sim.set_show_lasers(model.get_value_as_bool()))
 
     def _put_ebs(self):
-        """EBS 프림 둘은 짝이라 같이 넘긴다"""
+        """EBS 프림 둘을 같이 넘긴다"""
         EbsSimulateService.set_ebs_paths(
             self._ebs2_field.model.get_value_as_string(),
             self._ebs3_field.model.get_value_as_string())
 
     def _put_gaps(self):
-        """최소 여유 둘도 짝이라 같이 넘긴다"""
+        """최소 여유 둘을 같이 넘긴다"""
         EbsSimulateService.set_min_gaps(
             self._number(self._side_field, MIN_SIDE),
             self._number(self._ceiling_field, MIN_CEILING))
@@ -247,7 +239,7 @@ class EbsDummyUI:
         return field
 
     def auto_init(self) -> dict:
-        """버튼 없이 도는 init. 입력칸의 사전값을 그대로 쓴다"""
+        """입력칸의 사전값으로 init 을 돌린다"""
         self._apply_settings()
         result = EbsSimulateService.auto_init()
         self._apply_views()
@@ -270,7 +262,7 @@ class EbsDummyUI:
         return field
 
     def _apply_views(self) -> int:
-        """줄마다 적힌 경로를 지금 체크 상태대로 맞춘다. init 이 한 번 부른다"""
+        """줄마다 적힌 경로를 지금 체크 상태대로 맞춘다"""
         done = 0
         for field, box in self._views:
             path = field.model.get_value_as_string().strip()
@@ -290,7 +282,7 @@ class EbsDummyUI:
         self._set_status(f"{path}: {'visible' if on else 'hidden'} ({touched})")
 
     def dock_right(self) -> bool:
-        """우측 패널에 붙인다. 붙을 창이 아직 없으면 False"""
+        """우측 패널에 붙인다. 붙을 창이 없으면 False"""
         if self._docked:
             return True
         for title in DOCK_NEXT:
@@ -317,10 +309,7 @@ class EbsDummyUI:
         self._set_status(f"Selected: {name}")
 
     def _on_simulate(self):
-        """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다
-
-        설정은 입력칸이 바뀔 때 이미 넘어갔다. 연타는 서비스가 막는다
-        """
+        """SIM 버튼. 서비스 simulate 를 부른다"""
         self._spawn(EbsSimulateService.simulate(
             self._eqp_field.model.get_value_as_string()))
 
@@ -333,23 +322,23 @@ class EbsDummyUI:
             self._sim.add_phase("overlay", time.perf_counter() - started)
 
     def _on_align(self):
-        """2단계. EBS 를 제자리에 놓아 보인다. 밀어 둔 것이 있으면 되돌린다"""
+        """2단계. EBS 를 제자리에 놓아 보인다"""
         self._reset_nudge()
         self._start(self._aligning, WORK_ALIGN)
 
     async def _aligning(self):
-        """align 을 돌리고 화면이 잦아들 때까지 기다린 뒤 한 줄 찍는다"""
+        """align 을 돌리고 화면이 잦아들면 한 줄 찍는다"""
         self._render(await self._sim.align_async(
             self._eqp_field.model.get_value_as_string()))
         self._overlay(EbsSimulateOverlay.hide)
         self._sim.say_phases()
 
     def _on_camera(self):
-        """1단계. EBS 가 설 자리에 카메라를 맞춘다. 민 거리는 그대로 둔다"""
+        """1단계. EBS 가 설 자리에 카메라를 맞춘다"""
         self._start(self._focusing, WORK_CAMERA)
 
     async def _focusing(self):
-        """카메라를 잡고 한 줄 찍는다. 도는 동안은 다른 것을 안 받는다"""
+        """카메라를 잡고 한 줄 찍는다"""
         self._render(self._sim.focus(
             self._eqp_field.model.get_value_as_string()))
         self._overlay(EbsSimulateOverlay.hide)
@@ -381,13 +370,13 @@ class EbsDummyUI:
             return NEAR_SPAN
 
     def _reset_nudge(self):
-        """민 거리를 0 으로. 지금 장비 이름을 기억해 둔다"""
+        """민 거리를 0 으로"""
         self._sim.set_nudge(0.0)
         self._nudge_for = self._eqp_field.model.get_value_as_string().strip()
         self._mark_nudge()
 
     def _mark_nudge(self, busy: bool = False):
-        """어느 쪽으로 얼마나 밀어 뒀나. 미는 것은 뷰포트 손잡이가 한다"""
+        """어느 쪽으로 얼마나 밀어 뒀나"""
         if self._nudge_label is None:
             return
         metres = self._sim.get_nudge()
@@ -407,15 +396,11 @@ class EbsDummyUI:
         self._render(self._sim.refresh_camera())
 
     def _on_clear_markers(self):
-        """사용자 동작. 서비스 API 한 줄이 절차를 다 들고 있다"""
+        """CLEAR 버튼. 서비스 clear 를 부른다"""
         self._spawn(EbsSimulateService.clear())
 
     def _spawn(self, work):
-        """서비스 한 줄을 띄우고 결과만 상태 줄에 적는다
-
-        바쁨도 오버레이도 정착도 서비스 안에서 한다. 여기 남는 것은 도는
-        동안 상태 줄에 진행률을 적는 것뿐이고, 그건 더미 위젯 일이다
-        """
+        """서비스 한 줄을 띄우고 결과만 상태 줄에 적는다"""
         self._task = asyncio.ensure_future(self._spun(work))
 
     async def _spun(self, work):
@@ -423,13 +408,7 @@ class EbsDummyUI:
         self._render(await self._watched(work))
 
     def _start(self, make, label: str):
-        """일 하나를 띄운다. 이미 도는 것이 있으면 아예 안 만든다
-
-        make  코루틴이 아니라 코루틴을 만드는 함수다. 코루틴을 먼저 만들어
-                 넘기면, 바빠서 버릴 때 안 기다린 코루틴이 남아 경고가 뜬다
-        begin_work  띄우기 전에 그 자리에서 세운다. 한 프레임 안에 두 번
-                 눌러도 뒤엣것이 막힌다. 손잡이도 같은 것을 본다
-        """
+        """일 하나를 띄운다. 이미 도는 것이 있으면 안 만든다"""
         busy = self._sim.busy()
         if busy:
             self._set_status(f"Busy: {busy}")
@@ -485,11 +464,11 @@ class EbsDummyUI:
 
 
     def _render(self, result: dict):
-        """결과에서 reason 만 상태 줄로. 나머지는 콘솔이 받는다"""
+        """결과에서 reason 만 상태 줄로"""
         self._set_status((result or {}).get("reason", "") or "No result")
 
     def _set_status(self, text: str):
-        """상태 줄. 아직 안 만들었으면 넘어간다"""
+        """상태 줄에 쓴다"""
         if self._status_label:
             self._status_label.text = text
 

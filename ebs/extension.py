@@ -10,14 +10,10 @@ RAISE_FRAMES = 300
 
 
 class EbsExtension(omni.ext.IExt):
-    """킷이 잡는 진입점. 서비스와 창을 세우고 내린다"""
+    """킷이 잡는 진입점"""
 
     def on_startup(self, ext_id):
-        """익스텐션 시작. 창과 오버레이에 속을 하나 물린다
-
-        서비스는 사용자가 부르는 문만 열고, 창과 오버레이는 이것을 직접
-        잡는다. 서비스도 같은 것을 보므로 건네줄 것이 없다
-        """
+        """익스텐션 시작. 창과 오버레이에 속을 물린다"""
         self._sim = instance()
         attach_overlay(self._sim)
         self._ui = EbsDummyUI(self._sim)
@@ -30,7 +26,7 @@ class EbsExtension(omni.ext.IExt):
         self._watch_stage()
 
     def _watch_stage(self):
-        """스테이지가 준비되면 init 을 한 번 누른다"""
+        """스테이지가 준비되면 init 을 누른다"""
         try:
             import omni.kit.app
             self._stage = omni.kit.app.get_app().get_update_event_stream() \
@@ -40,7 +36,7 @@ class EbsExtension(omni.ext.IExt):
             print(f"[ebs] no auto init, press INIT: {e}")
 
     def _stage_step(self):
-        """다 들어온 프레임에 init 을 돌리고 그만 본다"""
+        """다 들어온 프레임에 init 을 돌린다"""
         if not self._stage_ready():
             return
         self._stage = None
@@ -57,7 +53,7 @@ class EbsExtension(omni.ext.IExt):
         return loaded >= total
 
     def _watch_layout(self):
-        """레이아웃이 창을 감추나 매 프레임 지켜본다"""
+        """레이아웃이 창을 감추나 프레임마다 본다"""
         try:
             import omni.kit.app
             self._raise = omni.kit.app.get_app().get_update_event_stream() \
@@ -67,7 +63,7 @@ class EbsExtension(omni.ext.IExt):
             print(f"[ebs] the layout may hide the window: {e}")
 
     def _raise_step(self):
-        """감춰졌으면 한 번 되살리고, 우측에 붙으면 그만 본다"""
+        """감춰진 창을 되살린다"""
         self._frames += 1
         window = ui.Workspace.get_window(WINDOW_TITLE)
         if window is not None and not window.visible and not self._shown:
