@@ -29,6 +29,11 @@ class EbsSimulateService:
         return await instance().run_clear()
 
     @classmethod
+    def get_equipment_names(cls, starts=""):
+        """장비 이름 목록. starts 를 주면 EQP_starts 로 시작하는 것만"""
+        return instance().get_equipment_names(starts)
+
+    @classmethod
     def get_result(cls, equipment=""):
         """그 장비의 마지막 판정. 면별 간격, 내부 충돌, 세울 수 있나"""
         return instance().get_result(equipment)

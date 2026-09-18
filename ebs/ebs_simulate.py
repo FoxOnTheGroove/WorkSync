@@ -1896,6 +1896,20 @@ class EbsSimulate:
         }
         return name
 
+    def get_equipment_names(self, starts: str = "") -> list:
+        """색인에 있는 장비 이름들. EQP_ 접두는 떼고 준다
+
+        starts  주면 그것으로 시작하는 것만. 대소문자는 안 가린다
+                색인이 EQP_ 를 떼고 대문자로 들고 있으므로 그대로 맞춘다
+        init 이 색인을 만든다. 그 전에는 빈 목록이다
+        """
+        want = str(starts or "").strip().upper()
+        if want.startswith(EQP_PREFIX):
+            want = want[len(EQP_PREFIX):]
+        names = sorted(name[len(EQP_PREFIX):] for name in self._eqp_index
+                       if name.startswith(EQP_PREFIX))
+        return [one for one in names if one.startswith(want)] if want else names
+
     def get_result(self, equipment: str = "") -> dict:
         """그 장비의 마지막 판정. 화면은 안 건드린다
 

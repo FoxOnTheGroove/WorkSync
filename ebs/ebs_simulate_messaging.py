@@ -10,6 +10,7 @@ __all__ = ["EbsSimulateMessaging"]
 IN_SIMULATE = "ebs.simulate"
 IN_CLEAR    = "ebs.clear"
 IN_RESULT   = "ebs.result"
+IN_NAMES    = "ebs.equipment"
 IN_STATUS   = "ebs.status"
 IN_SETTINGS = "ebs.settings"
 
@@ -43,6 +44,7 @@ class EbsSimulateMessaging:
         for name, work in ((IN_SIMULATE, self._on_simulate),
                            (IN_CLEAR, self._on_clear),
                            (IN_RESULT, self._on_result),
+                           (IN_NAMES, self._on_names),
                            (IN_STATUS, self._on_status),
                            (IN_SETTINGS, self._on_settings)):
             self._subs.append(bus.create_subscription_to_pop_by_type(
@@ -104,6 +106,13 @@ class EbsSimulateMessaging:
         equipment = str(self._field(event, "equipment", ""))
         self._send(OUT_DONE, {"event": IN_RESULT, "ok": True,
                               "result": EbsSimulateService.get_result(equipment)})
+
+    def _on_names(self, event) -> None:
+        """장비 이름 목록. starts 를 주면 그것으로 시작하는 것만"""
+        starts = str(self._field(event, "starts", ""))
+        names = EbsSimulateService.get_equipment_names(starts)
+        self._send(OUT_DONE, {"event": IN_NAMES, "ok": True,
+                              "starts": starts, "names": names})
 
     def _on_status(self, event) -> None:
         """지금 도는 일과 진행률"""
