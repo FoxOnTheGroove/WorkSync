@@ -110,6 +110,7 @@ PRUNE_TYPES = frozenset({
     "Material", "Shader", "NodeGraph", "Camera",
 })
 ANCHOR_DEPTH = 6
+PIVOT_SHIFT = 0.505
 PASS_TYPES  = ("Scope",)
 MIN_PORTS = 2
 MAX_PORTS = 3

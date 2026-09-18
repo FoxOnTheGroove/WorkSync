@@ -1422,27 +1422,22 @@ class EbsSimulate:
         return box
 
     def _do_align(self, reveal: bool = True, wear: bool = True) -> dict:
-        """포트 좌표로 목표점을 구해 EBS 를 놓는다. 못 구하면 피봇에 맞춘다"""
+        """피봇에서 나란히축으로 밀어 EBS 를 놓는다. 못 구하면 피봇에 맞춘다"""
         if self._target is None:
             return self._payload(False, "Run Prepare first")
         self.clear_markers()
-        stage = self._get_stage()
         anchor = self._target["anchor"]
 
         with self._phase("place"), self._stage_timer("align EBS"):
-            self._base = self.compute_target(stage, self._target["eqp_id"], anchor)
+            self._port_world = {}
+            self._base = self.pivot_target(anchor)
             target = self._pushed(anchor, self._base)
             if target is not None:
                 self._aligned = self._place_ebs(self._target["ebs"], target, anchor)
-                note = ("EBS placed at port 0, world "
+                note = ("EBS placed world "
                         f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f})")
-            elif self._blocked:
-                self._port_world = {}
-                self.clear_port_lasers()
-                return self._payload(False, self._blocked)
             else:
-                self._note("port geometry unavailable, falling back to the anchor prim")
-                self._port_world = {}
+                self._note("pivot unusable, falling back to the anchor prim")
                 self._aligned = self._align_prims(self._target["ebs"], anchor)
                 note = "EBS aligned to the anchor prim"
 
@@ -2440,6 +2435,23 @@ class EbsSimulate:
         if len(gaps) > 1 and max(gaps) - min(gaps) > 1e-6:
             self._note(f"{key}: port spacing is uneven {gaps}, using {spacing}")
         return spacing
+
+    def pivot_target(self, anchor: Usd.Prim):
+        """피봇에서 나란히축으로 PIVOT_SHIFT 만큼 간 자리. 나머지 두 축은 피봇 그대로"""
+        if anchor is None or not anchor.IsValid():
+            return None
+        try:
+            here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()).ExtractTranslation()
+            along = self._camera.axes(self._get_stage(), anchor)[0]
+        except Exception:
+            return None
+        target = Gf.Vec3d(*[here[i] + along[i] * PIVOT_SHIFT for i in range(3)])
+        self._note(f"pivot ({here[0]:.4f}, {here[1]:.4f}, {here[2]:.4f}) "
+                   f"+ {PIVOT_SHIFT:+.4f} along ({along[0]:+.3f}, {along[1]:+.3f}, "
+                   f"{along[2]:+.3f})")
+        self._note(f"  target = ({target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f})")
+        return target
 
     def compute_target(self, stage: Usd.Stage, eqp_id: str, anchor: Usd.Prim):
         """EBS 를 놓을 목표점. snap 보정까지"""
