@@ -571,10 +571,8 @@ class EbsSimulate:
                               if one is not None and one.IsValid()]
                 with self._stage_timer("skin: unbind"):
                     with Usd.EditContext(stage, stage.GetSessionLayer()):
-                        with Sdf.ChangeBlock():
-                            for one in picked:
-                                UsdShade.MaterialBindingAPI(
-                                    one).UnbindAllBindings()
+                        for one in picked:
+                            UsdShade.MaterialBindingAPI(one).UnbindAllBindings()
         except Exception as e:
             self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
@@ -759,7 +757,7 @@ class EbsSimulate:
             return False
         try:
             with self._phase("skin"):
-                meshes = []
+                meshes, roots = [], []
                 for turn in range(SKIN_DEEP):
                     with self._stage_timer("skin: plan"):
                         roots, meshes = self._skin_plan(prim)
@@ -769,6 +767,9 @@ class EbsSimulate:
                         break
                     with self._stage_timer("skin: open"):
                         self._open_instances(stage, roots)
+                if roots:
+                    print(f"[ebs] skin: {len(roots)} instance(s) would not "
+                          f"open in {SKIN_DEEP} passes")
                 with self._stage_timer("skin: bind"):
                     ready = self._bind_all(stage, material, meshes)
                 print(f"[ebs] skin bind: {ready} of {len(meshes)} bound")
@@ -852,7 +853,11 @@ class EbsSimulate:
     def _bind_all(self, stage, material, meshes) -> int:
         """정해 둔 메시에 한 덩이로 건다. 통지가 한 번만 간다
 
-        프림은 블록 밖에서 미리 집는다. 블록 안에서는 스테이지를 안 읽는다
+        Sdf.ChangeBlock 안에서 걸면 안 된다. Bind 는 MaterialBindingAPI 를
+        얹고 나서 관계를 만드는 두 걸음이라 그 사이에 스테이지를 읽는데,
+        블록 안에서는 스테이지가 안 맞춰져 있다. 그 장비에 처음 걸 때가
+        스키마를 얹어야 하는 때라 딱 그 첫 번이 빈다. 두 번째부터는 스키마가
+        이미 붙어 있어 한 걸음이라 걸린다. 장비마다 첫 SIM 만 안 칠해지던 것
         하나가 안 걸려도 나머지는 건다. 프록시가 하나 섞여 있다고 그 장비를
         통째로 안 칠하면 안 된다
         """
@@ -863,14 +868,13 @@ class EbsSimulate:
                 ready.append((path, one))
         missed = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):
-            with Sdf.ChangeBlock():
-                for path, one in ready:
-                    try:
-                        self._bind_skin(one, material)
-                    except Exception:
-                        missed += 1
-                        continue
-                    self._skin_wrote.append(path)
+            for path, one in ready:
+                try:
+                    self._bind_skin(one, material)
+                except Exception:
+                    missed += 1
+                    continue
+                self._skin_wrote.append(path)
         if missed:
             self._loud(f"skin: {missed} of {len(ready)} place(s) refused the "
                        f"binding")
