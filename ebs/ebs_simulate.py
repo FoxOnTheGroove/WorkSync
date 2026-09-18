@@ -1461,7 +1461,7 @@ class EbsSimulate:
         오버레이가 먼저 내려가야 지우는 동안 빈 자리를 가리키고 있지 않다
         """
         if self._busy:
-            return self._payload(False, f"Busy: {self._busy}")
+            return
         panel = self._panel()
         self._paint(panel.wake)
         self.begin_work(WORK_CLEAR)
