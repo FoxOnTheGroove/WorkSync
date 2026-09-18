@@ -571,8 +571,10 @@ class EbsSimulate:
                               if one is not None and one.IsValid()]
                 with self._stage_timer("skin: unbind"):
                     with Usd.EditContext(stage, stage.GetSessionLayer()):
-                        for one in picked:
-                            UsdShade.MaterialBindingAPI(one).UnbindAllBindings()
+                        with Sdf.ChangeBlock():
+                            for one in picked:
+                                UsdShade.MaterialBindingAPI(
+                                    one).UnbindAllBindings()
         except Exception as e:
             self._loud(f"skin: could not take it off: "
                        f"{type(e).__name__}: {e}")
@@ -799,14 +801,6 @@ class EbsSimulate:
             if stage.GetPrimAtPath(SKIN_ROOT).IsValid():
                 stage.RemovePrim(SKIN_ROOT)
 
-    @staticmethod
-    def _bind_skin(prim, material) -> None:
-        """그 메시에 직접 건다. 제 프림에 건 것이 제일 세다
-
-        조상에 strongerThanDescendants 로 걸면 그 아래 전부를 다시 풀게
-        만들어 킷이 오래 멈춘다. 메시마다 직접 걸면 그 메시들만 바뀐다
-        """
-        UsdShade.MaterialBindingAPI(prim).Bind(material)
 
     def _skin_plan(self, root) -> tuple:
         """어디에 걸지만 먼저 정한다. 한 자도 안 쓴다
@@ -853,11 +847,12 @@ class EbsSimulate:
     def _bind_all(self, stage, material, meshes) -> int:
         """정해 둔 메시에 한 덩이로 건다. 통지가 한 번만 간다
 
-        Sdf.ChangeBlock 안에서 걸면 안 된다. Bind 는 MaterialBindingAPI 를
-        얹고 나서 관계를 만드는 두 걸음이라 그 사이에 스테이지를 읽는데,
-        블록 안에서는 스테이지가 안 맞춰져 있다. 그 장비에 처음 걸 때가
-        스키마를 얹어야 하는 때라 딱 그 첫 번이 빈다. 두 번째부터는 스키마가
-        이미 붙어 있어 한 걸음이라 걸린다. 장비마다 첫 SIM 만 안 칠해지던 것
+        스키마 얹기는 블록 밖, 거는 것은 블록 안이다. Bind 는 프림에
+        MaterialBindingAPI 를 얹고 나서 관계를 만드는 두 걸음이고, 얹는
+        쪽이 스테이지를 다시 읽는다. 블록 안에서는 스테이지가 안 맞춰져
+        있어 그 읽기가 빈다. 그 장비에 처음 거는 때가 얹어야 하는 때라
+        장비마다 첫 SIM 만 안 칠해졌다. 얹기를 먼저 살아 있는 스테이지에
+        끝내 두면, 거는 것은 관계 하나 쓰는 한 걸음이라 블록 안에서도 된다
         하나가 안 걸려도 나머지는 건다. 프록시가 하나 섞여 있다고 그 장비를
         통째로 안 칠하면 안 된다
         """
@@ -868,13 +863,20 @@ class EbsSimulate:
                 ready.append((path, one))
         missed = 0
         with Usd.EditContext(stage, stage.GetSessionLayer()):
+            worn = []
             for path, one in ready:
                 try:
-                    self._bind_skin(one, material)
+                    worn.append((path, UsdShade.MaterialBindingAPI.Apply(one)))
                 except Exception:
                     missed += 1
-                    continue
-                self._skin_wrote.append(path)
+            with Sdf.ChangeBlock():
+                for path, api in worn:
+                    try:
+                        api.Bind(material)
+                    except Exception:
+                        missed += 1
+                        continue
+                    self._skin_wrote.append(path)
         if missed:
             self._loud(f"skin: {missed} of {len(ready)} place(s) refused the "
                        f"binding")
