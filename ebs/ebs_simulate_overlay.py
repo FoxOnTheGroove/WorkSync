@@ -42,6 +42,8 @@ GRIP_PICK  = 14.0
 
 GRIP_FADE_STEPS = 12
 GRIP_FADE_POWER = 1.0
+GRIP_STRETCH    = 1.5
+GRIP_EMISSION   = 1000.0
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
@@ -759,7 +761,7 @@ class EbsSimulateGrip:
         ends = []
         for way in (-1.0, 1.0):
             end = list(spot)
-            end[side] += self._reach * way
+            end[side] += self._reach * GRIP_STRETCH * way
             ends.append(tuple(end))
         self._ends = tuple(ends)
         sim().watch_grip(self)
@@ -783,7 +785,7 @@ class EbsSimulateGrip:
                 if self._matrix is not None:
                     EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, "grip", colour,
-                                             1.0, 0.0, glow=False)
+                                             1.0, GRIP_EMISSION)
                 self._fade_shaft(stage, body, thick, colour)
                 for name, tip, back in (("a", one, two), ("b", two, one)):
                     self._paint._gap_head(
@@ -806,7 +808,7 @@ class EbsSimulateGrip:
             middle = (step + 0.5) / GRIP_FADE_STEPS
             alpha = abs(middle * 2.0 - 1.0) ** GRIP_FADE_POWER
             skin = self._paint._material(stage, f"grip_{self._state}_{step}",
-                                         colour, alpha, 0.0, glow=False)
+                                         colour, alpha, GRIP_EMISSION)
             self._paint._gap_line(
                 stage, self._paint._keep(f"{self._root}/shaft_{step}"),
                 here, there, thick, skin, colour)
