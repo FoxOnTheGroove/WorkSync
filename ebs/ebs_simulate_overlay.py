@@ -45,7 +45,7 @@ GRIP_STRETCH  = 1.5
 GRIP_EMISSION = 1000.0
 GRIP_RINGS    = 16
 OPACITY_FROM_ALPHA = 0
-FADE_CUTOFF        = 0.5
+FADE_CUTOFF        = 0.0
 GRIP_FADE_MAP = os.path.join(os.path.dirname(__file__), "textures",
                              "grip_fade.png")
 
@@ -1541,8 +1541,6 @@ class EbsSimulateMarks:
             hang("opacity_texture", texture)
             put("opacity_mode", Sdf.ValueTypeNames.Int, OPACITY_FROM_ALPHA)
             put("opacity_threshold", Sdf.ValueTypeNames.Float, FADE_CUTOFF)
-            if glow:
-                hang("emissive_mask_texture", texture)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
         put("metallic_constant", Sdf.ValueTypeNames.Float, 0.0)
         put("specular_level", Sdf.ValueTypeNames.Float, 0.0)

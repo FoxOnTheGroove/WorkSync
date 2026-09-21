@@ -1,7 +1,7 @@
-"""손잡이 기둥에 물릴 알파 램프 PNG 하나. 양 끝 1, 가운데 0."""
+"""손잡이 기둥에 물릴 알파 램프 PNG 하나. 바깥 25% 는 1, 거기서 곤두박질친다."""
 import struct, zlib, pathlib, sys
 
-WIDE, HIGH, KEEP = 256, 8, 0.5
+WIDE, HIGH, KEEP, POWER = 256, 8, 0.5, 4
 
 
 def chunk(kind: bytes, body: bytes) -> bytes:
@@ -11,10 +11,10 @@ def chunk(kind: bytes, body: bytes) -> bytes:
 
 
 def ramp(at: int) -> int:
-    """그 가로 자리의 값. 바깥 KEEP 만큼은 255, 안쪽만 0 으로 떨어진다"""
+    """그 가로 자리의 값. 바깥 KEEP 만큼은 255, 거기서 POWER 제곱으로 떨어진다"""
     step = at / (WIDE - 1)
     away = abs(step * 2.0 - 1.0)
-    return round(255 * min(1.0, away / KEEP))
+    return round(255 * min(1.0, away / KEEP) ** POWER)
 
 
 row = b""
