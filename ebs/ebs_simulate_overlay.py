@@ -55,7 +55,7 @@ GAP_WIDTH = 84
 ABOVE, BELOW, LEFT, RIGHT, MIDDLE = "above", "below", "left", "right", "middle"
 GRIP_WIDTH = 100
 LINE_ROOM = 6
-ROOM_HEADS = 1.5
+PANEL_ROOM = 0.024
 PANEL_GAP = 0.1
 
 SIDE_BY_SIDE = ("ceiling",)
@@ -67,7 +67,7 @@ COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
 PAD_X, PAD_Y = 3, 1
-LINE_PAD = 3
+TEXT_DROP = 1
 
 MARKER_OPACITY  = 0.075
 MARKER_EMISSION = 10000.0
@@ -80,7 +80,7 @@ SHEET_GAP       = 0.001
 COLOR_GAP      = (1.0, 0.906, 0.604)
 COLOR_TIGHT    = (0.988, 0.224, 0.106)
 GAP_RADIUS     = 0.002
-GAP_HEAD_HIGH  = 0.02
+GAP_HEAD_HIGH  = 0.04
 GAP_HEAD_WIDE  = 0.032
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
@@ -361,6 +361,7 @@ class EbsSimulateOverlay:
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
                 self._label(text, ink, key)
+                ui.Spacer(height=ui.Pixel(TEXT_DROP))
         return fill
 
     def _offset_panel(self, said: dict) -> None:
@@ -451,8 +452,8 @@ class EbsSimulateOverlay:
 
     def _label(self, text: str, ink: int, key=None, wide: int = 0,
                size: int = TEXT_SIZE):
-        """판 속 글줄 하나. 상자는 글꼴 크기에 위아래 LINE_PAD 씩"""
-        label = ui.Label(text, height=ui.Pixel(size + LINE_PAD * 2),
+        """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다"""
+        label = ui.Label(text, height=0,
                          width=ui.Pixel(wide) if wide else 0,
                          alignment=ui.Alignment.CENTER,
                          style={"font_size": size, "color": ink})
@@ -500,6 +501,7 @@ class EbsSimulateOverlay:
                                                  "margin_height": PAD_Y}):
                     for text in lines:
                         self._label(text, ink, key, wide, FACE_SIZE)
+                    ui.Spacer(height=ui.Pixel(TEXT_DROP))
             return fill
 
         at = mark.get("at")
@@ -591,9 +593,9 @@ class EbsSimulateOverlay:
             self.clear()
 
     def _room_at(self, at, spot) -> float:
-        """선과 판 사이 여백. 화살촉 반지름의 ROOM_HEADS 배가 화면에서 몇 픽셀인가"""
+        """선과 판 사이 여백. PANEL_ROOM 이 화면에서 몇 픽셀인가"""
         try:
-            want = GAP_HEAD_WIDE * ROOM_HEADS
+            want = PANEL_ROOM
             camera = self._api.view.GetInverse()
             side = Gf.Vec3d(camera[0][0], camera[0][1], camera[0][2])
             side = side.GetNormalized() * want
