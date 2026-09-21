@@ -66,8 +66,8 @@ COLOR_TEXT   = 0xFFFFFFFF
 COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
-PAD_X, PAD_Y = 3, 1
-TEXT_DROP, TEXT_PUSH = 1, 1
+PAD_X, PAD_Y = 2, 1
+TEXT_DROP = 1
 
 MARKER_OPACITY  = 0.075
 MARKER_EMISSION = 10000.0
@@ -362,9 +362,7 @@ class EbsSimulateOverlay:
             """판 속 글줄을 채운다"""
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
-                with ui.HStack(spacing=0):
-                    ui.Spacer(width=ui.Pixel(TEXT_PUSH))
-                    self._label(text, ink, key)
+                self._label(text, ink, key)
                 ui.Spacer(height=ui.Pixel(TEXT_DROP))
         return fill
 
@@ -504,9 +502,7 @@ class EbsSimulateOverlay:
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
-                        with ui.HStack(spacing=0):
-                            ui.Spacer(width=ui.Pixel(TEXT_PUSH))
-                            self._label(text, ink, key, wide, FACE_SIZE)
+                        self._label(text, ink, key, wide, FACE_SIZE)
                     ui.Spacer(height=ui.Pixel(TEXT_DROP))
             return fill
 
