@@ -1375,6 +1375,12 @@ class EbsSimulate:
         if not reached:
             self._note(f"{eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
                   f"working off the equipment prim")
+
+        astray = self._pivot_astray(stage, eqp_id, anchor)
+        if astray:
+            return self._payload(False, astray, equipment=eqp_prim,
+                                 eqp_id=eqp_id, port_count=port_count)
+
         self._target = {
             "equipment": eqp_prim,
             "eqp_id": eqp_id,
@@ -1383,6 +1389,23 @@ class EbsSimulate:
             "anchor": anchor,
         }
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
+
+    def _pivot_astray(self, stage: Usd.Stage, eqp_id: str, anchor) -> str:
+        """피봇이 XML 의 포트 1 에서 얼마나 떨어져 있나. 멀면 사유, 가까우면 빈 칸"""
+        found = self.compute_port_points(stage, eqp_id)
+        if found is None:
+            return ""
+        points, _, rail = found
+        if 1 not in points or anchor is None or not anchor.IsValid():
+            return ""
+        port = self._parent_world(rail).Transform(points[1])
+        here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()).ExtractTranslation()
+        apart = math.hypot(port[0] - here[0], port[1] - here[1])
+        if apart < PIVOT_APART:
+            return ""
+        return (f"pivot {apart:.3f} away from port 1 in XML "
+                f"(limit {PIVOT_APART:.3f})")
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
