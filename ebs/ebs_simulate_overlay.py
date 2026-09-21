@@ -39,9 +39,10 @@ STALE  = "~"
 GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = GRIP_THICK * 3.0
+GRIP_BEAD  = GRIP_THICK * 2.0
 GRIP_PICK  = 14.0
 
-GRIP_STRETCH  = 1.5
+GRIP_STRETCH  = 1.0
 GRIP_EMISSION = 2000.0
 GRIP_RINGS    = 16
 OPACITY_FROM_ALPHA = 0
@@ -50,8 +51,8 @@ GRIP_FADE_MAP = os.path.join(os.path.dirname(__file__), "textures",
                              "grip_fade.png")
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
-GRIP_COLORS = {GRIP_IDLE: (1.0, 0.09, 0.04),
-               GRIP_HOLD: (0.32, 0.02, 0.01)}
+GRIP_COLORS = {GRIP_IDLE: (0.12, 0.45, 1.0),
+               GRIP_HOLD: (0.02, 0.08, 0.3)}
 
 CLASH = "충돌"
 GAP   = "여유"
@@ -772,7 +773,7 @@ class EbsSimulateGrip:
         return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
-        """그 상태 색으로 몸통 하나와 화살촉 둘"""
+        """그 상태 색으로 한쪽씩 화살표 둘과 가운데 구체 하나"""
         stage = self._stage()
         if stage is None or self._ends is None:
             return False
@@ -780,9 +781,9 @@ class EbsSimulateGrip:
         colour = GRIP_COLORS[state]
         self._paint._drawn = set()
         one, two = self._ends
-        thick = self._high * GRIP_THICK
+        thick, bead = self._high * GRIP_THICK, self._high * GRIP_BEAD
         high, wide = self._reach * GRIP_HEAD, self._high * GRIP_FLARE
-        body = EbsSimulateMarks._gap_shaft(one, two, high)
+        middle = [(one[i] + two[i]) * 0.5 for i in range(3)]
         try:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 root = UsdGeom.Xform.Define(stage, self._root)
@@ -794,18 +795,33 @@ class EbsSimulateGrip:
                 fade = self._paint._material(stage, "grip_fade", colour,
                                              1.0, GRIP_EMISSION,
                                              texture=self._fade_map())
-                self._paint._tube(
-                    stage, self._paint._keep(f"{self._root}/shaft"),
-                    body[0], body[1], thick, fade, colour)
-                for name, tip, back in (("a", one, two), ("b", two, one)):
+                for name, tip in (("a", one), ("b", two)):
+                    base = self._back_off(tip, middle, high * 0.5)
+                    self._paint._tube(
+                        stage,
+                        self._paint._keep(f"{self._root}/shaft_{name}"),
+                        base, middle, thick, fade, colour, 0.0, 0.5)
                     self._paint._gap_head(
                         stage, self._paint._keep(f"{self._root}/head_{name}"),
-                        tip, back, skin, colour, high, wide)
+                        tip, middle, skin, colour, high, wide)
+                self._paint._ball(
+                    stage, self._paint._keep(f"{self._root}/bead"),
+                    middle, bead, skin, colour)
                 self._paint._show_only(stage)
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
+
+    @staticmethod
+    def _back_off(tip, middle, step: float):
+        """tip 에서 middle 쪽으로 step 만큼 물러난 자리"""
+        along = Gf.Vec3d(*[middle[i] - tip[i] for i in range(3)])
+        span = along.GetLength()
+        if span <= 1e-9:
+            return tuple(tip)
+        along = along.GetNormalized()
+        return tuple(tip[i] + along[i] * step for i in range(3))
 
     @staticmethod
     def _fade_map() -> str:
@@ -1402,9 +1418,9 @@ class EbsSimulateMarks:
                   flip=True)
 
     @staticmethod
-    def _tube(stage, path: str, start, end, radius: float, material,
-              colour) -> bool:
-        """양 끝을 잇는 관 하나. u 가 끝에서 끝으로 가도록 st 를 붙인다"""
+    def _tube(stage, path: str, start, end, radius: float, material, colour,
+              u_from: float = 0.0, u_to: float = 1.0) -> bool:
+        """양 끝을 잇는 관 하나. u 가 u_from 에서 u_to 로 가도록 st 를 붙인다"""
         along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         span = along.GetLength()
         if span <= 1e-9:
@@ -1424,7 +1440,8 @@ class EbsSimulateMarks:
                 cos, sin = math.cos(turn) * radius, math.sin(turn) * radius
                 points.append(Gf.Vec3f(*[middle[i] + side[i] * cos
                                          + other[i] * sin for i in range(3)]))
-                uvs.append(Gf.Vec2f(step, ring / GRIP_RINGS))
+                uvs.append(Gf.Vec2f(u_from + (u_to - u_from) * step,
+                                    ring / GRIP_RINGS))
         counts, indices = [], []
         for ring in range(GRIP_RINGS):
             turn = (ring + 1) % GRIP_RINGS
@@ -1451,6 +1468,27 @@ class EbsSimulateMarks:
             pass
         if material:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+        return True
+
+    @staticmethod
+    def _ball(stage, path: str, spot, radius: float, material, colour) -> bool:
+        """그 자리에 구체 하나"""
+        ball = UsdGeom.Sphere.Define(stage, path)
+        ball.CreateRadiusAttr(radius)
+        ball.CreateExtentAttr(Vt.Vec3fArray([
+            Gf.Vec3f(-radius, -radius, -radius),
+            Gf.Vec3f(radius, radius, radius)]))
+        ball.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        matrix = Gf.Matrix4d(1.0)
+        matrix.SetTranslateOnly(Gf.Vec3d(*spot))
+        EbsSimulateMarks._moved(ball, matrix)
+        try:
+            ball.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(ball.GetPrim()).Bind(material)
         return True
 
     @staticmethod
