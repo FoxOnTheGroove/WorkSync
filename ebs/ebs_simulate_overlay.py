@@ -1522,6 +1522,11 @@ class EbsSimulateMarks:
             """셰이더 입력 하나를 만든다"""
             shader.CreateInput(name, type_name).Set(value)
 
+        def hang(name, asset: str):
+            """텍스처 하나를 건다"""
+            shader.CreateInput(name, Sdf.ValueTypeNames.Asset).Set(
+                Sdf.AssetPath(asset))
+
         dark = Gf.Vec3f(0.0, 0.0, 0.0)
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
             dark if glow else Gf.Vec3f(*color))
@@ -1532,11 +1537,11 @@ class EbsSimulateMarks:
         put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
         if texture:
-            shader.CreateInput("opacity_texture",
-                               Sdf.ValueTypeNames.Asset).Set(
-                Sdf.AssetPath(texture))
+            hang("opacity_texture", texture)
             put("opacity_mode", Sdf.ValueTypeNames.Int, OPACITY_FROM_ALPHA)
             put("opacity_threshold", Sdf.ValueTypeNames.Float, 0.0)
+            if glow:
+                hang("emissive_mask_texture", texture)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
         put("metallic_constant", Sdf.ValueTypeNames.Float, 0.0)
         put("specular_level", Sdf.ValueTypeNames.Float, 0.0)
