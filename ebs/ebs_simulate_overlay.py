@@ -37,11 +37,12 @@ STALE  = "~"
 
 GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
-GRIP_FLARE = 0.25 * 0.75
+GRIP_FLARE = 0.25 * 0.75 * 0.5
 GRIP_PICK  = 14.0
 
 GRIP_FADE_STEPS = 12
 GRIP_FADE_POWER = 1.0
+GRIP_FADE_HOLD  = 0.5
 GRIP_STRETCH    = 1.5
 GRIP_EMISSION   = 1000.0
 
@@ -798,7 +799,7 @@ class EbsSimulateGrip:
         return True
 
     def _fade_shaft(self, stage, body, thick: float, colour) -> None:
-        """몸통을 토막내어 양 끝은 진하게, 가운데로 갈수록 투명하게"""
+        """몸통을 토막낸다. 바깥 GRIP_FADE_HOLD 는 제 색, 안쪽만 흐려진다"""
         one, two = body
         for step in range(GRIP_FADE_STEPS):
             here = [one[i] + (two[i] - one[i]) * (step / GRIP_FADE_STEPS)
@@ -806,7 +807,8 @@ class EbsSimulateGrip:
             there = [one[i] + (two[i] - one[i]) * ((step + 1) / GRIP_FADE_STEPS)
                      for i in range(3)]
             middle = (step + 0.5) / GRIP_FADE_STEPS
-            alpha = abs(middle * 2.0 - 1.0) ** GRIP_FADE_POWER
+            away = abs(middle * 2.0 - 1.0)
+            alpha = min(1.0, away / GRIP_FADE_HOLD) ** GRIP_FADE_POWER
             skin = self._paint._material(stage, f"grip_{self._state}_{step}",
                                          colour, alpha, GRIP_EMISSION)
             self._paint._gap_line(
