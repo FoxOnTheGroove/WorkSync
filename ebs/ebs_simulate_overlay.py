@@ -67,7 +67,7 @@ COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
 PAD_X, PAD_Y = 3, 1
-LINE_PAD = 3
+TEXT_DROP = 1
 
 MARKER_OPACITY  = 0.075
 MARKER_EMISSION = 10000.0
@@ -363,6 +363,7 @@ class EbsSimulateOverlay:
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
                 self._label(text, ink, key)
+                ui.Spacer(height=ui.Pixel(TEXT_DROP))
         return fill
 
     def _offset_panel(self, said: dict) -> None:
@@ -453,13 +454,11 @@ class EbsSimulateOverlay:
 
     def _label(self, text: str, ink: int, key=None, wide: int = 0,
                size: int = TEXT_SIZE):
-        """판 속 글줄 하나. 높이를 못 박은 칸 안에서 가운데로 앉는다"""
-        with ui.ZStack(height=ui.Pixel(size + LINE_PAD * 2),
-                       width=ui.Pixel(wide) if wide else 0):
-            label = ui.Label(text, height=0,
-                             width=ui.Pixel(wide) if wide else 0,
-                             alignment=ui.Alignment.CENTER,
-                             style={"font_size": size, "color": ink})
+        """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다"""
+        label = ui.Label(text, height=0,
+                         width=ui.Pixel(wide) if wide else 0,
+                         alignment=ui.Alignment.CENTER,
+                         style={"font_size": size, "color": ink})
         if key is not None:
             self._texts.setdefault(key, label)
         return label
@@ -504,6 +503,7 @@ class EbsSimulateOverlay:
                                                  "margin_height": PAD_Y}):
                     for text in lines:
                         self._label(text, ink, key, wide, FACE_SIZE)
+                    ui.Spacer(height=ui.Pixel(TEXT_DROP))
             return fill
 
         at = mark.get("at")
