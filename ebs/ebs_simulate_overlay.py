@@ -40,11 +40,8 @@ GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = 0.25 * 0.75 * 0.5
 GRIP_PICK  = 14.0
 
-GRIP_FADE_STEPS = 12
-GRIP_FADE_POWER = 1.0
-GRIP_FADE_HOLD  = 0.5
-GRIP_STRETCH    = 1.5
-GRIP_EMISSION   = 1000.0
+GRIP_STRETCH  = 1.5
+GRIP_EMISSION = 1000.0
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
@@ -769,7 +766,7 @@ class EbsSimulateGrip:
         return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
-        """그 상태 색으로 몸통과 화살촉 둘"""
+        """그 상태 색으로 몸통 하나와 화살촉 둘"""
         stage = self._stage()
         if stage is None or self._ends is None:
             return False
@@ -787,7 +784,9 @@ class EbsSimulateGrip:
                     EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, "grip", colour,
                                              1.0, GRIP_EMISSION)
-                self._fade_shaft(stage, body, thick, colour)
+                self._paint._gap_line(
+                    stage, self._paint._keep(f"{self._root}/shaft"),
+                    body[0], body[1], thick, skin, colour)
                 for name, tip, back in (("a", one, two), ("b", two, one)):
                     self._paint._gap_head(
                         stage, self._paint._keep(f"{self._root}/head_{name}"),
@@ -797,23 +796,6 @@ class EbsSimulateGrip:
             print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
-
-    def _fade_shaft(self, stage, body, thick: float, colour) -> None:
-        """몸통을 토막낸다. 바깥 GRIP_FADE_HOLD 는 제 색, 안쪽만 흐려진다"""
-        one, two = body
-        for step in range(GRIP_FADE_STEPS):
-            here = [one[i] + (two[i] - one[i]) * (step / GRIP_FADE_STEPS)
-                    for i in range(3)]
-            there = [one[i] + (two[i] - one[i]) * ((step + 1) / GRIP_FADE_STEPS)
-                     for i in range(3)]
-            middle = (step + 0.5) / GRIP_FADE_STEPS
-            away = abs(middle * 2.0 - 1.0)
-            alpha = min(1.0, away / GRIP_FADE_HOLD) ** GRIP_FADE_POWER
-            skin = self._paint._material(stage, f"grip_{self._state}_{step}",
-                                         colour, alpha, GRIP_EMISSION)
-            self._paint._gap_line(
-                stage, self._paint._keep(f"{self._root}/shaft_{step}"),
-                here, there, thick, skin, colour)
 
     def wipe(self) -> None:
         """그린 것을 지우고 잡은 것도 놓는다. 머티리얼은 두고 간다"""
