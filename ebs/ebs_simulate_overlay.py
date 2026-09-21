@@ -787,11 +787,12 @@ class EbsSimulateGrip:
                 root = UsdGeom.Xform.Define(stage, self._root)
                 if self._matrix is not None:
                     EbsSimulateMarks._moved(root, self._matrix)
+                self._stamp(root.GetPrim())
                 skin = self._paint._material(stage, "grip", colour,
                                              1.0, GRIP_EMISSION)
                 fade = self._paint._material(stage, "grip_fade", colour,
                                              1.0, GRIP_EMISSION,
-                                             texture=GRIP_FADE_MAP)
+                                             texture=self._fade_map())
                 self._paint._tube(
                     stage, self._paint._keep(f"{self._root}/shaft"),
                     body[0], body[1], thick, fade, colour)
@@ -804,6 +805,25 @@ class EbsSimulateGrip:
             print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
+
+    @staticmethod
+    def _fade_map() -> str:
+        """물릴 알파 램프. 파일이 없으면 빈 칸이라 기둥이 그냥 진하게 선다"""
+        return GRIP_FADE_MAP if os.path.isfile(GRIP_FADE_MAP) else ""
+
+    def _stamp(self, prim) -> None:
+        """지금 도는 값을 뿌리에 적는다. 스테이지에서 눌러 프로퍼티로 본다"""
+        for name, kind, value in (
+                ("ebs:gripStretch", Sdf.ValueTypeNames.Float, GRIP_STRETCH),
+                ("ebs:gripEmission", Sdf.ValueTypeNames.Float, GRIP_EMISSION),
+                ("ebs:gripFlare", Sdf.ValueTypeNames.Float, GRIP_FLARE),
+                ("ebs:fadeMap", Sdf.ValueTypeNames.String, GRIP_FADE_MAP),
+                ("ebs:fadeFound", Sdf.ValueTypeNames.Bool,
+                 bool(self._fade_map()))):
+            try:
+                prim.CreateAttribute(name, kind).Set(value)
+            except Exception:
+                pass
 
     def wipe(self) -> None:
         """그린 것을 지우고 잡은 것도 놓는다. 머티리얼은 두고 간다"""
