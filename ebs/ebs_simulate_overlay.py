@@ -797,10 +797,11 @@ class EbsSimulateGrip:
                                              texture=self._fade_map())
                 for name, tip in (("a", one), ("b", two)):
                     base = self._back_off(tip, middle, high * 0.5)
+                    near = self._back_off(middle, tip, bead * 2.0)
                     self._paint._tube(
                         stage,
                         self._paint._keep(f"{self._root}/shaft_{name}"),
-                        base, middle, thick, fade, colour, 0.0, 0.5)
+                        base, near, thick, fade, colour, 0.0, 0.5)
                     self._paint._gap_head(
                         stage, self._paint._keep(f"{self._root}/head_{name}"),
                         tip, middle, skin, colour, high, wide)
