@@ -1,5 +1,6 @@
 import asyncio
 import math
+import os
 import time
 
 import omni.ui as ui
@@ -42,10 +43,10 @@ GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.5
 GRIP_EMISSION = 1000.0
-GRIP_WAIST    = 0.2
-GRIP_KEEP     = 0.5
 GRIP_RINGS    = 16
-GRIP_JOINTS   = 16
+OPACITY_FROM_ALPHA = 0
+GRIP_FADE_MAP = os.path.join(os.path.dirname(__file__), "textures",
+                             "grip_fade.png")
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
@@ -788,9 +789,12 @@ class EbsSimulateGrip:
                     EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, "grip", colour,
                                              1.0, GRIP_EMISSION)
-                self._paint._taper_tube(
+                fade = self._paint._material(stage, "grip_fade", colour,
+                                             1.0, GRIP_EMISSION,
+                                             texture=GRIP_FADE_MAP)
+                self._paint._tube(
                     stage, self._paint._keep(f"{self._root}/shaft"),
-                    body[0], body[1], thick, skin, colour)
+                    body[0], body[1], thick, fade, colour)
                 for name, tip, back in (("a", one, two), ("b", two, one)):
                     self._paint._gap_head(
                         stage, self._paint._keep(f"{self._root}/head_{name}"),
@@ -1377,9 +1381,9 @@ class EbsSimulateMarks:
                   flip=True)
 
     @staticmethod
-    def _taper_tube(stage, path: str, start, end, radius: float, material,
-                    colour) -> bool:
-        """가운데로 갈수록 가늘어지는 관 하나. 양 끝은 원뿔이 덮으니 안 막는다"""
+    def _tube(stage, path: str, start, end, radius: float, material,
+              colour) -> bool:
+        """양 끝을 잇는 관 하나. u 가 끝에서 끝으로 가도록 st 를 붙인다"""
         along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         span = along.GetLength()
         if span <= 1e-9:
@@ -1391,25 +1395,20 @@ class EbsSimulateMarks:
         side = side.GetNormalized()
         other = Gf.Cross(along, side).GetNormalized()
 
-        points, counts, indices = [], [], []
-        for joint in range(GRIP_JOINTS + 1):
-            step = joint / GRIP_JOINTS
-            away = abs(step * 2.0 - 1.0)
-            wide = radius * (GRIP_WAIST + (1.0 - GRIP_WAIST)
-                             * min(1.0, away / GRIP_KEEP))
+        points, uvs = [], []
+        for step in (0.0, 1.0):
             middle = [start[i] + along[i] * span * step for i in range(3)]
             for ring in range(GRIP_RINGS):
                 turn = math.tau * ring / GRIP_RINGS
-                cos, sin = math.cos(turn) * wide, math.sin(turn) * wide
+                cos, sin = math.cos(turn) * radius, math.sin(turn) * radius
                 points.append(Gf.Vec3f(*[middle[i] + side[i] * cos
                                          + other[i] * sin for i in range(3)]))
-        for joint in range(GRIP_JOINTS):
-            for ring in range(GRIP_RINGS):
-                near, far = joint * GRIP_RINGS, (joint + 1) * GRIP_RINGS
-                next_ring = (ring + 1) % GRIP_RINGS
-                counts.append(4)
-                indices += [near + ring, near + next_ring,
-                            far + next_ring, far + ring]
+                uvs.append(Gf.Vec2f(step, ring / GRIP_RINGS))
+        counts, indices = [], []
+        for ring in range(GRIP_RINGS):
+            turn = (ring + 1) % GRIP_RINGS
+            counts.append(4)
+            indices += [ring, turn, GRIP_RINGS + turn, GRIP_RINGS + ring]
 
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray(points))
@@ -1421,6 +1420,9 @@ class EbsSimulateMarks:
         low = [min(one[i] for one in points) for i in range(3)]
         high = [max(one[i] for one in points) for i in range(3)]
         mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
+        UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+            "st", Sdf.ValueTypeNames.TexCoord2fArray,
+            UsdGeom.Tokens.vertex).Set(Vt.Vec2fArray(uvs))
         try:
             mesh.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
@@ -1451,17 +1453,19 @@ class EbsSimulateMarks:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
 
     def _material(self, stage, name: str, color, opacity: float = MARKER_OPACITY,
-                  emission: float = MARKER_EMISSION, glow: bool = True):
+                  emission: float = MARKER_EMISSION, glow: bool = True,
+                  texture: str = ""):
         """마커용 머티리얼. preview 와 MDL 두 셰이더를 단다"""
         path = LOOKS_ROOT.format(self._root) + f"/{name}"
-        want = (tuple(color), opacity, emission, bool(glow))
+        want = (tuple(color), opacity, emission, bool(glow), texture)
         if self._looks.get(path) == want:
             standing = stage.GetPrimAtPath(path)
             if standing is not None and standing.IsValid():
                 return UsdShade.Material(standing)
         material = UsdShade.Material.Define(stage, path)
         self._preview_shader(stage, material, path, color, opacity, glow)
-        self._mdl_shader(stage, material, path, color, opacity, emission, glow)
+        self._mdl_shader(stage, material, path, color, opacity, emission, glow,
+                         texture)
         self._looks[path] = want
         return material
 
@@ -1487,8 +1491,9 @@ class EbsSimulateMarks:
 
     @staticmethod
     def _mdl_shader(stage, material, path: str, color, opacity: float,
-                    emission: float, glow: bool = True) -> None:
-        """OmniPBR 쪽. RTX 가 이걸 쓴다"""
+                    emission: float, glow: bool = True,
+                    texture: str = "") -> None:
+        """OmniPBR 쪽. RTX 가 이걸 쓴다. texture 를 주면 그것으로 뚫는다"""
         shader = UsdShade.Shader.Define(stage, path + "/mdl")
         shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
         shader.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
@@ -1506,6 +1511,12 @@ class EbsSimulateMarks:
         put("enable_emission", Sdf.ValueTypeNames.Bool, bool(glow))
         put("enable_opacity", Sdf.ValueTypeNames.Bool, True)
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
+        if texture:
+            shader.CreateInput("opacity_texture",
+                               Sdf.ValueTypeNames.Asset).Set(
+                Sdf.AssetPath(texture))
+            put("opacity_mode", Sdf.ValueTypeNames.Int, OPACITY_FROM_ALPHA)
+            put("opacity_threshold", Sdf.ValueTypeNames.Float, 0.0)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
         put("metallic_constant", Sdf.ValueTypeNames.Float, 0.0)
         put("specular_level", Sdf.ValueTypeNames.Float, 0.0)
