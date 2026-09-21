@@ -1,7 +1,7 @@
 """손잡이 기둥에 물릴 알파 램프 PNG 하나. 바깥 25% 는 1, 거기서 곤두박질친다."""
 import struct, zlib, pathlib, sys
 
-WIDE, HIGH, KEEP, POWER = 256, 8, 0.5, 8
+WIDE, HIGH, KEEP, POWER = 256, 8, 0.5, 4
 
 
 def chunk(kind: bytes, body: bytes) -> bytes:
