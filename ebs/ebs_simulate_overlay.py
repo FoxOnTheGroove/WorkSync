@@ -42,7 +42,7 @@ GRIP_FLARE = GRIP_THICK * 3.0
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.5
-GRIP_EMISSION = 1000.0
+GRIP_EMISSION = 2000.0
 GRIP_RINGS    = 16
 OPACITY_FROM_ALPHA = 0
 FADE_CUTOFF        = 0.0
@@ -1531,6 +1531,8 @@ class EbsSimulateMarks:
         dark = Gf.Vec3f(0.0, 0.0, 0.0)
         put("diffuse_color_constant", Sdf.ValueTypeNames.Color3f,
             dark if glow else Gf.Vec3f(*color))
+        put("diffuse_tint", Sdf.ValueTypeNames.Color3f,
+            dark if glow else Gf.Vec3f(1.0, 1.0, 1.0))
         put("emissive_color", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*color))
         put("emissive_intensity", Sdf.ValueTypeNames.Float,
             emission if glow else 0.0)
@@ -1539,6 +1541,7 @@ class EbsSimulateMarks:
         put("opacity_constant", Sdf.ValueTypeNames.Float, opacity)
         if texture:
             hang("opacity_texture", texture)
+            put("enable_opacity_texture", Sdf.ValueTypeNames.Bool, True)
             put("opacity_mode", Sdf.ValueTypeNames.Int, OPACITY_FROM_ALPHA)
             put("opacity_threshold", Sdf.ValueTypeNames.Float, FADE_CUTOFF)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
