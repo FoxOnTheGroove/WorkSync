@@ -281,6 +281,11 @@ class EbsDummyUI:
         touched = self._sim.set_visible(path, on)
         self._set_status(f"{path}: {'visible' if on else 'hidden'} ({touched})")
 
+    def show(self, on: bool) -> None:
+        """창을 띄우거나 가린다"""
+        if self._window is not None:
+            self._window.visible = bool(on)
+
     def dock_right(self) -> bool:
         """우측 패널에 붙인다. 붙을 창이 없으면 False"""
         if self._docked:
