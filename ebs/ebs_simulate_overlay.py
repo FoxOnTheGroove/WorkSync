@@ -42,6 +42,10 @@ GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.5
 GRIP_EMISSION = 1000.0
+GRIP_WAIST    = 0.2
+GRIP_KEEP     = 0.5
+GRIP_RINGS    = 16
+GRIP_JOINTS   = 16
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
@@ -784,7 +788,7 @@ class EbsSimulateGrip:
                     EbsSimulateMarks._moved(root, self._matrix)
                 skin = self._paint._material(stage, "grip", colour,
                                              1.0, GRIP_EMISSION)
-                self._paint._gap_line(
+                self._paint._taper_tube(
                     stage, self._paint._keep(f"{self._root}/shaft"),
                     body[0], body[1], thick, skin, colour)
                 for name, tip, back in (("a", one, two), ("b", two, one)):
@@ -1371,6 +1375,60 @@ class EbsSimulateMarks:
         cls._quad(stage, path, points, material, color, opacity)
         cls._quad(stage, path + "_back", behind, material, color, opacity,
                   flip=True)
+
+    @staticmethod
+    def _taper_tube(stage, path: str, start, end, radius: float, material,
+                    colour) -> bool:
+        """가운데로 갈수록 가늘어지는 관 하나. 양 끝은 원뿔이 덮으니 안 막는다"""
+        along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        span = along.GetLength()
+        if span <= 1e-9:
+            return False
+        along = along.GetNormalized()
+        side = Gf.Cross(along, Gf.Vec3d(0.0, 0.0, 1.0))
+        if side.GetLength() <= 1e-6:
+            side = Gf.Cross(along, Gf.Vec3d(0.0, 1.0, 0.0))
+        side = side.GetNormalized()
+        other = Gf.Cross(along, side).GetNormalized()
+
+        points, counts, indices = [], [], []
+        for joint in range(GRIP_JOINTS + 1):
+            step = joint / GRIP_JOINTS
+            away = abs(step * 2.0 - 1.0)
+            wide = radius * (GRIP_WAIST + (1.0 - GRIP_WAIST)
+                             * min(1.0, away / GRIP_KEEP))
+            middle = [start[i] + along[i] * span * step for i in range(3)]
+            for ring in range(GRIP_RINGS):
+                turn = math.tau * ring / GRIP_RINGS
+                cos, sin = math.cos(turn) * wide, math.sin(turn) * wide
+                points.append(Gf.Vec3f(*[middle[i] + side[i] * cos
+                                         + other[i] * sin for i in range(3)]))
+        for joint in range(GRIP_JOINTS):
+            for ring in range(GRIP_RINGS):
+                near, far = joint * GRIP_RINGS, (joint + 1) * GRIP_RINGS
+                next_ring = (ring + 1) % GRIP_RINGS
+                counts.append(4)
+                indices += [near + ring, near + next_ring,
+                            far + next_ring, far + ring]
+
+        mesh = UsdGeom.Mesh.Define(stage, path)
+        mesh.CreatePointsAttr(Vt.Vec3fArray(points))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
+        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        mesh.CreateDoubleSidedAttr(True)
+        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        low = [min(one[i] for one in points) for i in range(3)]
+        high = [max(one[i] for one in points) for i in range(3)]
+        mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
+        try:
+            mesh.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+        return True
 
     @staticmethod
     def _quad(stage, path: str, points: list, material, color,
