@@ -31,7 +31,7 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
 INNER  = "내부 장비와 충돌"
-HOME   = "원점"
+HOME   = "0mm"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
 
@@ -67,6 +67,7 @@ COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
 PAD_X, PAD_Y = 3, 1
+LINE_PAD = 3
 
 MARKER_OPACITY  = 0.075
 MARKER_EMISSION = 10000.0
@@ -80,7 +81,7 @@ COLOR_GAP      = (1.0, 0.906, 0.604)
 COLOR_TIGHT    = (0.988, 0.224, 0.106)
 GAP_RADIUS     = 0.002
 GAP_HEAD_HIGH  = 0.02
-GAP_HEAD_WIDE  = 0.016
+GAP_HEAD_WIDE  = 0.032
 GAP_OPACITY    = 1.0
 GAP_EMISSION   = 3000.0
 
@@ -406,7 +407,7 @@ class EbsSimulateOverlay:
 
     @staticmethod
     def _offset_word(said: dict) -> str:
-        """지금 얼마나 밀려 있나(mm). 눈금 아래면 원점"""
+        """지금 얼마나 밀려 있나(mm). 눈금 아래면 0mm"""
         slid = said.get("offset") or 0.0
         return (SLID.format(EbsSimulateOverlay._mm(slid))
                 if abs(slid) >= 5e-4 else HOME)
@@ -448,12 +449,13 @@ class EbsSimulateOverlay:
             if entry[7] in shown:
                 entry[8] = shown[entry[7]]
 
-    def _label(self, text: str, ink: int, key=None, wide: int = 0):
-        """판 속 글줄 하나. key 를 주면 나중에 갈아 끼우려고 적어 둔다"""
-        label = ui.Label(text, height=0,
+    def _label(self, text: str, ink: int, key=None, wide: int = 0,
+               size: int = TEXT_SIZE):
+        """판 속 글줄 하나. 상자는 글꼴 크기에 위아래 LINE_PAD 씩"""
+        label = ui.Label(text, height=ui.Pixel(size + LINE_PAD * 2),
                          width=ui.Pixel(wide) if wide else 0,
                          alignment=ui.Alignment.CENTER,
-                         style={"font_size": TEXT_SIZE, "color": ink})
+                         style={"font_size": size, "color": ink})
         if key is not None:
             self._texts.setdefault(key, label)
         return label
@@ -497,13 +499,7 @@ class EbsSimulateOverlay:
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
-                        label = ui.Label(text, height=0,
-                                         width=ui.Pixel(wide) if wide else 0,
-                                         alignment=ui.Alignment.CENTER,
-                                         style={"font_size": FACE_SIZE,
-                                                "color": ink})
-                        if key is not None:
-                            self._texts.setdefault(key, label)
+                        self._label(text, ink, key, wide, FACE_SIZE)
             return fill
 
         at = mark.get("at")
