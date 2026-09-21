@@ -1359,10 +1359,12 @@ class EbsSimulate:
             port_count = self.get_port_count(eqp_id)
         if port_count is None:
             return self._payload(False, f"No port info for '{eqp_id}' in XML",
-                                 equipment=eqp_prim, eqp_id=eqp_id)
+                                 equipment=eqp_prim, eqp_id=eqp_id,
+                                 code=CODE_PORT)
         if port_count not in (2, 3):
             return self._payload(False, f"{port_count}-port equipment: no matching EBS",
-                                 equipment=eqp_prim, eqp_id=eqp_id, port_count=port_count)
+                                 equipment=eqp_prim, eqp_id=eqp_id,
+                                 port_count=port_count, code=CODE_PORT)
 
         ebs_path = self._ebs_path_2port if port_count == 2 else self._ebs_path_3port
         ebs_prim = stage.GetPrimAtPath(ebs_path) if ebs_path else None
@@ -1379,7 +1381,8 @@ class EbsSimulate:
         astray = self._pivot_astray(stage, eqp_id, anchor)
         if astray:
             return self._payload(False, astray, equipment=eqp_prim,
-                                 eqp_id=eqp_id, port_count=port_count)
+                                 eqp_id=eqp_id, port_count=port_count,
+                                 code=CODE_PIVOT)
 
         self._target = {
             "equipment": eqp_prim,
@@ -2978,14 +2981,15 @@ class EbsSimulate:
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
                  equipment=None, eqp_id: str = "", port_count=None,
                  distances: dict = None, rows: list = None,
-                 equipment_hit: dict = None) -> dict:
-        """단계 하나의 결과 한 벌. 성공 여부, 사유, 시간, 로그"""
+                 equipment_hit: dict = None, code: str = "") -> dict:
+        """단계 하나의 결과 한 벌. 갈래, 성공 여부, 사유, 시간, 로그"""
         target = self._target or {}
         equipment = equipment or target.get("equipment")
         ebs = target.get("ebs")
         anchor = target.get("anchor")
         self._result = {
             "ok": ok,
+            "code": code or (CODE_OK if ok else CODE_OTHER),
             "reason": reason,
             "equipment": str(equipment.GetPath()) if equipment else "",
             "equipment_id": eqp_id or target.get("eqp_id", ""),

@@ -118,6 +118,11 @@ PIVOT_TOLERANCE = 1.0
 PIVOT_ACROSS = 0.5
 PIVOT_APART = 0.505
 
+CODE_OK    = "ok"
+CODE_PORT  = "port"
+CODE_PIVOT = "pivot"
+CODE_OTHER = "other"
+
 
 try:
     _EVERY_CHILD = Usd.TraverseInstanceProxies()
