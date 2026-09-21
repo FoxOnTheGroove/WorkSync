@@ -523,6 +523,14 @@ class EbsSimulateCamera:
         except Exception:
             return None
 
+    def eye(self):
+        """지금 카메라가 서 있는 월드 좌표. 없으면 None"""
+        stage = self._stage()
+        if stage is None:
+            return None
+        prim = stage.GetPrimAtPath(CAMERA_PATH)
+        return self._eye(prim) if prim and prim.IsValid() else None
+
     @staticmethod
     def _stage():
         """지금 열린 스테이지. 없으면 None"""

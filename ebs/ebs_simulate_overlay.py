@@ -40,6 +40,8 @@ GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = GRIP_THICK * 3.0
 GRIP_BEAD  = GRIP_THICK * 2.0
+GRIP_RING  = 1.15
+GRIP_RING_THICK = 0.8
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.0
@@ -797,7 +799,7 @@ class EbsSimulateGrip:
                                              texture=self._fade_map())
                 for name, tip in (("a", one), ("b", two)):
                     base = self._back_off(tip, middle, high * 0.5)
-                    near = self._back_off(middle, tip, bead * 2.0)
+                    near = self._back_off(middle, tip, bead)
                     self._paint._tube(
                         stage,
                         self._paint._keep(f"{self._root}/shaft_{name}"),
@@ -808,11 +810,38 @@ class EbsSimulateGrip:
                 self._paint._ball(
                     stage, self._paint._keep(f"{self._root}/bead"),
                     middle, bead, skin, colour)
+                if state == GRIP_HOLD:
+                    self._draw_ring(stage, middle, one, thick)
                 self._paint._show_only(stage)
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
+
+    def _draw_ring(self, stage, middle, tip, thick: float) -> None:
+        """기즈모를 두르는 고리. 카메라를 바라보고 선다"""
+        face = self._facing(middle)
+        if face is None:
+            return
+        bright = GRIP_COLORS[GRIP_IDLE]
+        edge = self._paint._material(stage, "grip_ring", bright,
+                                     1.0, GRIP_EMISSION)
+        span = math.dist(tuple(tip), tuple(middle))
+        self._paint._ring(
+            stage, self._paint._keep(f"{self._root}/ring"), middle, face,
+            span * GRIP_RING, thick * GRIP_RING_THICK, edge, bright)
+
+    def _facing(self, middle):
+        """카메라가 있는 쪽. EBS 안 좌표로 준다. 못 구하면 None"""
+        eye = sim().camera_eye()
+        if eye is None:
+            return None
+        if self._matrix is not None:
+            try:
+                eye = self._matrix.GetInverse().Transform(eye)
+            except Exception:
+                return None
+        return tuple(eye[i] - middle[i] for i in range(3))
 
     @staticmethod
     def _back_off(tip, middle, step: float):
@@ -1462,6 +1491,53 @@ class EbsSimulateMarks:
         UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
             "st", Sdf.ValueTypeNames.TexCoord2fArray,
             UsdGeom.Tokens.vertex).Set(Vt.Vec2fArray(uvs))
+        try:
+            mesh.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+        return True
+
+    @staticmethod
+    def _ring(stage, path: str, spot, face, radius: float, thick: float,
+              material, colour) -> bool:
+        """그 자리에 face 를 바라보고 선 납작한 고리 하나"""
+        face = Gf.Vec3d(*face)
+        if face.GetLength() <= 1e-9 or radius <= 1e-9:
+            return False
+        face = face.GetNormalized()
+        side = Gf.Cross(face, Gf.Vec3d(0.0, 0.0, 1.0))
+        if side.GetLength() <= 1e-6:
+            side = Gf.Cross(face, Gf.Vec3d(0.0, 1.0, 0.0))
+        side = side.GetNormalized()
+        other = Gf.Cross(face, side).GetNormalized()
+
+        sides = GRIP_RINGS * 2
+        points = []
+        for span in (radius - thick * 0.5, radius + thick * 0.5):
+            for at in range(sides):
+                turn = math.tau * at / sides
+                cos, sin = math.cos(turn) * span, math.sin(turn) * span
+                points.append(Gf.Vec3f(*[spot[i] + side[i] * cos
+                                         + other[i] * sin for i in range(3)]))
+        counts, indices = [], []
+        for at in range(sides):
+            turn = (at + 1) % sides
+            counts.append(4)
+            indices += [at, turn, sides + turn, sides + at]
+
+        mesh = UsdGeom.Mesh.Define(stage, path)
+        mesh.CreatePointsAttr(Vt.Vec3fArray(points))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
+        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        mesh.CreateDoubleSidedAttr(True)
+        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        low = [min(one[i] for one in points) for i in range(3)]
+        high = [max(one[i] for one in points) for i in range(3)]
+        mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
         try:
             mesh.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)

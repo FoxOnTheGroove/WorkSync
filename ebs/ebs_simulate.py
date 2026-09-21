@@ -317,6 +317,10 @@ class EbsSimulate:
         return done
 
 
+    def camera_eye(self):
+        """지금 카메라가 서 있는 월드 좌표"""
+        return self._camera.eye()
+
     def watch_grip(self, grip) -> None:
         """뷰포트 기즈모가 마우스를 먼저 보도록 카메라에 걸어 둔다"""
         self._camera.watch(grip)
