@@ -45,12 +45,13 @@ GRIP_STRETCH  = 1.5
 GRIP_EMISSION = 1000.0
 GRIP_RINGS    = 16
 OPACITY_FROM_ALPHA = 0
+FADE_CUTOFF        = 0.5
 GRIP_FADE_MAP = os.path.join(os.path.dirname(__file__), "textures",
                              "grip_fade.png")
 
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
-GRIP_COLORS = {GRIP_IDLE: (0.85, 0.58, 0.05),
-               GRIP_HOLD: (1.0, 0.92, 0.35)}
+GRIP_COLORS = {GRIP_IDLE: (1.0, 0.09, 0.04),
+               GRIP_HOLD: (0.32, 0.02, 0.01)}
 
 CLASH = "충돌"
 GAP   = "여유"
@@ -1539,7 +1540,7 @@ class EbsSimulateMarks:
         if texture:
             hang("opacity_texture", texture)
             put("opacity_mode", Sdf.ValueTypeNames.Int, OPACITY_FROM_ALPHA)
-            put("opacity_threshold", Sdf.ValueTypeNames.Float, 0.0)
+            put("opacity_threshold", Sdf.ValueTypeNames.Float, FADE_CUTOFF)
             if glow:
                 hang("emissive_mask_texture", texture)
         put("reflection_roughness_constant", Sdf.ValueTypeNames.Float, 1.0)
