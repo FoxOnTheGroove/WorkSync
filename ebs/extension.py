@@ -28,6 +28,7 @@ class EbsExtension(omni.ext.IExt):
         self._frames = 0
         self._shown = False
         self._stage = None
+        self._inited = False
         if self._ui is not None:
             self._ui.build_ui()
             self._watch_layout()
@@ -51,10 +52,13 @@ class EbsExtension(omni.ext.IExt):
             print(f"[ebs] no auto init, press INIT: {e}")
 
     def _stage_step(self):
-        """다 들어온 프레임에 init 을 돌린다"""
+        """다 들어온 프레임에 init 을 돌린다. 구독은 다음 프레임에 놓는다"""
+        if self._inited:
+            self._stage = None
+            return
         if not self._stage_ready():
             return
-        self._stage = None
+        self._inited = True
         if self._ui is not None:
             self._ui.auto_init()
         else:
@@ -62,19 +66,25 @@ class EbsExtension(omni.ext.IExt):
 
     def _auto_init(self) -> dict:
         """창 없이 도는 init. 사전값을 넘기고 보임 경로까지 맞춘다"""
-        self._sim.set_usd_path(PRESET["usd"])
-        self._sim.set_xml_path(PRESET["xml"])
-        self._sim.set_ebs_paths(PRESET["ebs2"], PRESET["ebs3"])
-        self._sim.set_search_root(PRESET["root"])
-        self._sim.set_rail_root(PRESET["rail"])
-        self._sim.set_near_span(NEAR_SPAN)
-        self._sim.set_min_gaps(MIN_SIDE, MIN_CEILING)
-        self._sim.set_skin(PRESET["skin"])
-        result = EbsSimulateService.auto_init()
-        for path, on in VIEW_PATHS:
-            if path:
-                self._sim.set_visible(path, on)
-        self._sim.set_nudge(0.0)
+        try:
+            self._sim.set_usd_path(PRESET["usd"])
+            self._sim.set_xml_path(PRESET["xml"])
+            self._sim.set_ebs_paths(PRESET["ebs2"], PRESET["ebs3"])
+            self._sim.set_search_root(PRESET["root"])
+            self._sim.set_rail_root(PRESET["rail"])
+            self._sim.set_near_span(NEAR_SPAN)
+            self._sim.set_min_gaps(MIN_SIDE, MIN_CEILING)
+            self._sim.set_skin(PRESET["skin"])
+            result = EbsSimulateService.auto_init()
+            for path, on in VIEW_PATHS:
+                if path:
+                    self._sim.set_visible(path, on)
+            self._sim.set_nudge(0.0)
+        except Exception:
+            import traceback
+            print(f"[ebs] auto init failed:\n{traceback.format_exc()}")
+            return {}
+        print(f"[ebs] auto init: {(result or {}).get('reason')}")
         return result
 
     @staticmethod
