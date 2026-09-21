@@ -1436,7 +1436,7 @@ class EbsSimulateMarks:
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
         mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
-        mesh.CreateDoubleSidedAttr(True)
+        mesh.CreateDoubleSidedAttr(False)
         mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         low = [min(one[i] for one in points) for i in range(3)]
         high = [max(one[i] for one in points) for i in range(3)]
