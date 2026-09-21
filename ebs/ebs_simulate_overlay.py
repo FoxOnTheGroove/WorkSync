@@ -30,8 +30,8 @@ STATE_CLASH = "clash"
 
 FRAME_ID = "ebs_simulate_overlay"
 
-CANNOT = "이 위치에 EBS 장비를 세울 수 없습니다."
-INNER  = "내부 장비와 충돌"
+CANNOT = " 이 위치에 EBS 장비를 세울 수 없습니다."
+INNER  = " 내부 장비와 충돌"
 HOME   = "0mm"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
@@ -54,11 +54,11 @@ GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.12, 0.45, 1.0),
                GRIP_HOLD: (0.02, 0.08, 0.3)}
 
-CLASH = "충돌"
-GAP   = "여유"
-TIGHT = "간섭"
-SPAN  = "{0:.0f}mm"
-LEAST = "(최소간격 : {0:.0f}mm)"
+CLASH = " 충돌"
+GAP   = " 여유"
+TIGHT = " 간섭"
+SPAN  = " {0:.0f}mm"
+LEAST = " (최소간격 : {0:.0f}mm)"
 MM_PER_M  = 1000.0
 GAP_WIDTH = 84
 
