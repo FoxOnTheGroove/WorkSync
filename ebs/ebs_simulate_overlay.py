@@ -67,7 +67,7 @@ COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
 FACE_SIZE    = 17
 PAD_X, PAD_Y = 3, 1
-TEXT_DROP = 1
+TEXT_DROP, TEXT_PUSH = 1, 1
 
 MARKER_OPACITY  = 0.075
 MARKER_EMISSION = 10000.0
@@ -77,13 +77,15 @@ BLOCKED_EMISSION = 1000.0
 COLOR_CLEAR     = (1.0, 1.0, 1.0)
 SHEET_GAP       = 0.001
 
-COLOR_GAP      = (1.0, 0.906, 0.604)
-COLOR_TIGHT    = (0.988, 0.224, 0.106)
+COLOR_GAP      = (0.67, 0.44, 0.19)
+COLOR_TIGHT    = (0.99, 0.1, 0.05)
 GAP_RADIUS     = 0.002
 GAP_HEAD_HIGH  = 0.04
 GAP_HEAD_WIDE  = 0.032
 GAP_OPACITY    = 1.0
-GAP_EMISSION   = 3000.0
+GAP_EMISSION   = 5000.0
+TIGHT_EMISSION = 2000.0
+LEAD_EMISSION  = 3000.0
 
 LEAD_RADIUS = 0.001
 LEAD_OVER   = 0.01
@@ -360,7 +362,9 @@ class EbsSimulateOverlay:
             """판 속 글줄을 채운다"""
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
-                self._label(text, ink, key)
+                with ui.HStack(spacing=0):
+                    ui.Spacer(width=ui.Pixel(TEXT_PUSH))
+                    self._label(text, ink, key)
                 ui.Spacer(height=ui.Pixel(TEXT_DROP))
         return fill
 
@@ -500,7 +504,9 @@ class EbsSimulateOverlay:
                 with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                                  "margin_height": PAD_Y}):
                     for text in lines:
-                        self._label(text, ink, key, wide, FACE_SIZE)
+                        with ui.HStack(spacing=0):
+                            ui.Spacer(width=ui.Pixel(TEXT_PUSH))
+                            self._label(text, ink, key, wide, FACE_SIZE)
                     ui.Spacer(height=ui.Pixel(TEXT_DROP))
             return fill
 
@@ -1052,8 +1058,8 @@ class EbsSimulateMarks:
             colour = COLOR_TIGHT if warn else COLOR_GAP
             if colour not in threads:
                 threads[colour] = self._material(
-                    stage, "tight" if warn else "gap", colour,
-                    GAP_OPACITY, GAP_EMISSION)
+                    stage, "tight" if warn else "gap", colour, GAP_OPACITY,
+                    TIGHT_EMISSION if warn else GAP_EMISSION)
             shaft = self._gap_shaft(mark["from"], mark["to"])
             if self._gap_line(stage,
                               self._keep(f"{self._root}/{mark['face']}_gap"),
@@ -1072,7 +1078,7 @@ class EbsSimulateMarks:
             return 0
         if COLOR_LEAD not in threads:
             threads[COLOR_LEAD] = self._material(
-                stage, "lead", COLOR_LEAD, GAP_OPACITY, GAP_EMISSION)
+                stage, "lead", COLOR_LEAD, GAP_OPACITY, LEAD_EMISSION)
         one, two = self._stretched(mark["to"], lead[-1], LEAD_OVER)
         drawn = int(self._gap_line(
             stage, self._keep(f"{self._root}/{mark['face']}_lead_0"),
