@@ -40,9 +40,6 @@ GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = GRIP_THICK * 3.0
 GRIP_BEAD  = GRIP_THICK * 2.0
-EDGE_ROUND = 16
-EDGE_PUSH  = 0.3
-EDGE_WIDE  = 0.35
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.0
@@ -811,88 +808,11 @@ class EbsSimulateGrip:
                 self._paint._ball(
                     stage, self._paint._keep(f"{self._root}/bead"),
                     middle, bead, skin, colour)
-                if state == GRIP_HOLD:
-                    self._draw_edge(stage, middle, one, two, thick, bead,
-                                    high, wide)
                 self._paint._show_only(stage)
-
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
-
-    def _edge_frame(self, middle, tip):
-        """카메라를 마주 보는 평면의 두 축과 반쪽 길이. 못 잡으면 None"""
-        axis = Gf.Vec3d(*[tip[i] - middle[i] for i in range(3)])
-        span = axis.GetLength()
-        if span <= 1e-9:
-            return None
-        axis = axis.GetNormalized()
-        eye = self._facing(middle)
-        if eye is None:
-            return None
-        perp = Gf.Cross(axis, Gf.Vec3d(*eye))
-        if perp.GetLength() <= 1e-6:
-            return None
-        return axis, perp.GetNormalized(), span
-
-    @staticmethod
-    def _edge_flat(middle, axis, perp, plan):
-        """(축 거리, 폭) 목록을 EBS 안 3D 점으로"""
-        return [tuple(middle[i] + axis[i] * at + perp[i] * off
-                      for i in range(3)) for at, off in plan]
-
-    def _edge_arrow(self, middle, axis, perp, span: float, thick: float,
-                    bead: float, high: float, wide: float):
-        """화살표 하나를 두르는 닫힌 윤곽. 원뿔과 관만 두른다"""
-        out = span - high
-        plan = [(span, 0.0), (out, wide), (out, thick), (bead, thick),
-                (bead, -thick), (out, -thick), (out, -wide)]
-        return self._edge_flat(middle, axis, perp, plan)
-
-    def _edge_ball(self, middle, axis, perp, bead: float):
-        """구체를 두르는 닫힌 윤곽"""
-        plan = []
-        for at in range(EDGE_ROUND):
-            turn = math.tau * at / EDGE_ROUND
-            plan.append((bead * math.cos(turn), bead * math.sin(turn)))
-        return self._edge_flat(middle, axis, perp, plan)
-
-    def _draw_edge(self, stage, middle, one, two, thick: float, bead: float,
-                   high: float, wide: float) -> None:
-        """잡는 동안 두르는 윤곽선. 화살표 둘과 구체를 따로 두른다"""
-        told = self._edge_frame(middle, one)
-        if told is None:
-            return
-        axis, perp, span = told
-        bright = GRIP_COLORS[GRIP_IDLE]
-        ink = self._paint._material(stage, "grip_edge", bright,
-                                    1.0, GRIP_EMISSION)
-        push = thick * EDGE_PUSH
-        loops = [("ball", self._edge_ball(middle, axis, perp, bead + push))]
-        for name, way in (("a", 1.0), ("b", -1.0)):
-            arm = Gf.Vec3d(*[axis[i] * way for i in range(3)])
-            loops.append((name, self._edge_arrow(
-                middle, arm, perp, span + push, thick + push,
-                bead - push, high, wide + push)))
-        for name, spots in loops:
-            heart = [sum(spot[i] for spot in spots) / len(spots)
-                     for i in range(3)]
-            self._paint._ribbon(
-                stage, self._paint._keep(f"{self._root}/edge_{name}"),
-                spots, heart, thick * EDGE_WIDE, ink, bright)
-
-    def _facing(self, middle):
-        """카메라가 있는 쪽. EBS 안 좌표로 준다. 못 구하면 None"""
-        eye = sim().camera_eye()
-        if eye is None:
-            return None
-        if self._matrix is not None:
-            try:
-                eye = self._matrix.GetInverse().Transform(eye)
-            except Exception:
-                return None
-        return tuple(eye[i] - middle[i] for i in range(3))
 
     @staticmethod
     def _back_off(tip, middle, step: float):
@@ -917,8 +837,7 @@ class EbsSimulateGrip:
                 ("ebs:gripFlare", Sdf.ValueTypeNames.Float, GRIP_FLARE),
                 ("ebs:fadeMap", Sdf.ValueTypeNames.String, GRIP_FADE_MAP),
                 ("ebs:fadeFound", Sdf.ValueTypeNames.Bool,
-                 bool(self._fade_map())),
-                ("ebs:edgeWide", Sdf.ValueTypeNames.Float, EDGE_WIDE)):
+                 bool(self._fade_map()))):
             try:
                 prim.CreateAttribute(name, kind).Set(value)
             except Exception:
@@ -1543,46 +1462,6 @@ class EbsSimulateMarks:
         UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
             "st", Sdf.ValueTypeNames.TexCoord2fArray,
             UsdGeom.Tokens.vertex).Set(Vt.Vec2fArray(uvs))
-        try:
-            mesh.GetPrim().CreateAttribute(
-                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
-        except Exception:
-            pass
-        if material:
-            UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
-        return True
-
-    @staticmethod
-    def _ribbon(stage, path: str, spots, middle, thick: float, material,
-                colour) -> bool:
-        """닫힌 윤곽선을 따라 두른 납작한 띠 하나. 중심에서 바깥으로 벌린다"""
-        if not spots or len(spots) < 3 or thick <= 0.0:
-            return False
-        points, half = [], thick * 0.5
-        for spot in spots:
-            way = Gf.Vec3d(*[spot[i] - middle[i] for i in range(3)])
-            if way.GetLength() <= 1e-9:
-                return False
-            way = way.GetNormalized()
-            for step in (-half, half):
-                points.append(Gf.Vec3f(*[spot[i] + way[i] * step
-                                         for i in range(3)]))
-        counts, indices = [], []
-        for at in range(len(spots)):
-            here, there = at * 2, ((at + 1) % len(spots)) * 2
-            counts.append(4)
-            indices += [here, there, there + 1, here + 1]
-
-        mesh = UsdGeom.Mesh.Define(stage, path)
-        mesh.CreatePointsAttr(Vt.Vec3fArray(points))
-        mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
-        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
-        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
-        mesh.CreateDoubleSidedAttr(True)
-        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
-        low = [min(one[i] for one in points) for i in range(3)]
-        high = [max(one[i] for one in points) for i in range(3)]
-        mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
         try:
             mesh.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
