@@ -40,11 +40,9 @@ GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = GRIP_THICK * 3.0
 GRIP_BEAD  = GRIP_THICK * 2.0
-EDGE_FRAME = "ebs_simulate_edge"
-EDGE_ARC   = 5
-EDGE_PUSH  = 1.06
-EDGE_WIDE  = 2.0
-EDGE_FLIP  = True
+EDGE_ARC  = 5
+EDGE_PUSH = 1.08
+EDGE_WIDE = 0.35
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.0
@@ -697,129 +695,6 @@ class EbsSimulateOverlay:
         self._window = None
 
 
-class EbsSimulateEdge:
-    """뷰포트에 얹는 2D 외곽선. omni.ui.scene 이 없으면 아무것도 안 한다"""
-
-    _one = None
-    _why = ""
-
-    def __init__(self):
-        """자리만. 세우는 것은 _stroke"""
-        self._view = None
-        self._frame = None
-
-    @classmethod
-    def show(cls, spots, colour) -> bool:
-        """그 월드 점들을 이어 닫힌 선을 긋는다"""
-        if not spots:
-            cls._why = "no points"
-            return False
-        if cls._one is None:
-            cls._one = cls()
-        return cls._one._stroke(spots, colour)
-
-    @classmethod
-    def hide(cls) -> None:
-        """그은 것을 치운다. 프레임은 남긴다"""
-        if cls._one is not None:
-            cls._one._wipe()
-
-    @classmethod
-    def drop(cls) -> None:
-        """프레임까지 놓고 인스턴스를 버린다"""
-        if cls._one is not None:
-            cls._one._wipe()
-            cls._one._view = None
-            cls._one._frame = None
-        cls._one = None
-
-    @classmethod
-    def why(cls) -> str:
-        """못 그은 사유. 그었으면 빈 칸"""
-        return cls._why
-
-    def _stroke(self, spots, colour) -> bool:
-        """SceneView 하나에 닫힌 곡선 하나"""
-        scene = self._scene()
-        if scene is None:
-            return False
-        window = viewport_window()
-        api = getattr(window, "viewport_api", None) if window else None
-        try:
-            model = self._view.model
-            for name, matrix in (("view", api.view),
-                                 ("projection", api.projection)):
-                flat = self._flat(matrix)
-                try:
-                    model.set_floats(name, flat)
-                except Exception:
-                    setattr(model, name, flat)
-        except Exception as e:
-            EbsSimulateEdge._why = f"model: {type(e).__name__}: {e}"
-            return False
-        try:
-            self._wipe()
-            loop = list(spots) + [spots[0]]
-            with self._view.scene:
-                scene.Curve(loop, thicknesses=[EDGE_WIDE] * len(loop),
-                            colors=[colour] * len(loop),
-                            curve_type=scene.Curve.CurveType.LINEAR)
-        except Exception as e:
-            EbsSimulateEdge._why = f"curve: {type(e).__name__}: {e}"
-            return False
-        EbsSimulateEdge._why = (f"drawn {self._size()} {len(loop)}pt "
-                                f"flip={EDGE_FLIP}")
-        return True
-
-    @staticmethod
-    def _flat(matrix):
-        """Gf 행렬을 실수 열여섯 개로 편다. Gf 는 행 우선, scene 은 열 우선"""
-        if EDGE_FLIP:
-            return [float(matrix[row][col])
-                    for col in range(4) for row in range(4)]
-        return [float(matrix[row][col]) for row in range(4) for col in range(4)]
-
-    def _size(self) -> str:
-        """SceneView 를 담은 프레임 크기. 0 이면 아무것도 안 보인다"""
-        try:
-            return (f"{self._frame.computed_width:.0f}"
-                    f"x{self._frame.computed_height:.0f}")
-        except Exception:
-            return "?x?"
-
-    def _scene(self):
-        """omni.ui.scene 모듈과 SceneView 하나. 못 세우면 None"""
-        try:
-            from omni.ui import scene as sc
-        except Exception as e:
-            EbsSimulateEdge._why = f"no omni.ui.scene: {type(e).__name__}"
-            return None
-        if self._view is not None:
-            return sc
-        window = viewport_window()
-        if window is None:
-            EbsSimulateEdge._why = "no viewport"
-            return None
-        try:
-            self._frame = window.get_frame(EDGE_FRAME)
-            with self._frame:
-                self._view = sc.SceneView()
-        except Exception as e:
-            EbsSimulateEdge._why = f"scene view: {type(e).__name__}: {e}"
-            self._view = None
-            return None
-        return sc
-
-    def _wipe(self) -> None:
-        """그은 것만 비운다"""
-        if self._view is None:
-            return
-        try:
-            self._view.scene.clear()
-        except Exception:
-            pass
-
-
 class EbsSimulateGrip:
     """EBS 앞 공중에 뜬 양방향 화살표. 끌면 EBS 가 좌우로 간다"""
 
@@ -850,8 +725,7 @@ class EbsSimulateGrip:
 
     @classmethod
     def destroy(cls) -> None:
-        """지우고 손을 뗀다. 머티리얼과 외곽선까지 치운다"""
-        EbsSimulateEdge.drop()
+        """지우고 손을 뗀다. 세워 둔 머티리얼까지 치운다"""
         if cls._one is not None:
             cls._one.wipe()
             paint = getattr(cls._one, "_paint", None)
@@ -937,13 +811,11 @@ class EbsSimulateGrip:
                 self._paint._ball(
                     stage, self._paint._keep(f"{self._root}/bead"),
                     middle, bead, skin, colour)
+                if state == GRIP_HOLD:
+                    self._draw_edge(stage, middle, one, thick, bead,
+                                    high, wide)
                 self._paint._show_only(stage)
-            if state == GRIP_HOLD:
-                EbsSimulateEdge.show(
-                    self._edge_points(middle, one, thick, bead, high, wide),
-                    GRIP_COLORS[GRIP_IDLE] + (1.0,))
-            else:
-                EbsSimulateEdge.hide()
+
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
             return False
@@ -976,14 +848,22 @@ class EbsSimulateGrip:
         loop = half + [(-at, off) for at, off in reversed(half[:-1])]
         loop += [(at, -off) for at, off in reversed(loop[1:-1])]
 
-        spots = []
-        for at, off in loop:
-            here = [middle[i] + axis[i] * at * EDGE_PUSH
-                    + perp[i] * off * EDGE_PUSH for i in range(3)]
-            if self._matrix is not None:
-                here = self._matrix.Transform(Gf.Vec3d(*here))
-            spots.append(tuple(here))
-        return spots
+        return [tuple(middle[i] + axis[i] * at * EDGE_PUSH
+                      + perp[i] * off * EDGE_PUSH for i in range(3))
+                for at, off in loop]
+
+    def _draw_edge(self, stage, middle, tip, thick: float, bead: float,
+                   high: float, wide: float) -> None:
+        """잡는 동안 두르는 윤곽선. 카메라를 마주 보는 평면에 눕는다"""
+        spots = self._edge_points(middle, tip, thick, bead, high, wide)
+        if not spots:
+            return
+        bright = GRIP_COLORS[GRIP_IDLE]
+        ink = self._paint._material(stage, "grip_edge", bright,
+                                    1.0, GRIP_EMISSION)
+        self._paint._ribbon(
+            stage, self._paint._keep(f"{self._root}/edge"), spots, middle,
+            thick * EDGE_WIDE, ink, bright)
 
     def _facing(self, middle):
         """카메라가 있는 쪽. EBS 안 좌표로 준다. 못 구하면 None"""
@@ -1021,8 +901,7 @@ class EbsSimulateGrip:
                 ("ebs:fadeMap", Sdf.ValueTypeNames.String, GRIP_FADE_MAP),
                 ("ebs:fadeFound", Sdf.ValueTypeNames.Bool,
                  bool(self._fade_map())),
-                ("ebs:edgeWhy", Sdf.ValueTypeNames.String,
-                 EbsSimulateEdge.why() or "idle")):
+                ("ebs:edgeWide", Sdf.ValueTypeNames.Float, EDGE_WIDE)):
             try:
                 prim.CreateAttribute(name, kind).Set(value)
             except Exception:
@@ -1647,6 +1526,46 @@ class EbsSimulateMarks:
         UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
             "st", Sdf.ValueTypeNames.TexCoord2fArray,
             UsdGeom.Tokens.vertex).Set(Vt.Vec2fArray(uvs))
+        try:
+            mesh.GetPrim().CreateAttribute(
+                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+        except Exception:
+            pass
+        if material:
+            UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+        return True
+
+    @staticmethod
+    def _ribbon(stage, path: str, spots, middle, thick: float, material,
+                colour) -> bool:
+        """닫힌 윤곽선을 따라 두른 납작한 띠 하나. 중심에서 바깥으로 벌린다"""
+        if not spots or len(spots) < 3 or thick <= 0.0:
+            return False
+        points, half = [], thick * 0.5
+        for spot in spots:
+            way = Gf.Vec3d(*[spot[i] - middle[i] for i in range(3)])
+            if way.GetLength() <= 1e-9:
+                return False
+            way = way.GetNormalized()
+            for step in (-half, half):
+                points.append(Gf.Vec3f(*[spot[i] + way[i] * step
+                                         for i in range(3)]))
+        counts, indices = [], []
+        for at in range(len(spots)):
+            here, there = at * 2, ((at + 1) % len(spots)) * 2
+            counts.append(4)
+            indices += [here, there, there + 1, here + 1]
+
+        mesh = UsdGeom.Mesh.Define(stage, path)
+        mesh.CreatePointsAttr(Vt.Vec3fArray(points))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
+        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        mesh.CreateDoubleSidedAttr(True)
+        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        low = [min(one[i] for one in points) for i in range(3)]
+        high = [max(one[i] for one in points) for i in range(3)]
+        mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
         try:
             mesh.GetPrim().CreateAttribute(
                 "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
