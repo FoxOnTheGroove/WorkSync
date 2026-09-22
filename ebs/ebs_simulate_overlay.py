@@ -749,7 +749,8 @@ class EbsSimulateEdge:
             model.view = api.view
             model.projection = api.projection
         except Exception as e:
-            EbsSimulateEdge._why = f"model: {type(e).__name__}"
+            EbsSimulateEdge._why = f"model: {type(e).__name__}: {e}"
+            return False
         try:
             self._wipe()
             loop = list(spots) + [spots[0]]
@@ -760,8 +761,16 @@ class EbsSimulateEdge:
         except Exception as e:
             EbsSimulateEdge._why = f"curve: {type(e).__name__}: {e}"
             return False
-        EbsSimulateEdge._why = ""
+        EbsSimulateEdge._why = f"drawn {self._size()} {len(loop)}pt"
         return True
+
+    def _size(self) -> str:
+        """SceneView 를 담은 프레임 크기. 0 이면 아무것도 안 보인다"""
+        try:
+            return (f"{self._frame.computed_width:.0f}"
+                    f"x{self._frame.computed_height:.0f}")
+        except Exception:
+            return "?x?"
 
     def _scene(self):
         """omni.ui.scene 모듈과 SceneView 하나. 못 세우면 None"""
@@ -998,7 +1007,7 @@ class EbsSimulateGrip:
                 ("ebs:fadeFound", Sdf.ValueTypeNames.Bool,
                  bool(self._fade_map())),
                 ("ebs:edgeWhy", Sdf.ValueTypeNames.String,
-                 EbsSimulateEdge.why() or "drawn")):
+                 EbsSimulateEdge.why() or "idle")):
             try:
                 prim.CreateAttribute(name, kind).Set(value)
             except Exception:
