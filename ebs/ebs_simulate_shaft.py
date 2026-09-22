@@ -2,12 +2,12 @@
 
 import math
 
-from pxr import Sdf, UsdGeom
+from pxr import Usd, UsdGeom
 
 from .ebs_simulate_shared import OURS
 
 __all__ = ["EbsSimulateShaft", "SHAFT_CULL", "SHAFT_MARGIN", "SHAFT_SLACK",
-           "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS"]
+           "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS", "SHAFT_LOUD"]
 
 SHAFT_CULL   = True
 SHAFT_MARGIN = 0.02
@@ -15,12 +15,12 @@ SHAFT_SLACK  = 0.05
 SHAFT_COVER  = 0.02
 SHAFT_BULK   = 3.0
 SHAFT_EPS    = 1e-6
-
-VISIBILITY = "visibility"
+SHAFT_LOUD   = True
+SHAFT_SHOWN  = 4
 
 
 class EbsSimulateShaft:
-    """눈에서 EBS 까지 뻗은 기둥 안에 통째로 든 프림을 세션 레이어에서 끈다"""
+    """눈에서 EBS 까지 뻗은 기둥 안에서 EBS 를 덮는 프림을 세션 레이어에서 끈다"""
 
     def __init__(self, sim):
         """끈 것을 적어 둘 자리만 비워 둔다"""
@@ -43,9 +43,10 @@ class EbsSimulateShaft:
         """마지막 판정에서 어느 관문이 몇 개를 걸렀나"""
         if not self._tally:
             return "shaft: nothing looked at yet"
-        return "shaft: " + ", ".join(f"{key} {self._tally[key]}" for key in
-                                     ("seen", "near", "front", "cover",
-                                      "bulk", "hid") if key in self._tally)
+        return "shaft: " + ", ".join(
+            f"{key} {self._tally[key]}" for key in
+            ("seen", "near", "front", "cover", "bulk", "proxy", "missed",
+             "hid") if self._tally.get(key))
 
     def enable(self, on: bool) -> bool:
         """컬링을 켜고 끈다. 끄면 끈 것을 전부 되돌린다"""
@@ -58,6 +59,7 @@ class EbsSimulateShaft:
         """끈 것을 전부 도로 켠다"""
         count = self._clear(self._hidden)
         self._hidden = set()
+        self._tally = {}
         return count
 
     def recull(self) -> int:
@@ -66,12 +68,20 @@ class EbsSimulateShaft:
             return 0
         placed = self._sim._camera.placed()
         boxes = self._targets()
-        if placed is None or not boxes:
-            return self.restore()
+        if placed is None:
+            return self._quit("no camera frame written yet")
+        if not boxes:
+            return self._quit("EBS and equipment have no world box")
         shaft = self._shaft(placed, boxes)
         if shaft is None:
-            return self.restore()
+            return self._quit("EBS sits on or behind the eye")
         return self._apply(self._blocking(placed, shaft, boxes))
+
+    def _quit(self, why: str) -> int:
+        """기둥을 못 세운 이유를 알리고 끈 것을 되돌린다"""
+        if SHAFT_LOUD:
+            print(f"[ebs] shaft: {why}")
+        return self.restore()
 
     @staticmethod
     def _across(low, high) -> float:
@@ -138,8 +148,7 @@ class EbsSimulateShaft:
         spare = self._spare()
         under = tuple(one + "/" for one in spare)
         limit = max(self._across(low, high) for low, high in boxes) * SHAFT_BULK
-        tally = dict.fromkeys(("seen", "near", "front", "cover", "bulk",
-                               "hid"), 0)
+        tally = dict.fromkeys(("seen", "near", "front", "cover", "bulk"), 0)
         found = set()
         for path, low, high, _box, _prim, _chain in Collide._stage_boxes(
                 self._sim):
@@ -159,7 +168,6 @@ class EbsSimulateShaft:
             if self._across(low, high) > limit:
                 tally["bulk"] += 1
                 continue
-            tally["hid"] += 1
             found.add(path)
         self._tally = tally
         return found
@@ -216,46 +224,67 @@ class EbsSimulateShaft:
 
     def _apply(self, want: set) -> int:
         """달라진 것만 끄고 켠다"""
-        gone = self._hidden - want
-        fresh = want - self._hidden
-        self._clear(gone)
-        self._mask(fresh)
-        self._hidden = want
-        return len(want)
+        self._clear(self._hidden - want)
+        wrote = self._mask(want - self._hidden)
+        self._hidden = (self._hidden & want) | wrote
+        self._tally["hid"] = len(self._hidden)
+        if SHAFT_LOUD:
+            print("[ebs] " + self.say())
+            for path in sorted(self._hidden)[:SHAFT_SHOWN]:
+                print(f"[ebs] shaft hides {path}")
+        return len(self._hidden)
 
-    def _mask(self, paths) -> int:
-        """세션 레이어에 invisible 을 한 덩이로 쓴다"""
-        return self._author(paths, UsdGeom.Tokens.invisible)
+    def _mask(self, paths) -> set:
+        """끌 수 있는 것만 끄고, 실제로 꺼진 경로를 돌려준다"""
+        stage = self._sim._get_stage()
+        if stage is None or not paths:
+            return set()
+        proxy, missed, done = 0, 0, set()
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for path in paths:
+                prim = stage.GetPrimAtPath(path)
+                if prim is None or not prim.IsValid():
+                    missed += 1
+                    continue
+                if prim.IsInstanceProxy():
+                    proxy += 1
+                    continue
+                imageable = UsdGeom.Imageable(prim)
+                if not imageable:
+                    missed += 1
+                    continue
+                try:
+                    imageable.CreateVisibilityAttr().Set(
+                        UsdGeom.Tokens.invisible)
+                except Exception:
+                    missed += 1
+                    continue
+                self._sim._visible[path] = True
+                done.add(path)
+        self._tally["proxy"] = self._tally.get("proxy", 0) + proxy
+        self._tally["missed"] = self._tally.get("missed", 0) + missed
+        return done
 
     def _clear(self, paths) -> int:
-        """세션 레이어에 써 둔 가시성만 걷는다"""
-        return self._author(paths, None)
-
-    def _author(self, paths, token) -> int:
-        """세션 레이어의 visibility 를 쓰거나 지운다. 충돌 검사에는 계속 있는 셈 친다"""
+        """세션 레이어에 써 둔 가시성만 걷는다. 다른 레이어 의견은 안 건드린다"""
         stage = self._sim._get_stage()
         if stage is None or not paths:
             return 0
-        layer = stage.GetSessionLayer()
         done = 0
-        try:
-            with Sdf.ChangeBlock():
-                for path in paths:
-                    spec = Sdf.CreatePrimInLayer(layer, path)
-                    if spec is None:
-                        continue
-                    if token is None:
-                        if VISIBILITY in spec.attributes:
-                            del spec.attributes[VISIBILITY]
-                        self._sim._visible.pop(path, None)
-                    else:
-                        attribute = spec.attributes.get(VISIBILITY)
-                        if attribute is None:
-                            attribute = Sdf.AttributeSpec(
-                                spec, VISIBILITY, Sdf.ValueTypeNames.Token)
-                        attribute.default = token
-                        self._sim._visible[path] = True
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for path in paths:
+                prim = stage.GetPrimAtPath(path)
+                self._sim._visible.pop(path, None)
+                if prim is None or not prim.IsValid():
+                    continue
+                imageable = UsdGeom.Imageable(prim)
+                if not imageable:
+                    continue
+                try:
+                    attribute = imageable.GetVisibilityAttr()
+                    if attribute:
+                        attribute.Clear()
                     done += 1
-        except Exception as e:
-            print(f"[ebs] could not write the shaft visibility: {e}")
+                except Exception:
+                    continue
         return done

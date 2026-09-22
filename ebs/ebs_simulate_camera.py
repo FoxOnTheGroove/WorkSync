@@ -3,13 +3,14 @@ import math
 from pxr import Usd, UsdGeom, Sdf, Gf
 
 __all__ = ["EbsSimulateCamera", "CAMERA_PATH", "CAMERA_BACK",
-           "CAMERA_NEAR", "CAMERA_FAR"]
+           "CAMERA_NEAR", "CAMERA_FAR", "NEAR_CULL"]
 
 CAMERA_PATH = "/EbsCamera"
 CAMERA_BACK = 18.0
 CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
 NEAR_SPAN   = 0.0
+NEAR_CULL   = False
 
 FOCAL      = 50.0
 APERTURE_H = 20.955
@@ -589,8 +590,8 @@ class EbsSimulateCamera:
         return x_cam, y_cam, z_cam
 
     def _near(self, x_cam, distance: float) -> float:
-        """EBS 폭 절반의 set_near_span 배만큼 앞에 둘 근평면 거리. 0 이면 안 자른다"""
-        if self._box is None or self._span <= 0.0:
+        """근평면 거리. NEAR_CULL 이 꺼져 있으면 슬라이더와 무관하게 안 자른다"""
+        if not NEAR_CULL or self._box is None or self._span <= 0.0:
             return CAMERA_NEAR
         low, high = self._box.GetMin(), self._box.GetMax()
         half = sum(abs(x_cam[i]) * (high[i] - low[i]) * 0.5 for i in range(3))
