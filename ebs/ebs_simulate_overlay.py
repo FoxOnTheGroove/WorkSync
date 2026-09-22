@@ -40,9 +40,9 @@ GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = GRIP_THICK * 3.0
 GRIP_BEAD  = GRIP_THICK * 2.0
-EDGE_ARC  = 5
-EDGE_PUSH = 1.08
-EDGE_WIDE = 0.35
+EDGE_ROUND = 16
+EDGE_PUSH  = 0.3
+EDGE_WIDE  = 0.35
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.0
@@ -812,7 +812,7 @@ class EbsSimulateGrip:
                     stage, self._paint._keep(f"{self._root}/bead"),
                     middle, bead, skin, colour)
                 if state == GRIP_HOLD:
-                    self._draw_edge(stage, middle, one, thick, bead,
+                    self._draw_edge(stage, middle, one, two, thick, bead,
                                     high, wide)
                 self._paint._show_only(stage)
 
@@ -821,9 +821,8 @@ class EbsSimulateGrip:
             return False
         return True
 
-    def _edge_points(self, middle, tip, thick: float, bead: float,
-                     high: float, wide: float):
-        """카메라를 마주 보는 평면에서 기즈모 윤곽을 한 바퀴. 못 잡으면 None"""
+    def _edge_frame(self, middle, tip):
+        """카메라를 마주 보는 평면의 두 축과 반쪽 길이. 못 잡으면 None"""
         axis = Gf.Vec3d(*[tip[i] - middle[i] for i in range(3)])
         span = axis.GetLength()
         if span <= 1e-9:
@@ -835,35 +834,53 @@ class EbsSimulateGrip:
         perp = Gf.Cross(axis, Gf.Vec3d(*eye))
         if perp.GetLength() <= 1e-6:
             return None
-        perp = perp.GetNormalized()
+        return axis, perp.GetNormalized(), span
 
-        half = [(span, 0.0), (span - high, wide), (span - high, thick)]
-        meet = math.sqrt(max(bead * bead - thick * thick, 0.0))
-        if meet < span - high:
-            half.append((meet, thick))
-            start = math.asin(min(1.0, thick / bead)) if bead > 1e-9 else 0.0
-            for step in range(1, EDGE_ARC + 1):
-                turn = start + (math.pi * 0.5 - start) * step / EDGE_ARC
-                half.append((bead * math.cos(turn), bead * math.sin(turn)))
-        loop = half + [(-at, off) for at, off in reversed(half[:-1])]
-        loop += [(at, -off) for at, off in reversed(loop[1:-1])]
+    @staticmethod
+    def _edge_flat(middle, axis, perp, plan):
+        """(축 거리, 폭) 목록을 EBS 안 3D 점으로"""
+        return [tuple(middle[i] + axis[i] * at + perp[i] * off
+                      for i in range(3)) for at, off in plan]
 
-        return [tuple(middle[i] + axis[i] * at * EDGE_PUSH
-                      + perp[i] * off * EDGE_PUSH for i in range(3))
-                for at, off in loop]
+    def _edge_arrow(self, middle, axis, perp, span: float, thick: float,
+                    bead: float, high: float, wide: float):
+        """화살표 하나를 두르는 닫힌 윤곽. 원뿔과 관만 두른다"""
+        out = span - high
+        plan = [(span, 0.0), (out, wide), (out, thick), (bead, thick),
+                (bead, -thick), (out, -thick), (out, -wide)]
+        return self._edge_flat(middle, axis, perp, plan)
 
-    def _draw_edge(self, stage, middle, tip, thick: float, bead: float,
+    def _edge_ball(self, middle, axis, perp, bead: float):
+        """구체를 두르는 닫힌 윤곽"""
+        plan = []
+        for at in range(EDGE_ROUND):
+            turn = math.tau * at / EDGE_ROUND
+            plan.append((bead * math.cos(turn), bead * math.sin(turn)))
+        return self._edge_flat(middle, axis, perp, plan)
+
+    def _draw_edge(self, stage, middle, one, two, thick: float, bead: float,
                    high: float, wide: float) -> None:
-        """잡는 동안 두르는 윤곽선. 카메라를 마주 보는 평면에 눕는다"""
-        spots = self._edge_points(middle, tip, thick, bead, high, wide)
-        if not spots:
+        """잡는 동안 두르는 윤곽선. 화살표 둘과 구체를 따로 두른다"""
+        told = self._edge_frame(middle, one)
+        if told is None:
             return
+        axis, perp, span = told
         bright = GRIP_COLORS[GRIP_IDLE]
         ink = self._paint._material(stage, "grip_edge", bright,
                                     1.0, GRIP_EMISSION)
-        self._paint._ribbon(
-            stage, self._paint._keep(f"{self._root}/edge"), spots, middle,
-            thick * EDGE_WIDE, ink, bright)
+        push = thick * EDGE_PUSH
+        loops = [("ball", self._edge_ball(middle, axis, perp, bead + push))]
+        for name, way in (("a", 1.0), ("b", -1.0)):
+            arm = Gf.Vec3d(*[axis[i] * way for i in range(3)])
+            loops.append((name, self._edge_arrow(
+                middle, arm, perp, span + push, thick + push,
+                bead - push, high, wide + push)))
+        for name, spots in loops:
+            heart = [sum(spot[i] for spot in spots) / len(spots)
+                     for i in range(3)]
+            self._paint._ribbon(
+                stage, self._paint._keep(f"{self._root}/edge_{name}"),
+                spots, heart, thick * EDGE_WIDE, ink, bright)
 
     def _facing(self, middle):
         """카메라가 있는 쪽. EBS 안 좌표로 준다. 못 구하면 None"""
