@@ -40,6 +40,10 @@ GRIP_HEAD  = 0.3
 GRIP_THICK = 0.175 / 3.0 * 0.75
 GRIP_FLARE = GRIP_THICK * 3.0
 GRIP_BEAD  = GRIP_THICK * 2.0
+EDGE_FRAME = "ebs_simulate_edge"
+EDGE_ARC   = 5
+EDGE_PUSH  = 1.06
+EDGE_WIDE  = 2.0
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.0
@@ -692,6 +696,106 @@ class EbsSimulateOverlay:
         self._window = None
 
 
+class EbsSimulateEdge:
+    """뷰포트에 얹는 2D 외곽선. omni.ui.scene 이 없으면 아무것도 안 한다"""
+
+    _one = None
+    _why = ""
+
+    def __init__(self):
+        """자리만. 세우는 것은 _stroke"""
+        self._view = None
+        self._frame = None
+
+    @classmethod
+    def show(cls, spots, colour) -> bool:
+        """그 월드 점들을 이어 닫힌 선을 긋는다"""
+        if not spots:
+            cls._why = "no points"
+            return False
+        if cls._one is None:
+            cls._one = cls()
+        return cls._one._stroke(spots, colour)
+
+    @classmethod
+    def hide(cls) -> None:
+        """그은 것을 치운다. 프레임은 남긴다"""
+        if cls._one is not None:
+            cls._one._wipe()
+
+    @classmethod
+    def drop(cls) -> None:
+        """프레임까지 놓고 인스턴스를 버린다"""
+        if cls._one is not None:
+            cls._one._wipe()
+            cls._one._view = None
+            cls._one._frame = None
+        cls._one = None
+
+    @classmethod
+    def why(cls) -> str:
+        """못 그은 사유. 그었으면 빈 칸"""
+        return cls._why
+
+    def _stroke(self, spots, colour) -> bool:
+        """SceneView 하나에 닫힌 곡선 하나"""
+        scene = self._scene()
+        if scene is None:
+            return False
+        window = viewport_window()
+        api = getattr(window, "viewport_api", None) if window else None
+        try:
+            model = self._view.model
+            model.view = api.view
+            model.projection = api.projection
+        except Exception as e:
+            EbsSimulateEdge._why = f"model: {type(e).__name__}"
+        try:
+            self._wipe()
+            loop = list(spots) + [spots[0]]
+            with self._view.scene:
+                scene.Curve(loop, thicknesses=[EDGE_WIDE] * len(loop),
+                            colors=[colour] * len(loop),
+                            curve_type=scene.Curve.CurveType.LINEAR)
+        except Exception as e:
+            EbsSimulateEdge._why = f"curve: {type(e).__name__}: {e}"
+            return False
+        EbsSimulateEdge._why = ""
+        return True
+
+    def _scene(self):
+        """omni.ui.scene 모듈과 SceneView 하나. 못 세우면 None"""
+        try:
+            from omni.ui import scene as sc
+        except Exception as e:
+            EbsSimulateEdge._why = f"no omni.ui.scene: {type(e).__name__}"
+            return None
+        if self._view is not None:
+            return sc
+        window = viewport_window()
+        if window is None:
+            EbsSimulateEdge._why = "no viewport"
+            return None
+        try:
+            self._frame = window.get_frame(EDGE_FRAME)
+            with self._frame:
+                self._view = sc.SceneView()
+        except Exception as e:
+            EbsSimulateEdge._why = f"scene view: {type(e).__name__}: {e}"
+            self._view = None
+            return None
+        return sc
+
+    def _wipe(self) -> None:
+        """그은 것만 비운다"""
+        if self._view is None:
+            return
+        try:
+            self._view.scene.clear()
+        except Exception:
+            pass
+
+
 class EbsSimulateGrip:
     """EBS 앞 공중에 뜬 양방향 화살표. 끌면 EBS 가 좌우로 간다"""
 
@@ -722,7 +826,8 @@ class EbsSimulateGrip:
 
     @classmethod
     def destroy(cls) -> None:
-        """지우고 손을 뗀다. 세워 둔 머티리얼까지 치운다"""
+        """지우고 손을 뗀다. 머티리얼과 외곽선까지 치운다"""
+        EbsSimulateEdge.drop()
         if cls._one is not None:
             cls._one.wipe()
             paint = getattr(cls._one, "_paint", None)
@@ -809,10 +914,64 @@ class EbsSimulateGrip:
                     stage, self._paint._keep(f"{self._root}/bead"),
                     middle, bead, skin, colour)
                 self._paint._show_only(stage)
+            if state == GRIP_HOLD:
+                EbsSimulateEdge.show(
+                    self._edge_points(middle, one, thick, bead, high, wide),
+                    GRIP_COLORS[GRIP_IDLE] + (1.0,))
+            else:
+                EbsSimulateEdge.hide()
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
             return False
         return True
+
+    def _edge_points(self, middle, tip, thick: float, bead: float,
+                     high: float, wide: float):
+        """카메라를 마주 보는 평면에서 기즈모 윤곽을 한 바퀴. 못 잡으면 None"""
+        axis = Gf.Vec3d(*[tip[i] - middle[i] for i in range(3)])
+        span = axis.GetLength()
+        if span <= 1e-9:
+            return None
+        axis = axis.GetNormalized()
+        eye = self._facing(middle)
+        if eye is None:
+            return None
+        perp = Gf.Cross(axis, Gf.Vec3d(*eye))
+        if perp.GetLength() <= 1e-6:
+            return None
+        perp = perp.GetNormalized()
+
+        half = [(span, 0.0), (span - high, wide), (span - high, thick)]
+        meet = math.sqrt(max(bead * bead - thick * thick, 0.0))
+        if meet < span - high:
+            half.append((meet, thick))
+            start = math.asin(min(1.0, thick / bead)) if bead > 1e-9 else 0.0
+            for step in range(1, EDGE_ARC + 1):
+                turn = start + (math.pi * 0.5 - start) * step / EDGE_ARC
+                half.append((bead * math.cos(turn), bead * math.sin(turn)))
+        loop = half + [(-at, off) for at, off in reversed(half[:-1])]
+        loop += [(at, -off) for at, off in reversed(loop[1:-1])]
+
+        spots = []
+        for at, off in loop:
+            here = [middle[i] + axis[i] * at * EDGE_PUSH
+                    + perp[i] * off * EDGE_PUSH for i in range(3)]
+            if self._matrix is not None:
+                here = self._matrix.Transform(Gf.Vec3d(*here))
+            spots.append(tuple(here))
+        return spots
+
+    def _facing(self, middle):
+        """카메라가 있는 쪽. EBS 안 좌표로 준다. 못 구하면 None"""
+        eye = sim().camera_eye()
+        if eye is None:
+            return None
+        if self._matrix is not None:
+            try:
+                eye = self._matrix.GetInverse().Transform(eye)
+            except Exception:
+                return None
+        return tuple(eye[i] - middle[i] for i in range(3))
 
     @staticmethod
     def _back_off(tip, middle, step: float):
@@ -837,7 +996,9 @@ class EbsSimulateGrip:
                 ("ebs:gripFlare", Sdf.ValueTypeNames.Float, GRIP_FLARE),
                 ("ebs:fadeMap", Sdf.ValueTypeNames.String, GRIP_FADE_MAP),
                 ("ebs:fadeFound", Sdf.ValueTypeNames.Bool,
-                 bool(self._fade_map()))):
+                 bool(self._fade_map())),
+                ("ebs:edgeWhy", Sdf.ValueTypeNames.String,
+                 EbsSimulateEdge.why() or "drawn")):
             try:
                 prim.CreateAttribute(name, kind).Set(value)
             except Exception:
