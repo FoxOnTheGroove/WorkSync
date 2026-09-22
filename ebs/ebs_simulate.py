@@ -866,6 +866,7 @@ class EbsSimulate:
         self.drop_skin()
         self._camera.on_rest(None)
         self._shaft.restore()
+        self._shaft.forget()
         self._camera.remove(self._get_stage())
         self._marks().drop_looks()
         self.clear_markers()
@@ -983,6 +984,7 @@ class EbsSimulate:
         """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다"""
         self._begin("init")
         self._shaft.restore()
+        self._shaft.forget()
         self._eqp_boxes = None
         self._bounds = None
         self._stage_index = None
@@ -2968,6 +2970,7 @@ class EbsSimulate:
         self.strip_skin()
         self._camera.on_rest(None)
         self._shaft.restore()
+        self._shaft.forget()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:

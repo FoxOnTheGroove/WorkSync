@@ -18,6 +18,7 @@ SHAFT_BULK   = 3.0
 SHAFT_EPS    = 1e-6
 SHAFT_LOUD   = True
 SHAFT_SHOWN  = 4
+SHAFT_ROOM   = 1.6
 
 
 class EbsSimulateShaft:
@@ -29,6 +30,9 @@ class EbsSimulateShaft:
         self._hidden = set()
         self._on = SHAFT_CULL
         self._tally = {}
+        self._close = None
+        self._reach = 0.0
+        self._for = ()
 
     @property
     def on(self) -> bool:
@@ -46,8 +50,8 @@ class EbsSimulateShaft:
             return "shaft: nothing looked at yet"
         return "shaft: " + ", ".join(
             f"{key} {self._tally[key]}" for key in
-            ("seen", "near", "front", "cover", "bulk", "proxy", "missed",
-             "hid") if self._tally.get(key))
+            ("seen", "close", "near", "front", "cover", "bulk", "proxy",
+             "missed", "hid") if self._tally.get(key))
 
     def enable(self, on: bool) -> bool:
         """컬링을 켜고 끈다. 끄면 끈 것을 전부 되돌린다"""
@@ -62,6 +66,12 @@ class EbsSimulateShaft:
         self._hidden = set()
         self._tally = {}
         return count
+
+    def forget(self) -> None:
+        """미리 담아 둔 이웃 목록을 버린다"""
+        self._close = None
+        self._reach = 0.0
+        self._for = ()
 
     def recull(self) -> int:
         """지금 카메라에서 가리는 것만 끄고 나머지는 켠다"""
@@ -143,17 +153,15 @@ class EbsSimulateShaft:
 
     def _blocking(self, placed, shaft, boxes) -> set:
         """화면에서 대상을 덮고 있는 프림 경로들"""
+        close = self._local(placed[0], boxes)
         rough = self._rough(placed[0], boxes)
-        spare = self._spare()
-        under = tuple(one + "/" for one in spare)
         limit = max(self._across(low, high) for low, high in boxes) * SHAFT_BULK
-        tally = dict.fromkeys(("seen", "near", "front", "cover", "bulk"), 0)
+        tally = dict.fromkeys(("seen", "close", "near", "front", "cover",
+                               "bulk"), 0)
+        tally["seen"] = self._tally.get("seen", 0)
+        tally["close"] = len(close)
         found = set()
-        for path, low, high, _box, _prim, _chain in Collide._stage_boxes(
-                self._sim):
-            tally["seen"] += 1
-            if path in spare or path.startswith(under):
-                continue
+        for path, low, high in close:
             if not self._rough_hit(rough, low, high):
                 continue
             tally["near"] += 1
@@ -170,6 +178,49 @@ class EbsSimulateShaft:
             found.add(path)
         self._tally = tally
         return found
+
+    def _local(self, eye, boxes) -> list:
+        """기둥이 닿을 수 있는 이웃만 미리 담아 둔다. 멀어질 때만 다시 담는다"""
+        middle = [sum(box[at][i] for box in boxes for at in (0, 1))
+                  / (len(boxes) * 2) for i in range(3)]
+        span = max(self._across(low, high) for low, high in boxes) * 0.5
+        want = math.sqrt(sum((eye[i] - middle[i]) ** 2
+                             for i in range(3))) + span
+        mine = tuple(sorted(self._spare()))
+        if self._close is not None and self._for == mine and self._reach >= want:
+            return self._close
+
+        keep = want * SHAFT_ROOM
+        spare = self._spare()
+        under = tuple(one + "/" for one in spare)
+        close, seen = [], 0
+        for entry in Collide._stage_boxes(self._sim):
+            seen += 1
+            path, low, high = entry[0], entry[1], entry[2]
+            if path in spare or path.startswith(under):
+                continue
+            if self._apart(middle, low, high) > keep:
+                continue
+            close.append((path, low, high))
+        self._close = close
+        self._reach = keep
+        self._for = mine
+        self._tally["seen"] = seen
+        if SHAFT_LOUD:
+            print(f"[ebs] shaft: kept {len(close)} of {seen} within "
+                  f"{keep:.1f} of the EBS")
+        return close
+
+    @staticmethod
+    def _apart(spot, low, high) -> float:
+        """그 점에서 상자까지의 거리. 안에 있으면 0"""
+        gap = 0.0
+        for i in range(3):
+            if spot[i] < low[i]:
+                gap += (low[i] - spot[i]) ** 2
+            elif spot[i] > high[i]:
+                gap += (spot[i] - high[i]) ** 2
+        return math.sqrt(gap)
 
     def _spare(self) -> frozenset:
         """절대 안 끄는 경로들"""
