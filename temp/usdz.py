@@ -10,13 +10,30 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(:[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
 def _usd_type_of(v):
-    """JSON 값 -> USD 타입 (단일 값만). bool 은 int 의 하위형이라 먼저 검사."""
+    """JSON 값 -> USD 타입. bool 은 int 의 하위형이라 먼저 검사.
+
+    리스트는 요소가 전부 같은 타입일 때만 배열 타입으로 대응.
+    혼합/빈/중첩 리스트는 미지원(None)으로 취급.
+    """
     if isinstance(v, bool):
         return Sdf.ValueTypeNames.Bool
     if isinstance(v, (int, float)):
         return Sdf.ValueTypeNames.Double
     if isinstance(v, str):
         return Sdf.ValueTypeNames.String
+    if isinstance(v, list):
+        if not v:
+            return None
+        elem_types = {_usd_type_of(e) for e in v}
+        if len(elem_types) != 1 or None in elem_types:
+            return None                      # 혼합/미지원/중첩 리스트
+        elem = elem_types.pop()
+        if elem == Sdf.ValueTypeNames.Bool:
+            return getattr(Sdf.ValueTypeNames, "BoolArray", None)
+        if elem == Sdf.ValueTypeNames.Double:
+            return Sdf.ValueTypeNames.DoubleArray
+        if elem == Sdf.ValueTypeNames.String:
+            return Sdf.ValueTypeNames.StringArray
     return None
 
 
