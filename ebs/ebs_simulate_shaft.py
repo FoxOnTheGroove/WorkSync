@@ -1,15 +1,19 @@
 """카메라와 EBS 사이를 가리는 물체만 골라 끈다."""
 
+import math
+
 from pxr import Sdf, UsdGeom
 
 from .ebs_simulate_shared import OURS
 
 __all__ = ["EbsSimulateShaft", "SHAFT_CULL", "SHAFT_MARGIN", "SHAFT_SLACK",
-           "SHAFT_EPS"]
+           "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS"]
 
 SHAFT_CULL   = True
-SHAFT_MARGIN = 0.05
+SHAFT_MARGIN = 0.02
 SHAFT_SLACK  = 0.05
+SHAFT_COVER  = 0.02
+SHAFT_BULK   = 3.0
 SHAFT_EPS    = 1e-6
 
 VISIBILITY = "visibility"
@@ -23,6 +27,7 @@ class EbsSimulateShaft:
         self._sim = sim
         self._hidden = set()
         self._on = SHAFT_CULL
+        self._tally = {}
 
     @property
     def on(self) -> bool:
@@ -33,6 +38,14 @@ class EbsSimulateShaft:
     def hidden(self) -> frozenset:
         """지금 끄고 있는 경로들"""
         return frozenset(self._hidden)
+
+    def say(self) -> str:
+        """마지막 판정에서 어느 관문이 몇 개를 걸렀나"""
+        if not self._tally:
+            return "shaft: nothing looked at yet"
+        return "shaft: " + ", ".join(f"{key} {self._tally[key]}" for key in
+                                     ("seen", "near", "front", "cover",
+                                      "bulk", "hid") if key in self._tally)
 
     def enable(self, on: bool) -> bool:
         """컬링을 켜고 끈다. 끄면 끈 것을 전부 되돌린다"""
@@ -59,6 +72,11 @@ class EbsSimulateShaft:
         if shaft is None:
             return self.restore()
         return self._apply(self._blocking(placed, shaft, boxes))
+
+    @staticmethod
+    def _across(low, high) -> float:
+        """상자의 대각선 길이"""
+        return math.sqrt(sum((high[i] - low[i]) ** 2 for i in range(3)))
 
     def _targets(self) -> list:
         """가리면 안 되는 것들의 월드 상자. EBS 와 대상 장비"""
@@ -113,21 +131,37 @@ class EbsSimulateShaft:
                 down - SHAFT_MARGIN, up + SHAFT_MARGIN, deep - SHAFT_SLACK)
 
     def _blocking(self, placed, shaft, boxes) -> set:
-        """기둥 안에 통째로 들어온 프림 경로들"""
+        """화면에서 대상을 덮고 있는 프림 경로들"""
         from .ebs_simulate_collide import Collide
 
         rough = self._rough(placed[0], boxes)
         spare = self._spare()
         under = tuple(one + "/" for one in spare)
+        limit = max(self._across(low, high) for low, high in boxes) * SHAFT_BULK
+        tally = dict.fromkeys(("seen", "near", "front", "cover", "bulk",
+                               "hid"), 0)
         found = set()
         for path, low, high, _box, _prim, _chain in Collide._stage_boxes(
                 self._sim):
+            tally["seen"] += 1
             if path in spare or path.startswith(under):
                 continue
             if not self._rough_hit(rough, low, high):
                 continue
-            if self._swallowed(placed, shaft, low, high):
-                found.add(path)
+            tally["near"] += 1
+            covered = self._covers(placed, shaft, low, high)
+            if covered is None:
+                continue
+            tally["front"] += 1
+            if covered < SHAFT_COVER:
+                continue
+            tally["cover"] += 1
+            if self._across(low, high) > limit:
+                tally["bulk"] += 1
+                continue
+            tally["hid"] += 1
+            found.add(path)
+        self._tally = tally
         return found
 
     def _spare(self) -> frozenset:
@@ -160,17 +194,25 @@ class EbsSimulateShaft:
         one, two = rough
         return all(low[i] <= two[i] and high[i] >= one[i] for i in range(3))
 
-    def _swallowed(self, placed, shaft, low, high) -> bool:
-        """여덟 꼭짓점이 모두 기둥 안이고 대상보다 앞인가"""
+    def _covers(self, placed, shaft, low, high):
+        """대상보다 앞이면 대상 화면 넓이의 몇 할을 덮나. 앞이 아니면 None"""
         left, right, down, up, deep = shaft
+        one = two = three = four = None
         for spot in self._corners(low, high):
             across, tall, away = self._camera_space(placed, spot)
             if away <= SHAFT_EPS or away >= deep:
-                return False
+                return None
             u, v = across / away, tall / away
-            if u < left or u > right or v < down or v > up:
-                return False
-        return True
+            one = u if one is None else min(one, u)
+            two = u if two is None else max(two, u)
+            three = v if three is None else min(three, v)
+            four = v if four is None else max(four, v)
+        wide = min(right, two) - max(left, one)
+        tall = min(up, four) - max(down, three)
+        if wide <= 0.0 or tall <= 0.0:
+            return 0.0
+        room = (right - left) * (up - down)
+        return wide * tall / room if room > SHAFT_EPS else 0.0
 
     def _apply(self, want: set) -> int:
         """달라진 것만 끄고 켠다"""

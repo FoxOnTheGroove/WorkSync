@@ -79,7 +79,7 @@ class EbsSimulateService:
 
     @classmethod
     def cull_shaft(cls, on):
-        """카메라와 EBS 사이를 가리는 프림 끄기"""
+        """카메라와 EBS 사이를 가리는 프림 끄기. 관문별 개수를 돌려준다"""
         return instance().cull_shaft(on)
 
     @classmethod

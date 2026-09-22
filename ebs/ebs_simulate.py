@@ -493,11 +493,12 @@ class EbsSimulate:
         self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
         return moved
 
-    def cull_shaft(self, on: bool) -> bool:
-        """차폐 기둥 컬링을 켜고 끈다. 끄면 가려 둔 것을 되돌린다"""
-        if self._shaft.enable(on):
-            self._shaft.recull()
-        return self._shaft.on
+    def cull_shaft(self, on: bool) -> str:
+        """차폐 기둥 컬링을 켜고 끈다. 어느 관문이 몇 개를 걸렀는지 돌려준다"""
+        if not self._shaft.enable(on):
+            return "shaft: off, everything back"
+        self._shaft.recull()
+        return self._shaft.say()
 
     def set_near_span(self, span: float) -> float:
         """근평면을 EBS 폭 절반의 몇 배 앞에 둘지"""
@@ -1446,7 +1447,7 @@ class EbsSimulate:
             told = self._camera.place(stage, self._framed_box(), facing)
         if told:
             self._note(told)
-            self._note(f"shaft cull hides {len(self._shaft.hidden)} prim(s)")
+            self._note(self._shaft.say())
         return self._payload(bool(told), "Camera on the EBS" if told
                              else "Camera focus failed")
 
