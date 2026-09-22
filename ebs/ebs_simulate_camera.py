@@ -97,7 +97,7 @@ class EbsSimulateCamera:
         self._from = None
         self._home = None
         self._box = None
-        self._only = ""
+        self._only = ()
         self._span = NEAR_SPAN
         self._held = False
         self._watcher = None
@@ -106,12 +106,16 @@ class EbsSimulateCamera:
         """마우스 구독 순서. 낮을수록 먼저 본다"""
         self._watcher = grip
 
-    def pick_only(self, prim) -> None:
-        """더블클릭을 받아 줄 프림 하나. 그 아래 자식도 같이 받는다"""
-        try:
-            self._only = str(prim.GetPath()) if prim is not None else ""
-        except Exception:
-            self._only = ""
+    def pick_only(self, *prims) -> None:
+        """더블클릭을 받아 줄 프림들. 그 아래 자식도 같이 받는다"""
+        paths = []
+        for prim in prims:
+            try:
+                if prim is not None and prim.IsValid():
+                    paths.append(str(prim.GetPath()))
+            except Exception:
+                continue
+        self._only = tuple(paths)
 
     def hold(self, on: bool) -> None:
         """궤도 조작을 잠깐 놓는다"""
@@ -173,7 +177,7 @@ class EbsSimulateCamera:
         self._drop()
         self._orbit = False
         self._interest = None
-        self._only = ""
+        self._only = ()
         if stage is None:
             return
         viewport = self.viewport()
@@ -428,8 +432,9 @@ class EbsSimulateCamera:
         path = str(path)
         if path in OURS or path.startswith(tuple(OURS_UNDER)):
             return
-        if self._only and not (path == self._only
-                               or path.startswith(self._only + "/")):
+        if self._only and not (path in self._only
+                               or path.startswith(
+                                   tuple(one + "/" for one in self._only))):
             return
         self._look_at(Gf.Vec3d(position[0], position[1], position[2]))
 
