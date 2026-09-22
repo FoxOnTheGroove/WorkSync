@@ -78,6 +78,11 @@ class EbsSimulateService:
         return instance().set_near_span(span)
 
     @classmethod
+    def cull_shaft(cls, on):
+        """카메라와 EBS 사이를 가리는 프림 끄기"""
+        return instance().cull_shaft(on)
+
+    @classmethod
     def set_min_gaps(cls, side, ceiling):
         """tight 로 볼 좌우와 천장의 최소 간격"""
         return instance().set_min_gaps(side, ceiling)

@@ -13,6 +13,7 @@ import omni.usd
 from .ebs_simulate_camera import EbsSimulateCamera
 from .ebs_simulate_shared import *
 from .ebs_simulate_collide import EbsSimulateCollide as Collide
+from .ebs_simulate_shaft import EbsSimulateShaft
 
 __all__ = ["EbsSimulate", "instance", "forget"]
 
@@ -216,6 +217,7 @@ class EbsSimulate:
         self._port_rail_z: float = 0.0
         self._face_planes: dict = {}
         self._camera = EbsSimulateCamera()
+        self._shaft = EbsSimulateShaft(self)
         self._precision: str = PRECISION_TRI
         self._timings: list = []
         self._notes: list = []
@@ -490,6 +492,12 @@ class EbsSimulate:
         moved = Gf.Vec3d(*[target[i] + right[i] * paces for i in range(3)])
         self._note(f"nudged {self._nudge:+.3f} along the EBS right axis")
         return moved
+
+    def cull_shaft(self, on: bool) -> bool:
+        """차폐 기둥 컬링을 켜고 끈다. 끄면 가려 둔 것을 되돌린다"""
+        if self._shaft.enable(on):
+            self._shaft.recull()
+        return self._shaft.on
 
     def set_near_span(self, span: float) -> float:
         """근평면을 EBS 폭 절반의 몇 배 앞에 둘지"""
@@ -855,6 +863,8 @@ class EbsSimulate:
         """그린 것, 카메라, 색인, 캐시를 전부 놓는다"""
         self.strip_skin()
         self.drop_skin()
+        self._camera.on_rest(None)
+        self._shaft.restore()
         self._camera.remove(self._get_stage())
         self._marks().drop_looks()
         self.clear_markers()
@@ -971,6 +981,7 @@ class EbsSimulate:
     def init(self) -> dict:
         """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다"""
         self._begin("init")
+        self._shaft.restore()
         self._eqp_boxes = None
         self._bounds = None
         self._stage_index = None
@@ -1430,10 +1441,12 @@ class EbsSimulate:
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
         self._camera.pick_only(self._target["equipment"], ebs)
+        self._camera.on_rest(self._shaft.recull)
         with self._phase("camera"), self._stage_timer("camera focus"):
             told = self._camera.place(stage, self._framed_box(), facing)
         if told:
             self._note(told)
+            self._note(f"shaft cull hides {len(self._shaft.hidden)} prim(s)")
         return self._payload(bool(told), "Camera on the EBS" if told
                              else "Camera focus failed")
 
@@ -2950,8 +2963,10 @@ class EbsSimulate:
 
 
     def release_camera(self) -> None:
-        """카메라를 놓고 갈아입힌 머티리얼을 걷는다"""
+        """카메라를 놓고 갈아입힌 머티리얼과 가려 둔 프림을 걷는다"""
         self.strip_skin()
+        self._camera.on_rest(None)
+        self._shaft.restore()
         self._camera.release(self._get_stage())
 
     def refresh_camera(self) -> dict:

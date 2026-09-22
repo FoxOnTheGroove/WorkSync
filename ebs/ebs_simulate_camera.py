@@ -98,6 +98,8 @@ class EbsSimulateCamera:
         self._home = None
         self._box = None
         self._only = ()
+        self._placed = None
+        self._rested = None
         self._span = NEAR_SPAN
         self._held = False
         self._watcher = None
@@ -105,6 +107,23 @@ class EbsSimulateCamera:
     def watch(self, grip) -> None:
         """마우스 구독 순서. 낮을수록 먼저 본다"""
         self._watcher = grip
+
+    def on_rest(self, fn) -> None:
+        """카메라가 멎을 때마다 부를 것. None 이면 아무도 안 부른다"""
+        self._rested = fn
+
+    def placed(self):
+        """마지막으로 쓴 (눈, 좌우축, 위아래축, 앞뒤축). 아직이면 None"""
+        return self._placed
+
+    def _rest(self) -> None:
+        """드래그 중이 아닐 때만 멎었다고 알린다"""
+        if self._from is not None or self._rested is None:
+            return
+        try:
+            self._rested()
+        except Exception as e:
+            print(f"[ebs] could not settle after the camera moved: {e}")
 
     def pick_only(self, *prims) -> None:
         """더블클릭을 받아 줄 프림들. 그 아래 자식도 같이 받는다"""
@@ -178,6 +197,7 @@ class EbsSimulateCamera:
         self._orbit = False
         self._interest = None
         self._only = ()
+        self._placed = None
         if stage is None:
             return
         viewport = self.viewport()
@@ -387,6 +407,7 @@ class EbsSimulateCamera:
         if self._watcher is not None:
             self._watcher.release()
         self._from = self._at = None
+        self._rest()
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
         """더블클릭한 자리에 무엇이 있는지 뷰포트에 묻는다"""
@@ -599,3 +620,5 @@ class EbsSimulateCamera:
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
+        self._placed = (tuple(eye), tuple(x_cam), tuple(y_cam), tuple(z_cam))
+        self._rest()
