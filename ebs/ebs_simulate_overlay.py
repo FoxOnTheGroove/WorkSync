@@ -44,6 +44,7 @@ EDGE_FRAME = "ebs_simulate_edge"
 EDGE_ARC   = 5
 EDGE_PUSH  = 1.06
 EDGE_WIDE  = 2.0
+EDGE_FLIP  = True
 GRIP_PICK  = 14.0
 
 GRIP_STRETCH  = 1.0
@@ -766,12 +767,16 @@ class EbsSimulateEdge:
         except Exception as e:
             EbsSimulateEdge._why = f"curve: {type(e).__name__}: {e}"
             return False
-        EbsSimulateEdge._why = f"drawn {self._size()} {len(loop)}pt"
+        EbsSimulateEdge._why = (f"drawn {self._size()} {len(loop)}pt "
+                                f"flip={EDGE_FLIP}")
         return True
 
     @staticmethod
     def _flat(matrix):
-        """Gf 행렬을 scene 이 받는 실수 열여섯 개로 편다"""
+        """Gf 행렬을 실수 열여섯 개로 편다. Gf 는 행 우선, scene 은 열 우선"""
+        if EDGE_FLIP:
+            return [float(matrix[row][col])
+                    for col in range(4) for row in range(4)]
         return [float(matrix[row][col]) for row in range(4) for col in range(4)]
 
     def _size(self) -> str:
