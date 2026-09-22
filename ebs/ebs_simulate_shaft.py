@@ -4,6 +4,7 @@ import math
 
 from pxr import Usd, UsdGeom
 
+from .ebs_simulate_collide import EbsSimulateCollide as Collide
 from .ebs_simulate_shared import OURS
 
 __all__ = ["EbsSimulateShaft", "SHAFT_CULL", "SHAFT_MARGIN", "SHAFT_SLACK",
@@ -142,8 +143,6 @@ class EbsSimulateShaft:
 
     def _blocking(self, placed, shaft, boxes) -> set:
         """화면에서 대상을 덮고 있는 프림 경로들"""
-        from .ebs_simulate_collide import Collide
-
         rough = self._rough(placed[0], boxes)
         spare = self._spare()
         under = tuple(one + "/" for one in spare)
