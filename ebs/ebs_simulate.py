@@ -1429,6 +1429,7 @@ class EbsSimulate:
         ebs = self._target["ebs"]
         anchor = self._target["anchor"]
         facing = anchor if (anchor is not None and anchor.IsValid()) else ebs
+        self._camera.pick_only(self._target["equipment"])
         with self._phase("camera"), self._stage_timer("camera focus"):
             told = self._camera.place(stage, self._framed_box(), facing)
         if told:
