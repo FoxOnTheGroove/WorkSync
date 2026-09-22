@@ -746,8 +746,13 @@ class EbsSimulateEdge:
         api = getattr(window, "viewport_api", None) if window else None
         try:
             model = self._view.model
-            model.view = api.view
-            model.projection = api.projection
+            for name, matrix in (("view", api.view),
+                                 ("projection", api.projection)):
+                flat = self._flat(matrix)
+                try:
+                    model.set_floats(name, flat)
+                except Exception:
+                    setattr(model, name, flat)
         except Exception as e:
             EbsSimulateEdge._why = f"model: {type(e).__name__}: {e}"
             return False
@@ -763,6 +768,11 @@ class EbsSimulateEdge:
             return False
         EbsSimulateEdge._why = f"drawn {self._size()} {len(loop)}pt"
         return True
+
+    @staticmethod
+    def _flat(matrix):
+        """Gf 행렬을 scene 이 받는 실수 열여섯 개로 편다"""
+        return [float(matrix[row][col]) for row in range(4) for col in range(4)]
 
     def _size(self) -> str:
         """SceneView 를 담은 프레임 크기. 0 이면 아무것도 안 보인다"""
