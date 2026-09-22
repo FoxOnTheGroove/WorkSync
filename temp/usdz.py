@@ -78,7 +78,7 @@ def _stamp_and_export(root_usd, table):
     if not prim:
         return None, "미적용 (최상위 프림 없음)"
 
-    applied, declared, skipped = 0, 0, 0
+    applied, nulls, skipped = [], 0, 0
     for key, value in table.items():
         if not _IDENT_RE.match(key):            # 프로퍼티 이름으로 쓸 수 없는 키
             skipped += 1
@@ -88,23 +88,23 @@ def _stamp_and_export(root_usd, table):
             # (소비 측은 attr.HasAuthoredValue() 로 구분)
             # JSON null 에는 타입 정보가 없어 Double 로 선언한다.
             prim.CreateAttribute(key, Sdf.ValueTypeNames.Double, custom=True)
-            declared += 1
+            nulls += 1
             continue
         type_name = _usd_type_of(value)
         if type_name is None:                   # 미지원 타입 (배열/객체)
             skipped += 1
             continue
         prim.CreateAttribute(key, type_name, custom=True).Set(value)
-        applied += 1
+        applied.append(key)
 
     base, ext = os.path.splitext(root_usd)
     stamped = f"{base}.__stamped_{os.getpid()}__{ext}"
     stage.GetRootLayer().Export(stamped)
 
-    msg = f"적용 {applied}건 -> {prim.GetPath()}"
+    msg = f"적용 {len(applied)}건 [{', '.join(applied)}] -> {prim.GetPath()}"
     extra = []
-    if declared:
-        extra.append(f"값없음 {declared}건")
+    if nulls:
+        extra.append(f"값없음 {nulls}건")
     if skipped:
         extra.append(f"스킵 {skipped}건")
     if extra:
