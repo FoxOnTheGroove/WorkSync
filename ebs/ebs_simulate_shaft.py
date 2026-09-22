@@ -8,7 +8,8 @@ from .ebs_simulate_collide import EbsSimulateCollide as Collide
 from .ebs_simulate_shared import GRID_CELLS, OURS, SKIN_ROOT
 
 __all__ = ["EbsSimulateShaft", "SHAFT_CULL", "SHAFT_MARGIN", "SHAFT_SLACK",
-           "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS", "SHAFT_LOUD"]
+           "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS", "SHAFT_LOUD",
+           "GLASS_PATH", "GLASS_CUT"]
 
 SHAFT_CULL   = True
 SHAFT_MARGIN = 0.02
@@ -22,6 +23,7 @@ SHAFT_ROOM   = 1.6
 
 GLASS_PATH = SKIN_ROOT + "/M_shaft"
 BINDING = "material:binding"
+GLASS_CUT = 0.5
 
 
 class EbsSimulateShaft:
@@ -332,7 +334,7 @@ class EbsSimulateShaft:
         return len(self._hidden)
 
     def _glass(self, stage):
-        """속이 다 비치는 머티리얼 하나. 없으면 세션 레이어에 세운다"""
+        """조각을 아예 버리는 머티리얼 하나. 불투명도 0 이 문턱 아래라 정렬을 안 탄다"""
         standing = stage.GetPrimAtPath(GLASS_PATH)
         if standing is not None and standing.IsValid():
             return UsdShade.Material(standing)
@@ -344,6 +346,8 @@ class EbsSimulateShaft:
             preview.CreateInput("diffuseColor",
                                 Sdf.ValueTypeNames.Color3f).Set(dark)
             preview.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.0)
+            preview.CreateInput("opacityThreshold",
+                                Sdf.ValueTypeNames.Float).Set(GLASS_CUT)
             material.CreateSurfaceOutput().ConnectToSource(
                 preview.ConnectableAPI(), "surface")
 
@@ -359,7 +363,9 @@ class EbsSimulateShaft:
             shader.CreateInput("opacity_constant",
                                Sdf.ValueTypeNames.Float).Set(0.0)
             shader.CreateInput("opacity_threshold",
-                               Sdf.ValueTypeNames.Float).Set(0.0)
+                               Sdf.ValueTypeNames.Float).Set(GLASS_CUT)
+            shader.CreateInput("opacity_mode",
+                               Sdf.ValueTypeNames.Int).Set(0)
             material.CreateSurfaceOutput("mdl").ConnectToSource(
                 shader.ConnectableAPI(), "out")
         return material
