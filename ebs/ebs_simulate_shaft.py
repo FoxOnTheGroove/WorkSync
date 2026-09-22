@@ -1,11 +1,11 @@
-"""카메라와 EBS 사이를 가리는 물체만 골라 끈다."""
+"""카메라와 EBS 사이를 가리는 물체만 골라 비치게 한다."""
 
 import math
 
-from pxr import Usd, UsdGeom
+from pxr import Gf, Sdf, Usd, UsdShade
 
 from .ebs_simulate_collide import EbsSimulateCollide as Collide
-from .ebs_simulate_shared import GRID_CELLS, OURS
+from .ebs_simulate_shared import GRID_CELLS, OURS, SKIN_ROOT
 
 __all__ = ["EbsSimulateShaft", "SHAFT_CULL", "SHAFT_MARGIN", "SHAFT_SLACK",
            "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS", "SHAFT_LOUD"]
@@ -20,12 +20,15 @@ SHAFT_LOUD   = True
 SHAFT_SHOWN  = 4
 SHAFT_ROOM   = 1.6
 
+GLASS_PATH = SKIN_ROOT + "/M_shaft"
+BINDING = "material:binding"
+
 
 class EbsSimulateShaft:
-    """눈에서 EBS 까지 뻗은 기둥 안에서 EBS 를 덮는 프림을 세션 레이어에서 끈다"""
+    """눈에서 EBS 까지 뻗은 절두체 안에서 EBS 를 덮는 프림에 비치는 머티리얼을 물린다"""
 
     def __init__(self, sim):
-        """끈 것을 적어 둘 자리만 비워 둔다"""
+        """물린 것을 적어 둘 자리만 비워 둔다"""
         self._sim = sim
         self._hidden = set()
         self._on = SHAFT_CULL
@@ -42,7 +45,7 @@ class EbsSimulateShaft:
 
     @property
     def hidden(self) -> frozenset:
-        """지금 끄고 있는 경로들"""
+        """지금 비치게 해 둔 경로들"""
         return frozenset(self._hidden)
 
     def say(self) -> str:
@@ -55,14 +58,14 @@ class EbsSimulateShaft:
              "proxy", "missed", "hid") if self._tally.get(key))
 
     def enable(self, on: bool) -> bool:
-        """컬링을 켜고 끈다. 끄면 끈 것을 전부 되돌린다"""
+        """컬링을 켜고 끈다. 끄면 물려 둔 것을 전부 뗀다"""
         self._on = bool(on)
         if not self._on:
             self.restore()
         return self._on
 
     def restore(self) -> int:
-        """끈 것을 전부 도로 켠다"""
+        """물려 둔 것을 전부 뗀다"""
         count = self._clear(self._hidden)
         self._hidden = set()
         self._tally = {}
@@ -76,7 +79,7 @@ class EbsSimulateShaft:
         self._for = ()
 
     def recull(self) -> int:
-        """지금 카메라에서 가리는 것만 끄고 나머지는 켠다"""
+        """지금 카메라에서 가리는 것만 비치게 하고 나머지는 되돌린다"""
         if not self._on:
             return 0
         placed = self._sim._camera.placed()
@@ -91,7 +94,7 @@ class EbsSimulateShaft:
         return self._apply(self._blocking(placed, shaft, boxes))
 
     def _quit(self, why: str) -> int:
-        """기둥을 못 세운 이유를 알리고 끈 것을 되돌린다"""
+        """절두체를 못 세운 이유를 알리고 물려 둔 것을 뗀다"""
         if SHAFT_LOUD:
             print(f"[ebs] shaft: {why}")
         return self.restore()
@@ -185,7 +188,7 @@ class EbsSimulateShaft:
         return found
 
     def _local(self, eye, boxes) -> list:
-        """기둥이 닿을 수 있는 이웃만 미리 담아 둔다. 멀어질 때만 다시 담는다"""
+        """절두체가 닿을 수 있는 이웃만 미리 담아 둔다. 멀어질 때만 다시 담는다"""
         middle = [sum(box[at][i] for box in boxes for at in (0, 1))
                   / (len(boxes) * 2) for i in range(3)]
         span = max(self._across(low, high) for low, high in boxes) * 0.5
@@ -267,7 +270,7 @@ class EbsSimulateShaft:
         return math.sqrt(gap)
 
     def _spare(self) -> frozenset:
-        """절대 안 끄는 경로들"""
+        """절대 안 건드리는 경로들"""
         target = self._sim._target or {}
         keep = set(OURS)
         for key in ("ebs", "equipment"):
@@ -317,7 +320,7 @@ class EbsSimulateShaft:
         return wide * tall / room if room > SHAFT_EPS else 0.0
 
     def _apply(self, want: set) -> int:
-        """달라진 것만 끄고 켠다"""
+        """달라진 것만 물리고 뗀다"""
         self._clear(self._hidden - want)
         wrote = self._mask(want - self._hidden)
         self._hidden = (self._hidden & want) | wrote
@@ -325,14 +328,48 @@ class EbsSimulateShaft:
         if SHAFT_LOUD:
             print("[ebs] " + self.say())
             for path in sorted(self._hidden)[:SHAFT_SHOWN]:
-                print(f"[ebs] shaft hides {path}")
+                print(f"[ebs] shaft clears {path}")
         return len(self._hidden)
 
+    def _glass(self, stage):
+        """속이 다 비치는 머티리얼 하나. 없으면 세션 레이어에 세운다"""
+        standing = stage.GetPrimAtPath(GLASS_PATH)
+        if standing is not None and standing.IsValid():
+            return UsdShade.Material(standing)
+        dark = Gf.Vec3f(0.0, 0.0, 0.0)
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            material = UsdShade.Material.Define(stage, GLASS_PATH)
+            preview = UsdShade.Shader.Define(stage, GLASS_PATH + "/shader")
+            preview.CreateIdAttr("UsdPreviewSurface")
+            preview.CreateInput("diffuseColor",
+                                Sdf.ValueTypeNames.Color3f).Set(dark)
+            preview.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.0)
+            material.CreateSurfaceOutput().ConnectToSource(
+                preview.ConnectableAPI(), "surface")
+
+            shader = UsdShade.Shader.Define(stage, GLASS_PATH + "/mdl")
+            shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
+            shader.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
+            shader.CreateInput("diffuse_color_constant",
+                               Sdf.ValueTypeNames.Color3f).Set(dark)
+            shader.CreateInput("enable_emission",
+                               Sdf.ValueTypeNames.Bool).Set(False)
+            shader.CreateInput("enable_opacity",
+                               Sdf.ValueTypeNames.Bool).Set(True)
+            shader.CreateInput("opacity_constant",
+                               Sdf.ValueTypeNames.Float).Set(0.0)
+            shader.CreateInput("opacity_threshold",
+                               Sdf.ValueTypeNames.Float).Set(0.0)
+            material.CreateSurfaceOutput("mdl").ConnectToSource(
+                shader.ConnectableAPI(), "out")
+        return material
+
     def _mask(self, paths) -> set:
-        """끌 수 있는 것만 끄고, 실제로 꺼진 경로를 돌려준다"""
+        """비치는 머티리얼을 물린다. 실제로 물린 경로만 돌려준다"""
         stage = self._sim._get_stage()
         if stage is None or not paths:
             return set()
+        glass = self._glass(stage)
         proxy, missed, done = 0, 0, set()
         with Usd.EditContext(stage, stage.GetSessionLayer()):
             for path in paths:
@@ -343,42 +380,29 @@ class EbsSimulateShaft:
                 if prim.IsInstanceProxy():
                     proxy += 1
                     continue
-                imageable = UsdGeom.Imageable(prim)
-                if not imageable:
-                    missed += 1
-                    continue
                 try:
-                    imageable.CreateVisibilityAttr().Set(
-                        UsdGeom.Tokens.invisible)
+                    UsdShade.MaterialBindingAPI.Apply(prim).Bind(glass)
                 except Exception:
                     missed += 1
                     continue
-                self._sim._visible[path] = True
                 done.add(path)
         self._tally["proxy"] = self._tally.get("proxy", 0) + proxy
         self._tally["missed"] = self._tally.get("missed", 0) + missed
         return done
 
     def _clear(self, paths) -> int:
-        """세션 레이어에 써 둔 가시성만 걷는다. 다른 레이어 의견은 안 건드린다"""
+        """세션 레이어에 물려 둔 머티리얼만 뗀다. 원래 머티리얼은 안 건드린다"""
         stage = self._sim._get_stage()
         if stage is None or not paths:
             return 0
+        layer = stage.GetSessionLayer()
         done = 0
-        with Usd.EditContext(stage, stage.GetSessionLayer()):
+        with Sdf.ChangeBlock():
             for path in paths:
-                prim = stage.GetPrimAtPath(path)
-                self._sim._visible.pop(path, None)
-                if prim is None or not prim.IsValid():
+                spec = layer.GetPrimAtPath(path)
+                if spec is None:
                     continue
-                imageable = UsdGeom.Imageable(prim)
-                if not imageable:
-                    continue
-                try:
-                    attribute = imageable.GetVisibilityAttr()
-                    if attribute:
-                        attribute.Clear()
+                if BINDING in spec.relationships:
+                    del spec.relationships[BINDING]
                     done += 1
-                except Exception:
-                    continue
         return done
