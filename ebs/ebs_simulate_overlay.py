@@ -789,7 +789,7 @@ class EbsSimulateGrip:
                                              1.0, GRIP_EMISSION)
                 for name, tip in (("a", one), ("b", two)):
                     base = self._back_off(tip, middle, high * 0.5)
-                    near = self._back_off(middle, tip, bead * 2.0)
+                    near = self._back_off(middle, tip, bead * 3.0)
                     self._paint._tube(
                         stage,
                         self._paint._keep(f"{self._root}/shaft_{name}"),
@@ -1405,7 +1405,7 @@ class EbsSimulateMarks:
     @staticmethod
     def _tube(stage, path: str, start, end, radius: float, material,
               colour) -> bool:
-        """양 끝을 잇는 관 하나. 양 끝은 원뿔이 덮으니 안 막는다"""
+        """양 끝을 잇는 관 하나. 양 끝 뚜껑까지 덮어 속이 안 보인다"""
         along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
         span = along.GetLength()
         if span <= 1e-9:
@@ -1430,6 +1430,10 @@ class EbsSimulateMarks:
             turn = (ring + 1) % GRIP_RINGS
             counts.append(4)
             indices += [ring, turn, GRIP_RINGS + turn, GRIP_RINGS + ring]
+        counts.append(GRIP_RINGS)
+        indices += list(reversed(range(GRIP_RINGS)))
+        counts.append(GRIP_RINGS)
+        indices += list(range(GRIP_RINGS, GRIP_RINGS * 2))
 
         mesh = UsdGeom.Mesh.Define(stage, path)
         mesh.CreatePointsAttr(Vt.Vec3fArray(points))
