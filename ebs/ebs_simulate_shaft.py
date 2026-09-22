@@ -408,7 +408,11 @@ class EbsSimulateShaft:
                 spec = layer.GetPrimAtPath(path)
                 if spec is None:
                     continue
-                if BINDING in spec.relationships:
-                    del spec.relationships[BINDING]
-                    done += 1
+                try:
+                    worn = spec.relationships.get(BINDING)
+                    if worn is not None:
+                        spec.RemoveProperty(worn)
+                        done += 1
+                except Exception as e:
+                    print(f"[ebs] shaft could not unbind {path}: {e}")
         return done
