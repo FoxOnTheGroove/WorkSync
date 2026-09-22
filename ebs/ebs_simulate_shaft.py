@@ -5,7 +5,7 @@ import math
 from pxr import Usd, UsdGeom
 
 from .ebs_simulate_collide import EbsSimulateCollide as Collide
-from .ebs_simulate_shared import OURS
+from .ebs_simulate_shared import GRID_CELLS, OURS
 
 __all__ = ["EbsSimulateShaft", "SHAFT_CULL", "SHAFT_MARGIN", "SHAFT_SLACK",
            "SHAFT_COVER", "SHAFT_BULK", "SHAFT_EPS", "SHAFT_LOUD"]
@@ -31,6 +31,7 @@ class EbsSimulateShaft:
         self._on = SHAFT_CULL
         self._tally = {}
         self._close = None
+        self._grid = None
         self._reach = 0.0
         self._for = ()
 
@@ -50,8 +51,8 @@ class EbsSimulateShaft:
             return "shaft: nothing looked at yet"
         return "shaft: " + ", ".join(
             f"{key} {self._tally[key]}" for key in
-            ("seen", "close", "near", "front", "cover", "bulk", "proxy",
-             "missed", "hid") if self._tally.get(key))
+            ("seen", "close", "cells", "near", "front", "cover", "bulk",
+             "proxy", "missed", "hid") if self._tally.get(key))
 
     def enable(self, on: bool) -> bool:
         """컬링을 켜고 끈다. 끄면 끈 것을 전부 되돌린다"""
@@ -68,8 +69,9 @@ class EbsSimulateShaft:
         return count
 
     def forget(self) -> None:
-        """미리 담아 둔 이웃 목록을 버린다"""
+        """미리 담아 둔 이웃 목록과 격자를 버린다"""
         self._close = None
+        self._grid = None
         self._reach = 0.0
         self._for = ()
 
@@ -156,12 +158,15 @@ class EbsSimulateShaft:
         close = self._local(placed[0], boxes)
         rough = self._rough(placed[0], boxes)
         limit = max(self._across(low, high) for low, high in boxes) * SHAFT_BULK
-        tally = dict.fromkeys(("seen", "close", "near", "front", "cover",
-                               "bulk"), 0)
+        tally = dict.fromkeys(("seen", "close", "cells", "near", "front",
+                               "cover", "bulk"), 0)
         tally["seen"] = self._tally.get("seen", 0)
         tally["close"] = len(close)
+        asked = self._cells_in(rough)
+        tally["cells"] = len(asked)
         found = set()
-        for path, low, high in close:
+        for at in asked:
+            path, low, high = close[at]
             if not self._rough_hit(rough, low, high):
                 continue
             tally["near"] += 1
@@ -203,13 +208,52 @@ class EbsSimulateShaft:
                 continue
             close.append((path, low, high))
         self._close = close
+        self._grid = self._sift(close)
         self._reach = keep
         self._for = mine
         self._tally["seen"] = seen
         if SHAFT_LOUD:
+            cells = len(self._grid[0]) if self._grid else 0
             print(f"[ebs] shaft: kept {len(close)} of {seen} within "
-                  f"{keep:.1f} of the EBS")
+                  f"{keep:.1f} of the EBS, {cells} cell(s)")
         return close
+
+    @staticmethod
+    def _sift(close) -> tuple:
+        """이웃을 격자 칸에 나눠 담는다. 칸마다 자리 번호만"""
+        if not close:
+            return {}, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 1
+        low = [min(one[1][i] for one in close) for i in range(3)]
+        high = [max(one[2][i] for one in close) for i in range(3)]
+        spread = max(1, min(GRID_CELLS, int(round(len(close) ** (1.0 / 3.0)))))
+        step = [max((high[i] - low[i]) / spread, 1e-6) for i in range(3)]
+        grid = {}
+        for at, one in enumerate(close):
+            for cell in EbsSimulateShaft._cells(one[1], one[2], low, step,
+                                                spread):
+                grid.setdefault(cell, []).append(at)
+        return grid, tuple(low), tuple(step), spread
+
+    @staticmethod
+    def _cells(low, high, origin, step, spread) -> list:
+        """그 상자가 걸치는 격자 칸들"""
+        spans = []
+        for i in range(3):
+            first = int((low[i] - origin[i]) / step[i])
+            last = int((high[i] - origin[i]) / step[i])
+            spans.append(range(max(0, min(first, spread - 1)),
+                               max(0, min(last, spread - 1)) + 1))
+        return [(x, y, z) for x in spans[0] for y in spans[1] for z in spans[2]]
+
+    def _cells_in(self, rough) -> list:
+        """절두체 상자가 걸치는 칸에 든 이웃 자리 번호들"""
+        if not self._grid or not self._close:
+            return list(range(len(self._close or ())))
+        grid, origin, step, spread = self._grid
+        found = set()
+        for cell in self._cells(rough[0], rough[1], origin, step, spread):
+            found.update(grid.get(cell, ()))
+        return sorted(found)
 
     @staticmethod
     def _apart(spot, low, high) -> float:
