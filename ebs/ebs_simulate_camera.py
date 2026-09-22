@@ -404,11 +404,13 @@ class EbsSimulateCamera:
         self._from = (0.0, 0.0)
 
     def _end_drag(self) -> None:
-        """드래그 상태를 놓는다"""
+        """드래그 상태를 놓는다. 실제로 끈 뒤에만 멎었다고 알린다"""
         if self._watcher is not None:
             self._watcher.release()
+        turned = self._from is not None and self._from != (0.0, 0.0)
         self._from = self._at = None
-        self._rest()
+        if turned:
+            self._rest()
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
         """더블클릭한 자리에 무엇이 있는지 뷰포트에 묻는다"""
