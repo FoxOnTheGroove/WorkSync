@@ -3,14 +3,13 @@ import math
 from pxr import Usd, UsdGeom, Sdf, Gf
 
 __all__ = ["EbsSimulateCamera", "CAMERA_PATH", "CAMERA_BACK",
-           "CAMERA_NEAR", "CAMERA_FAR", "NEAR_CULL"]
+           "CAMERA_NEAR", "CAMERA_FAR"]
 
 CAMERA_PATH = "/EbsCamera"
 CAMERA_BACK = 18.0
 CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
-NEAR_SPAN   = 0.0
-NEAR_CULL   = False
+NEAR_SPAN   = 2.5
 
 FOCAL      = 50.0
 APERTURE_H = 20.955
@@ -99,8 +98,6 @@ class EbsSimulateCamera:
         self._home = None
         self._box = None
         self._only = ()
-        self._placed = None
-        self._rested = None
         self._span = NEAR_SPAN
         self._held = False
         self._watcher = None
@@ -108,23 +105,6 @@ class EbsSimulateCamera:
     def watch(self, grip) -> None:
         """마우스 구독 순서. 낮을수록 먼저 본다"""
         self._watcher = grip
-
-    def on_rest(self, fn) -> None:
-        """카메라가 멎을 때마다 부를 것. None 이면 아무도 안 부른다"""
-        self._rested = fn
-
-    def placed(self):
-        """마지막으로 쓴 (눈, 좌우축, 위아래축, 앞뒤축). 아직이면 None"""
-        return self._placed
-
-    def _rest(self) -> None:
-        """드래그 중이 아닐 때만 멎었다고 알린다"""
-        if self._from is not None or self._rested is None:
-            return
-        try:
-            self._rested()
-        except Exception as e:
-            print(f"[ebs] could not settle after the camera moved: {e}")
 
     def pick_only(self, *prims) -> None:
         """더블클릭을 받아 줄 프림들. 그 아래 자식도 같이 받는다"""
@@ -198,7 +178,6 @@ class EbsSimulateCamera:
         self._orbit = False
         self._interest = None
         self._only = ()
-        self._placed = None
         if stage is None:
             return
         viewport = self.viewport()
@@ -404,13 +383,10 @@ class EbsSimulateCamera:
         self._from = (0.0, 0.0)
 
     def _end_drag(self) -> None:
-        """드래그 상태를 놓는다. 실제로 끈 뒤에만 멎었다고 알린다"""
+        """드래그 상태를 놓는다"""
         if self._watcher is not None:
             self._watcher.release()
-        turned = self._from is not None and self._from != (0.0, 0.0)
         self._from = self._at = None
-        if turned:
-            self._rest()
 
     def _double(self, x: float, y: float, button: int = LEFT_BUTTON) -> None:
         """더블클릭한 자리에 무엇이 있는지 뷰포트에 묻는다"""
@@ -592,8 +568,8 @@ class EbsSimulateCamera:
         return x_cam, y_cam, z_cam
 
     def _near(self, x_cam, distance: float) -> float:
-        """근평면 거리. NEAR_CULL 이 꺼져 있으면 슬라이더와 무관하게 안 자른다"""
-        if not NEAR_CULL or self._box is None or self._span <= 0.0:
+        """EBS 폭 절반의 set_near_span 배만큼 앞에 둘 근평면 거리"""
+        if self._box is None:
             return CAMERA_NEAR
         low, high = self._box.GetMin(), self._box.GetMax()
         half = sum(abs(x_cam[i]) * (high[i] - low[i]) * 0.5 for i in range(3))
@@ -623,5 +599,3 @@ class EbsSimulateCamera:
             coi = cam_prim.GetAttribute("omni:kit:centerOfInterest")
             if coi and coi.IsValid():
                 coi.Set(Gf.Vec3d(0.0, 0.0, -distance))
-        self._placed = (tuple(eye), tuple(x_cam), tuple(y_cam), tuple(z_cam))
-        self._rest()
