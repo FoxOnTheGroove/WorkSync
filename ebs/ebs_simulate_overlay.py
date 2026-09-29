@@ -50,7 +50,7 @@ GRIP_COLORS = {GRIP_IDLE: (0.12, 0.45, 1.0),
                GRIP_HOLD: (0.02, 0.08, 0.3)}
 GRIP_OUTLINE = GRIP_COLORS[GRIP_IDLE] + (1.0,)
 GRIP_UNSHADED = (0.0, 0.0, 0.0, 0.0)
-GRIP_PIECES = ("shaft_a", "head_a", "bead", "shaft_b", "head_b")
+GRIP_BODY = "body"
 
 CLASH = " 충돌"
 GAP   = " 여유"
@@ -773,7 +773,7 @@ class EbsSimulateGrip:
         return self._draw(GRIP_HOLD if self._from is not None else GRIP_IDLE)
 
     def _draw(self, state: str) -> bool:
-        """그 상태 색으로 한쪽씩 화살표 둘과 가운데 구체 하나"""
+        """그 상태 색으로 화살표 둘과 가운데 구체를 메시 하나로"""
         stage = self._stage()
         if stage is None or self._ends is None:
             return False
@@ -792,19 +792,17 @@ class EbsSimulateGrip:
                 self._stamp(root.GetPrim())
                 skin = self._paint._material(stage, "grip", colour,
                                              1.0, GRIP_EMISSION)
-                for name, tip in (("a", one), ("b", two)):
+                parts = []
+                for tip in (one, two):
                     base = self._back_off(tip, middle, high * 0.5)
                     near = self._back_off(middle, tip, bead * 3.0)
-                    self._paint._tube(
-                        stage,
-                        self._paint._keep(f"{self._root}/shaft_{name}"),
-                        base, near, thick, skin, colour)
-                    self._paint._gap_head(
-                        stage, self._paint._keep(f"{self._root}/head_{name}"),
-                        tip, middle, skin, colour, high, wide)
-                self._paint._ball(
-                    stage, self._paint._keep(f"{self._root}/bead"),
-                    middle, bead, skin, colour)
+                    parts.append(self._paint._tube_part(base, near, thick))
+                    parts.append(self._paint._cone_part(tip, middle, high,
+                                                        wide))
+                parts.append(self._paint._ball_part(middle, bead))
+                self._paint._solid(
+                    stage, self._paint._keep(f"{self._root}/{GRIP_BODY}"),
+                    parts, skin, colour)
                 self._paint._show_only(stage)
         except Exception as e:
             print(f"[ebs] could not draw the grip: {e}")
@@ -841,7 +839,7 @@ class EbsSimulateGrip:
         self._paint.clear()
 
     def _ring(self, on: bool) -> None:
-        """누르는 동안 조각 전부를 한 그룹으로 테두른다. 그룹끼리 맞닿는 경계가 없어 기본색이 안 샌다"""
+        """누르는 동안 기즈모 몸통을 테두른다. 그룹은 한 번만 받는다"""
         if not on and not EbsSimulateGrip._ringed:
             return
         try:
@@ -857,8 +855,7 @@ class EbsSimulateGrip:
                     context.set_selection_group_shade_color(
                         group, GRIP_UNSHADED)
                     EbsSimulateGrip._group = group
-            for name in GRIP_PIECES:
-                context.set_selection_group(group, f"{self._root}/{name}")
+            context.set_selection_group(group, f"{self._root}/{GRIP_BODY}")
         except Exception as e:
             print(f"[ebs] could not ring the grip: {e}")
             return
@@ -1435,28 +1432,35 @@ class EbsSimulateMarks:
                   flip=True)
 
     @staticmethod
-    def _tube(stage, path: str, start, end, radius: float, material,
-              colour) -> bool:
-        """양 끝을 잇는 관 하나. 양 끝 뚜껑까지 덮어 속이 안 보인다"""
-        along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
-        span = along.GetLength()
-        if span <= 1e-9:
-            return False
-        along = along.GetNormalized()
+    def _frame(along):
+        """축 하나에 직각이고 서로도 직각인 두 방향"""
         side = Gf.Cross(along, Gf.Vec3d(0.0, 0.0, 1.0))
         if side.GetLength() <= 1e-6:
             side = Gf.Cross(along, Gf.Vec3d(0.0, 1.0, 0.0))
         side = side.GetNormalized()
-        other = Gf.Cross(along, side).GetNormalized()
+        return side, Gf.Cross(along, side).GetNormalized()
 
+    @staticmethod
+    def _ring_at(middle, side, other, radius: float) -> list:
+        """축에 직각인 원 위 GRIP_RINGS 개 점"""
         points = []
-        for step in (0.0, 1.0):
-            middle = [start[i] + along[i] * span * step for i in range(3)]
-            for ring in range(GRIP_RINGS):
-                turn = math.tau * ring / GRIP_RINGS
-                cos, sin = math.cos(turn) * radius, math.sin(turn) * radius
-                points.append(Gf.Vec3f(*[middle[i] + side[i] * cos
-                                         + other[i] * sin for i in range(3)]))
+        for ring in range(GRIP_RINGS):
+            turn = math.tau * ring / GRIP_RINGS
+            cos, sin = math.cos(turn) * radius, math.sin(turn) * radius
+            points.append(tuple(middle[i] + side[i] * cos + other[i] * sin
+                                for i in range(3)))
+        return points
+
+    @classmethod
+    def _tube_part(cls, start, end, radius: float):
+        """양 끝을 잇고 뚜껑까지 막은 관의 점과 면. 못 만들면 None"""
+        along = Gf.Vec3d(*[end[i] - start[i] for i in range(3)])
+        if along.GetLength() <= 1e-9:
+            return None
+        along = along.GetNormalized()
+        side, other = cls._frame(along)
+        points = (cls._ring_at(start, side, other, radius)
+                  + cls._ring_at(end, side, other, radius))
         counts, indices = [], []
         for ring in range(GRIP_RINGS):
             turn = (ring + 1) % GRIP_RINGS
@@ -1466,9 +1470,76 @@ class EbsSimulateMarks:
         indices += list(reversed(range(GRIP_RINGS)))
         counts.append(GRIP_RINGS)
         indices += list(range(GRIP_RINGS, GRIP_RINGS * 2))
+        return points, counts, indices
 
+    @classmethod
+    def _cone_part(cls, tip, back, high: float, wide: float):
+        """tip 을 향해 뾰족하고 밑면까지 막은 원뿔의 점과 면. 못 만들면 None"""
+        along = Gf.Vec3d(*[tip[i] - back[i] for i in range(3)])
+        if along.GetLength() <= 1e-9:
+            return None
+        along = along.GetNormalized()
+        side, other = cls._frame(along)
+        base = [tip[i] - along[i] * high for i in range(3)]
+        points = cls._ring_at(base, side, other, wide) + [tuple(tip)]
+        counts, indices = [], []
+        for ring in range(GRIP_RINGS):
+            counts.append(3)
+            indices += [ring, (ring + 1) % GRIP_RINGS, GRIP_RINGS]
+        counts.append(GRIP_RINGS)
+        indices += list(reversed(range(GRIP_RINGS)))
+        return points, counts, indices
+
+    @staticmethod
+    def _ball_part(spot, radius: float):
+        """그 자리 구체의 점과 면. 위아래 극에서 부채꼴로 닫는다"""
+        stacks = max(GRIP_RINGS // 2, 2)
+        points = [(spot[0], spot[1], spot[2] + radius)]
+        for stack in range(1, stacks):
+            lean = math.pi * stack / stacks
+            wide, tall = math.sin(lean) * radius, math.cos(lean) * radius
+            for ring in range(GRIP_RINGS):
+                turn = math.tau * ring / GRIP_RINGS
+                points.append((spot[0] + math.cos(turn) * wide,
+                               spot[1] + math.sin(turn) * wide,
+                               spot[2] + tall))
+        bottom = len(points)
+        points.append((spot[0], spot[1], spot[2] - radius))
+
+        def at(stack, ring):
+            """stack 번째 원의 ring 번째 점 자리"""
+            return 1 + (stack - 1) * GRIP_RINGS + ring % GRIP_RINGS
+
+        counts, indices = [], []
+        for ring in range(GRIP_RINGS):
+            counts.append(3)
+            indices += [0, at(1, ring), at(1, ring + 1)]
+        for stack in range(1, stacks - 1):
+            for ring in range(GRIP_RINGS):
+                counts.append(4)
+                indices += [at(stack, ring), at(stack + 1, ring),
+                            at(stack + 1, ring + 1), at(stack, ring + 1)]
+        for ring in range(GRIP_RINGS):
+            counts.append(3)
+            indices += [bottom, at(stacks - 1, ring + 1),
+                        at(stacks - 1, ring)]
+        return points, counts, indices
+
+    @staticmethod
+    def _solid(stage, path: str, parts, material, colour) -> bool:
+        """조각들을 메시 하나로 합쳐 쓴다. 프림이 하나라 외곽선이 안쪽에 안 생긴다"""
+        points, counts, indices = [], [], []
+        for part in parts:
+            if part is None:
+                continue
+            shift = len(points)
+            points += part[0]
+            counts += part[1]
+            indices += [one + shift for one in part[2]]
+        if not points:
+            return False
         mesh = UsdGeom.Mesh.Define(stage, path)
-        mesh.CreatePointsAttr(Vt.Vec3fArray(points))
+        mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*one) for one in points]))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
         mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
@@ -1484,27 +1555,6 @@ class EbsSimulateMarks:
             pass
         if material:
             UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
-        return True
-
-    @staticmethod
-    def _ball(stage, path: str, spot, radius: float, material, colour) -> bool:
-        """그 자리에 구체 하나"""
-        ball = UsdGeom.Sphere.Define(stage, path)
-        ball.CreateRadiusAttr(radius)
-        ball.CreateExtentAttr(Vt.Vec3fArray([
-            Gf.Vec3f(-radius, -radius, -radius),
-            Gf.Vec3f(radius, radius, radius)]))
-        ball.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
-        matrix = Gf.Matrix4d(1.0)
-        matrix.SetTranslateOnly(Gf.Vec3d(*spot))
-        EbsSimulateMarks._moved(ball, matrix)
-        try:
-            ball.GetPrim().CreateAttribute(
-                "primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
-        except Exception:
-            pass
-        if material:
-            UsdShade.MaterialBindingAPI(ball.GetPrim()).Bind(material)
         return True
 
     @staticmethod
