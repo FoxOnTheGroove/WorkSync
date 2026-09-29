@@ -48,8 +48,11 @@ GRIP_RINGS    = 16
 GRIP_IDLE, GRIP_HOLD = "idle", "hold"
 GRIP_COLORS = {GRIP_IDLE: (0.12, 0.45, 1.0),
                GRIP_HOLD: (0.02, 0.08, 0.3)}
-GRIP_OUTLINE = GRIP_COLORS[GRIP_IDLE] + (1.0,)
+GRIP_OUTLINE = (0.45, 0.8, 1.0, 1.0)
 GRIP_UNSHADED = (0.0, 0.0, 0.0, 0.0)
+GRIP_OUTLINE_WIDTH = 6
+GRIP_WIDTH_KEYS = ("/persistent/app/viewport/outline/width",
+                   "/app/viewport/outline/width")
 GRIP_BODY = "body"
 
 CLASH = " 충돌"
@@ -697,6 +700,8 @@ class EbsSimulateGrip:
     _again = False
     _group = None
     _ringed = False
+    _widths = None
+    _told = False
 
     @classmethod
     def place(cls, said: dict, to_screen) -> bool:
@@ -860,6 +865,37 @@ class EbsSimulateGrip:
             print(f"[ebs] could not ring the grip: {e}")
             return
         EbsSimulateGrip._ringed = on
+        self._widen(on)
+
+    @classmethod
+    def _widen(cls, on: bool) -> None:
+        """누르는 동안만 외곽선을 굵게 하고, 놓으면 원래 두께로 돌린다"""
+        try:
+            import carb.settings
+            settings = carb.settings.get_settings()
+        except Exception:
+            return
+        try:
+            if on:
+                if cls._widths is None:
+                    cls._widths = {key: settings.get(key)
+                                   for key in GRIP_WIDTH_KEYS}
+                    if not cls._told:
+                        print(f"[ebs] outline width was {cls._widths}")
+                        cls._told = True
+                for key in GRIP_WIDTH_KEYS:
+                    settings.set(key, GRIP_OUTLINE_WIDTH)
+                return
+            if cls._widths is None:
+                return
+            for key, value in cls._widths.items():
+                if value is None:
+                    settings.destroy_item(key)
+                else:
+                    settings.set(key, value)
+            cls._widths = None
+        except Exception as e:
+            print(f"[ebs] could not set the outline width: {e}")
 
     def press(self, x: float, y: float) -> bool:
         """여기서 눌렸나. 눌렸으면 끌기를 시작한다"""
