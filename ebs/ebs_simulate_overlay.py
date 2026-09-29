@@ -50,9 +50,7 @@ GRIP_COLORS = {GRIP_IDLE: (0.12, 0.45, 1.0),
                GRIP_HOLD: (0.02, 0.08, 0.3)}
 GRIP_OUTLINE = GRIP_COLORS[GRIP_IDLE] + (1.0,)
 GRIP_UNSHADED = (0.0, 0.0, 0.0, 0.0)
-GRIP_PIECES = {"a": ("shaft_a", "head_a"),
-               "bead": ("bead",),
-               "b": ("shaft_b", "head_b")}
+GRIP_PIECES = ("shaft_a", "head_a", "bead", "shaft_b", "head_b")
 
 CLASH = " 충돌"
 GAP   = " 여유"
@@ -697,7 +695,7 @@ class EbsSimulateGrip:
 
     _one = None
     _again = False
-    _groups = {}
+    _group = None
     _ringed = False
 
     @classmethod
@@ -843,25 +841,24 @@ class EbsSimulateGrip:
         self._paint.clear()
 
     def _ring(self, on: bool) -> None:
-        """누르는 동안 좌화살표, 구체, 우화살표를 따로 테두른다. 그룹은 한 번만 받는다"""
+        """누르는 동안 조각 전부를 한 그룹으로 테두른다. 그룹끼리 맞닿는 경계가 없어 기본색이 안 샌다"""
         if not on and not EbsSimulateGrip._ringed:
             return
         try:
             import omni.usd
             context = omni.usd.get_context()
-            for piece, names in GRIP_PIECES.items():
-                group = 0
-                if on:
-                    group = EbsSimulateGrip._groups.get(piece)
-                    if group is None:
-                        group = context.register_selection_group()
-                        context.set_selection_group_outline_color(
-                            group, GRIP_OUTLINE)
-                        context.set_selection_group_shade_color(
-                            group, GRIP_UNSHADED)
-                        EbsSimulateGrip._groups[piece] = group
-                for name in names:
-                    context.set_selection_group(group, f"{self._root}/{name}")
+            group = 0
+            if on:
+                group = EbsSimulateGrip._group
+                if group is None:
+                    group = context.register_selection_group()
+                    context.set_selection_group_outline_color(
+                        group, GRIP_OUTLINE)
+                    context.set_selection_group_shade_color(
+                        group, GRIP_UNSHADED)
+                    EbsSimulateGrip._group = group
+            for name in GRIP_PIECES:
+                context.set_selection_group(group, f"{self._root}/{name}")
         except Exception as e:
             print(f"[ebs] could not ring the grip: {e}")
             return
