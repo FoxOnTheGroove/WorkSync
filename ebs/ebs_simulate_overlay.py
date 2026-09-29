@@ -50,7 +50,7 @@ GRIP_COLORS = {GRIP_IDLE: (0.12, 0.45, 1.0),
                GRIP_HOLD: (0.02, 0.08, 0.3)}
 GRIP_OUTLINE = (0.45, 0.8, 1.0, 1.0)
 GRIP_UNSHADED = (0.0, 0.0, 0.0, 0.0)
-GRIP_OUTLINE_WIDTH = 6
+GRIP_OUTLINE_WIDTH = 3.5
 GRIP_WIDTH_KEYS = ("/persistent/app/viewport/outline/width",
                    "/app/viewport/outline/width")
 GRIP_BODY = "body"
