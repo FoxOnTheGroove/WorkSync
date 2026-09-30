@@ -449,11 +449,14 @@ class EbsSimulateOverlay:
                             share, group, key, on, wide])
 
     def _verdict_panel(self, said: dict) -> None:
-        """못 세울 때만 보이는 한 줄"""
+        """못 세울 때만 보이는 두 줄과, 늘 보이는 장비 이름표"""
         held = EbsSimulateGrip.held()
         self._floating(said.get("centre"), self._one(CANNOT), COLOR_CANNOT,
                        key=("verdict", "centre"),
                        on=not held and not said.get("placeable"))
+        name = said.get("name") or ""
+        self._floating(said.get("name_at"), self._one(" " + name), COLOR_WORK,
+                       key=("verdict", "name_at"), on=bool(name))
         self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=not held and bool(said.get("inside")))
@@ -532,6 +535,7 @@ class EbsSimulateOverlay:
             return
         spots = {("verdict", "centre"): said.get("centre"),
                  ("verdict", "inside_at"): said.get("inside_at"),
+                 ("verdict", "name_at"): said.get("name_at"),
                  ("verdict", "offset"): self._grip_at(said, "under")}
         self._dial(said)
         for mark in said.get("marks") or ():
