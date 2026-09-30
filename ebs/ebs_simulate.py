@@ -1812,7 +1812,6 @@ class EbsSimulate:
         lower = to_world.Transform(Gf.Vec3d(*spot))
         spot[up_axis] = lo[up_axis] + tall * NAME_HEIGHT
         named = to_world.Transform(Gf.Vec3d(*spot))
-        equipment = (self._target or {}).get("equipment")
         marks = Collide._face_marks(self, local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
@@ -1825,7 +1824,7 @@ class EbsSimulate:
             "centre": (middle[0], middle[1], middle[2]),
             "inside_at": (lower[0], lower[1], lower[2]),
             "name_at": (named[0], named[1], named[2]),
-            "name": self._path_of(equipment).rsplit("/", 1)[-1],
+            "name": (self._target or {}).get("eqp_id", ""),
             "inside": bool(inside),
             "boxes": list(boxes or ()),
             "faces": blocked,
