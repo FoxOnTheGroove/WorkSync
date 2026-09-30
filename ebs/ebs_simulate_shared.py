@@ -123,6 +123,16 @@ CODE_PORT  = "port"
 CODE_PIVOT = "pivot"
 CODE_OTHER = "other"
 
+SAY_INIT   = "초기화되지 않음"
+SAY_STAGE  = "스테이지가 열려 있지 않음"
+SAY_EQP    = "장비를 찾을 수 없음"
+SAY_XML    = "xml 데이터 없음 : 포트 파악 불가"
+SAY_PORTS  = "포트 개수 불일치 ({0}개)"
+SAY_EBS    = "EBS 프림 경로 오류 ({0}포트)"
+SAY_PIVOT  = "유효하지 않은 pivot 데이터"
+SAY_ALIGN  = "EBS 배치 실패"
+SAY_CAMERA = "카메라 설정 실패"
+
 
 try:
     _EVERY_CHILD = Usd.TraverseInstanceProxies()

@@ -1284,6 +1284,9 @@ class EbsSimulate:
         try:
             told = await self.simulate_async(equipment)
             self._paint(panel.show)
+            if told is not None and not told.get("ok"):
+                why = told.get("say") or told.get("reason", "")
+                self._paint(lambda: panel.fail(why))
             await self.settle()
             self.say_phases()
             return told
@@ -1311,7 +1314,8 @@ class EbsSimulate:
         self._begin("simulate")
         self.set_legs(3)
         if not self._ready:
-            return self._done(self._payload(False, "Run Init first"))
+            return self._done(self._payload(False, "Run Init first",
+                                            say=SAY_INIT))
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return self._done(result)
@@ -1344,14 +1348,15 @@ class EbsSimulate:
 
         stage = self._get_stage()
         if stage is None:
-            return self._payload(False, "No stage open")
+            return self._payload(False, "No stage open", say=SAY_STAGE)
 
         with self._stage_timer("resolve equipment"):
             eqp_prim = (self._resolve_by_name(stage, equipment) if equipment.strip()
                         else self._resolve_by_selection(stage))
         if eqp_prim is None:
             return self._payload(False, "Equipment prim not found: "
-                                 f"{equipment.strip() or '(no selection)'}")
+                                 f"{equipment.strip() or '(no selection)'}",
+                                 say=SAY_EQP)
 
         eqp_id = self._equipment_id(eqp_prim)
 
@@ -1360,17 +1365,19 @@ class EbsSimulate:
         if port_count is None:
             return self._payload(False, f"No port info for '{eqp_id}' in XML",
                                  equipment=eqp_prim, eqp_id=eqp_id,
-                                 code=CODE_PORT)
+                                 code=CODE_PORT, say=SAY_XML)
         if port_count not in (2, 3):
             return self._payload(False, f"{port_count}-port equipment: no matching EBS",
                                  equipment=eqp_prim, eqp_id=eqp_id,
-                                 port_count=port_count, code=CODE_PORT)
+                                 port_count=port_count, code=CODE_PORT,
+                                 say=SAY_PORTS.format(port_count))
 
         ebs_path = self._ebs_path_2port if port_count == 2 else self._ebs_path_3port
         ebs_prim = stage.GetPrimAtPath(ebs_path) if ebs_path else None
         if ebs_prim is None or not ebs_prim.IsValid():
             return self._payload(False, f"Invalid {port_count}-port EBS prim path: {ebs_path}",
-                                 equipment=eqp_prim, eqp_id=eqp_id, port_count=port_count)
+                                 equipment=eqp_prim, eqp_id=eqp_id, port_count=port_count,
+                                 say=SAY_EBS.format(port_count))
 
         with self._stage_timer("resolve anchor"):
             anchor, reached = self.resolve_anchor(eqp_prim)
@@ -1382,7 +1389,7 @@ class EbsSimulate:
         if astray:
             return self._payload(False, astray, equipment=eqp_prim,
                                  eqp_id=eqp_id, port_count=port_count,
-                                 code=CODE_PIVOT)
+                                 code=CODE_PIVOT, say=SAY_PIVOT)
 
         self._target = {
             "equipment": eqp_prim,
@@ -1435,7 +1442,8 @@ class EbsSimulate:
         if told:
             self._note(told)
         return self._payload(bool(told), "Camera on the EBS" if told
-                             else "Camera focus failed")
+                             else "Camera focus failed",
+                             say="" if told else SAY_CAMERA)
 
     def _framed_box(self):
         """카메라가 담을 상자. 아직 감춰 둔 EBS 는 잠깐 켜서 잰다"""
@@ -1483,7 +1491,9 @@ class EbsSimulate:
                 self._note(f"{drawn} port laser(s) drawn under {LASER_ROOT}")
         else:
             self.clear_port_lasers()
-        return self._payload(self._aligned, note if self._aligned else "EBS alignment failed")
+        return self._payload(self._aligned,
+                             note if self._aligned else "EBS alignment failed",
+                             say="" if self._aligned else SAY_ALIGN)
 
     def _do_collide(self) -> dict:
         """3면 충돌, 빈 면 거리, 내부 간섭을 재고 판정과 마커까지"""
@@ -2982,7 +2992,8 @@ class EbsSimulate:
     def _payload(self, ok: bool, reason: str, cells: dict = None, hit_count: int = 0,
                  equipment=None, eqp_id: str = "", port_count=None,
                  distances: dict = None, rows: list = None,
-                 equipment_hit: dict = None, code: str = "") -> dict:
+                 equipment_hit: dict = None, code: str = "",
+                 say: str = "") -> dict:
         """단계 하나의 결과 한 벌. 갈래, 성공 여부, 사유, 시간, 로그"""
         target = self._target or {}
         equipment = equipment or target.get("equipment")
@@ -2992,6 +3003,7 @@ class EbsSimulate:
             "ok": ok,
             "code": code or (CODE_OK if ok else CODE_OTHER),
             "reason": reason,
+            "say": say,
             "equipment": str(equipment.GetPath()) if equipment else "",
             "equipment_id": eqp_id or target.get("eqp_id", ""),
             "port_count": port_count if port_count is not None else target.get("port_count"),

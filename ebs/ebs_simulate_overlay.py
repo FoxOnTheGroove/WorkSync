@@ -115,6 +115,11 @@ COLOR_TRACK   = 0x33FFFFFF
 COLOR_FILL    = 0xFF20C8FF
 WORK_SIZE     = 17
 
+FAIL_TITLE    = "Simulation 실패"
+FAIL_SIZE     = 15
+FAIL_HOLD     = 1.0
+FAIL_FADE     = 1.0
+
 CLASH_ROOT    = "{0}/Clash"
 LOOKS_ROOT    = "{0}/Looks"
 LOOKS_NAME    = "Looks"
@@ -160,6 +165,15 @@ class EbsSimulateOverlay:
     def wake(cls, vp_name: str = None):
         """프레임만 세워 둔다"""
         return cls._get(vp_name)
+
+    @classmethod
+    def fail(cls, why: str, vp_name: str = None):
+        """시뮬이 왜 실패했는지 적어 둔다. 일이 끝나면 가운데에 잠깐 띄운다"""
+        overlay = cls._get(vp_name)
+        if overlay is not None:
+            overlay._fail_text = why or ""
+            overlay._fail_at = None
+        return overlay
 
     @classmethod
     def hide(cls, vp_name: str = None):
@@ -216,6 +230,13 @@ class EbsSimulateOverlay:
         self._work_fill = None
         self._work_gap = None
         self._work_panel = None
+        self._fail = None
+        self._fail_panel = None
+        self._fail_ground = None
+        self._fail_title = None
+        self._fail_why = None
+        self._fail_text = ""
+        self._fail_at = None
 
     def _build(self, window) -> bool:
         """뷰포트에 프레임을 걸고 투영에 쓸 viewport api 를 잡는다"""
@@ -225,6 +246,7 @@ class EbsSimulateOverlay:
                 with ui.ZStack():
                     self._stack = ui.ZStack()
                     self._build_work()
+                    self._build_fail()
         except Exception as e:
             print(f"[ebs] could not put the overlay on the viewport: {e}")
             return False
@@ -269,6 +291,76 @@ class EbsSimulateOverlay:
                     self._work_pct_hold = ui.ZStack(height=ui.Pixel(WORK_LINE))
                     ui.Spacer(height=ui.Pixel(WORK_PAD))
         self._work_panel.visible = False
+
+    def _build_fail(self) -> None:
+        """실패 표를 작업중 표와 같은 크기로 한 번 지어 둔다"""
+        self._fail = ui.Placer(draggable=False, offset_x=0, offset_y=0)
+        with self._fail:
+            self._fail_panel = ui.ZStack(width=ui.Pixel(WORK_WIDE),
+                                         height=ui.Pixel(WORK_HIGH))
+            with self._fail_panel:
+                self._fail_ground = ui.Rectangle(
+                    style={"background_color": COLOR_WORK, "border_radius": 6})
+                with ui.VStack(spacing=0):
+                    ui.Spacer()
+                    self._fail_title = ui.Label(
+                        FAIL_TITLE, height=ui.Pixel(WORK_LINE),
+                        width=ui.Pixel(WORK_WIDE),
+                        alignment=ui.Alignment.CENTER,
+                        style={"color": COLOR_TEXT, "font_size": WORK_SIZE})
+                    ui.Spacer(height=ui.Pixel(WORK_GAP))
+                    self._fail_why = ui.Label(
+                        "", height=ui.Pixel(WORK_LINE),
+                        width=ui.Pixel(WORK_WIDE),
+                        alignment=ui.Alignment.CENTER, elided_text=True,
+                        style={"color": COLOR_TEXT, "font_size": FAIL_SIZE})
+                    ui.Spacer()
+        self._fail_panel.visible = False
+
+    @staticmethod
+    def _faded(colour: int, share: float) -> int:
+        """0xAABBGGRR 색의 알파만 그 비율로 줄인다"""
+        alpha = int(((colour >> 24) & 0xFF) * max(0.0, min(share, 1.0)))
+        return (alpha << 24) | (colour & 0x00FFFFFF)
+
+    def _fail_place(self) -> None:
+        """일이 끝난 뒤 실패 표를 가운데 FAIL_HOLD 동안 두고 FAIL_FADE 동안 흐리게 지운다"""
+        panel = self._fail_panel
+        if panel is None or self._fail is None:
+            return
+        busy = sim() is not None and sim().busy()
+        if not self._fail_text or (busy and self._fail_at is not None):
+            self._fail_text, self._fail_at = "", None
+            panel.visible = False
+            return
+        if busy:
+            panel.visible = False
+            return
+        now = time.monotonic()
+        if self._fail_at is None:
+            self._fail_at = now
+            self._fail_why.text = self._fail_text
+        spent = now - self._fail_at
+        if spent >= FAIL_HOLD + FAIL_FADE:
+            self._fail_text, self._fail_at = "", None
+            panel.visible = False
+            return
+        share = 1.0 if spent <= FAIL_HOLD else 1.0 - (spent - FAIL_HOLD) / FAIL_FADE
+        self._fail_ground.set_style({
+            "background_color": self._faded(COLOR_WORK, share),
+            "border_radius": 6})
+        self._fail_title.set_style({"color": self._faded(COLOR_TEXT, share),
+                                    "font_size": WORK_SIZE})
+        self._fail_why.set_style({"color": self._faded(COLOR_TEXT, share),
+                                  "font_size": FAIL_SIZE})
+        try:
+            width = self._frame.computed_width
+            height = self._frame.computed_height
+        except Exception:
+            return
+        self._fail.offset_x = (width - WORK_WIDE) * 0.5
+        self._fail.offset_y = (height - WORK_HIGH) * 0.5
+        panel.visible = True
 
     def _work_word(self, hold, store: dict, text: str) -> None:
         """그 글 모양의 글줄만 켠다"""
@@ -544,6 +636,7 @@ class EbsSimulateOverlay:
     def _tick(self) -> None:
         """한 프레임 몫. 표를 보고, hover 를 묻고, 판을 카메라에 맞춘다"""
         self._work_place()
+        self._fail_place()
         self._place()
 
     def _start(self) -> bool:
@@ -687,6 +780,13 @@ class EbsSimulateOverlay:
         self._work_fill = None
         self._work_gap = None
         self._work_panel = None
+        self._fail = None
+        self._fail_panel = None
+        self._fail_ground = None
+        self._fail_title = None
+        self._fail_why = None
+        self._fail_text = ""
+        self._fail_at = None
         self._stack = None
         self._frame = None
         self._api = None
