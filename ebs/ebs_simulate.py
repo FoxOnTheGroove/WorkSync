@@ -1449,7 +1449,7 @@ class EbsSimulate:
         return found
 
     def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """5뎁스 자식 중 포트 1 거리, 레일 정렬, 가장 큰 상자로 고른 것이 첫자식이 아닌 장비"""
+        """4뎁스의 자식(5뎁스 가지)마다 첫자식(6뎁스)을 후보로, 세 방법이 첫 가지가 아닌 것을 고른 장비"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         cache = UsdGeom.BBoxCache(tc, includedPurposes=[UsdGeom.Tokens.default_,
@@ -1483,9 +1483,14 @@ class EbsSimulate:
             if count not in (2, 3):
                 skipped["ports"] += 1
                 continue
-            parent, reached = self.resolve_anchor(prim, ANCHOR_DEPTH - 1)
-            kids = self._level_kids(parent) if reached else []
-            if not kids:
+            parent, reached = self.resolve_anchor(prim, ANCHOR_DEPTH - 2)
+            kids, tips = [], []
+            for kid in (self._level_kids(parent) if reached else []):
+                tip, deep = self.resolve_anchor(kid, 1)
+                if deep:
+                    kids.append(kid)
+                    tips.append(tip)
+            if not kids or tips[0] != self.resolve_anchor(prim)[0]:
                 skipped["shallow"] += 1
                 continue
             with self._hush(False):
@@ -1498,12 +1503,12 @@ class EbsSimulate:
             other = 1 - axis
             rail_at = spot(rail)[other]
 
-            places = [spot(kid) for kid in kids]
+            places = [spot(tip) for tip in tips]
             gaps = [math.hypot(port[0] - at[0], port[1] - at[1]) for at in places]
             offs = [abs(at[other] - rail_at) for at in places]
             sizes = [size(kid) for kid in kids]
             if gaps[0] >= PIVOT_APART:
-                astray.append(f"{eqp_id} (first {kids[0].GetName()} "
+                astray.append(f"{eqp_id} (first {kids[0].GetName()}/{tips[0].GetName()} "
                               f"{gaps[0]:.3f} from port 1)")
             if len(kids) == 1:
                 single += 1
@@ -1517,20 +1522,21 @@ class EbsSimulate:
             for method, (pick, values) in picks.items():
                 if pick:
                     odd[method].append(
-                        f"{eqp_id}: child {pick + 1}/{len(kids)} "
-                        f"{kids[pick].GetName()} {values[pick]:.3f}, "
-                        f"first {kids[0].GetName()} {values[0]:.3f}")
+                        f"{eqp_id}: branch {pick + 1}/{len(kids)} "
+                        f"{kids[pick].GetName()}/{tips[pick].GetName()} "
+                        f"{values[pick]:.3f}, first {kids[0].GetName()}/"
+                        f"{tips[0].GetName()} {values[0]:.3f}")
 
         print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
               f"{(time.perf_counter() - started):.1f}s, skipped " +
               ", ".join(f"{k} {v}" for k, v in skipped.items()) +
-              f"; one child {single}, several {several}")
+              f"; one branch {single}, several {several}")
         print(f"[ebs] pivot survey: first child {PIVOT_APART} or more from port 1: "
               f"{len(astray)}")
         for line in astray:
             print(f"[ebs]     {line}")
         for method in methods:
-            print(f"[ebs] pivot survey: {method} picks other than the first child: "
+            print(f"[ebs] pivot survey: {method} picks other than the first branch: "
                   f"{len(odd[method])}")
             for line in odd[method]:
                 print(f"[ebs]     {line}")
