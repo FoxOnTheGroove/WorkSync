@@ -1949,7 +1949,8 @@ class EbsSimulate:
         if reach <= 0:
             return {}
 
-        left = right = None
+        nearest = {"left": None, "right": None}
+        tangled = []
         for name, box in boxes.items():
             if name == key:
                 continue
@@ -1958,18 +1959,23 @@ class EbsSimulate:
                 continue
             side = self._cast(box, sideways)
             if side[0] >= my_side[1]:
-                gap, hand = side[0] - my_side[1], "right"
+                self._closer(nearest, "right", side[0] - my_side[1], name, reach)
             elif side[1] <= my_side[0]:
-                gap, hand = my_side[0] - side[1], "left"
+                self._closer(nearest, "left", my_side[0] - side[1], name, reach)
             else:
-                continue
-            if gap > reach:
-                continue
-            if hand == "right":
-                if right is None or gap < right[0]:
-                    right = (gap, name)
-            elif left is None or gap < left[0]:
-                left = (gap, name)
+                tangled.append(name)
+
+        with self._stage_timer("sides: parts"):
+            for name in tangled:
+                for hand, gap in self._part_gaps(stage, name, sideways, inward,
+                                                 my_side, my_deep).items():
+                    self._closer(nearest, hand, gap, name, reach)
+        if tangled:
+            self._note(f"sides: {len(tangled)} machine(s) overlap this one's "
+                       f"width, judged by their parts: "
+                       + ", ".join(tangled[:4])
+                       + (" ..." if len(tangled) > 4 else ""))
+        left, right = nearest["left"], nearest["right"]
 
         return {
             "beside": [self._eqp_index[one[1]] for one in (left, right) if one],
@@ -1977,6 +1983,43 @@ class EbsSimulate:
             "side": (my_side[0] - reach, my_side[1] + reach),
             "deep": my_deep,
         }
+
+    @staticmethod
+    def _closer(nearest: dict, hand: str, gap: float, name: str,
+                reach: float) -> None:
+        """그쪽에서 지금보다 가까우면 바꿔 적는다. reach 밖은 버린다"""
+        if gap > reach:
+            return
+        if nearest[hand] is None or gap < nearest[hand][0]:
+            nearest[hand] = (gap, name)
+
+    def _part_gaps(self, stage, name: str, sideways, inward, my_side,
+                   my_deep) -> dict:
+        """폭이 대상과 겹친 장비를 부품 단위로 본다. 좌우 각쪽 가장 가까운 틈"""
+        prim = stage.GetPrimAtPath(self._eqp_index.get(name, ""))
+        if not prim or not prim.IsValid():
+            return {}
+        cache = Collide._bounds_cache(self)
+        best = {}
+        for path, box, part, chain in Collide._subtree_leaves(self, stage,
+                                                              cache, prim):
+            deep = self._cast(box, inward)
+            if deep[0] >= my_deep[1] or deep[1] <= my_deep[0]:
+                continue
+            side = self._cast(box, sideways)
+            if side[0] >= my_side[1]:
+                hand, gap = "right", side[0] - my_side[1]
+            elif side[1] <= my_side[0]:
+                hand, gap = "left", my_side[0] - side[1]
+            else:
+                continue
+            if any(not self._is_visible(one, where) for one, where in chain):
+                continue
+            if not self._is_visible(part, path):
+                continue
+            if hand not in best or gap < best[hand]:
+                best[hand] = gap
+        return best
 
     def _sideways(self, ebs_prim) -> tuple:
         """그 상자가 EBS 의 좌우 어느 쪽에 얼마나 걸치나"""
