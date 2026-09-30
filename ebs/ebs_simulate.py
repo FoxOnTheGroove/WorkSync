@@ -1979,6 +1979,8 @@ class EbsSimulate:
 
         return {
             "beside": [self._eqp_index[one[1]] for one in (left, right) if one],
+            "left": self._eqp_index[left[1]] if left else "",
+            "right": self._eqp_index[right[1]] if right else "",
             "sideways": sideways, "inward": inward,
             "side": (my_side[0] - reach, my_side[1] + reach),
             "deep": my_deep,

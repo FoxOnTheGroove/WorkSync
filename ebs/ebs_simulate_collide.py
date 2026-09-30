@@ -121,9 +121,14 @@ class EbsSimulateCollide:
             found, visited = cls._gather_nearby(sim, stage, cache, search, skip)
             return [(path, box, FACES) for path, box in found], visited
 
-        sides = tuple(face for face in cells if face != FACE_CEILING)
-        beside, visited = cls._gather_nearby(sim, stage, cache, search, skip, roots)
-        candidates = [(path, box, sides) for path, box in beside]
+        candidates, visited = [], 0
+        for face in cells:
+            if face == FACE_CEILING:
+                continue
+            beside, seen = cls._gather_nearby(sim, stage, cache, search, skip,
+                                              cls._roots_for(roots, face))
+            visited += seen
+            candidates += [(path, box, (face,)) for path, box in beside]
 
         top = cells.get(FACE_CEILING)
         if top is not None:
@@ -981,11 +986,12 @@ class EbsSimulateCollide:
             return {face: found for face in wanted}
 
         by_face = {}
-        sides = {face: one for face, one in wanted.items() if face != FACE_CEILING}
-        if sides:
-            whole = cls._union([one[1] for one in sides.values()])
-            found, _ = cls._gather_nearby(sim, stage, cache, whole, skip, roots)
-            by_face.update({face: found for face in sides})
+        for face, one in wanted.items():
+            if face == FACE_CEILING:
+                continue
+            found, _ = cls._gather_nearby(sim, stage, cache, one[1], skip,
+                                          cls._roots_for(roots, face))
+            by_face[face] = found
         top = wanted.get(FACE_CEILING)
         if top is not None:
             found, _ = cls._gather_nearby(sim, stage, cache, top[1], skip)
@@ -1056,23 +1062,28 @@ class EbsSimulateCollide:
         return 0.0 <= along <= 1.0
 
     @classmethod
-    def _side_roots(cls, sim) -> list:
-        """좌우 판정에 쓸 옆 장비들"""
+    def _side_roots(cls, sim) -> dict:
+        """좌우 면마다 그쪽 옆 장비 하나. 왼쪽 면은 왼쪽 장비만, 오른쪽 면은 오른쪽 장비만 본다"""
         stage = sim._get_stage()
         if stage is None:
-            return []
+            return {FACE_LEFT: [], FACE_RIGHT: []}
         found = sim.side_band(stage, sim._target["ebs"],
-                               sim._target["equipment"])
-        beside = found.get("beside", []) if found else []
-        roots = []
-        for path in beside:
-            prim = stage.GetPrimAtPath(path)
-            if prim and prim.IsValid():
-                roots.append(prim)
-        sim._note("left and right judged against "
-                   + (", ".join(str(p).rsplit("/", 1)[-1] for p in beside)
-                      if beside else "nothing -- no machine beside this one")
-                   + "; the ceiling still walks the stage")
+                               sim._target["equipment"]) or {}
+        roots, said = {}, []
+        for face in (FACE_LEFT, FACE_RIGHT):
+            path = found.get(face, "")
+            prim = stage.GetPrimAtPath(path) if path else None
+            roots[face] = [prim] if prim and prim.IsValid() else []
+            said.append(f"{face} {path.rsplit('/', 1)[-1] if roots[face] else '-'}")
+        sim._note("sides judged against " + ", ".join(said)
+                  + "; the ceiling still walks the stage")
+        return roots
+
+    @staticmethod
+    def _roots_for(roots, face: str) -> list:
+        """그 면이 볼 옆 장비들. 목록을 받으면 두 면이 같이 본다"""
+        if isinstance(roots, dict):
+            return roots.get(face) or []
         return roots
 
     @classmethod
