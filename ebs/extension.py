@@ -2,12 +2,14 @@ import omni.ext
 import omni.ui as ui
 
 from .ebs_simulate import instance, forget
+from .ebs_simulate_camera import PickLock, viewport_window
 from .ebs_simulate_overlay import attach as attach_overlay
 from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
 RAISE_FRAMES = 300
 SHOW_DUMMY_UI = False
+BLOCK_SELECT = True
 
 
 class EbsExtension(omni.ext.IExt):
@@ -24,6 +26,7 @@ class EbsExtension(omni.ext.IExt):
         self._frames = 0
         self._shown = False
         self._stage = None
+        self._picking = False
         self._watch_layout()
         self._watch_stage()
 
@@ -42,7 +45,21 @@ class EbsExtension(omni.ext.IExt):
         if not self._stage_ready():
             return
         self._stage = None
+        self._lock_select()
         self._ui.auto_init()
+
+    def _lock_select(self):
+        """뷰포트에서 눌러 고르는 것을 익스텐션이 떠 있는 내내 끈다"""
+        if not BLOCK_SELECT or self._picking:
+            return
+        window = viewport_window()
+        if window is None:
+            print("[ebs] no viewport, selection stays on")
+            return
+        try:
+            self._picking = PickLock.hold(window)
+        except Exception as e:
+            print(f"[ebs] selection NOT off: {type(e).__name__}: {e}")
 
     @staticmethod
     def _stage_ready() -> bool:
@@ -79,6 +96,9 @@ class EbsExtension(omni.ext.IExt):
         """익스텐션 종료"""
         self._raise = None
         self._stage = None
+        if self._picking:
+            PickLock.drop()
+            self._picking = False
         if self._ui:
             self._ui.destroy()
             self._ui = None

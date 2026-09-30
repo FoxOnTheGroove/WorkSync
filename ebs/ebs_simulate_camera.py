@@ -2,7 +2,7 @@ import math
 
 from pxr import Usd, UsdGeom, Sdf, Gf
 
-__all__ = ["EbsSimulateCamera", "CAMERA_PATH", "CAMERA_BACK",
+__all__ = ["EbsSimulateCamera", "PickLock", "CAMERA_PATH", "CAMERA_BACK",
            "CAMERA_NEAR", "CAMERA_FAR"]
 
 CAMERA_PATH = "/EbsCamera"
@@ -78,6 +78,31 @@ def viewport_window(name: str = None):
     if window is None:
         print("[ebs] no viewport window -- " + "; ".join(tried))
     return window
+
+
+class PickLock:
+    """뷰포트에서 눌러 고르는 것을 여럿이 나눠 끈다. 마지막 하나가 놓아야 되살아난다"""
+
+    _handle = None
+    _holders = 0
+
+    @classmethod
+    def hold(cls, window) -> bool:
+        """선택을 끈다. 이미 누가 꺼 뒀으면 세기만 한다"""
+        if cls._handle is None:
+            from omni.kit.viewport.utility import disable_selection
+            cls._handle = disable_selection(window, disable_click=True)
+        cls._holders += 1
+        return True
+
+    @classmethod
+    def drop(cls) -> None:
+        """하나를 놓는다. 아무도 안 잡고 있으면 선택을 되살린다"""
+        if cls._holders <= 0:
+            return
+        cls._holders -= 1
+        if cls._holders == 0:
+            cls._handle = None
 
 
 class EbsSimulateCamera:
@@ -279,8 +304,7 @@ class EbsSimulateCamera:
                 print(f"[ebs] input: {line}")
 
         try:
-            from omni.kit.viewport.utility import disable_selection
-            self._no_pick = disable_selection(window, disable_click=True)
+            self._no_pick = PickLock.hold(window)
             say("selection off")
         except Exception as e:
             self._no_pick = None
@@ -307,6 +331,8 @@ class EbsSimulateCamera:
 
     def _restore(self) -> None:
         """꺼 뒀던 선택과 카메라 단축키를 되돌린다"""
+        if self._no_pick:
+            PickLock.drop()
         self._no_pick = None
         self._no_menu = None
         if self._bindings is not None:
