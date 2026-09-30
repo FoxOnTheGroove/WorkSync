@@ -455,8 +455,8 @@ class EbsSimulateOverlay:
                        key=("verdict", "centre"),
                        on=not held and not said.get("placeable"))
         name = said.get("name") or ""
-        self._floating(said.get("name_at"), self._one(" " + name), COLOR_WORK,
-                       key=("verdict", "name_at"), on=bool(name))
+        self._floating(said.get("name_at"), self._one(" " + name, COLOR_INK),
+                       COLOR_CAN, key=("verdict", "name_at"), on=bool(name))
         self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=not held and bool(said.get("inside")))
