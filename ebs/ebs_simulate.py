@@ -1508,8 +1508,7 @@ class EbsSimulate:
             offs = [abs(at[other] - rail_at) for at in places]
             sizes = [size(kid) for kid in kids]
             if gaps[0] >= PIVOT_APART:
-                astray.append(f"{eqp_id} (first {kids[0].GetName()}/{tips[0].GetName()} "
-                              f"{gaps[0]:.3f} from port 1)")
+                astray.append(eqp_id)
             if len(kids) == 1:
                 single += 1
                 continue
@@ -1519,27 +1518,20 @@ class EbsSimulate:
                 "rail aligned": (offs.index(min(offs)), offs),
                 "largest box": (sizes.index(max(sizes)), sizes),
             }
-            for method, (pick, values) in picks.items():
+            for method, (pick, _) in picks.items():
                 if pick:
-                    odd[method].append(
-                        f"{eqp_id}: branch {pick + 1}/{len(kids)} "
-                        f"{kids[pick].GetName()}/{tips[pick].GetName()} "
-                        f"{values[pick]:.3f}, first {kids[0].GetName()}/"
-                        f"{tips[0].GetName()} {values[0]:.3f}")
+                    odd[method].append(eqp_id)
 
         print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
               f"{(time.perf_counter() - started):.1f}s, skipped " +
               ", ".join(f"{k} {v}" for k, v in skipped.items()) +
               f"; one branch {single}, several {several}")
-        print(f"[ebs] pivot survey: first child {PIVOT_APART} or more from port 1: "
-              f"{len(astray)}")
-        for line in astray:
-            print(f"[ebs]     {line}")
+        seen = single + several
+        print(f"[ebs] pivot survey: first astray {len(astray)}/{seen}: "
+              + ", ".join(astray))
         for method in methods:
-            print(f"[ebs] pivot survey: {method} picks other than the first branch: "
-                  f"{len(odd[method])}")
-            for line in odd[method]:
-                print(f"[ebs]     {line}")
+            print(f"[ebs] pivot survey: {method} {len(odd[method])}/{seen}: "
+                  + ", ".join(odd[method]))
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
