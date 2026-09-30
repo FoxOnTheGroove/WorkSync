@@ -154,6 +154,8 @@ class _PortScan:
 class EbsSimulate:
     """EBS 시뮬레이션의 속"""
 
+    _surveyed = False
+
     def __init__(self):
         """설정, 색인, 캐시 자리를 전부 비워 둔다"""
         self._xml_path: str = ""
@@ -1289,6 +1291,7 @@ class EbsSimulate:
                 self._paint(lambda: panel.fail(why))
             await self.settle()
             self.say_phases()
+            self._survey_once()
             return told
         finally:
             self.end_work()
@@ -1416,6 +1419,121 @@ class EbsSimulate:
             return ""
         return (f"pivot {apart:.3f} away from port 1 in XML "
                 f"(limit {PIVOT_APART:.3f})")
+
+    def _survey_once(self) -> None:
+        """임시 검증. 첫 SIM 때 한 번만 피봇 후보를 전수조사해 콘솔에 찍는다"""
+        if EbsSimulate._surveyed:
+            return
+        EbsSimulate._surveyed = True
+        stage = self._get_stage()
+        if stage is None:
+            return
+        kept = (self._rail_frame, self._why)
+        try:
+            self._pivot_survey(stage)
+        except Exception as e:
+            print(f"[ebs] pivot survey failed: {type(e).__name__}: {e}")
+        finally:
+            self._rail_frame, self._why = kept
+
+    @staticmethod
+    def _level_kids(parent) -> list:
+        """그 프림의 자식을 순서대로. Scope 는 풀어서 그 자식을 넣는다"""
+        found, stack = [], list(reversed(children(parent)))
+        while stack:
+            kid = stack.pop()
+            if kid.GetTypeName() in PASS_TYPES:
+                stack.extend(reversed(children(kid)))
+                continue
+            found.append(kid)
+        return found
+
+    def _pivot_survey(self, stage: Usd.Stage) -> None:
+        """5뎁스 자식 중 포트 1 거리, 레일 정렬, 가장 큰 상자로 고른 것이 첫자식이 아닌 장비"""
+        started = time.perf_counter()
+        tc = Usd.TimeCode.Default()
+        cache = UsdGeom.BBoxCache(tc, includedPurposes=[UsdGeom.Tokens.default_,
+                                                        UsdGeom.Tokens.render],
+                                  useExtentsHint=True)
+        skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0, "shallow": 0}
+        methods = ("port 1 nearest", "rail aligned", "largest box")
+        odd = {name: [] for name in methods}
+        astray, single, several = [], 0, 0
+
+        def spot(prim):
+            """월드 위치"""
+            return UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+                tc).ExtractTranslation()
+
+        def size(prim):
+            """월드 상자 부피"""
+            box = self._world_range(prim, cache)
+            if box is None:
+                return 0.0
+            lo, hi = box.GetMin(), box.GetMax()
+            return (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2])
+
+        for name in sorted(self._eqp_index):
+            prim = stage.GetPrimAtPath(self._eqp_index[name])
+            eqp_id = self._equipment_id(prim)
+            count = self.get_port_count(eqp_id)
+            if count is None:
+                skipped["no-xml"] += 1
+                continue
+            if count not in (2, 3):
+                skipped["ports"] += 1
+                continue
+            parent, reached = self.resolve_anchor(prim, ANCHOR_DEPTH - 1)
+            kids = self._level_kids(parent) if reached else []
+            if not kids:
+                skipped["shallow"] += 1
+                continue
+            with self._hush(False):
+                found = self.compute_port_points(stage, eqp_id)
+            if found is None or 1 not in found[0]:
+                skipped["xml-invalid"] += 1
+                continue
+            points, axis, rail = found
+            port = self._parent_world(rail).Transform(points[1])
+            other = 1 - axis
+            rail_at = spot(rail)[other]
+
+            places = [spot(kid) for kid in kids]
+            gaps = [math.hypot(port[0] - at[0], port[1] - at[1]) for at in places]
+            offs = [abs(at[other] - rail_at) for at in places]
+            sizes = [size(kid) for kid in kids]
+            if gaps[0] >= PIVOT_APART:
+                astray.append(f"{eqp_id} (first {kids[0].GetName()} "
+                              f"{gaps[0]:.3f} from port 1)")
+            if len(kids) == 1:
+                single += 1
+                continue
+            several += 1
+            picks = {
+                "port 1 nearest": (gaps.index(min(gaps)), gaps),
+                "rail aligned": (offs.index(min(offs)), offs),
+                "largest box": (sizes.index(max(sizes)), sizes),
+            }
+            for method, (pick, values) in picks.items():
+                if pick:
+                    odd[method].append(
+                        f"{eqp_id}: child {pick + 1}/{len(kids)} "
+                        f"{kids[pick].GetName()} {values[pick]:.3f}, "
+                        f"first {kids[0].GetName()} {values[0]:.3f}")
+
+        print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
+              f"{(time.perf_counter() - started):.1f}s, skipped " +
+              ", ".join(f"{k} {v}" for k, v in skipped.items()) +
+              f"; one child {single}, several {several}")
+        print(f"[ebs] pivot survey: first child {PIVOT_APART} or more from port 1: "
+              f"{len(astray)}")
+        for line in astray:
+            print(f"[ebs]     {line}")
+        for method in methods:
+            print(f"[ebs] pivot survey: {method} picks other than the first child: "
+                  f"{len(odd[method])}")
+            for line in odd[method]:
+                print(f"[ebs]     {line}")
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
