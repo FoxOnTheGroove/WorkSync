@@ -1066,15 +1066,13 @@ class EbsSimulate:
                 rows.append(row)
                 try:
                     prim = stage.GetPrimAtPath(self._eqp_index[name])
-                    anchor, reached = self.resolve_anchor(prim)
-                    row["pivot_ok"] = "TRUE" if reached else "FALSE"
-                    if not reached:
+                    choices = self.anchor_choices(prim)
+                    row["pivot_ok"] = "TRUE" if choices else "FALSE"
+                    if not choices:
                         row["why"] = (f"nothing {ANCHOR_DEPTH} levels down to "
                                       f"measure against")
                         failed.append((eqp_id, row["why"]))
                         continue
-                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
-                        tc).ExtractTranslation()
 
                     self._rail_frame = None
                     with self._hush(position == 0):
@@ -1103,6 +1101,9 @@ class EbsSimulate:
                         parents[key] = self._parent_world(rail)
                     to_world = parents[key]
                     port = to_world.Transform(points[1])
+                    anchor, _ = self._pick_anchor(choices, port)
+                    here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+                        tc).ExtractTranslation()
                     row.update(self._measure(to_world, axis, rail, port, here,
                                              self._port_addr.get(eqp_id.upper())))
                     row["_port"], row["_here"] = port, here
@@ -1380,12 +1381,20 @@ class EbsSimulate:
                                  say=SAY_EBS.format(port_count))
 
         with self._stage_timer("resolve anchor"):
-            anchor, reached = self.resolve_anchor(eqp_prim)
-        if not reached:
+            port = self._port_one(stage, eqp_id)
+            choices = self.anchor_choices(eqp_prim)
+            if choices:
+                anchor, rank = self._pick_anchor(choices, port)
+            else:
+                anchor, rank = self.resolve_anchor(eqp_prim)[0], 0
+        if not choices:
             self._note(f"{eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
                   f"working off the equipment prim")
+        elif rank:
+            self._note(f"{eqp_id}: pivot is child {rank + 1} of {len(choices)} "
+                       f"({anchor.GetName()}), the first sits away from port 1")
 
-        astray = self._pivot_astray(stage, eqp_id, anchor)
+        astray = self._pivot_astray(port, anchor)
         if astray:
             return self._payload(False, astray, equipment=eqp_prim,
                                  eqp_id=eqp_id, port_count=port_count,
@@ -1400,18 +1409,36 @@ class EbsSimulate:
         }
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
-    def _pivot_astray(self, stage: Usd.Stage, eqp_id: str, anchor) -> str:
-        """피봇이 XML 의 포트 1 에서 얼마나 떨어져 있나. 멀면 사유, 가까우면 빈 칸"""
+    def _port_one(self, stage: Usd.Stage, eqp_id: str):
+        """XML 포트 1 의 월드 좌표. 못 구하면 None"""
         found = self.compute_port_points(stage, eqp_id)
         if found is None:
-            return ""
+            return None
         points, _, rail = found
-        if 1 not in points or anchor is None or not anchor.IsValid():
-            return ""
-        port = self._parent_world(rail).Transform(points[1])
+        if 1 not in points:
+            return None
+        return self._parent_world(rail).Transform(points[1])
+
+    @staticmethod
+    def _apart(anchor, port) -> float:
+        """그 프림과 포트 1 의 XY 거리"""
         here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default()).ExtractTranslation()
-        apart = math.hypot(port[0] - here[0], port[1] - here[1])
+        return math.hypot(port[0] - here[0], port[1] - here[1])
+
+    def _pick_anchor(self, choices: list, port):
+        """후보 중 포트 1 에 붙은 첫 프림과 그 순번. 없으면 첫자식"""
+        if port is not None:
+            for rank, choice in enumerate(choices):
+                if self._apart(choice, port) < PIVOT_APART:
+                    return choice, rank
+        return choices[0], 0
+
+    def _pivot_astray(self, port, anchor) -> str:
+        """피봇이 XML 의 포트 1 에서 얼마나 떨어져 있나. 멀면 사유, 가까우면 빈 칸"""
+        if port is None or anchor is None or not anchor.IsValid():
+            return ""
+        apart = self._apart(anchor, port)
         if apart < PIVOT_APART:
             return ""
         return (f"pivot {apart:.3f} away from port 1 in XML "
@@ -2108,6 +2135,21 @@ class EbsSimulate:
                 continue
             current, level = first, level + 1
         return current, True
+
+    @classmethod
+    def anchor_choices(cls, prim: Usd.Prim, depth: int = ANCHOR_DEPTH) -> list:
+        """피봇 후보. 한 단계 위까지 첫자식으로 내려가 그 자식들을 순서대로 모은다"""
+        parent, reached = cls.resolve_anchor(prim, depth - 1)
+        if not reached or not parent or not parent.IsValid():
+            return []
+        found, stack = [], list(reversed(children(parent)))
+        while stack:
+            kid = stack.pop()
+            if kid.GetTypeName() in PASS_TYPES:
+                stack.extend(reversed(children(kid)))
+                continue
+            found.append(kid)
+        return found
 
 
     def load_ports(self) -> int:
