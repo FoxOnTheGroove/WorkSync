@@ -30,7 +30,10 @@ STATE_CLASH = "clash"
 FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = " 이 위치에 EBS 장비를 세울 수 없습니다."
-INNER  = " 내부 장비와 충돌"
+CAN    = " 이 위치에 EBS 장비를 세울 수 있습니다."
+OUTER_HIT = " 외부 간섭"
+INNER_HIT = " 내부 간섭"
+BOTH_HIT  = " 외부, 내부 간섭"
 HOME   = "0mm"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
@@ -73,6 +76,7 @@ SIDE_BY_SIDE = ("ceiling",)
 
 COLOR_CAN    = 0xFF9AE7FF
 COLOR_CANNOT = 0xFF1B39FC
+COLOR_PLACE  = 0xFF43A02E
 COLOR_TEXT   = 0xFFFFFFFF
 COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
@@ -451,19 +455,39 @@ class EbsSimulateOverlay:
                             share, group, key, on, wide])
 
     def _verdict_panel(self, said: dict) -> None:
-        """못 세울 때만 보이는 두 줄과, 늘 보이는 장비 이름표"""
+        """세울 수 있나 없나를 알리는 판과, 늘 보이는 장비 이름표"""
         held = EbsSimulateGrip.held()
-        self._floating(said.get("centre"), self._one(CANNOT), COLOR_CANNOT,
-                       key=("verdict", "centre"),
-                       on=not held and not said.get("placeable"))
+
+        def fill():
+            """첫 줄은 판정, 둘째 줄은 못 세울 때의 사유"""
+            with ui.VStack(spacing=0, style={"margin_width": PAD_X,
+                                             "margin_height": PAD_Y}):
+                self._label("", COLOR_TEXT, ("verdict", "title"))
+                self._label("", COLOR_TEXT, ("verdict", "why"))
+                ui.Spacer(height=ui.Pixel(TEXT_DROP))
+
+        self._floating(said.get("centre"), fill, COLOR_CANNOT,
+                       key=("verdict", "centre"), on=not held)
+        self._judge(said)
         name = said.get("name") or ""
         self._floating(said.get("name_at"),
                        self._one(" " + name + " ", COLOR_TEXT, size=NAME_SIZE),
                        COLOR_NAME, key=("verdict", "name_at"), on=bool(name))
-        self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
-                       key=("verdict", "inside_at"),
-                       on=not held and bool(said.get("inside")))
         self._offset_panel(said)
+
+    def _judge(self, said: dict) -> None:
+        """판정 판의 글과 색. 세울 수 있으면 녹색 한 줄, 없으면 붉은 두 줄"""
+        placeable = bool(said.get("placeable"))
+        outer, inner = bool(said.get("faces")), bool(said.get("inside"))
+        self._say(("verdict", "title"), CAN if placeable else CANNOT)
+        self._say(("verdict", "why"), BOTH_HIT if outer and inner else
+                  INNER_HIT if inner else OUTER_HIT)
+        why = self._texts.get(("verdict", "why"))
+        if why is not None:
+            why.visible = not placeable
+        ground = COLOR_PLACE if placeable else COLOR_CANNOT
+        for behind in self._grounds.get(("verdict", "centre"), ()):
+            behind.style = {"background_color": ground, "border_radius": 4}
 
     def _one(self, text, ink=COLOR_TEXT, key=None, size: int = TEXT_SIZE):
         """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
@@ -539,10 +563,10 @@ class EbsSimulateOverlay:
         if not said:
             return
         spots = {("verdict", "centre"): said.get("centre"),
-                 ("verdict", "inside_at"): said.get("inside_at"),
                  ("verdict", "name_at"): said.get("name_at"),
                  ("verdict", "offset"): self._grip_at(said, "under")}
         self._dial(said)
+        self._judge(said)
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
             self._say(("face", mark["face"], "word"), self._word_of(mark))
@@ -555,8 +579,7 @@ class EbsSimulateOverlay:
         for mark in said.get("marks") or ():
             self._repaint(("face", mark["face"]), mark.get("state"))
         held = EbsSimulateGrip.held()
-        shown = {("verdict", "centre"): not held and not said.get("placeable"),
-                 ("verdict", "inside_at"): not held and bool(said.get("inside"))}
+        shown = {("verdict", "centre"): not held}
         for entry in self._marks:
             at = spots.get(entry[7])
             if at is not None:
