@@ -1380,7 +1380,8 @@ class EbsSimulate:
                                  say=SAY_EBS.format(port_count))
 
         with self._stage_timer("resolve anchor"):
-            anchor, astray = self._pick_anchor(stage, eqp_id, eqp_prim)
+            port = self._port_one(stage, eqp_id)
+            anchor, astray = self._pick_anchor(eqp_id, eqp_prim, port)
         if astray:
             return self._payload(False, astray, equipment=eqp_prim,
                                  eqp_id=eqp_id, port_count=port_count,
@@ -1392,10 +1393,11 @@ class EbsSimulate:
             "port_count": port_count,
             "ebs": ebs_prim,
             "anchor": anchor,
+            "port_one": port,
         }
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
-    def _pick_anchor(self, stage: Usd.Stage, eqp_id: str, prim):
+    def _pick_anchor(self, eqp_id: str, prim, port):
         """6뎁스 피봇과 실패 사유. MAINBODY, MAIN, EFEM 순으로 하나면 그대로, 아니면 포트 1 로 검증해 고른다"""
         tip, reached = self.resolve_anchor(prim)
         _, tips = self._branch_tips(prim)
@@ -1418,7 +1420,6 @@ class EbsSimulate:
             return pool[0], ""
         pool = pool or every
 
-        port = self._port_one(stage, eqp_id)
         if port is None:
             self._note(f"{eqp_id}: pivot {pool[0].GetName()}, {tier} of "
                        f"{len(pool)} unchecked, no port 1 in XML")
@@ -1894,11 +1895,7 @@ class EbsSimulate:
         spot[up_axis] = lo[up_axis] + tall * CLASH_HEIGHT
         lower = to_world.Transform(Gf.Vec3d(*spot))
         spot[up_axis] = lo[up_axis] + tall * NAME_HEIGHT
-        named = to_world.Transform(Gf.Vec3d(*spot))
-        right = self._right_way(0)
-        if right is not None and self._nudge:
-            paces = self._nudge / (self._per_unit() or 1.0)
-            named = Gf.Vec3d(*[named[i] - right[i] * paces for i in range(3)])
+        named = self._name_spot(to_world.Transform(Gf.Vec3d(*spot)))
         marks = Collide._face_marks(self, local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
@@ -1918,6 +1915,18 @@ class EbsSimulate:
             "blocked": sum(1 for face in FACES if cells.get(face)),
             "placeable": not inside and not blocked,
         }
+
+    def _name_spot(self, named):
+        """이름표 자리. 좌우만 XML 포트 1 에 맞추고, 없으면 민 거리만큼 되돌린다"""
+        right = self._right_way(0)
+        if right is None:
+            return named
+        port = (self._target or {}).get("port_one")
+        if port is not None:
+            off = sum((port[i] - named[i]) * right[i] for i in range(3))
+        else:
+            off = -self._nudge / (self._per_unit() or 1.0)
+        return Gf.Vec3d(*[named[i] + right[i] * off for i in range(3)])
 
     def _grip_spot(self, local_box, to_world) -> dict:
         """손잡이를 EBS 에 붙일 자리와 크기. EBS 안 좌표로 잰다"""
