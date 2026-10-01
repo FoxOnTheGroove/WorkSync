@@ -31,9 +31,9 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = " 이 위치에 EBS 장비를 세울 수 없습니다."
 CAN    = " 이 위치에 EBS 장비를 세울 수 있습니다."
-OUTER_HIT = "외부 간섭"
-INNER_HIT = "내부 간섭"
-BOTH_HIT  = "외부, 내부 간섭"
+OUTER_HIT = " (외부 간섭)"
+INNER_HIT = " (내부 간섭)"
+BOTH_HIT  = " (외부, 내부 간섭)"
 HOME   = "0mm"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
@@ -458,19 +458,9 @@ class EbsSimulateOverlay:
         """세울 수 있나 없나를 알리는 판과, 늘 보이는 장비 이름표"""
         held = EbsSimulateGrip.held()
 
-        def fill():
-            """첫 줄은 판정, 둘째 줄은 못 세울 때의 사유"""
-            with ui.VStack(spacing=0, style={"margin_width": PAD_X,
-                                             "margin_height": PAD_Y}):
-                self._label("", COLOR_TEXT, ("verdict", "title"))
-                with ui.HStack(height=0):
-                    ui.Spacer()
-                    self._label("", COLOR_TEXT, ("verdict", "why"))
-                    ui.Spacer()
-                ui.Spacer(height=ui.Pixel(TEXT_DROP))
-
-        self._floating(said.get("centre"), fill, COLOR_CANNOT,
-                       key=("verdict", "centre"), on=not held)
+        self._floating(said.get("centre"),
+                       self._one("", COLOR_TEXT, ("verdict", "title")),
+                       COLOR_CANNOT, key=("verdict", "centre"), on=not held)
         self._judge(said)
         name = said.get("name") or ""
         self._floating(said.get("name_at"),
@@ -479,15 +469,12 @@ class EbsSimulateOverlay:
         self._offset_panel(said)
 
     def _judge(self, said: dict) -> None:
-        """판정 판의 글과 색. 세울 수 있으면 녹색 한 줄, 없으면 붉은 두 줄"""
+        """판정 판의 글과 색. 세울 수 있으면 녹색, 없으면 붉은 판에 사유를 붙인다"""
         placeable = bool(said.get("placeable"))
         outer, inner = bool(said.get("faces")), bool(said.get("inside"))
-        self._say(("verdict", "title"), CAN if placeable else CANNOT)
-        self._say(("verdict", "why"), BOTH_HIT if outer and inner else
-                  INNER_HIT if inner else OUTER_HIT)
-        why = self._texts.get(("verdict", "why"))
-        if why is not None:
-            why.visible = not placeable
+        why = (BOTH_HIT if outer and inner else
+               INNER_HIT if inner else OUTER_HIT)
+        self._say(("verdict", "title"), CAN if placeable else CANNOT + why)
         ground = COLOR_PLACE if placeable else COLOR_CANNOT
         for behind in self._grounds.get(("verdict", "centre"), ()):
             behind.style = {"background_color": ground, "border_radius": 4}

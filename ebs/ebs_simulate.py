@@ -1916,14 +1916,12 @@ class EbsSimulate:
         }
 
     def _name_spot(self, named):
-        """이름표 자리. 높이는 그대로, 나머지 두 축은 피봇의 월드 좌표"""
-        anchor = (self._target or {}).get("anchor")
-        if anchor is None or not anchor.IsValid():
+        """이름표 자리. EBS 가운데에서 민 거리만큼 되돌려, 밀어도 제자리에 둔다"""
+        right = self._right_way(0)
+        if right is None or not self._nudge:
             return named
-        here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
-            Usd.TimeCode.Default()).ExtractTranslation()
-        up = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
-        return Gf.Vec3d(*[named[i] if i == up else here[i] for i in range(3)])
+        paces = self._nudge / (self._per_unit() or 1.0)
+        return Gf.Vec3d(*[named[i] - right[i] * paces for i in range(3)])
 
     def _grip_spot(self, local_box, to_world) -> dict:
         """손잡이를 EBS 에 붙일 자리와 크기. EBS 안 좌표로 잰다"""
