@@ -1467,29 +1467,34 @@ class EbsSimulate:
         return kids, tips
 
     @staticmethod
-    def _module_of(prim) -> str:
-        """그 프림의 MODULE 메타데이터 값"""
+    def _module_of(prim) -> "str | None":
+        """그 프림의 MODULE 메타데이터 값. 속성이 없으면 None"""
         want = re.sub(r"[^a-z0-9]", "", MODULE_ATTR.lower())
         for attr in prim.GetAttributes():
             if re.sub(r"[^a-z0-9]", "", attr.GetName().lower()) == want:
                 value = attr.Get()
                 return str(value).strip() if value is not None else ""
-        return ""
+        return None
 
     def _pivot_survey(self, stage: Usd.Stage) -> None:
         """6뎁스 첫자식이 MAINBODY 이고 포트 1 에 붙으면 그대로, 아니면 1~4뎁스 갈래에서 찾는다"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
-        first, branch, invalid, probed = [], [], [], []
+        first, branch, invalid = [], [], []
+        why = {"near, not MAINBODY": [], "MAINBODY but far": [],
+               "no MODULE": [], "MODULE but no MAINBODY": []}
+        values = {}
 
-        def fits(tip, port):
-            """MAINBODY 이고 포트 1 에서 PIVOT_APART 안"""
-            if self._module_of(tip) != MODULE_BODY:
-                return False
+        def near(tip, port):
+            """포트 1 에서 PIVOT_APART 안"""
             at = UsdGeom.Xformable(tip).ComputeLocalToWorldTransform(
                 tc).ExtractTranslation()
             return math.hypot(port[0] - at[0], port[1] - at[1]) < PIVOT_APART
+
+        def fits(tip, port):
+            """MAINBODY 이고 포트 1 에서 PIVOT_APART 안"""
+            return self._module_of(tip) == MODULE_BODY and near(tip, port)
 
         for name in sorted(self._eqp_index):
             prim = stage.GetPrimAtPath(self._eqp_index[name])
@@ -1509,8 +1514,6 @@ class EbsSimulate:
             points, _, rail = found
             port = self._parent_world(rail).Transform(points[1])
 
-            if len(probed) < 3:
-                probed.append(prim)
             tip, reached = self.resolve_anchor(prim)
             if reached and fits(tip, port):
                 first.append(eqp_id)
@@ -1518,8 +1521,20 @@ class EbsSimulate:
             _, tips = self._branch_tips(prim)
             if any(other != tip and fits(other, port) for other in tips):
                 branch.append(eqp_id)
+                continue
+            invalid.append(eqp_id)
+            every = ([tip] if reached else []) + [o for o in tips if o != tip]
+            modules = [self._module_of(one) for one in every]
+            if reached and near(tip, port):
+                why["near, not MAINBODY"].append(eqp_id)
+                said = repr(self._module_of(tip))
+                values[said] = values.get(said, 0) + 1
+            elif MODULE_BODY in modules:
+                why["MAINBODY but far"].append(eqp_id)
+            elif all(one is None for one in modules):
+                why["no MODULE"].append(eqp_id)
             else:
-                invalid.append(eqp_id)
+                why["MODULE but no MAINBODY"].append(eqp_id)
 
         seen = len(first) + len(branch) + len(invalid)
         print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
@@ -1528,32 +1543,12 @@ class EbsSimulate:
         print(f"[ebs] pivot survey: first child {len(first)}/{seen}")
         print(f"[ebs] pivot survey: other branch {len(branch)}/{seen}: "
               + ", ".join(branch))
-        print(f"[ebs] pivot survey: invalid {len(invalid)}/{seen}: "
-              + ", ".join(invalid))
-        for prim in probed:
-            self._module_probe(prim)
-
-    def _module_probe(self, prim) -> None:
-        """임시 진단. 첫자식 경로 1~7뎁스에서 이름에 module 이 든 속성과 customData 를 찍는다"""
-        eqp_id = self._equipment_id(prim)
-        hits = 0
-        for depth in range(1, ANCHOR_DEPTH + 2):
-            node, reached = self.resolve_anchor(prim, depth)
-            if not reached:
-                break
-            for attr in node.GetAttributes():
-                if "module" in attr.GetName().lower():
-                    hits += 1
-                    print(f"[ebs] module probe {eqp_id} d{depth} {node.GetName()}: "
-                          f"attr '{attr.GetName()}' = {attr.Get()!r}")
-            for key, value in (node.GetCustomData() or {}).items():
-                if "module" in str(key).lower() or "hoops" in str(key).lower():
-                    hits += 1
-                    print(f"[ebs] module probe {eqp_id} d{depth} {node.GetName()}: "
-                          f"customData '{key}' = {value!r}")
-        if not hits:
-            print(f"[ebs] module probe {eqp_id}: nothing named module on depth "
-                  f"1-{ANCHOR_DEPTH + 1} of the first path")
+        print(f"[ebs] pivot survey: invalid {len(invalid)}/{seen}")
+        for reason, names in why.items():
+            print(f"[ebs] pivot survey:   {reason} {len(names)}/{len(invalid)}: "
+                  + ", ".join(names))
+        print("[ebs] pivot survey:   near, not MAINBODY values: " + ", ".join(
+            f"{k} {v}" for k, v in sorted(values.items(), key=lambda kv: -kv[1])))
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
