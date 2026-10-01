@@ -154,8 +154,6 @@ class _PortScan:
 class EbsSimulate:
     """EBS 시뮬레이션의 속"""
 
-    _surveyed = False
-
     def __init__(self):
         """설정, 색인, 캐시 자리를 전부 비워 둔다"""
         self._xml_path: str = ""
@@ -1291,7 +1289,6 @@ class EbsSimulate:
                 self._paint(lambda: panel.fail(why))
             await self.settle()
             self.say_phases()
-            self._survey_once()
             return told
         finally:
             self.end_work()
@@ -1383,12 +1380,7 @@ class EbsSimulate:
                                  say=SAY_EBS.format(port_count))
 
         with self._stage_timer("resolve anchor"):
-            anchor, reached = self.resolve_anchor(eqp_prim)
-        if not reached:
-            self._note(f"{eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
-                  f"working off the equipment prim")
-
-        astray = self._pivot_astray(stage, eqp_id, anchor)
+            anchor, astray = self._pick_anchor(stage, eqp_id, eqp_prim)
         if astray:
             return self._payload(False, astray, equipment=eqp_prim,
                                  eqp_id=eqp_id, port_count=port_count,
@@ -1403,38 +1395,70 @@ class EbsSimulate:
         }
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
-    def _pivot_astray(self, stage: Usd.Stage, eqp_id: str, anchor) -> str:
-        """피봇이 XML 의 포트 1 에서 얼마나 떨어져 있나. 멀면 사유, 가까우면 빈 칸"""
-        found = self.compute_port_points(stage, eqp_id)
-        if found is None:
-            return ""
-        points, _, rail = found
-        if 1 not in points or anchor is None or not anchor.IsValid():
-            return ""
-        port = self._parent_world(rail).Transform(points[1])
-        here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
-            Usd.TimeCode.Default()).ExtractTranslation()
-        apart = math.hypot(port[0] - here[0], port[1] - here[1])
-        if apart < PIVOT_APART:
-            return ""
-        return (f"pivot {apart:.3f} away from port 1 in XML "
-                f"(limit {PIVOT_APART:.3f})")
+    def _pick_anchor(self, stage: Usd.Stage, eqp_id: str, prim):
+        """6뎁스 피봇과 실패 사유. MAINBODY, MAIN, EFEM 순으로 하나면 그대로, 아니면 포트 1 로 검증해 고른다"""
+        tip, reached = self.resolve_anchor(prim)
+        _, tips = self._branch_tips(prim)
+        every = ([tip] if reached else []) + [one for one in tips if one != tip]
+        if not reached and not every:
+            self._note(f"{eqp_id}: nothing {ANCHOR_DEPTH} transform levels down, "
+                       f"working off the equipment prim")
+            every = [tip]
 
-    def _survey_once(self) -> None:
-        """임시 검증. 첫 SIM 때 한 번만 피봇 후보를 전수조사해 콘솔에 찍는다"""
-        if EbsSimulate._surveyed:
-            return
-        EbsSimulate._surveyed = True
-        stage = self._get_stage()
-        if stage is None:
-            return
-        kept = (self._rail_frame, self._why)
-        try:
-            self._pivot_survey(stage)
-        except Exception as e:
-            print(f"[ebs] pivot survey failed: {type(e).__name__}: {e}")
-        finally:
-            self._rail_frame, self._why = kept
+        modules = [(self._module_of(one) or "").upper() for one in every]
+        pool, tier = [], "none"
+        for label in MODULE_TIERS:
+            pool = [one for one, m in zip(every, modules)
+                    if self._module_fits(label, m)]
+            if pool:
+                tier = label
+                break
+        if len(pool) == 1:
+            self._note(f"{eqp_id}: pivot {pool[0].GetName()}, the only {tier}")
+            return pool[0], ""
+        pool = pool or every
+
+        port = self._port_one(stage, eqp_id)
+        if port is None:
+            self._note(f"{eqp_id}: pivot {pool[0].GetName()}, {tier} of "
+                       f"{len(pool)} unchecked, no port 1 in XML")
+            return pool[0], ""
+        gaps = [self._apart(one, port) for one in pool]
+        if tip in pool and gaps[pool.index(tip)] < PIVOT_APART:
+            best = tip
+        else:
+            best = pool[gaps.index(min(gaps))]
+        apart = gaps[pool.index(best)]
+        self._note(f"{eqp_id}: pivot {best.GetName()}, {tier} of {len(pool)} "
+                   f"checked, {apart:.3f} from port 1")
+        if apart < PIVOT_APART:
+            return best, ""
+        return best, (f"pivot {apart:.3f} away from port 1 in XML "
+                      f"(limit {PIVOT_APART:.3f})")
+
+    @staticmethod
+    def _module_fits(label: str, module: str) -> bool:
+        """MODULE 값이 그 단계에 드나. MAINBODY 는 정확히, MAIN 은 MAINT 를 빼고, 나머지는 포함"""
+        if label == MODULE_BODY:
+            return module == MODULE_BODY
+        if label == MODULE_MAIN:
+            return MODULE_MAIN in module and MODULE_SKIP not in module
+        return label in module
+
+    def _port_one(self, stage: Usd.Stage, eqp_id: str):
+        """XML 포트 1 의 월드 좌표. 못 구하면 None"""
+        found = self.compute_port_points(stage, eqp_id)
+        if found is None or 1 not in found[0]:
+            return None
+        points, _, rail = found
+        return self._parent_world(rail).Transform(points[1])
+
+    @staticmethod
+    def _apart(prim, port) -> float:
+        """그 프림과 포트 1 의 XY 거리"""
+        here = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()).ExtractTranslation()
+        return math.hypot(port[0] - here[0], port[1] - here[1])
 
     @staticmethod
     def _level_kids(parent) -> list:
@@ -1475,95 +1499,6 @@ class EbsSimulate:
                 value = attr.Get()
                 return str(value).strip() if value is not None else ""
         return None
-
-    def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """MAINBODY, MAIN, EFEM 순으로 하나면 그대로, 여럿이면 그 안에서, 다 없으면 전부에서 포트 1 로 검증해 고른다"""
-        started = time.perf_counter()
-        tc = Usd.TimeCode.Default()
-        skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
-        alone = ("MAINBODY one", "MAIN one", "EFEM one")
-        tiers = ("MAINBODY several", "MAIN several", "EFEM several", "none")
-        picked = {tier: {"first": [], "other": []} for tier in alone}
-        sorted_out = {tier: {"first": [], "other": [], "far": []} for tier in tiers}
-
-        def gap(tip, port):
-            """포트 1 과의 XY 거리"""
-            at = UsdGeom.Xformable(tip).ComputeLocalToWorldTransform(
-                tc).ExtractTranslation()
-            return math.hypot(port[0] - at[0], port[1] - at[1])
-
-        for name in sorted(self._eqp_index):
-            prim = stage.GetPrimAtPath(self._eqp_index[name])
-            eqp_id = self._equipment_id(prim)
-            count = self.get_port_count(eqp_id)
-            if count is None:
-                skipped["no-xml"] += 1
-                continue
-            if count not in (2, 3):
-                skipped["ports"] += 1
-                continue
-            with self._hush(False):
-                found = self.compute_port_points(stage, eqp_id)
-            if found is None or 1 not in found[0]:
-                skipped["xml-invalid"] += 1
-                continue
-            points, _, rail = found
-            port = self._parent_world(rail).Transform(points[1])
-
-            tip, reached = self.resolve_anchor(prim)
-            _, tips = self._branch_tips(prim)
-            every = ([tip] if reached else []) + [o for o in tips if o != tip]
-            if not every:
-                sorted_out["none"]["far"].append(eqp_id)
-                continue
-            modules = [(self._module_of(one) or "").upper() for one in every]
-            pool = [one for one, m in zip(every, modules) if m == MODULE_BODY]
-            tier = "MAINBODY"
-            if not pool:
-                pool = [one for one, m in zip(every, modules)
-                        if "MAIN" in m and "MAINT" not in m]
-                tier = "MAIN"
-            if not pool:
-                pool = [one for one, m in zip(every, modules) if "EFEM" in m]
-                tier = "EFEM"
-            if len(pool) == 1:
-                way = "first" if reached and pool[0] == tip else "other"
-                picked[f"{tier} one"][way].append(eqp_id)
-                continue
-            if pool:
-                tier = f"{tier} several"
-            else:
-                pool, tier = every, "none"
-            if reached and tip in pool and gap(tip, port) < PIVOT_APART:
-                sorted_out[tier]["first"].append(eqp_id)
-            elif min(gap(one, port) for one in pool) < PIVOT_APART:
-                sorted_out[tier]["other"].append(eqp_id)
-            else:
-                sorted_out[tier]["far"].append(eqp_id)
-
-        seen = sum(len(names) for out in list(sorted_out.values())
-                   + list(picked.values()) for names in out.values())
-        valid = seen - sum(len(out["far"]) for out in sorted_out.values())
-        print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
-              f"{(time.perf_counter() - started):.1f}s, skipped " +
-              ", ".join(f"{k} {v}" for k, v in skipped.items()) +
-              f"; valid {valid}/{seen}")
-        for tier in alone:
-            out = picked[tier]
-            total = len(out["first"]) + len(out["other"])
-            print(f"[ebs] pivot survey: {tier} {total}/{seen}, unchecked: "
-                  f"first child {len(out['first'])}")
-            print(f"[ebs] pivot survey:   {tier} other branch "
-                  f"{len(out['other'])}/{total}: " + ", ".join(out["other"]))
-        for tier in tiers:
-            out = sorted_out[tier]
-            total = sum(len(names) for names in out.values())
-            print(f"[ebs] pivot survey: {tier} {total}/{seen}: "
-                  f"first child {len(out['first'])}")
-            print(f"[ebs] pivot survey:   {tier} other branch "
-                  f"{len(out['other'])}/{total}: " + ", ".join(out["other"]))
-            print(f"[ebs] pivot survey:   {tier} invalid (far) "
-                  f"{len(out['far'])}/{total}: " + ", ".join(out["far"]))
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
