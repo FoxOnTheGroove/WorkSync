@@ -1,15 +1,18 @@
+import asyncio
+
 import omni.ext
 import omni.ui as ui
 
 from .ebs_simulate import instance, forget
 from .ebs_simulate_camera import PickLock, viewport_window
-from .ebs_simulate_overlay import attach as attach_overlay
+from .ebs_simulate_overlay import attach as attach_overlay, EbsSimulateGrip
 from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
 RAISE_FRAMES = 300
 SHOW_DUMMY_UI = False
 BLOCK_SELECT = True
+KEY_STEP = 0.005
 
 
 class EbsExtension(omni.ext.IExt):
@@ -28,6 +31,7 @@ class EbsExtension(omni.ext.IExt):
         self._stage = None
         self._picking = False
         self._keys = None
+        self._stepped = False
         self._watch_layout()
         self._watch_stage()
         self._watch_keys()
@@ -45,24 +49,33 @@ class EbsExtension(omni.ext.IExt):
             print(f"[ebs] no keyboard: {type(e).__name__}: {e}")
 
     def _on_key(self, event, *args, **kwargs) -> bool:
-        """좌우 화살표를 누르거나 누르고 있으면 그쪽 일을 부른다"""
+        """좌우 화살표로 EBS 를 KEY_STEP 씩 밀고, 떼면 다시 잰다"""
         import carb.input
-        kind = carb.input.KeyboardEventType
-        if event.type not in (kind.KEY_PRESS, kind.KEY_REPEAT):
+        keys = carb.input.KeyboardInput
+        way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
+        if way is None:
             return True
-        if event.input == carb.input.KeyboardInput.LEFT:
-            self._on_left()
-        elif event.input == carb.input.KeyboardInput.RIGHT:
-            self._on_right()
+        kind = carb.input.KeyboardEventType
+        if event.type in (kind.KEY_PRESS, kind.KEY_REPEAT):
+            self._step(way)
+        elif event.type == kind.KEY_RELEASE:
+            self._settle()
         return True
 
-    def _on_left(self):
-        """왼쪽 화살표. 할 일은 다음에 붙인다"""
-        print("[ebs] key left")
+    def _step(self, way: float):
+        """SIM 중이고 손잡이를 안 잡았을 때만 한 칸 민다"""
+        if self._sim is None or EbsSimulateGrip.held():
+            return
+        told = self._sim.nudge_by(way * KEY_STEP)
+        if told and told.get("ok"):
+            self._stepped = True
 
-    def _on_right(self):
-        """오른쪽 화살표. 할 일은 다음에 붙인다"""
-        print("[ebs] key right")
+    def _settle(self):
+        """민 것이 있으면 그 자리에서 내부 충돌을 다시 잰다"""
+        if not self._stepped or self._sim is None:
+            return
+        self._stepped = False
+        asyncio.ensure_future(self._sim.run_nudge_settle())
 
     def _drop_keys(self):
         """키보드 구독을 놓는다"""

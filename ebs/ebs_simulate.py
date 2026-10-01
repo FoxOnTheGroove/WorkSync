@@ -1332,6 +1332,34 @@ class EbsSimulate:
         finally:
             self.end_work()
 
+    def nudge_by(self, metres: float) -> dict:
+        """SIM 중일 때만 EBS 를 그만큼 더 민다. 내부 충돌은 손을 뗀 뒤 다시 잰다"""
+        if self._busy or self._target is None or not self._aligned \
+                or not self._verdict:
+            return self._payload(False, "Not in SIM")
+        if self._clash_on:
+            self.hold_clash(False)
+        told = self.slide(self._nudge + metres)
+        self._paint(self._panel().restate)
+        return told
+
+    async def run_nudge_settle(self) -> dict:
+        """민 자리에서 내부 충돌을 다시 재고 연출을 되켠다"""
+        if self._busy or self._target is None or not self._verdict:
+            return
+        import omni.kit.app
+        panel = self._panel()
+        self._paint(panel.wake)
+        self.begin_work(WORK_SETTLE)
+        try:
+            await omni.kit.app.get_app().next_update_async()
+            self.hold_clash(True)
+            await self.settle()
+            return self._payload(True, f"offset {self._nudge:+.3f}")
+        finally:
+            self._paint(panel.restate)
+            self.end_work()
+
     def run_cam_refresh(self) -> dict:
         """카메라 위치와 궤도 중심을 처음 자리로 되돌린다"""
         if self._busy:
