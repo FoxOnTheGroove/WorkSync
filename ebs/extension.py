@@ -13,6 +13,7 @@ RAISE_FRAMES = 300
 SHOW_DUMMY_UI = False
 BLOCK_SELECT = True
 KEY_STEP = 0.005
+KEY_WAIT = 0.75
 
 
 class EbsExtension(omni.ext.IExt):
@@ -32,6 +33,7 @@ class EbsExtension(omni.ext.IExt):
         self._picking = False
         self._keys = None
         self._stepped = False
+        self._waiting = None
         self._watch_layout()
         self._watch_stage()
         self._watch_keys()
@@ -63,19 +65,34 @@ class EbsExtension(omni.ext.IExt):
         return True
 
     def _step(self, way: float):
-        """SIM 중이고 손잡이를 안 잡았을 때만 한 칸 민다"""
+        """SIM 중이고 손잡이를 안 잡았을 때만 한 칸 민다. 기다리던 재측정은 미룬다"""
         if self._sim is None or EbsSimulateGrip.held():
             return
+        self._hold_off()
         told = self._sim.nudge_by(way * KEY_STEP)
         if told and told.get("ok"):
             self._stepped = True
 
     def _settle(self):
-        """민 것이 있으면 그 자리에서 내부 충돌을 다시 잰다"""
+        """민 것이 있으면 KEY_WAIT 동안 더 안 눌릴 때 그 자리에서 다시 잰다"""
         if not self._stepped or self._sim is None:
             return
+        self._hold_off()
+        self._waiting = asyncio.ensure_future(self._settle_later())
+
+    async def _settle_later(self):
+        """KEY_WAIT 를 기다렸다가 내부 충돌을 다시 잰다"""
+        await asyncio.sleep(KEY_WAIT)
+        self._waiting = None
         self._stepped = False
-        asyncio.ensure_future(self._sim.run_nudge_settle())
+        if self._sim is not None:
+            await self._sim.run_nudge_settle()
+
+    def _hold_off(self):
+        """기다리던 재측정을 거둔다"""
+        if self._waiting is not None:
+            self._waiting.cancel()
+            self._waiting = None
 
     def _drop_keys(self):
         """키보드 구독을 놓는다"""
@@ -154,6 +171,7 @@ class EbsExtension(omni.ext.IExt):
         self._raise = None
         self._stage = None
         self._drop_keys()
+        self._hold_off()
         if self._picking:
             PickLock.drop()
             self._picking = False

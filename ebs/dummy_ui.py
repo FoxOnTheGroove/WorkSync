@@ -120,7 +120,6 @@ class EbsDummyUI:
         self._status_label = None
         self._near_slider = None
         self._nudge_label = None
-        self._nudge_for = ""
         self._task = None
 
 
@@ -376,7 +375,6 @@ class EbsDummyUI:
     def _reset_nudge(self):
         """민 거리를 0 으로"""
         self._sim.set_nudge(0.0)
-        self._nudge_for = self._eqp_field.model.get_value_as_string().strip()
         self._mark_nudge()
 
     def _mark_nudge(self, busy: bool = False):
