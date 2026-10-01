@@ -1477,24 +1477,18 @@ class EbsSimulate:
         return None
 
     def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """6뎁스 첫자식이 MAINBODY 이고 포트 1 에 붙으면 그대로, 아니면 1~4뎁스 갈래에서 찾는다"""
+        """6뎁스 후보를 MAINBODY, 없으면 MAIN 포함, 그것도 없으면 전부로 좁혀 첫자식 우선, 아니면 포트 1 최근접"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
-        first, branch, invalid = [], [], []
-        why = {"near, not MAINBODY": [], "MAINBODY but far": [],
-               "no MODULE": [], "MODULE but no MAINBODY": []}
-        values = {}
+        tiers = ("MAINBODY", "MAIN", "nearest")
+        sorted_out = {tier: {"first": [], "other": [], "far": []} for tier in tiers}
 
-        def near(tip, port):
-            """포트 1 에서 PIVOT_APART 안"""
+        def gap(tip, port):
+            """포트 1 과의 XY 거리"""
             at = UsdGeom.Xformable(tip).ComputeLocalToWorldTransform(
                 tc).ExtractTranslation()
-            return math.hypot(port[0] - at[0], port[1] - at[1]) < PIVOT_APART
-
-        def fits(tip, port):
-            """MAINBODY 이고 포트 1 에서 PIVOT_APART 안"""
-            return self._module_of(tip) == MODULE_BODY and near(tip, port)
+            return math.hypot(port[0] - at[0], port[1] - at[1])
 
         for name in sorted(self._eqp_index):
             prim = stage.GetPrimAtPath(self._eqp_index[name])
@@ -1515,40 +1509,43 @@ class EbsSimulate:
             port = self._parent_world(rail).Transform(points[1])
 
             tip, reached = self.resolve_anchor(prim)
-            if reached and fits(tip, port):
-                first.append(eqp_id)
-                continue
             _, tips = self._branch_tips(prim)
-            if any(other != tip and fits(other, port) for other in tips):
-                branch.append(eqp_id)
-                continue
-            invalid.append(eqp_id)
             every = ([tip] if reached else []) + [o for o in tips if o != tip]
-            modules = [self._module_of(one) for one in every]
-            if reached and near(tip, port):
-                why["near, not MAINBODY"].append(eqp_id)
-                said = repr(self._module_of(tip))
-                values[said] = values.get(said, 0) + 1
-            elif MODULE_BODY in modules:
-                why["MAINBODY but far"].append(eqp_id)
-            elif all(one is None for one in modules):
-                why["no MODULE"].append(eqp_id)
+            if not every:
+                sorted_out["nearest"]["far"].append(eqp_id)
+                continue
+            modules = [(self._module_of(one) or "").upper() for one in every]
+            pool = [one for one, m in zip(every, modules) if m == MODULE_BODY]
+            tier = "MAINBODY"
+            if not pool:
+                pool = [one for one, m in zip(every, modules) if "MAIN" in m]
+                tier = "MAIN"
+            if not pool:
+                pool, tier = every, "nearest"
+            if reached and tip in pool and gap(tip, port) < PIVOT_APART:
+                sorted_out[tier]["first"].append(eqp_id)
+            elif min(gap(one, port) for one in pool) < PIVOT_APART:
+                sorted_out[tier]["other"].append(eqp_id)
             else:
-                why["MODULE but no MAINBODY"].append(eqp_id)
+                sorted_out[tier]["far"].append(eqp_id)
 
-        seen = len(first) + len(branch) + len(invalid)
+        seen = sum(len(names) for out in sorted_out.values()
+                   for names in out.values())
+        valid = sum(len(out["first"]) + len(out["other"])
+                    for out in sorted_out.values())
         print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
               f"{(time.perf_counter() - started):.1f}s, skipped " +
-              ", ".join(f"{k} {v}" for k, v in skipped.items()))
-        print(f"[ebs] pivot survey: first child {len(first)}/{seen}")
-        print(f"[ebs] pivot survey: other branch {len(branch)}/{seen}: "
-              + ", ".join(branch))
-        print(f"[ebs] pivot survey: invalid {len(invalid)}/{seen}")
-        for reason, names in why.items():
-            print(f"[ebs] pivot survey:   {reason} {len(names)}/{len(invalid)}: "
-                  + ", ".join(names))
-        print("[ebs] pivot survey:   near, not MAINBODY values: " + ", ".join(
-            f"{k} {v}" for k, v in sorted(values.items(), key=lambda kv: -kv[1])))
+              ", ".join(f"{k} {v}" for k, v in skipped.items()) +
+              f"; valid {valid}/{seen}")
+        for tier in tiers:
+            out = sorted_out[tier]
+            total = sum(len(names) for names in out.values())
+            print(f"[ebs] pivot survey: {tier} {total}/{seen}: "
+                  f"first child {len(out['first'])}")
+            print(f"[ebs] pivot survey:   {tier} other branch "
+                  f"{len(out['other'])}/{total}: " + ", ".join(out["other"]))
+            print(f"[ebs] pivot survey:   {tier} invalid (far) "
+                  f"{len(out['far'])}/{total}: " + ", ".join(out["far"]))
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
