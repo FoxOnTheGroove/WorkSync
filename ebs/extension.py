@@ -27,8 +27,52 @@ class EbsExtension(omni.ext.IExt):
         self._shown = False
         self._stage = None
         self._picking = False
+        self._keys = None
         self._watch_layout()
         self._watch_stage()
+        self._watch_keys()
+
+    def _watch_keys(self):
+        """킷 창의 키보드를 받는다"""
+        try:
+            import carb.input
+            import omni.appwindow
+            self._keyboard = omni.appwindow.get_default_app_window().get_keyboard()
+            self._input = carb.input.acquire_input_interface()
+            self._keys = self._input.subscribe_to_keyboard_events(
+                self._keyboard, self._on_key)
+        except Exception as e:
+            print(f"[ebs] no keyboard: {type(e).__name__}: {e}")
+
+    def _on_key(self, event, *args, **kwargs) -> bool:
+        """좌우 화살표를 누르거나 누르고 있으면 그쪽 일을 부른다"""
+        import carb.input
+        kind = carb.input.KeyboardEventType
+        if event.type not in (kind.KEY_PRESS, kind.KEY_REPEAT):
+            return True
+        if event.input == carb.input.KeyboardInput.LEFT:
+            self._on_left()
+        elif event.input == carb.input.KeyboardInput.RIGHT:
+            self._on_right()
+        return True
+
+    def _on_left(self):
+        """왼쪽 화살표. 할 일은 다음에 붙인다"""
+        print("[ebs] key left")
+
+    def _on_right(self):
+        """오른쪽 화살표. 할 일은 다음에 붙인다"""
+        print("[ebs] key right")
+
+    def _drop_keys(self):
+        """키보드 구독을 놓는다"""
+        if self._keys is None:
+            return
+        try:
+            self._input.unsubscribe_to_keyboard_events(self._keyboard, self._keys)
+        except Exception as e:
+            print(f"[ebs] could not drop the keyboard: {e}")
+        self._keys = None
 
     def _watch_stage(self):
         """스테이지가 준비되면 init 을 누른다"""
@@ -96,6 +140,7 @@ class EbsExtension(omni.ext.IExt):
         """익스텐션 종료"""
         self._raise = None
         self._stage = None
+        self._drop_keys()
         if self._picking:
             PickLock.drop()
             self._picking = False

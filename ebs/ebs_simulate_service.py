@@ -24,6 +24,16 @@ class EbsSimulateService:
         return await instance().run_clear()
 
     @classmethod
+    async def refresh(cls):
+        """EBS 를 0mm 로 되돌리고 카메라를 처음 자리로"""
+        return await instance().run_refresh()
+
+    @classmethod
+    def cam_refresh(cls):
+        """카메라만 처음 자리와 처음 궤도 중심으로"""
+        return instance().run_cam_refresh()
+
+    @classmethod
     def get_result(cls, equipment=""):
         """그 장비의 마지막 판정"""
         return instance().get_result(equipment)

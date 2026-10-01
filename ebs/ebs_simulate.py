@@ -1309,6 +1309,35 @@ class EbsSimulate:
         finally:
             self.end_work()
 
+    async def run_refresh(self) -> dict:
+        """Refresh 한 번이 하는 일 전부. EBS 를 0mm 로 되돌리고 카메라를 첫 자리로"""
+        if self._busy:
+            return
+        if self._target is None or not self._aligned:
+            return self._payload(False, "Run SIM first")
+        panel = self._panel()
+        self._paint(panel.wake)
+        self.begin_work(WORK_REFRESH)
+        try:
+            if self._nudge:
+                import omni.kit.app
+                self.hold_clash(False)
+                self.slide(0.0)
+                self._paint(panel.restate)
+                await omni.kit.app.get_app().next_update_async()
+                self.hold_clash(True)
+                self._paint(panel.restate)
+                await self.settle()
+            return self.refresh_camera()
+        finally:
+            self.end_work()
+
+    def run_cam_refresh(self) -> dict:
+        """카메라만 첫 자리와 첫 궤도 중심으로 되돌린다"""
+        if self._busy:
+            return
+        return self.refresh_camera()
+
     async def simulate_async(self, equipment: str = "") -> dict:
         """simulate 인데 collide 만 프레임에 나눠 돈다"""
         self._begin("simulate")

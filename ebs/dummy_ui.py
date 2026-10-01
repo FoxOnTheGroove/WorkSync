@@ -4,8 +4,7 @@ import time
 
 import omni.ui as ui
 
-from .ebs_simulate_shared import (WORK_ALIGN, WORK_CAMERA, WORK_COLLIDE,
-                                  WORK_REFRESH)
+from .ebs_simulate_shared import WORK_ALIGN, WORK_CAMERA, WORK_COLLIDE
 from .ebs_simulate_service import EbsSimulateService
 from .ebs_simulate_overlay import EbsSimulateOverlay
 
@@ -181,6 +180,7 @@ class EbsDummyUI:
                 with ui.HStack(height=28, spacing=4):
                     ui.Button("SIM", clicked_fn=self._on_simulate)
                     ui.Button("Refresh", width=70, clicked_fn=self._on_refresh)
+                    ui.Button("Cam", width=48, clicked_fn=self._on_cam_refresh)
                     ui.Button("Clear", width=64, clicked_fn=self._on_clear_markers)
 
                 with ui.HStack(height=26, spacing=4):
@@ -393,12 +393,18 @@ class EbsDummyUI:
         self._nudge_label.text = text + (NUDGE_BUSY if busy else "")
 
     def _on_refresh(self):
-        """카메라만 원래 자리로 되돌린다"""
-        self._start(self._refreshing, WORK_REFRESH)
+        """REFRESH 버튼. 서비스 refresh 를 부른다"""
+        self._spawn(self._refreshed())
 
-    async def _refreshing(self):
-        """되돌리고 한 줄 찍는다"""
-        self._render(self._sim.refresh_camera())
+    async def _refreshed(self):
+        """EBS 와 카메라를 되돌리고 민 거리 줄을 고친다"""
+        told = await EbsSimulateService.refresh()
+        self._mark_nudge()
+        return told
+
+    def _on_cam_refresh(self):
+        """CAM 버튼. 서비스 cam_refresh 를 부른다"""
+        self._render(EbsSimulateService.cam_refresh())
 
     def _on_clear_markers(self):
         """CLEAR 버튼. 서비스 clear 를 부른다"""
