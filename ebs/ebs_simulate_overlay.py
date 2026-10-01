@@ -31,9 +31,9 @@ FRAME_ID = "ebs_simulate_overlay"
 
 CANNOT = " 이 위치에 EBS 장비를 세울 수 없습니다."
 CAN    = " 이 위치에 EBS 장비를 세울 수 있습니다."
-OUTER_HIT = " 외부 간섭"
-INNER_HIT = " 내부 간섭"
-BOTH_HIT  = " 외부, 내부 간섭"
+OUTER_HIT = "외부 간섭"
+INNER_HIT = "내부 간섭"
+BOTH_HIT  = "외부, 내부 간섭"
 HOME   = "0mm"
 SLID   = "{0:+.0f}mm"
 STALE  = "~"
@@ -463,7 +463,10 @@ class EbsSimulateOverlay:
             with ui.VStack(spacing=0, style={"margin_width": PAD_X,
                                              "margin_height": PAD_Y}):
                 self._label("", COLOR_TEXT, ("verdict", "title"))
-                self._label("", COLOR_TEXT, ("verdict", "why"))
+                with ui.HStack(height=0):
+                    ui.Spacer()
+                    self._label("", COLOR_TEXT, ("verdict", "why"))
+                    ui.Spacer()
                 ui.Spacer(height=ui.Pixel(TEXT_DROP))
 
         self._floating(said.get("centre"), fill, COLOR_CANNOT,
