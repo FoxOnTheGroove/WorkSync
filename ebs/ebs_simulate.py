@@ -1309,8 +1309,8 @@ class EbsSimulate:
         finally:
             self.end_work()
 
-    async def run_refresh(self) -> dict:
-        """Refresh 한 번이 하는 일 전부. EBS 를 0mm 로 되돌리고 카메라를 첫 자리로"""
+    async def run_ebs_refresh(self) -> dict:
+        """EBS 를 0mm 로 되돌리고 내부 충돌을 다시 잰다"""
         if self._busy:
             return
         if self._target is None or not self._aligned:
@@ -1328,12 +1328,12 @@ class EbsSimulate:
                 self.hold_clash(True)
                 self._paint(panel.restate)
                 await self.settle()
-            return self.refresh_camera()
+            return self._payload(True, f"offset {self._nudge:+.3f}")
         finally:
             self.end_work()
 
     def run_cam_refresh(self) -> dict:
-        """카메라만 첫 자리와 첫 궤도 중심으로 되돌린다"""
+        """카메라 위치와 궤도 중심을 처음 자리로 되돌린다"""
         if self._busy:
             return
         return self.refresh_camera()
