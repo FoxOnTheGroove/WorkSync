@@ -1469,8 +1469,9 @@ class EbsSimulate:
     @staticmethod
     def _module_of(prim) -> str:
         """그 프림의 MODULE 메타데이터 값"""
+        want = re.sub(r"[^a-z0-9]", "", MODULE_ATTR.lower())
         for attr in prim.GetAttributes():
-            if attr.GetName() == MODULE_ATTR:
+            if re.sub(r"[^a-z0-9]", "", attr.GetName().lower()) == want:
                 value = attr.Get()
                 return str(value).strip() if value is not None else ""
         return ""
@@ -1480,7 +1481,7 @@ class EbsSimulate:
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
-        first, branch, invalid = [], [], []
+        first, branch, invalid, probed = [], [], [], []
 
         def fits(tip, port):
             """MAINBODY 이고 포트 1 에서 PIVOT_APART 안"""
@@ -1508,6 +1509,8 @@ class EbsSimulate:
             points, _, rail = found
             port = self._parent_world(rail).Transform(points[1])
 
+            if len(probed) < 3:
+                probed.append(prim)
             tip, reached = self.resolve_anchor(prim)
             if reached and fits(tip, port):
                 first.append(eqp_id)
@@ -1527,6 +1530,30 @@ class EbsSimulate:
               + ", ".join(branch))
         print(f"[ebs] pivot survey: invalid {len(invalid)}/{seen}: "
               + ", ".join(invalid))
+        for prim in probed:
+            self._module_probe(prim)
+
+    def _module_probe(self, prim) -> None:
+        """임시 진단. 첫자식 경로 1~7뎁스에서 이름에 module 이 든 속성과 customData 를 찍는다"""
+        eqp_id = self._equipment_id(prim)
+        hits = 0
+        for depth in range(1, ANCHOR_DEPTH + 2):
+            node, reached = self.resolve_anchor(prim, depth)
+            if not reached:
+                break
+            for attr in node.GetAttributes():
+                if "module" in attr.GetName().lower():
+                    hits += 1
+                    print(f"[ebs] module probe {eqp_id} d{depth} {node.GetName()}: "
+                          f"attr '{attr.GetName()}' = {attr.Get()!r}")
+            for key, value in (node.GetCustomData() or {}).items():
+                if "module" in str(key).lower() or "hoops" in str(key).lower():
+                    hits += 1
+                    print(f"[ebs] module probe {eqp_id} d{depth} {node.GetName()}: "
+                          f"customData '{key}' = {value!r}")
+        if not hits:
+            print(f"[ebs] module probe {eqp_id}: nothing named module on depth "
+                  f"1-{ANCHOR_DEPTH + 1} of the first path")
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
