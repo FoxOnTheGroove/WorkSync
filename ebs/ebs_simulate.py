@@ -1477,12 +1477,12 @@ class EbsSimulate:
         return None
 
     def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """MAINBODY 나 MAIN 이 하나면 그대로, 여럿이거나 없으면 그 안에서(없으면 전부) 포트 1 로 검증해 고른다"""
+        """MAINBODY, MAIN, EFEM 순으로 하나면 그대로, 여럿이면 그 안에서, 다 없으면 전부에서 포트 1 로 검증해 고른다"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
-        alone = ("MAINBODY one", "MAIN one")
-        tiers = ("MAINBODY several", "MAIN several", "no MAIN")
+        alone = ("MAINBODY one", "MAIN one", "EFEM one")
+        tiers = ("MAINBODY several", "MAIN several", "EFEM several", "none")
         picked = {tier: {"first": [], "other": []} for tier in alone}
         sorted_out = {tier: {"first": [], "other": [], "far": []} for tier in tiers}
 
@@ -1514,7 +1514,7 @@ class EbsSimulate:
             _, tips = self._branch_tips(prim)
             every = ([tip] if reached else []) + [o for o in tips if o != tip]
             if not every:
-                sorted_out["no MAIN"]["far"].append(eqp_id)
+                sorted_out["none"]["far"].append(eqp_id)
                 continue
             modules = [(self._module_of(one) or "").upper() for one in every]
             pool = [one for one, m in zip(every, modules) if m == MODULE_BODY]
@@ -1523,6 +1523,9 @@ class EbsSimulate:
                 pool = [one for one, m in zip(every, modules)
                         if "MAIN" in m and "MAINT" not in m]
                 tier = "MAIN"
+            if not pool:
+                pool = [one for one, m in zip(every, modules) if "EFEM" in m]
+                tier = "EFEM"
             if len(pool) == 1:
                 way = "first" if reached and pool[0] == tip else "other"
                 picked[f"{tier} one"][way].append(eqp_id)
@@ -1530,7 +1533,7 @@ class EbsSimulate:
             if pool:
                 tier = f"{tier} several"
             else:
-                pool, tier = every, "no MAIN"
+                pool, tier = every, "none"
             if reached and tip in pool and gap(tip, port) < PIVOT_APART:
                 sorted_out[tier]["first"].append(eqp_id)
             elif min(gap(one, port) for one in pool) < PIVOT_APART:
