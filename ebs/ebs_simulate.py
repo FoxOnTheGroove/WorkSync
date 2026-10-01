@@ -1477,11 +1477,13 @@ class EbsSimulate:
         return None
 
     def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """6뎁스 후보를 MAINBODY, 없으면 MAIN 포함, 그것도 없으면 전부로 좁혀 첫자식 우선, 아니면 포트 1 최근접"""
+        """MAINBODY 나 MAIN 이 하나면 그대로, 여럿이거나 없으면 그 안에서(없으면 전부) 포트 1 로 검증해 고른다"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
-        tiers = ("MAINBODY", "MAIN", "nearest")
+        alone = ("MAINBODY one", "MAIN one")
+        tiers = ("MAINBODY several", "MAIN several", "no MAIN")
+        picked = {tier: {"first": [], "other": []} for tier in alone}
         sorted_out = {tier: {"first": [], "other": [], "far": []} for tier in tiers}
 
         def gap(tip, port):
@@ -1512,16 +1514,23 @@ class EbsSimulate:
             _, tips = self._branch_tips(prim)
             every = ([tip] if reached else []) + [o for o in tips if o != tip]
             if not every:
-                sorted_out["nearest"]["far"].append(eqp_id)
+                sorted_out["no MAIN"]["far"].append(eqp_id)
                 continue
             modules = [(self._module_of(one) or "").upper() for one in every]
             pool = [one for one, m in zip(every, modules) if m == MODULE_BODY]
             tier = "MAINBODY"
             if not pool:
-                pool = [one for one, m in zip(every, modules) if "MAIN" in m]
+                pool = [one for one, m in zip(every, modules)
+                        if "MAIN" in m and "MAINT" not in m]
                 tier = "MAIN"
-            if not pool:
-                pool, tier = every, "nearest"
+            if len(pool) == 1:
+                way = "first" if reached and pool[0] == tip else "other"
+                picked[f"{tier} one"][way].append(eqp_id)
+                continue
+            if pool:
+                tier = f"{tier} several"
+            else:
+                pool, tier = every, "no MAIN"
             if reached and tip in pool and gap(tip, port) < PIVOT_APART:
                 sorted_out[tier]["first"].append(eqp_id)
             elif min(gap(one, port) for one in pool) < PIVOT_APART:
@@ -1529,14 +1538,20 @@ class EbsSimulate:
             else:
                 sorted_out[tier]["far"].append(eqp_id)
 
-        seen = sum(len(names) for out in sorted_out.values()
-                   for names in out.values())
-        valid = sum(len(out["first"]) + len(out["other"])
-                    for out in sorted_out.values())
+        seen = sum(len(names) for out in list(sorted_out.values())
+                   + list(picked.values()) for names in out.values())
+        valid = seen - sum(len(out["far"]) for out in sorted_out.values())
         print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
               f"{(time.perf_counter() - started):.1f}s, skipped " +
               ", ".join(f"{k} {v}" for k, v in skipped.items()) +
               f"; valid {valid}/{seen}")
+        for tier in alone:
+            out = picked[tier]
+            total = len(out["first"]) + len(out["other"])
+            print(f"[ebs] pivot survey: {tier} {total}/{seen}, unchecked: "
+                  f"first child {len(out['first'])}")
+            print(f"[ebs] pivot survey:   {tier} other branch "
+                  f"{len(out['other'])}/{total}: " + ", ".join(out["other"]))
         for tier in tiers:
             out = sorted_out[tier]
             total = sum(len(names) for names in out.values())
