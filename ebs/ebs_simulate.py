@@ -1393,7 +1393,6 @@ class EbsSimulate:
             "port_count": port_count,
             "ebs": ebs_prim,
             "anchor": anchor,
-            "port_one": port,
         }
         return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
 
@@ -1917,16 +1916,14 @@ class EbsSimulate:
         }
 
     def _name_spot(self, named):
-        """이름표 자리. 좌우만 XML 포트 1 에 맞추고, 없으면 민 거리만큼 되돌린다"""
-        right = self._right_way(0)
-        if right is None:
+        """이름표 자리. 높이는 그대로, 나머지 두 축은 피봇의 월드 좌표"""
+        anchor = (self._target or {}).get("anchor")
+        if anchor is None or not anchor.IsValid():
             return named
-        port = (self._target or {}).get("port_one")
-        if port is not None:
-            off = sum((port[i] - named[i]) * right[i] for i in range(3))
-        else:
-            off = -self._nudge / (self._per_unit() or 1.0)
-        return Gf.Vec3d(*[named[i] + right[i] * off for i in range(3)])
+        here = UsdGeom.Xformable(anchor).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()).ExtractTranslation()
+        up = 1 if UsdGeom.GetStageUpAxis(self._get_stage()) == UsdGeom.Tokens.y else 2
+        return Gf.Vec3d(*[named[i] if i == up else here[i] for i in range(3)])
 
     def _grip_spot(self, local_box, to_world) -> dict:
         """손잡이를 EBS 에 붙일 자리와 크기. EBS 안 좌표로 잰다"""
