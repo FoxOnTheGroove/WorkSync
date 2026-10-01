@@ -6,6 +6,7 @@ import omni.ui as ui
 from .ebs_simulate import instance, forget
 from .ebs_simulate_camera import PickLock, viewport_window
 from .ebs_simulate_overlay import attach as attach_overlay, EbsSimulateGrip
+from .ebs_simulate_service import EbsSimulateService
 from .dummy_ui import EbsDummyUI
 
 WINDOW_TITLE = "EBS Simulate"
@@ -51,18 +52,30 @@ class EbsExtension(omni.ext.IExt):
             print(f"[ebs] no keyboard: {type(e).__name__}: {e}")
 
     def _on_key(self, event, *args, **kwargs) -> bool:
-        """좌우 화살표로 EBS 를 KEY_STEP 씩 밀고, 떼면 다시 잰다"""
+        """좌우 화살표로 EBS 를 KEY_STEP 씩 밀고 떼면 다시 잰다. 임시로 R 은 카메라, T 는 EBS 를 되돌린다"""
         import carb.input
         keys = carb.input.KeyboardInput
+        kind = carb.input.KeyboardEventType
+        if event.type == kind.KEY_PRESS and event.input == keys.R:
+            EbsSimulateService.cam_refresh()
+            return True
+        if event.type == kind.KEY_PRESS and event.input == keys.T:
+            self._ebs_refresh()
+            return True
         way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
         if way is None:
             return True
-        kind = carb.input.KeyboardEventType
         if event.type in (kind.KEY_PRESS, kind.KEY_REPEAT):
             self._step(way)
         elif event.type == kind.KEY_RELEASE:
             self._settle()
         return True
+
+    def _ebs_refresh(self):
+        """임시. T 키로 EBS 를 0mm 로 되돌린다"""
+        self._hold_off()
+        self._stepped = False
+        asyncio.ensure_future(EbsSimulateService.ebs_refresh())
 
     def _step(self, way: float):
         """SIM 중이고 손잡이를 안 잡았을 때만 한 칸 민다. 기다리던 재측정은 미룬다"""
