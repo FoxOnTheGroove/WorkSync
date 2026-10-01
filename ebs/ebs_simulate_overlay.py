@@ -76,6 +76,8 @@ COLOR_CANNOT = 0xFF1B39FC
 COLOR_TEXT   = 0xFFFFFFFF
 COLOR_INK    = 0xFF000000
 TEXT_SIZE    = 19
+NAME_SIZE    = int(TEXT_SIZE * 1.5)
+COLOR_NAME   = 0xFF2A170F
 FACE_SIZE    = 17
 PAD_X, PAD_Y = 3, 1
 TEXT_DROP = 1
@@ -455,21 +457,24 @@ class EbsSimulateOverlay:
                        key=("verdict", "centre"),
                        on=not held and not said.get("placeable"))
         name = said.get("name") or ""
-        self._floating(said.get("name_at"), self._one(" " + name, COLOR_INK),
-                       COLOR_CAN, key=("verdict", "name_at"), on=bool(name))
+        self._floating(said.get("name_at"),
+                       self._one(" " + name + " ", COLOR_TEXT, size=NAME_SIZE),
+                       COLOR_NAME, key=("verdict", "name_at"), on=bool(name))
         self._floating(said.get("inside_at"), self._one(INNER), COLOR_CANNOT,
                        key=("verdict", "inside_at"),
                        on=not held and bool(said.get("inside")))
         self._offset_panel(said)
 
-    def _one(self, text, ink=COLOR_TEXT, key=None):
+    def _one(self, text, ink=COLOR_TEXT, key=None, size: int = TEXT_SIZE):
         """_floating 에 넘길 그리기 함수. key 를 주면 글줄을 적어 둔다"""
+        grow = size / TEXT_SIZE
+
         def fill():
             """판 속 글줄을 채운다"""
-            with ui.VStack(spacing=0, style={"margin_width": PAD_X,
-                                             "margin_height": PAD_Y}):
-                self._label(text, ink, key)
-                ui.Spacer(height=ui.Pixel(TEXT_DROP))
+            with ui.VStack(spacing=0, style={"margin_width": PAD_X * grow,
+                                             "margin_height": PAD_Y * grow}):
+                self._label(text, ink, key, size=size)
+                ui.Spacer(height=ui.Pixel(TEXT_DROP * grow))
         return fill
 
     def _offset_panel(self, said: dict) -> None:

@@ -432,7 +432,7 @@ class EbsSimulate:
                              if mark["distance"] < mark.get("min_gap", 0.0)
                              else STATE_CLEAR)
             mark["stale"] = not self._still_inside(mark, box)
-        for name in ("centre", "inside_at", "name_at"):
+        for name in ("centre", "inside_at"):
             spot = self._verdict.get(name)
             if spot:
                 self._verdict[name] = tuple(spot[i] + step[i] for i in range(3))
@@ -1894,7 +1894,13 @@ class EbsSimulate:
         spot[up_axis] = lo[up_axis] + tall * CLASH_HEIGHT
         lower = to_world.Transform(Gf.Vec3d(*spot))
         spot[up_axis] = lo[up_axis] + tall * NAME_HEIGHT
+        front_axis = 3 - up_axis
+        spot[front_axis] = (lo if LEAD_FRONT < 0 else hi)[front_axis]
         named = to_world.Transform(Gf.Vec3d(*spot))
+        right = self._right_way(0)
+        if right is not None and self._nudge:
+            paces = self._nudge / (self._per_unit() or 1.0)
+            named = Gf.Vec3d(*[named[i] - right[i] * paces for i in range(3)])
         marks = Collide._face_marks(self, local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
