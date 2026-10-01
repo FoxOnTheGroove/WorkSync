@@ -1448,8 +1448,26 @@ class EbsSimulate:
             found.append(kid)
         return found
 
+    def _branch_tips(self, prim) -> tuple:
+        """1~4뎁스 프림의 자식을 전부 갈래로 타고 5뎁스까지 가서, 5뎁스와 그 첫자식(6뎁스) 목록"""
+        top, reached = self.resolve_anchor(prim, 1)
+        if not reached:
+            return [], []
+        kids, tips, stack = [], [], [(top, 1)]
+        while stack:
+            node, level = stack.pop()
+            if level == ANCHOR_DEPTH - 1:
+                tip, deep = self.resolve_anchor(node, 1)
+                if deep:
+                    kids.append(node)
+                    tips.append(tip)
+                continue
+            stack.extend((kid, level + 1)
+                         for kid in reversed(self._level_kids(node)))
+        return kids, tips
+
     def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """4뎁스의 자식(5뎁스 가지)마다 첫자식(6뎁스)을 후보로, 세 방법이 첫 가지가 아닌 것을 고른 장비"""
+        """1~4뎁스의 모든 분기를 따라 6뎁스 후보를 모아, 세 방법이 첫 가지가 아닌 것을 고른 장비"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
         cache = UsdGeom.BBoxCache(tc, includedPurposes=[UsdGeom.Tokens.default_,
@@ -1483,13 +1501,7 @@ class EbsSimulate:
             if count not in (2, 3):
                 skipped["ports"] += 1
                 continue
-            parent, reached = self.resolve_anchor(prim, ANCHOR_DEPTH - 2)
-            kids, tips = [], []
-            for kid in (self._level_kids(parent) if reached else []):
-                tip, deep = self.resolve_anchor(kid, 1)
-                if deep:
-                    kids.append(kid)
-                    tips.append(tip)
+            kids, tips = self._branch_tips(prim)
             if not kids or tips[0] != self.resolve_anchor(prim)[0]:
                 skipped["shallow"] += 1
                 continue
