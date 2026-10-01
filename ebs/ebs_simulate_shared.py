@@ -118,6 +118,8 @@ MAX_PORTS = 3
 PIVOT_TOLERANCE = 1.0
 PIVOT_ACROSS = 0.5
 PIVOT_APART = 0.505
+MODULE_ATTR = "omni:hoops:metadata:Identity Data:MODULE"
+MODULE_BODY = "MAINBODY"
 
 CODE_OK    = "ok"
 CODE_PORT  = "port"

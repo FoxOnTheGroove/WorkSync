@@ -1466,30 +1466,29 @@ class EbsSimulate:
                          for kid in reversed(self._level_kids(node)))
         return kids, tips
 
+    @staticmethod
+    def _module_of(prim) -> str:
+        """그 프림의 MODULE 메타데이터 값"""
+        for attr in prim.GetAttributes():
+            if attr.GetName() == MODULE_ATTR:
+                value = attr.Get()
+                return str(value).strip() if value is not None else ""
+        return ""
+
     def _pivot_survey(self, stage: Usd.Stage) -> None:
-        """1~4뎁스의 모든 분기를 따라 6뎁스 후보를 모아, 세 방법이 첫 가지가 아닌 것을 고른 장비"""
+        """6뎁스 첫자식이 MAINBODY 이고 포트 1 에 붙으면 그대로, 아니면 1~4뎁스 갈래에서 찾는다"""
         started = time.perf_counter()
         tc = Usd.TimeCode.Default()
-        cache = UsdGeom.BBoxCache(tc, includedPurposes=[UsdGeom.Tokens.default_,
-                                                        UsdGeom.Tokens.render],
-                                  useExtentsHint=True)
-        skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0, "shallow": 0}
-        methods = ("port 1 nearest", "rail aligned", "largest box")
-        odd = {name: [] for name in methods}
-        astray, single, several = [], 0, 0
+        skipped = {"no-xml": 0, "ports": 0, "xml-invalid": 0}
+        first, branch, invalid = [], [], []
 
-        def spot(prim):
-            """월드 위치"""
-            return UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+        def fits(tip, port):
+            """MAINBODY 이고 포트 1 에서 PIVOT_APART 안"""
+            if self._module_of(tip) != MODULE_BODY:
+                return False
+            at = UsdGeom.Xformable(tip).ComputeLocalToWorldTransform(
                 tc).ExtractTranslation()
-
-        def size(prim):
-            """월드 상자 부피"""
-            box = self._world_range(prim, cache)
-            if box is None:
-                return 0.0
-            lo, hi = box.GetMin(), box.GetMax()
-            return (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2])
+            return math.hypot(port[0] - at[0], port[1] - at[1]) < PIVOT_APART
 
         for name in sorted(self._eqp_index):
             prim = stage.GetPrimAtPath(self._eqp_index[name])
@@ -1501,49 +1500,33 @@ class EbsSimulate:
             if count not in (2, 3):
                 skipped["ports"] += 1
                 continue
-            kids, tips = self._branch_tips(prim)
-            if not kids or tips[0] != self.resolve_anchor(prim)[0]:
-                skipped["shallow"] += 1
-                continue
             with self._hush(False):
                 found = self.compute_port_points(stage, eqp_id)
             if found is None or 1 not in found[0]:
                 skipped["xml-invalid"] += 1
                 continue
-            points, axis, rail = found
+            points, _, rail = found
             port = self._parent_world(rail).Transform(points[1])
-            other = 1 - axis
-            rail_at = spot(rail)[other]
 
-            places = [spot(tip) for tip in tips]
-            gaps = [math.hypot(port[0] - at[0], port[1] - at[1]) for at in places]
-            offs = [abs(at[other] - rail_at) for at in places]
-            sizes = [size(kid) for kid in kids]
-            if gaps[0] >= PIVOT_APART:
-                astray.append(eqp_id)
-            if len(kids) == 1:
-                single += 1
+            tip, reached = self.resolve_anchor(prim)
+            if reached and fits(tip, port):
+                first.append(eqp_id)
                 continue
-            several += 1
-            picks = {
-                "port 1 nearest": (gaps.index(min(gaps)), gaps),
-                "rail aligned": (offs.index(min(offs)), offs),
-                "largest box": (sizes.index(max(sizes)), sizes),
-            }
-            for method, (pick, _) in picks.items():
-                if pick:
-                    odd[method].append(eqp_id)
+            _, tips = self._branch_tips(prim)
+            if any(other != tip and fits(other, port) for other in tips):
+                branch.append(eqp_id)
+            else:
+                invalid.append(eqp_id)
 
+        seen = len(first) + len(branch) + len(invalid)
         print(f"[ebs] pivot survey: {len(self._eqp_index)} equipment in "
               f"{(time.perf_counter() - started):.1f}s, skipped " +
-              ", ".join(f"{k} {v}" for k, v in skipped.items()) +
-              f"; one branch {single}, several {several}")
-        seen = single + several
-        print(f"[ebs] pivot survey: first astray {len(astray)}/{seen}: "
-              + ", ".join(astray))
-        for method in methods:
-            print(f"[ebs] pivot survey: {method} {len(odd[method])}/{seen}: "
-                  + ", ".join(odd[method]))
+              ", ".join(f"{k} {v}" for k, v in skipped.items()))
+        print(f"[ebs] pivot survey: first child {len(first)}/{seen}")
+        print(f"[ebs] pivot survey: other branch {len(branch)}/{seen}: "
+              + ", ".join(branch))
+        print(f"[ebs] pivot survey: invalid {len(invalid)}/{seen}: "
+              + ", ".join(invalid))
 
     def _do_stage(self) -> dict:
         """카메라를 세우기 전에 그린 것을 걷고, 아직이면 EBS 를 놓는다"""
