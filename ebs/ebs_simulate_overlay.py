@@ -121,8 +121,6 @@ COLOR_TRACK   = 0x33FFFFFF
 COLOR_FILL    = 0xFF20C8FF
 WORK_SIZE     = 17
 
-FAIL_TITLE    = "Simulation 실패"
-FAIL_SIZE     = 15
 FAIL_HOLD     = 1.0
 FAIL_FADE     = 1.0
 
@@ -239,7 +237,6 @@ class EbsSimulateOverlay:
         self._fail = None
         self._fail_panel = None
         self._fail_ground = None
-        self._fail_title = None
         self._fail_why = None
         self._fail_text = ""
         self._fail_at = None
@@ -299,27 +296,24 @@ class EbsSimulateOverlay:
         self._work_panel.visible = False
 
     def _build_fail(self) -> None:
-        """실패 표를 작업중 표와 같은 크기로 한 번 지어 둔다"""
+        """실패 표를 한 번 지어 둔다. 높이는 작업중 표와 같고 폭은 글에 맞춰 늘린다"""
         self._fail = ui.Placer(draggable=False, offset_x=0, offset_y=0)
         with self._fail:
-            self._fail_panel = ui.ZStack(width=ui.Pixel(WORK_WIDE),
-                                         height=ui.Pixel(WORK_HIGH))
+            self._fail_panel = ui.ZStack(width=0, height=ui.Pixel(WORK_HIGH))
             with self._fail_panel:
                 self._fail_ground = ui.Rectangle(
                     style={"background_color": COLOR_WORK, "border_radius": 6})
+                ui.Spacer(width=ui.Pixel(WORK_WIDE))
                 with ui.VStack(spacing=0):
                     ui.Spacer()
-                    self._fail_title = ui.Label(
-                        FAIL_TITLE, height=ui.Pixel(WORK_LINE),
-                        width=ui.Pixel(WORK_WIDE),
-                        alignment=ui.Alignment.CENTER,
-                        style={"color": COLOR_TEXT, "font_size": WORK_SIZE})
-                    ui.Spacer(height=ui.Pixel(WORK_GAP))
-                    self._fail_why = ui.Label(
-                        "", height=ui.Pixel(WORK_LINE),
-                        width=ui.Pixel(WORK_WIDE),
-                        alignment=ui.Alignment.CENTER, elided_text=True,
-                        style={"color": COLOR_TEXT, "font_size": FAIL_SIZE})
+                    with ui.HStack(height=0):
+                        ui.Spacer(width=ui.Pixel(WORK_PAD * 2))
+                        ui.Spacer()
+                        self._fail_why = ui.Label(
+                            "", width=0, alignment=ui.Alignment.CENTER,
+                            style={"color": COLOR_TEXT, "font_size": NAME_SIZE})
+                        ui.Spacer()
+                        ui.Spacer(width=ui.Pixel(WORK_PAD * 2))
                     ui.Spacer()
         self._fail_panel.visible = False
 
@@ -355,16 +349,15 @@ class EbsSimulateOverlay:
         self._fail_ground.set_style({
             "background_color": self._faded(COLOR_WORK, share),
             "border_radius": 6})
-        self._fail_title.set_style({"color": self._faded(COLOR_TEXT, share),
-                                    "font_size": WORK_SIZE})
         self._fail_why.set_style({"color": self._faded(COLOR_TEXT, share),
-                                  "font_size": FAIL_SIZE})
+                                  "font_size": NAME_SIZE})
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
         except Exception:
             return
-        self._fail.offset_x = (width - WORK_WIDE) * 0.5
+        wide = max(panel.computed_width, WORK_WIDE)
+        self._fail.offset_x = (width - wide) * 0.5
         self._fail.offset_y = (height - WORK_HIGH) * 0.5
         panel.visible = True
 
@@ -805,7 +798,6 @@ class EbsSimulateOverlay:
         self._fail = None
         self._fail_panel = None
         self._fail_ground = None
-        self._fail_title = None
         self._fail_why = None
         self._fail_text = ""
         self._fail_at = None

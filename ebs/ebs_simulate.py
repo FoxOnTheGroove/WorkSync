@@ -1286,7 +1286,9 @@ class EbsSimulate:
             self._paint(panel.show)
             if told is not None and not told.get("ok"):
                 why = told.get("say") or told.get("reason", "")
-                self._paint(lambda: panel.fail(why))
+                tried = told.get("eqp_id") or equipment.strip()
+                said = f"{why} : {tried}" if tried else why
+                self._paint(lambda: panel.fail(said))
             await self.settle()
             self.say_phases()
             return told
