@@ -15,6 +15,9 @@ SHOW_DUMMY_UI = False
 BLOCK_SELECT = True
 KEY_STEP = 0.005
 KEY_WAIT = 0.75
+KEY_DELAY = 0.5
+KEY_EVERY = 0.05
+KEY_MOST = 10.0
 
 
 class EbsExtension(omni.ext.IExt):
@@ -35,6 +38,8 @@ class EbsExtension(omni.ext.IExt):
         self._keys = None
         self._stepped = False
         self._waiting = None
+        self._turbo = None
+        self._repeats = False
         self._watch_layout()
         self._watch_stage()
         self._watch_keys()
@@ -65,11 +70,33 @@ class EbsExtension(omni.ext.IExt):
         way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
         if way is None:
             return True
-        if event.type in (kind.KEY_PRESS, kind.KEY_REPEAT):
+        if event.type == kind.KEY_PRESS:
+            self._let_go()
+            if self._step(way) and not self._repeats:
+                self._turbo = asyncio.ensure_future(self._repeat(way))
+        elif event.type == kind.KEY_REPEAT:
+            self._repeats = True
+            self._let_go()
             self._step(way)
         elif event.type == kind.KEY_RELEASE:
+            self._let_go()
             self._settle()
         return True
+
+    async def _repeat(self, way: float):
+        """KEY_REPEAT 가 안 오는 곳(웹 스트리밍)에서 꾹 누름을 대신 반복한다"""
+        await asyncio.sleep(KEY_DELAY)
+        spent = KEY_DELAY
+        while spent < KEY_MOST and self._step(way):
+            await asyncio.sleep(KEY_EVERY)
+            spent += KEY_EVERY
+        self._turbo = None
+
+    def _let_go(self):
+        """대신 돌던 반복을 멈춘다"""
+        if self._turbo is not None:
+            self._turbo.cancel()
+            self._turbo = None
 
     def _ebs_refresh(self):
         """임시. T 키로 EBS 를 0mm 로 되돌린다"""
@@ -77,14 +104,16 @@ class EbsExtension(omni.ext.IExt):
         self._stepped = False
         asyncio.ensure_future(EbsSimulateService.ebs_refresh())
 
-    def _step(self, way: float):
+    def _step(self, way: float) -> bool:
         """SIM 중이고 손잡이를 안 잡았을 때만 한 칸 민다. 기다리던 재측정은 미룬다"""
         if self._sim is None or EbsSimulateGrip.held():
-            return
+            return False
         self._hold_off()
         told = self._sim.nudge_by(way * KEY_STEP)
         if told and told.get("ok"):
             self._stepped = True
+            return True
+        return False
 
     def _settle(self):
         """민 것이 있으면 KEY_WAIT 동안 더 안 눌릴 때 그 자리에서 다시 잰다"""
@@ -184,6 +213,7 @@ class EbsExtension(omni.ext.IExt):
         self._raise = None
         self._stage = None
         self._drop_keys()
+        self._let_go()
         self._hold_off()
         if self._picking:
             PickLock.drop()
