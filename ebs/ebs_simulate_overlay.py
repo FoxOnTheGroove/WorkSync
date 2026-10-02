@@ -652,6 +652,7 @@ class EbsSimulateOverlay:
         """한 프레임 몫. 표를 보고, hover 를 묻고, 판을 카메라에 맞춘다"""
         self._work_place()
         self._fail_place()
+        EbsSimulateGrip.sweep()
         self._place()
 
     def _start(self) -> bool:
@@ -814,6 +815,7 @@ class EbsSimulateGrip:
     _again = False
     _group = None
     _ringed = False
+    _cursor = None
     _widths = None
     _told = False
 
@@ -827,6 +829,40 @@ class EbsSimulateGrip:
         if cls._one is None:
             cls._one = cls()
         return cls._one.stand(grip, to_screen)
+
+    @classmethod
+    def sweep(cls) -> None:
+        """프레임마다 커서 자리를 물어, 커서가 몸통 위에 있는 동안만 테두른다"""
+        one = cls._one
+        if one is None or one._from is not None:
+            return
+        over = False
+        if one._ends is not None and not sim().busy():
+            spot = cls._where()
+            over = spot is not None and one._hit(spot[0], spot[1])
+        if over != one._over:
+            one._over = over
+            one._ring(over)
+
+    @classmethod
+    def _where(cls):
+        """앱 창 기준 커서 자리(ui 좌표). 한 번 못 물으면 다시 안 묻는다"""
+        if cls._cursor is False:
+            return None
+        try:
+            if cls._cursor is None:
+                import carb.input
+                import omni.appwindow
+                cls._cursor = (carb.input.acquire_input_interface(),
+                               omni.appwindow.get_default_app_window().get_mouse())
+            reader, mouse = cls._cursor
+            at = reader.get_mouse_coords_normalized(mouse)
+            return (at.x * ui.Workspace.get_main_window_width(),
+                    at.y * ui.Workspace.get_main_window_height())
+        except Exception as e:
+            cls._cursor = False
+            print(f"[ebs] grip hover cannot ask the cursor: {type(e).__name__}: {e}")
+            return None
 
     @classmethod
     def held(cls) -> bool:
@@ -864,6 +900,7 @@ class EbsSimulateGrip:
         self._state = ""
         self._from = None
         self._was = 0.0
+        self._over = False
 
     @staticmethod
     def _stage():
@@ -952,13 +989,14 @@ class EbsSimulateGrip:
     def wipe(self) -> None:
         """그린 것을 지우고 잡은 것도 놓는다. 머티리얼은 두고 간다"""
         self._ring(False)
+        self._over = False
         self._from = None
         self._ends = None
         self._matrix = None
         self._paint.clear()
 
     def _ring(self, on: bool) -> None:
-        """누르는 동안 기즈모 몸통을 테두른다. 그룹은 한 번만 받는다"""
+        """커서가 올라온 동안 기즈모 몸통을 테두른다. 그룹은 한 번만 받는다"""
         if not on and not EbsSimulateGrip._ringed:
             return
         try:
@@ -983,7 +1021,7 @@ class EbsSimulateGrip:
 
     @classmethod
     def _widen(cls, on: bool) -> None:
-        """누르는 동안만 외곽선을 굵게 하고, 놓으면 원래 두께로 돌린다"""
+        """테두르는 동안만 외곽선을 굵게 하고, 걷으면 원래 두께로 돌린다"""
         try:
             import carb.settings
             settings = carb.settings.get_settings()
@@ -1021,7 +1059,6 @@ class EbsSimulateGrip:
         self._was = sim().get_nudge()
         sim().hold_clash(False)
         self._draw(GRIP_HOLD)
-        self._ring(True)
         return True
 
     def drag(self, x: float, y: float) -> bool:
@@ -1040,7 +1077,6 @@ class EbsSimulateGrip:
         if self._from is None:
             return
         self._from = None
-        self._ring(False)
         self._draw(GRIP_IDLE)
         if sim().busy():
             EbsSimulateOverlay.restate()
