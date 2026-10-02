@@ -224,6 +224,8 @@ class EbsSimulate:
         self._started: float = 0.0
         self._ready: bool = False
         self._target: dict = None
+        self._next: dict = None
+        self._tried: str = ""
         self._aligned: bool = False
         self._result: dict = {}
         self._marker_draw = None
@@ -1277,7 +1279,7 @@ class EbsSimulate:
         if self._busy:
             return
         panel = self._panel()
-        self.set_nudge(0.0)
+        self._tried = ""
         self._paint(panel.hide)
         self._paint(panel.wake)
         self.begin_work(WORK_SIM)
@@ -1286,7 +1288,7 @@ class EbsSimulate:
             self._paint(panel.show)
             if told is not None and not told.get("ok"):
                 why = told.get("say") or told.get("reason", "")
-                tried = told.get("equipment_id") or equipment.strip()
+                tried = equipment.strip() or self._tried
                 said = f"{why} : {tried}" if tried else why
                 self._paint(lambda: panel.fail(said))
             await self.settle()
@@ -1401,10 +1403,19 @@ class EbsSimulate:
 
 
     def _do_prepare(self, equipment: str) -> dict:
-        """장비를 찾아 포트 수로 EBS 를 고르고 피봇을 잡는다"""
-        self._target = None
+        """새 장비를 잡는다. 못 잡으면 지금 SIM 은 그대로 두고, 잡으면 그때 바꾼다"""
+        kept, self._next, self._tried = self._rail_frame, None, ""
+        told = self._prepare(equipment)
+        if not told.get("ok") or self._next is None:
+            self._rail_frame = kept
+            return told
+        self._target, self._next = self._next, None
         self._aligned = False
+        self.set_nudge(0.0)
+        return told
 
+    def _prepare(self, equipment: str) -> dict:
+        """장비를 찾아 포트 수로 EBS 를 고르고 피봇을 잡는다. 잡은 것은 _next 에만 둔다"""
         stage = self._get_stage()
         if stage is None:
             return self._payload(False, "No stage open", say=SAY_STAGE)
@@ -1418,6 +1429,7 @@ class EbsSimulate:
                                  say=SAY_EQP)
 
         eqp_id = self._equipment_id(eqp_prim)
+        self._tried = eqp_id
 
         with self._stage_timer("port lookup"):
             port_count = self.get_port_count(eqp_id)
@@ -1446,14 +1458,15 @@ class EbsSimulate:
                                  eqp_id=eqp_id, port_count=port_count,
                                  code=CODE_PIVOT, say=SAY_PIVOT)
 
-        self._target = {
+        self._next = {
             "equipment": eqp_prim,
             "eqp_id": eqp_id,
             "port_count": port_count,
             "ebs": ebs_prim,
             "anchor": anchor,
         }
-        return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)")
+        return self._payload(True, f"Prepared: {eqp_id} ({port_count} port)",
+                             eqp_id=eqp_id)
 
     def _pick_anchor(self, eqp_id: str, prim, port):
         """6뎁스 피봇과 실패 사유. MAINBODY, MAIN, EFEM 순으로 하나면 그대로, 아니면 포트 1 로 검증해 고른다"""

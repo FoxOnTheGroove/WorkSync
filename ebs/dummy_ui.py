@@ -308,7 +308,6 @@ class EbsDummyUI:
         if name.upper().startswith(EQP_PREFIX):
             name = name[len(EQP_PREFIX):]
         self._eqp_field.model.set_value(name)
-        self._reset_nudge()
         self._set_status(f"Selected: {name}")
 
     def _on_simulate(self):
