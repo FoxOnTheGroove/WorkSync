@@ -1283,6 +1283,7 @@ class EbsSimulate:
         self._paint(panel.hide)
         self._paint(panel.wake)
         self.begin_work(WORK_SIM)
+        self._veil(True)
         try:
             told = await self.simulate_async(equipment)
             self._paint(panel.show)
@@ -1295,7 +1296,27 @@ class EbsSimulate:
             self.say_phases()
             return told
         finally:
+            self._veil(False)
             self.end_work()
+
+    def _veil(self, on: bool) -> None:
+        """SIM 이 도는 동안 마커와 손잡이 뿌리를 통째로 감추고, 끝나면 되켠다"""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        want = UsdGeom.Tokens.invisible if on else UsdGeom.Tokens.inherited
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for path in (MARKER_ROOT, GRIP_ROOT):
+                    prim = stage.GetPrimAtPath(path)
+                    if prim is None or not prim.IsValid():
+                        if not on:
+                            continue
+                        prim = stage.OverridePrim(path)
+                    prim.CreateAttribute(UsdGeom.Tokens.visibility,
+                                         Sdf.ValueTypeNames.Token).Set(want)
+        except Exception as e:
+            self._note(f"could not veil the markers ({e})")
 
     async def run_clear(self) -> dict:
         """Clear 한 번이 하는 일 전부"""

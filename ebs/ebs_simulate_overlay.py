@@ -6,7 +6,7 @@ import omni.ui as ui
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 
 from .ebs_simulate_camera import viewport_window
-from .ebs_simulate_shared import WORK_SETTLE
+from .ebs_simulate_shared import WORK_SETTLE, WORK_SIM
 
 __all__ = ["EbsSimulateOverlay", "EbsSimulateMarks", "EbsSimulateGrip", "attach"]
 
@@ -71,6 +71,7 @@ GRIP_WIDTH = 100
 LINE_ROOM = 6
 PANEL_ROOM = 0.024
 PANEL_GAP = 0.1
+PANEL_AWAY = -100000.0
 FACE_MARGIN = 12
 
 SIDE_BY_SIDE = ("ceiling",)
@@ -701,6 +702,7 @@ class EbsSimulateOverlay:
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
+            hold = sim() is not None and sim().busy() == WORK_SIM
             widest, broad = {}, {}
             for _, panel, _, _, _, _, group, key, on, wide in self._marks:
                 if not on:
@@ -738,6 +740,8 @@ class EbsSimulateOverlay:
                 if self._outside(x, y, panel_w, panel_h, width, height):
                     panel.visible = False
                     continue
+                if hold or panel_w <= 0 or panel_h <= 0:
+                    x = y = PANEL_AWAY
                 placer.offset_x = x
                 placer.offset_y = y
                 panel.visible = True
