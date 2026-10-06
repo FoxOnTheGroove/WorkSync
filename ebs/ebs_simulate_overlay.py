@@ -713,7 +713,8 @@ class EbsSimulateOverlay:
                                      wide or panel.computed_width)
             for placer, panel, at, anchor, step, share, group, key, on, wide in \
                     self._marks:
-                spot = self._to_screen(at) if on else None
+                base = self._to_screen(at) if on else None
+                spot = base
                 if spot is not None and key in self._walls:
                     spot = self._hug(spot, self._walls[key], broad.get(key, 0.0))
                 if spot is None:
@@ -721,7 +722,7 @@ class EbsSimulateOverlay:
                     continue
                 panel_w = wide or panel.computed_width
                 panel_h = panel.computed_height
-                room = self._room_at(at, spot)
+                room = self._room_at(at, base)
                 stack = panel_h * (1.0 + PANEL_GAP)
                 block = widest.get(group, panel_w)
                 inset = (block - panel_w) * 0.5
