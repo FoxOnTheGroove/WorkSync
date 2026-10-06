@@ -1292,6 +1292,7 @@ class EbsSimulate:
                 tried = equipment.strip() or self._tried
                 said = f"{why} : {tried}" if tried else why
                 self._paint(lambda: panel.fail(said))
+            self._veil(False)
             await self.settle()
             self.say_phases()
             return told
