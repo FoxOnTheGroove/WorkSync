@@ -71,6 +71,7 @@ GRIP_WIDTH = 100
 LINE_ROOM = 6
 PANEL_ROOM = 0.024
 PANEL_GAP = 0.1
+FACE_MARGIN = 12
 
 SIDE_BY_SIDE = ("ceiling",)
 
@@ -224,6 +225,7 @@ class EbsSimulateOverlay:
         self._dials = {}
         self._dial_hold = None
         self._grounds = {}
+        self._walls = {}
         self._from = None
         self._was = 0.0
         self._work = None
@@ -552,6 +554,7 @@ class EbsSimulateOverlay:
         self._judge(said)
         for mark in said.get("marks") or ():
             spots[("face", mark["face"])] = mark.get("at")
+            self._wall(mark)
             self._say(("face", mark["face"], "word"), self._word_of(mark))
             gap = mark.get("distance")
             if gap is not None:
@@ -628,6 +631,7 @@ class EbsSimulateOverlay:
         first, second = ((LEFT, RIGHT) if mark.get("face") in SIDE_BY_SIDE
                          else (ABOVE, BELOW))
         face = mark.get("face")
+        self._wall(mark)
         self._floating(at, block([self._word_of(mark)],
                                  ("face", face, "word")), ground,
                        first, group=(face, first), key=("face", face))
@@ -642,6 +646,27 @@ class EbsSimulateOverlay:
             self._floating(at, block([LEAST.format(self._mm(least))],
                                      ("face", face, "least")), ground, second,
                            1, share, (face, second), ("face", face))
+
+    def _wall(self, mark: dict) -> None:
+        """좌우 면이면 선이 시작하는 벽 자리를 적어 둔다. 판이 거기서 너무 멀어지지 않게"""
+        key = ("face", mark.get("face"))
+        if (mark.get("face") in SIDE_BY_SIDE or mark.get("from") is None
+                or mark.get("distance") is None):
+            self._walls.pop(key, None)
+            return
+        self._walls[key] = tuple(mark["from"])
+
+    def _hug(self, spot, wall, widest: float):
+        """선 가운데가 벽에서 가장 넓은 판 반폭과 FACE_MARGIN 보다 멀면 그만큼까지만 띄운다"""
+        near = self._to_screen(wall)
+        if near is None:
+            return spot
+        dx, dy = spot[0] - near[0], spot[1] - near[1]
+        apart = (dx * dx + dy * dy) ** 0.5
+        reach = widest * 0.5 + FACE_MARGIN
+        if apart <= reach:
+            return spot
+        return (near[0] + dx / apart * reach, near[1] + dy / apart * reach)
 
     @staticmethod
     def _mm(metres: float) -> float:
@@ -676,16 +701,21 @@ class EbsSimulateOverlay:
         try:
             width = self._frame.computed_width
             height = self._frame.computed_height
-            widest = {}
-            for _, panel, _, _, _, _, group, _, on, wide in self._marks:
+            widest, broad = {}, {}
+            for _, panel, _, _, _, _, group, key, on, wide in self._marks:
                 if not on:
                     continue
                 if group is not None:
                     widest[group] = max(widest.get(group, 0.0),
                                         wide or panel.computed_width)
-            for placer, panel, at, anchor, step, share, group, _, on, wide in \
+                if key in self._walls:
+                    broad[key] = max(broad.get(key, 0.0),
+                                     wide or panel.computed_width)
+            for placer, panel, at, anchor, step, share, group, key, on, wide in \
                     self._marks:
                 spot = self._to_screen(at) if on else None
+                if spot is not None and key in self._walls:
+                    spot = self._hug(spot, self._walls[key], broad.get(key, 0.0))
                 if spot is None:
                     panel.visible = False
                     continue
@@ -777,6 +807,7 @@ class EbsSimulateOverlay:
         self._dials = {}
         self._dial_hold = None
         self._grounds = {}
+        self._walls = {}
         if self._stack is not None:
             try:
                 self._stack.clear()
