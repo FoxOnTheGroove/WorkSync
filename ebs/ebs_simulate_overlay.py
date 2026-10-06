@@ -72,6 +72,7 @@ LINE_ROOM = 6
 PANEL_ROOM = 0.024
 PANEL_GAP = 0.1
 PANEL_AWAY = -100000.0
+ORDER_SLACK = 0.02
 FACE_MARGIN = 12
 
 SIDE_BY_SIDE = ("ceiling",)
@@ -227,6 +228,9 @@ class EbsSimulateOverlay:
         self._dial_hold = None
         self._grounds = {}
         self._walls = {}
+        self._depths = {}
+        self._order = ()
+        self._sizes = {}
         self._from = None
         self._was = 0.0
         self._work = None
@@ -416,10 +420,7 @@ class EbsSimulateOverlay:
         if not said or self._stack is None:
             return False
         try:
-            with self._stack:
-                self._verdict_panel(said)
-                for mark in said.get("marks") or ():
-                    self._face_panel(mark)
+            self._fill(said)
             EbsSimulateGrip.place(said, self._to_window)
         except Exception as e:
             print(f"[ebs] could not build the overlay: {e}")
@@ -430,6 +431,49 @@ class EbsSimulateOverlay:
         self._place()
         return self._start()
 
+
+    def _fill(self, said: dict) -> None:
+        """판정 판과 면 판을 짓는다. 면 판은 카메라에서 먼 것부터 지어 가까운 것이 위에 온다"""
+        marks = list(said.get("marks") or ())
+        for mark in marks:
+            self._depths[mark.get("face")] = mark.get("from") or mark.get("at")
+        marks.sort(key=lambda mark: self._depth(self._depths.get(mark.get("face"))))
+        self._order = tuple(mark.get("face") for mark in marks)
+        with self._stack:
+            self._verdict_panel(said)
+            for mark in marks:
+                self._face_panel(mark)
+
+    def _depth(self, point) -> float:
+        """카메라 앞 깊이. 클수록 카메라에 가깝다"""
+        if point is None or self._api is None:
+            return float("-inf")
+        try:
+            return self._api.view.Transform(Gf.Vec3d(*point))[2]
+        except Exception:
+            return float("-inf")
+
+    def _reorder(self) -> None:
+        """면 판의 앞뒤가 뒤바뀌었으면 손잡이는 두고 판만 다시 짓는다"""
+        if len(self._order) < 2 or self._stack is None:
+            return
+        depth = {face: self._depth(self._depths.get(face)) for face in self._order}
+        crossed = False
+        for i, back in enumerate(self._order):
+            for front in self._order[i + 1:]:
+                gap = depth[back] - depth[front]
+                if gap > ORDER_SLACK * max(abs(depth[back]), abs(depth[front]), 1e-9):
+                    crossed = True
+        if not crossed:
+            return
+        said = sim().get_verdict() if sim() is not None else None
+        if not said:
+            return
+        self._forget()
+        try:
+            self._fill(said)
+        except Exception as e:
+            print(f"[ebs] could not reorder the overlay: {e}")
 
     def _floating(self, at, fill, ground, anchor=MIDDLE, step: float = 0.0,
                   share: int = 1, group=None, key=None, on: bool = True,
@@ -656,10 +700,11 @@ class EbsSimulateOverlay:
             self._walls.pop(key, None)
             return
         self._walls[key] = tuple(mark["from"])
+        self._depths[mark.get("face")] = mark.get("from") or mark.get("at")
 
     def _hug(self, spot, wall, widest: float):
         """선 가운데가 벽에서 가장 넓은 판 반폭과 FACE_MARGIN 보다 멀면 그만큼까지만 띄운다"""
-        near = self._to_screen(wall)
+        near = self._to_screen(wall, False)
         if near is None:
             return spot
         dx, dy = spot[0] - near[0], spot[1] - near[1]
@@ -679,6 +724,7 @@ class EbsSimulateOverlay:
         self._work_place()
         self._fail_place()
         EbsSimulateGrip.sweep()
+        self._reorder()
         self._place()
 
     def _start(self) -> bool:
@@ -704,26 +750,26 @@ class EbsSimulateOverlay:
             height = self._frame.computed_height
             hold = sim() is not None and sim().busy() == WORK_SIM
             widest, broad = {}, {}
-            for _, panel, _, _, _, _, group, key, on, wide in self._marks:
+            for entry in self._marks:
+                _, panel, _, anchor, step, _, group, key, on, wide = entry
                 if not on:
                     continue
+                panel_w = self._size(entry)[0]
                 if group is not None:
-                    widest[group] = max(widest.get(group, 0.0),
-                                        wide or panel.computed_width)
+                    widest[group] = max(widest.get(group, 0.0), panel_w)
                 if key in self._walls:
-                    broad[key] = max(broad.get(key, 0.0),
-                                     wide or panel.computed_width)
-            for placer, panel, at, anchor, step, share, group, key, on, wide in \
-                    self._marks:
-                base = self._to_screen(at) if on else None
+                    broad[key] = max(broad.get(key, 0.0), panel_w)
+            for entry in self._marks:
+                placer, panel, at, anchor, step, share, group, key, on, wide = entry
+                hugged = key in self._walls
+                base = self._to_screen(at, not hugged) if on else None
                 spot = base
-                if spot is not None and key in self._walls:
+                if spot is not None and hugged:
                     spot = self._hug(spot, self._walls[key], broad.get(key, 0.0))
                 if spot is None:
                     panel.visible = False
                     continue
-                panel_w = wide or panel.computed_width
-                panel_h = panel.computed_height
+                panel_w, panel_h = self._size(entry)
                 room = self._room_at(at, base)
                 stack = panel_h * (1.0 + PANEL_GAP)
                 block = widest.get(group, panel_w)
@@ -749,6 +795,18 @@ class EbsSimulateOverlay:
             print(f"[ebs] could not place the overlay: {e}")
             self.clear()
 
+    def _size(self, entry) -> tuple:
+        """판 크기. 막 지어 아직 0 이면 같은 자리 판의 지난 크기를 쓴다"""
+        _, panel, _, anchor, step, _, group, key, _, wide = entry
+        size = (wide or panel.computed_width, panel.computed_height)
+        if key is None:
+            return size
+        slot = (key, anchor, step, group)
+        if size[0] > 0 and size[1] > 0:
+            self._sizes[slot] = size
+            return size
+        return self._sizes.get(slot, size)
+
     def _room_at(self, at, spot) -> float:
         """선과 판 사이 여백. PANEL_ROOM 이 화면에서 몇 픽셀인가"""
         try:
@@ -756,7 +814,7 @@ class EbsSimulateOverlay:
             camera = self._api.view.GetInverse()
             side = Gf.Vec3d(camera[0][0], camera[0][1], camera[0][2])
             side = side.GetNormalized() * want
-            other = self._to_screen([at[i] + side[i] for i in range(3)])
+            other = self._to_screen([at[i] + side[i] for i in range(3)], False)
         except Exception:
             other = None
         if other is None:
@@ -771,19 +829,19 @@ class EbsSimulateOverlay:
             return False
         return x < 0 or y < 0 or x + panel_w > width or y + panel_h > height
 
-    def _to_screen(self, point):
-        """월드 점을 화면 픽셀로. 카메라 뒤나 화면 밖이면 None"""
+    def _to_screen(self, point, clip: bool = True):
+        """월드 점을 화면 픽셀로. 카메라 뒤면 None, clip 이면 화면 밖도 None"""
         api = self._api
         at = Gf.Vec3d(*point)
         view = api.view
         if view.Transform(at)[2] >= 0.0:
             return None
         try:
-            clip = api.world_to_ndc
+            to_ndc = api.world_to_ndc
         except AttributeError:
-            clip = view * api.projection
-        ndc = clip.Transform(at)
-        if not (-1.0 <= ndc[0] <= 1.0 and -1.0 <= ndc[1] <= 1.0):
+            to_ndc = view * api.projection
+        ndc = to_ndc.Transform(at)
+        if clip and not (-1.0 <= ndc[0] <= 1.0 and -1.0 <= ndc[1] <= 1.0):
             return None
         width = self._frame.computed_width
         height = self._frame.computed_height
@@ -807,7 +865,13 @@ class EbsSimulateOverlay:
     def clear(self) -> None:
         """그린 판을 놓는다. 프레임 구독은 그대로 둔다"""
         EbsSimulateGrip.hide()
+        self._forget()
+
+    def _forget(self) -> None:
+        """판 위젯만 놓는다. 손잡이는 그대로 둔다"""
         self._marks = []
+        self._depths = {}
+        self._order = ()
         self._texts = {}
         self._dials = {}
         self._dial_hold = None
