@@ -67,6 +67,9 @@ class EbsExtension(omni.ext.IExt):
         if event.type == kind.KEY_PRESS and event.input == keys.T:
             self._ebs_refresh()
             return True
+        if event.type == kind.KEY_PRESS and event.input == keys.P:
+            self._log_camera()
+            return True
         way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
         if way is None:
             return True
@@ -97,6 +100,28 @@ class EbsExtension(omni.ext.IExt):
         if self._turbo is not None:
             self._turbo.cancel()
             self._turbo = None
+
+    @staticmethod
+    def _log_camera():
+        """임시. P 키로 지금 뷰포트 카메라의 경로, 변환, 궤도 중심을 콘솔에 찍는다"""
+        try:
+            import omni.usd
+            from pxr import Usd, UsdGeom
+            window = viewport_window()
+            path = str(window.viewport_api.camera_path)
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(path)
+            xform = UsdGeom.Xformable(prim)
+            matrix = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            print(f"[ebs] camera path: {path}")
+            for op in xform.GetOrderedXformOps():
+                print(f"[ebs] camera op {op.GetOpName()}: {op.Get()}")
+            coi = prim.GetAttribute("omni:kit:centerOfInterest")
+            print(f"[ebs] camera centerOfInterest: {coi.Get() if coi else None}")
+            print(f"[ebs] camera world eye: {tuple(matrix.ExtractTranslation())}")
+            print(f"[ebs] camera world matrix: {[tuple(row) for row in matrix]}")
+        except Exception as e:
+            print(f"[ebs] could not read the camera: {type(e).__name__}: {e}")
 
     def _ebs_refresh(self):
         """임시. T 키로 EBS 를 0mm 로 되돌린다"""
