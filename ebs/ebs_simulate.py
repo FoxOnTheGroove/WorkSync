@@ -1001,6 +1001,7 @@ class EbsSimulate:
         ports = self.load_ports()
         self._ready = equipment > 0 and ports > 0
         self._note(f"indexed {equipment} equipment, {ports} port entries")
+        self._camera.go_home(self._get_stage())
         if not equipment:
             return self._payload(False, "No EQP_ prims found - check the search root")
         if not ports:
@@ -3197,6 +3198,7 @@ class EbsSimulate:
         """카메라를 놓고 갈아입힌 머티리얼을 걷는다"""
         self.strip_skin()
         self._camera.release(self._get_stage())
+        self._camera.go_home(self._get_stage())
 
     def refresh_camera(self) -> dict:
         """카메라를 처음 잡은 자리로"""

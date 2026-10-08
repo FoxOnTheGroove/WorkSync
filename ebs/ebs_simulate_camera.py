@@ -8,6 +8,11 @@ __all__ = ["EbsSimulateCamera", "PickLock", "CAMERA_PATH", "CAMERA_BACK",
 CAMERA_PATH = "/EbsCamera"
 CAMERA_BACK = 25.0
 LOOK_HEIGHT = 0.53
+HOME_CAMERA    = "/OmniverseKit_Persp"
+HOME_TRANSLATE = (97.54, 81.99, 83.40)
+HOME_ROTATE    = (91.30, 0.0, -78.0)
+HOME_SCALE     = (1.0, 1.0, 1.0)
+HOME_INTEREST  = (0.0, 0.0, -13.0)
 CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
 NEAR_SPAN   = 2.5
@@ -197,6 +202,32 @@ class EbsSimulateCamera:
                 "omni:kit:centerOfInterest",
                 Sdf.ValueTypeNames.Vector3d).Set(Gf.Vec3d(0.0, 0.0, -100.0))
         return True
+
+    def go_home(self, stage) -> str:
+        """원래 Persp 카메라를 정해 둔 첫 장면에 세우고 뷰포트를 그 카메라로 돌린다"""
+        if stage is None:
+            return ""
+        prim = stage.GetPrimAtPath(HOME_CAMERA)
+        if prim is None or not prim.IsValid():
+            return ""
+        wanted = (("xformOp:translate", HOME_TRANSLATE),
+                  ("xformOp:rotateXYZ", HOME_ROTATE),
+                  ("xformOp:scale", HOME_SCALE),
+                  ("omni:kit:centerOfInterest", HOME_INTEREST))
+        with Usd.EditContext(stage, stage.GetSessionLayer()):
+            for name, value in wanted:
+                attr = prim.GetAttribute(name)
+                if not attr or not attr.IsValid():
+                    continue
+                kind = type(attr.Get()) if attr.Get() is not None else Gf.Vec3d
+                attr.Set(kind(*value))
+        viewport = self.viewport()
+        if viewport is not None:
+            try:
+                viewport.camera_path = HOME_CAMERA
+            except Exception as e:
+                print(f"[ebs] could not point the viewport home: {e}")
+        return f"camera home at {HOME_TRANSLATE}"
 
     def release(self, stage) -> None:
         """입력 가로채기를 놓고 뷰포트를 원래 카메라로 되돌린다"""
