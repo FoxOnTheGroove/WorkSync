@@ -6,7 +6,8 @@ __all__ = ["EbsSimulateCamera", "PickLock", "CAMERA_PATH", "CAMERA_BACK",
            "CAMERA_NEAR", "CAMERA_FAR"]
 
 CAMERA_PATH = "/EbsCamera"
-CAMERA_BACK = 18.0
+CAMERA_BACK = 25.0
+LOOK_HEIGHT = 0.53
 CAMERA_NEAR = 0.01
 CAMERA_FAR  = 1.0e6
 NEAR_SPAN   = 2.5
@@ -248,6 +249,8 @@ class EbsSimulateCamera:
         x_cam, y_cam, z_cam = self._frame(stage, facing)
         low, high = box.GetMin(), box.GetMax()
         interest = Gf.Vec3d(*[(low[i] + high[i]) * 0.5 for i in range(3)])
+        up = 1 if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y else 2
+        interest[up] = low[up] + (high[up] - low[up]) * LOOK_HEIGHT
 
         distance = CAMERA_BACK
         eye = interest + z_cam * distance
