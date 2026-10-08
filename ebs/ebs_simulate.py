@@ -434,7 +434,7 @@ class EbsSimulate:
                              if mark["distance"] < mark.get("min_gap", 0.0)
                              else STATE_CLEAR)
             mark["stale"] = not self._still_inside(mark, box)
-        for name in ("name_at", "inside_at"):
+        for name in ("centre", "inside_at"):
             spot = self._verdict.get(name)
             if spot:
                 self._verdict[name] = tuple(spot[i] + step[i] for i in range(3))
@@ -1984,11 +1984,11 @@ class EbsSimulate:
         up_axis = (self._face_planes.get(FACE_CEILING) or (2,))[0]
         tall = hi[up_axis] - lo[up_axis]
         spot[up_axis] = lo[up_axis] + tall * VERDICT_HEIGHT
-        middle = self._pinned(to_world.Transform(Gf.Vec3d(*spot)))
+        middle = to_world.Transform(Gf.Vec3d(*spot))
         spot[up_axis] = lo[up_axis] + tall * CLASH_HEIGHT
         lower = to_world.Transform(Gf.Vec3d(*spot))
         spot[up_axis] = lo[up_axis] + tall * NAME_HEIGHT
-        named = to_world.Transform(Gf.Vec3d(*spot))
+        named = self._pinned(to_world.Transform(Gf.Vec3d(*spot)))
         marks = Collide._face_marks(self, local_box, to_world, cells, distances)
         blocked = [{"face": mark["face"], "name": mark["name"],
                     "state": mark["state"]}
@@ -2010,7 +2010,7 @@ class EbsSimulate:
         }
 
     def _pinned(self, named):
-        """판정 판 자리. EBS 가운데에서 민 거리만큼 되돌려, 밀어도 제자리에 둔다"""
+        """이름표 자리. EBS 가운데에서 민 거리만큼 되돌려, 밀어도 제자리에 둔다"""
         right = self._right_way(0)
         if right is None or not self._nudge:
             return named
