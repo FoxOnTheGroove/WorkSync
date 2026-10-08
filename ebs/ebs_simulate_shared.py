@@ -39,13 +39,13 @@ GEOMETRY_TYPES = frozenset({
     "Mesh", "Points", "BasisCurves", "NurbsCurves",
     "Capsule", "Cone", "Cube", "Cylinder", "Sphere", "Plane",
 })
-VERDICT_HEIGHT = 0.8
+VERDICT_HEIGHT = 0.45
 GRIP_HEIGHT   = 0.3
 OFFSET_HEIGHT = 0.25
 GRIP_WIDE   = 1.5 / 8.0
 GRIP_TALL   = 1.0 / 16.0
 CLASH_HEIGHT   = 0.45
-NAME_HEIGHT    = 0.45
+NAME_HEIGHT    = 0.8
 NEIGHBOUR_REACH = 1.5
 GROUP_NAMES = ("AMH", "Construction")
 STATE_CLASH = "clash"
