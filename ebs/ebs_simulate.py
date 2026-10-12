@@ -509,6 +509,68 @@ class EbsSimulate:
         return self._skin
 
 
+    def skin_test(self, ebs_shown: bool) -> bool:
+        """임시 재현. EBS 를 보이거나 감춘 채로 스킨을 다시 걸고, 상태를 찍은 뒤 EBS 를 보인다"""
+        ebs = (self._target or {}).get("ebs")
+        if ebs is None or not ebs.IsValid():
+            print("[ebs] skin test: run SIM first")
+            return False
+        self._show_ebs([ebs], ebs_shown)
+        self.strip_skin()
+        print(f"[ebs] skin test: binding with the EBS "
+              f"{'shown' if ebs_shown else 'hidden'}")
+        done = self.wear_skin()
+        self.skin_probe()
+        self.show_ebs(ebs)
+        return done
+
+    def skin_probe(self) -> None:
+        """임시 진단. 스킨 머티리얼의 자리, 인스턴스 여부, 보임, 셰이더 경로, 실제 걸린 것을 찍는다"""
+        stage = self._get_stage()
+        tc = Usd.TimeCode.Default()
+        say = lambda text: print(f"[ebs] skin probe: {text}")
+        if stage is None or not self._skin:
+            say("no stage or no skin set")
+            return
+        prim = stage.GetPrimAtPath(self._skin)
+        say(f"skin {self._skin} valid={bool(prim and prim.IsValid())}")
+        if not prim or not prim.IsValid():
+            return
+        say(f"type={prim.GetTypeName()} instance_proxy={prim.IsInstanceProxy()} "
+            f"in_prototype={prim.IsInPrototype()}")
+        up = prim.GetParent()
+        while up and up.IsValid() and not up.IsPseudoRoot():
+            if up.IsInstance():
+                say(f"instanceable ancestor {up.GetPath()}")
+            image = UsdGeom.Imageable(up)
+            if image and image.GetVisibilityAttr().Get(tc) == UsdGeom.Tokens.invisible:
+                say(f"invisible ancestor {up.GetPath()}")
+            up = up.GetParent()
+        ebs = (self._target or {}).get("ebs")
+        if ebs is not None and ebs.IsValid():
+            say(f"EBS {ebs.GetPath()} visibility="
+                f"{UsdGeom.Imageable(ebs).ComputeVisibility(tc)}")
+        for one in Usd.PrimRange(prim, Usd.TraverseInstanceProxies()):
+            shader = UsdShade.Shader(one)
+            if not shader:
+                continue
+            say(f"shader {one.GetPath()} id={shader.GetIdAttr().Get()}")
+            source = shader.GetSourceAsset("mdl")
+            if source is not None:
+                say(f"  mdl authored={source.path!r} resolved={source.resolvedPath!r} "
+                    f"sub={shader.GetSourceAssetSubIdentifier('mdl')!r}")
+            for item in shader.GetInputs():
+                value = item.Get()
+                if isinstance(value, Sdf.AssetPath):
+                    say(f"  input {item.GetBaseName()} authored={value.path!r} "
+                        f"resolved={value.resolvedPath!r}")
+        for path in list(self._skin_wrote)[:3]:
+            mesh = stage.GetPrimAtPath(path)
+            if not mesh or not mesh.IsValid():
+                continue
+            bound, _ = UsdShade.MaterialBindingAPI(mesh).ComputeBoundMaterial()
+            say(f"bound on {path}: {bound.GetPath() if bound else None}")
+
     def strip_skin(self) -> bool:
         """건 것을 푼다. 푼 인스턴스는 열어 둔 채로 둔다"""
         wrote, self._skin_wrote = self._skin_wrote, []
@@ -1410,6 +1472,7 @@ class EbsSimulate:
         if not told["ok"]:
             return self._done(told)
         if self.wear_skin():
+            self.skin_probe()
             await self.settle_skin()
         self.next_leg()
         self.show_ebs(self._target["ebs"])

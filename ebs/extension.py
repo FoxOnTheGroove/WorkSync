@@ -70,6 +70,15 @@ class EbsExtension(omni.ext.IExt):
         if event.type == kind.KEY_PRESS and event.input == keys.P:
             self._log_camera()
             return True
+        if event.type == kind.KEY_PRESS and event.input == keys.F5:
+            self._sim.skin_probe()
+            return True
+        if event.type == kind.KEY_PRESS and event.input == keys.F6:
+            self._sim.skin_test(True)
+            return True
+        if event.type == kind.KEY_PRESS and event.input == keys.F7:
+            self._sim.skin_test(False)
+            return True
         way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
         if way is None:
             return True
