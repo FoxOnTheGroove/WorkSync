@@ -1400,9 +1400,11 @@ class EbsSimulate:
             self._note(f"could not veil the markers ({e})")
 
     async def run_clear(self) -> dict:
-        """Clear 한 번이 하는 일 전부"""
+        """Clear 한 번이 하는 일 전부. init 이 끝나기 전에는 무시한다"""
         if self._busy:
             return
+        if not self._ready:
+            return self._payload(False, "Init not finished, clear ignored")
         panel = self._panel()
         self._paint(panel.wake)
         self.begin_work(WORK_CLEAR)
