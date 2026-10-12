@@ -79,6 +79,15 @@ class EbsExtension(omni.ext.IExt):
         if event.type == kind.KEY_PRESS and event.input == keys.F7:
             self._sim.skin_test(False)
             return True
+        if event.type == kind.KEY_PRESS and event.input == keys.F8:
+            self._sim.skin_break("missing")
+            return True
+        if event.type == kind.KEY_PRESS and event.input == keys.F9:
+            self._sim.skin_break("gone")
+            return True
+        if event.type == kind.KEY_PRESS and event.input == keys.F10:
+            self._sim.skin_break("back")
+            return True
         way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
         if way is None:
             return True

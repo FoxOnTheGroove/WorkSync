@@ -524,6 +524,40 @@ class EbsSimulate:
         self.show_ebs(ebs)
         return done
 
+    def skin_break(self, how: str) -> None:
+        """임시 재현. missing 은 없는 경로에 걸고, gone 은 건 머티리얼을 비활성으로 없애고, back 은 되살려 다시 건다"""
+        stage = self._get_stage()
+        if stage is None or not self._skin_wrote:
+            print("[ebs] skin break: run SIM with a skin first")
+            return
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                if how == "missing":
+                    nowhere = Sdf.Path("/EbsSkinMissing/Material")
+                    for path in self._skin_wrote:
+                        one = stage.GetPrimAtPath(path)
+                        if one and one.IsValid():
+                            UsdShade.MaterialBindingAPI.Apply(one) \
+                                .GetDirectBindingRel().SetTargets([nowhere])
+                    print(f"[ebs] skin break: {len(self._skin_wrote)} place(s) "
+                          f"now point at {nowhere}, which does not exist")
+                elif how == "gone":
+                    prim = stage.GetPrimAtPath(self._skin)
+                    prim.SetActive(False)
+                    print(f"[ebs] skin break: {self._skin} deactivated, "
+                          f"bindings still point at it")
+                elif how == "back":
+                    prim = stage.GetPrimAtPath(self._skin)
+                    if prim:
+                        prim.ClearActive()
+                    print(f"[ebs] skin break: {self._skin} active again, rebinding")
+        except Exception as e:
+            print(f"[ebs] skin break {how} failed: {type(e).__name__}: {e}")
+            return
+        if how == "back":
+            self.strip_skin()
+            self.wear_skin()
+
     def skin_probe(self) -> None:
         """임시 진단. 스킨 머티리얼의 자리, 인스턴스 여부, 보임, 셰이더 경로, 실제 걸린 것을 찍는다"""
         stage = self._get_stage()
