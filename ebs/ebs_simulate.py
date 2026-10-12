@@ -632,6 +632,8 @@ class EbsSimulate:
                                                     attr.IsCustom())
                         value = attr.Get(tc)
                         if isinstance(value, Sdf.AssetPath):
+                            print(f"[ebs] skin copy {one.GetPath()}.{attr.GetName()}: "
+                                  f"{value.path!r} -> {value.resolvedPath or value.path!r}")
                             value = Sdf.AssetPath(value.resolvedPath or value.path)
                         elif isinstance(value, Sdf.AssetPathArray):
                             value = Sdf.AssetPathArray(
