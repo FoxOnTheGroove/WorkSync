@@ -190,7 +190,6 @@ class EbsSimulate:
         self._skin_wrote: list = []
         self._skin_opened: list = []
         self._skin_remote: set = set()
-        self._skin_fetched: dict = {}
         self._phases: dict = {}
         self._skin_use: bool = True
         self._nudge: float = 0.0
@@ -604,50 +603,6 @@ class EbsSimulate:
             return self._copy_skin(stage)
         return self._make_skin(stage)
 
-    def _settle_asset(self, value) -> str:
-        """복사본에 적을 에셋 경로. 원격이면 로컬 캐시로 받은 경로, 못 받으면 원격 그대로"""
-        url = value.resolvedPath or value.path
-        if value.path.startswith(REMOTE_ASSETS) and not url.startswith(REMOTE_ASSETS):
-            url = value.path
-        if not url.startswith(REMOTE_ASSETS):
-            return url
-        local = self._fetch_asset(url)
-        if local:
-            return local
-        self._skin_remote.add(url)
-        return url
-
-    def _fetch_asset(self, url: str) -> str:
-        """원격 에셋을 로컬 캐시로 받는다. MDL 은 들어 있는 폴더째 받는다. 못 받으면 빈 칸"""
-        import omni.client
-        from urllib.parse import urlparse
-        try:
-            import carb.tokens
-            base = carb.tokens.get_tokens_interface().resolve("${cache}")
-        except Exception:
-            base = ""
-        if not base or base.startswith("${"):
-            import tempfile
-            base = tempfile.gettempdir()
-        parts = urlparse(url)
-        local = os.path.normpath(os.path.join(base, SKIN_CACHE, parts.netloc,
-                                              parts.path.lstrip("/")))
-        if url.lower().endswith(".mdl"):
-            source, target = url.rsplit("/", 1)[0], os.path.dirname(local)
-        else:
-            source, target = url, local
-        if source not in self._skin_fetched:
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            result = omni.client.copy(source, target,
-                                      behavior=omni.client.CopyBehavior.OVERWRITE)
-            ok = result == omni.client.Result.OK
-            self._skin_fetched[source] = ok
-            print(f"[ebs] skin: {'downloaded' if ok else 'could not download'} "
-                  f"{source} -> {target}" + ("" if ok else f" ({result})"))
-        if not self._skin_fetched[source] or not os.path.exists(local):
-            return ""
-        return local
-
     async def _reach_skin(self) -> bool:
         """스킨이 쓰는 원격 에셋에 닿는지 본다. 끊겼으면 재연결하고, 붙으면 머티리얼을 새로 복사하게 한다"""
         if not self._skin_use or not self._skin or not self._skin_remote:
@@ -708,13 +663,14 @@ class EbsSimulate:
                                                     attr.IsCustom())
                         value = attr.Get(tc)
                         if isinstance(value, Sdf.AssetPath):
-                            where_to = self._settle_asset(value)
                             print(f"[ebs] skin copy {one.GetPath()}.{attr.GetName()}: "
-                                  f"{value.path!r} -> {where_to!r}")
-                            value = Sdf.AssetPath(where_to)
+                                  f"{value.path!r} -> {value.resolvedPath or value.path!r}")
+                            value = Sdf.AssetPath(value.resolvedPath or value.path)
+                            if value.path.startswith(REMOTE_ASSETS):
+                                self._skin_remote.add(value.path)
                         elif isinstance(value, Sdf.AssetPathArray):
                             value = Sdf.AssetPathArray(
-                                [Sdf.AssetPath(self._settle_asset(v)) for v in value])
+                                [Sdf.AssetPath(v.resolvedPath or v.path) for v in value])
                         if value is not None and attr.HasAuthoredValue():
                             copy.Set(value)
                         if attr.HasColorSpace():

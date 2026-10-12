@@ -65,7 +65,6 @@ SWEEP_COLOR_EQP  = (0.15, 0.8, 0.3)
 SKIN_ROOT      = "/EbsSkin"
 SKIN_NAME      = "M_skin"
 REMOTE_ASSETS  = ("omniverse://", "http://", "https://")
-SKIN_CACHE     = "ebs_skin"
 SKIN_DEEP      = 8
 OURS = (MARKER_ROOT, GRIP_ROOT, LASER_ROOT, SWEEP_ROOT, CAMERA_PATH, SKIN_ROOT)
 OURS_UNDER = tuple(p + "/" for p in OURS)
