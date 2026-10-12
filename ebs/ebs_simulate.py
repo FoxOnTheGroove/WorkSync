@@ -599,16 +599,58 @@ class EbsSimulate:
         if colour is not None:
             return self._make_colour(stage, colour)
         if self._skin.startswith("/"):
-            found = stage.GetPrimAtPath(self._skin)
-            if found is None or not found.IsValid():
-                self._loud(f"skin: nothing stands at {self._skin}")
-                return None
-            material = UsdShade.Material(found)
-            if not material:
-                self._loud(f"skin: {self._skin} is not a material")
-                return None
-            return material
+            return self._copy_skin(stage)
         return self._make_skin(stage)
+
+    def _copy_skin(self, stage):
+        """씬 머티리얼을 세션 레이어에 통째로 복사해 둔다. 에셋 경로는 푼 절대 경로로 옮긴다"""
+        where = f"{SKIN_ROOT}/{SKIN_NAME}"
+        if self._skin_made == self._skin:
+            made = stage.GetPrimAtPath(where)
+            if made is not None and made.IsValid():
+                return UsdShade.Material(made)
+        found = stage.GetPrimAtPath(self._skin)
+        if found is None or not found.IsValid():
+            self._loud(f"skin: nothing stands at {self._skin}")
+            return None
+        if not UsdShade.Material(found):
+            self._loud(f"skin: {self._skin} is not a material")
+            return None
+        source = found.GetPath()
+        target = Sdf.Path(where)
+        tc = Usd.TimeCode.Default()
+        try:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                if stage.GetPrimAtPath(where).IsValid():
+                    stage.RemovePrim(where)
+                UsdGeom.Scope.Define(stage, SKIN_ROOT)
+                for one in Usd.PrimRange(found, Usd.TraverseInstanceProxies()):
+                    path = one.GetPath().ReplacePrefix(source, target)
+                    made = stage.DefinePrim(path, one.GetTypeName())
+                    for attr in one.GetAttributes():
+                        copy = made.CreateAttribute(attr.GetName(), attr.GetTypeName(),
+                                                    attr.IsCustom())
+                        value = attr.Get(tc)
+                        if isinstance(value, Sdf.AssetPath):
+                            value = Sdf.AssetPath(value.resolvedPath or value.path)
+                        elif isinstance(value, Sdf.AssetPathArray):
+                            value = Sdf.AssetPathArray(
+                                [Sdf.AssetPath(v.resolvedPath or v.path) for v in value])
+                        if value is not None and attr.HasAuthoredValue():
+                            copy.Set(value)
+                        if attr.HasColorSpace():
+                            copy.SetColorSpace(attr.GetColorSpace())
+                        links = attr.GetConnections()
+                        if links:
+                            copy.SetConnections([link.ReplacePrefix(source, target)
+                                                 for link in links])
+        except Exception as e:
+            self._loud(f"skin: could not copy {self._skin}: "
+                       f"{type(e).__name__}: {e}")
+            return None
+        self._skin_made = self._skin
+        self._note(f"material copied: {self._skin} -> {where}")
+        return UsdShade.Material(stage.GetPrimAtPath(where))
 
     def _make_colour(self, stage, colour):
         """그 색 하나짜리 머티리얼. 세션 레이어에 세운다"""
@@ -1002,6 +1044,8 @@ class EbsSimulate:
         self._ready = equipment > 0 and ports > 0
         self._note(f"indexed {equipment} equipment, {ports} port entries")
         self._camera.go_home(self._get_stage())
+        if self._skin.startswith("/") and self._get_stage() is not None:
+            self._copy_skin(self._get_stage())
         if not equipment:
             return self._payload(False, "No EQP_ prims found - check the search root")
         if not ports:
