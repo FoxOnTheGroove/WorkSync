@@ -79,11 +79,13 @@ class EbsExtension(omni.ext.IExt):
         if event.type == kind.KEY_PRESS and event.input == keys.F7:
             self._sim.skin_test(False)
             return True
+        shift = bool(getattr(event, "modifiers", 0)
+                     & carb.input.KeyboardEventModifierFlag.SHIFT)
         if event.type == kind.KEY_PRESS and event.input == keys.F8:
-            self._sim.skin_break("missing")
+            self._sim.skin_break("no_file" if shift else "missing")
             return True
         if event.type == kind.KEY_PRESS and event.input == keys.F9:
-            self._sim.skin_break("gone")
+            self._sim.skin_break("no_name" if shift else "gone")
             return True
         if event.type == kind.KEY_PRESS and event.input == keys.F10:
             self._sim.skin_break("back")

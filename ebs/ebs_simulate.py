@@ -546,6 +546,26 @@ class EbsSimulate:
                     prim.SetActive(False)
                     print(f"[ebs] skin break: {self._skin} deactivated, "
                           f"bindings still point at it")
+                elif how in ("no_file", "no_name"):
+                    where = "/EbsSkinBroken/Material"
+                    UsdGeom.Scope.Define(stage, "/EbsSkinBroken")
+                    broken = UsdShade.Material.Define(stage, where)
+                    shader = UsdShade.Shader.Define(stage, f"{where}/mdl")
+                    if how == "no_file":
+                        shader.SetSourceAsset(Sdf.AssetPath("EbsNoSuchFile.mdl"), "mdl")
+                        shader.SetSourceAssetSubIdentifier("EbsNoSuchFile", "mdl")
+                    else:
+                        shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
+                        shader.SetSourceAssetSubIdentifier("EbsNoSuchMaterial", "mdl")
+                    broken.CreateSurfaceOutput("mdl").ConnectToSource(
+                        shader.ConnectableAPI(), "out")
+                    for path in self._skin_wrote:
+                        one = stage.GetPrimAtPath(path)
+                        if one and one.IsValid():
+                            UsdShade.MaterialBindingAPI.Apply(one) \
+                                .GetDirectBindingRel().SetTargets([Sdf.Path(where)])
+                    print(f"[ebs] skin break: {len(self._skin_wrote)} place(s) now on "
+                          f"a broken mdl ({'missing file' if how == 'no_file' else 'wrong material name in OmniPBR.mdl'})")
                 elif how == "back":
                     prim = stage.GetPrimAtPath(self._skin)
                     if prim:
