@@ -509,122 +509,6 @@ class EbsSimulate:
         return self._skin
 
 
-    def skin_test(self, ebs_shown: bool) -> bool:
-        """임시 재현. EBS 를 보이거나 감춘 채로 스킨을 다시 걸고, 상태를 찍은 뒤 EBS 를 보인다"""
-        ebs = (self._target or {}).get("ebs")
-        if ebs is None or not ebs.IsValid():
-            print("[ebs] skin test: run SIM first")
-            return False
-        self._show_ebs([ebs], ebs_shown)
-        self.strip_skin()
-        print(f"[ebs] skin test: binding with the EBS "
-              f"{'shown' if ebs_shown else 'hidden'}")
-        done = self.wear_skin()
-        self.skin_probe()
-        self.show_ebs(ebs)
-        return done
-
-    def skin_break(self, how: str) -> None:
-        """임시 재현. missing 은 없는 경로에 걸고, gone 은 건 머티리얼을 비활성으로 없애고, back 은 되살려 다시 건다"""
-        stage = self._get_stage()
-        if stage is None or not self._skin_wrote:
-            print("[ebs] skin break: run SIM with a skin first")
-            return
-        try:
-            with Usd.EditContext(stage, stage.GetSessionLayer()):
-                if how == "missing":
-                    nowhere = Sdf.Path("/EbsSkinMissing/Material")
-                    for path in self._skin_wrote:
-                        one = stage.GetPrimAtPath(path)
-                        if one and one.IsValid():
-                            UsdShade.MaterialBindingAPI.Apply(one) \
-                                .GetDirectBindingRel().SetTargets([nowhere])
-                    print(f"[ebs] skin break: {len(self._skin_wrote)} place(s) "
-                          f"now point at {nowhere}, which does not exist")
-                elif how == "gone":
-                    prim = stage.GetPrimAtPath(self._skin)
-                    prim.SetActive(False)
-                    print(f"[ebs] skin break: {self._skin} deactivated, "
-                          f"bindings still point at it")
-                elif how in ("no_file", "no_name"):
-                    where = "/EbsSkinBroken/Material"
-                    UsdGeom.Scope.Define(stage, "/EbsSkinBroken")
-                    broken = UsdShade.Material.Define(stage, where)
-                    shader = UsdShade.Shader.Define(stage, f"{where}/mdl")
-                    if how == "no_file":
-                        shader.SetSourceAsset(Sdf.AssetPath("EbsNoSuchFile.mdl"), "mdl")
-                        shader.SetSourceAssetSubIdentifier("EbsNoSuchFile", "mdl")
-                    else:
-                        shader.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
-                        shader.SetSourceAssetSubIdentifier("EbsNoSuchMaterial", "mdl")
-                    broken.CreateSurfaceOutput("mdl").ConnectToSource(
-                        shader.ConnectableAPI(), "out")
-                    for path in self._skin_wrote:
-                        one = stage.GetPrimAtPath(path)
-                        if one and one.IsValid():
-                            UsdShade.MaterialBindingAPI.Apply(one) \
-                                .GetDirectBindingRel().SetTargets([Sdf.Path(where)])
-                    print(f"[ebs] skin break: {len(self._skin_wrote)} place(s) now on "
-                          f"a broken mdl ({'missing file' if how == 'no_file' else 'wrong material name in OmniPBR.mdl'})")
-                elif how == "back":
-                    prim = stage.GetPrimAtPath(self._skin)
-                    if prim:
-                        prim.ClearActive()
-                    print(f"[ebs] skin break: {self._skin} active again, rebinding")
-        except Exception as e:
-            print(f"[ebs] skin break {how} failed: {type(e).__name__}: {e}")
-            return
-        if how == "back":
-            self.strip_skin()
-            self.wear_skin()
-
-    def skin_probe(self) -> None:
-        """임시 진단. 스킨 머티리얼의 자리, 인스턴스 여부, 보임, 셰이더 경로, 실제 걸린 것을 찍는다"""
-        stage = self._get_stage()
-        tc = Usd.TimeCode.Default()
-        say = lambda text: print(f"[ebs] skin probe: {text}")
-        if stage is None or not self._skin:
-            say("no stage or no skin set")
-            return
-        prim = stage.GetPrimAtPath(self._skin)
-        say(f"skin {self._skin} valid={bool(prim and prim.IsValid())}")
-        if not prim or not prim.IsValid():
-            return
-        say(f"type={prim.GetTypeName()} instance_proxy={prim.IsInstanceProxy()} "
-            f"in_prototype={prim.IsInPrototype()}")
-        up = prim.GetParent()
-        while up and up.IsValid() and not up.IsPseudoRoot():
-            if up.IsInstance():
-                say(f"instanceable ancestor {up.GetPath()}")
-            image = UsdGeom.Imageable(up)
-            if image and image.GetVisibilityAttr().Get(tc) == UsdGeom.Tokens.invisible:
-                say(f"invisible ancestor {up.GetPath()}")
-            up = up.GetParent()
-        ebs = (self._target or {}).get("ebs")
-        if ebs is not None and ebs.IsValid():
-            say(f"EBS {ebs.GetPath()} visibility="
-                f"{UsdGeom.Imageable(ebs).ComputeVisibility(tc)}")
-        for one in Usd.PrimRange(prim, Usd.TraverseInstanceProxies()):
-            shader = UsdShade.Shader(one)
-            if not shader:
-                continue
-            say(f"shader {one.GetPath()} id={shader.GetIdAttr().Get()}")
-            source = shader.GetSourceAsset("mdl")
-            if source is not None:
-                say(f"  mdl authored={source.path!r} resolved={source.resolvedPath!r} "
-                    f"sub={shader.GetSourceAssetSubIdentifier('mdl')!r}")
-            for item in shader.GetInputs():
-                value = item.Get()
-                if isinstance(value, Sdf.AssetPath):
-                    say(f"  input {item.GetBaseName()} authored={value.path!r} "
-                        f"resolved={value.resolvedPath!r}")
-        for path in list(self._skin_wrote)[:3]:
-            mesh = stage.GetPrimAtPath(path)
-            if not mesh or not mesh.IsValid():
-                continue
-            bound, _ = UsdShade.MaterialBindingAPI(mesh).ComputeBoundMaterial()
-            say(f"bound on {path}: {bound.GetPath() if bound else None}")
-
     def strip_skin(self) -> bool:
         """건 것을 푼다. 푼 인스턴스는 열어 둔 채로 둔다"""
         wrote, self._skin_wrote = self._skin_wrote, []
@@ -1526,7 +1410,6 @@ class EbsSimulate:
         if not told["ok"]:
             return self._done(told)
         if self.wear_skin():
-            self.skin_probe()
             await self.settle_skin()
         self.next_leg()
         self.show_ebs(self._target["ebs"])

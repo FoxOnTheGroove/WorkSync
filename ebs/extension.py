@@ -70,26 +70,6 @@ class EbsExtension(omni.ext.IExt):
         if event.type == kind.KEY_PRESS and event.input == keys.P:
             self._log_camera()
             return True
-        if event.type == kind.KEY_PRESS and event.input == keys.F5:
-            self._sim.skin_probe()
-            return True
-        if event.type == kind.KEY_PRESS and event.input == keys.F6:
-            self._sim.skin_test(True)
-            return True
-        if event.type == kind.KEY_PRESS and event.input == keys.F7:
-            self._sim.skin_test(False)
-            return True
-        shift = bool(getattr(event, "modifiers", 0)
-                     & carb.input.KeyboardEventModifierFlag.SHIFT)
-        if event.type == kind.KEY_PRESS and event.input == keys.F8:
-            self._sim.skin_break("no_file" if shift else "missing")
-            return True
-        if event.type == kind.KEY_PRESS and event.input == keys.F9:
-            self._sim.skin_break("no_name" if shift else "gone")
-            return True
-        if event.type == kind.KEY_PRESS and event.input == keys.F10:
-            self._sim.skin_break("back")
-            return True
         way = {keys.LEFT: -1.0, keys.RIGHT: 1.0}.get(event.input)
         if way is None:
             return True
