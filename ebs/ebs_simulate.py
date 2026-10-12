@@ -190,6 +190,10 @@ class EbsSimulate:
         self._skin_wrote: list = []
         self._skin_opened: list = []
         self._skin_remote: set = set()
+        self._sim_count = 0
+        self._skin_offline = False
+        self._skin_lost = False
+        self._skin_host = ""
         self._phases: dict = {}
         self._skin_use: bool = True
         self._nudge: float = 0.0
@@ -603,6 +607,36 @@ class EbsSimulate:
             return self._copy_skin(stage)
         return self._make_skin(stage)
 
+    def _drop_test(self) -> None:
+        """임시 재현. SIM 2, 3 회는 원격 에셋을 없는 서버로 돌려 끊긴 상태를 만들고, 4 회에 되살린다"""
+        if not SKIN_DROP_TEST or not self._skin.startswith("/"):
+            return
+        count = self._sim_count
+        offline = count in (2, 3)
+        if offline == self._skin_offline:
+            return
+        self._skin_offline = offline
+        self._skin_made = ""
+        self.strip_skin()
+        if offline:
+            print(f"[ebs] skin test: sim {count}, cutting the asset server off "
+                  f"({SKIN_DEAD_HOST})")
+            return
+        self._skin_remote = {re.sub(r"^(\w+://)[^/]+",
+                                    lambda m: m.group(1) + self._skin_host, url)
+                             for url in self._skin_remote}
+        self._skin_lost = True
+        print(f"[ebs] skin test: sim {count}, asset server back")
+
+    def _cut_asset(self, url: str) -> str:
+        """임시 재현. 끊긴 동안 원격 에셋 주소의 서버를 없는 이름으로 바꾼다"""
+        if not self._skin_offline or not url.startswith(REMOTE_ASSETS):
+            return url
+        found = re.match(r"^\w+://([^/]+)", url)
+        if found and found.group(1) != SKIN_DEAD_HOST:
+            self._skin_host = found.group(1)
+        return re.sub(r"^(\w+://)[^/]+", lambda m: m.group(1) + SKIN_DEAD_HOST, url)
+
     async def _reach_skin(self) -> bool:
         """스킨이 쓰는 원격 에셋에 닿는지 본다. 끊겼으면 재연결하고, 붙으면 머티리얼을 새로 복사하게 한다"""
         if not self._skin_use or not self._skin or not self._skin_remote:
@@ -611,6 +645,8 @@ class EbsSimulate:
         healed, reached = False, True
         for url in sorted(self._skin_remote):
             result, _ = await omni.client.stat_async(url)
+            if self._skin_lost:
+                result = omni.client.Result.ERROR_CONNECTION
             if result == omni.client.Result.OK:
                 continue
             print(f"[ebs] skin: connection lost to {url} ({result})")
@@ -627,6 +663,7 @@ class EbsSimulate:
                 print(f"[ebs] skin: still cannot reach {url} ({result}), "
                       f"the skin may render red")
                 reached = False
+        self._skin_lost = False
         if healed:
             self._skin_made = ""
             self.strip_skin()
@@ -665,7 +702,8 @@ class EbsSimulate:
                         if isinstance(value, Sdf.AssetPath):
                             print(f"[ebs] skin copy {one.GetPath()}.{attr.GetName()}: "
                                   f"{value.path!r} -> {value.resolvedPath or value.path!r}")
-                            value = Sdf.AssetPath(value.resolvedPath or value.path)
+                            value = Sdf.AssetPath(
+                                self._cut_asset(value.resolvedPath or value.path))
                             if value.path.startswith(REMOTE_ASSETS):
                                 self._skin_remote.add(value.path)
                         elif isinstance(value, Sdf.AssetPathArray):
@@ -1363,6 +1401,7 @@ class EbsSimulate:
         self._paint(panel.hide)
         self._paint(panel.wake)
         self.begin_work(WORK_SIM)
+        self._sim_count += 1
         self._veil(True)
         try:
             told = await self.simulate_async(equipment)
@@ -1488,6 +1527,7 @@ class EbsSimulate:
         told = self._do_focus()
         if not told["ok"]:
             return self._done(told)
+        self._drop_test()
         await self._reach_skin()
         if self.wear_skin():
             await self.settle_skin()
