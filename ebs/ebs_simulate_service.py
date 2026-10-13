@@ -34,6 +34,11 @@ class EbsSimulateService:
         return instance().run_cam_refresh()
 
     @classmethod
+    def valid_ids(cls, ids):
+        """id 목록 중 XML 에 있고 포트가 2, 3 개인 것만"""
+        return instance().valid_ids(ids)
+
+    @classmethod
     def get_result(cls, equipment=""):
         """그 장비의 마지막 판정"""
         return instance().get_result(equipment)

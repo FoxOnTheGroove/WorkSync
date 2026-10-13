@@ -2522,6 +2522,19 @@ class EbsSimulate:
         self._note(f"xml cache written: {path} "
                    f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
 
+    def valid_ids(self, ids) -> list:
+        """XML 에 있고 포트가 2, 3 개인 장비 id 만 골라 준다. 포트 표가 없으면 캐시부터 읽는다"""
+        if not self._port_map:
+            self.load_ports()
+        valid = []
+        for one in ids or ():
+            key = str(one).strip().upper()
+            if key.startswith(EQP_PREFIX):
+                key = key[len(EQP_PREFIX):]
+            if len(self._port_map.get(key, ())) in (2, 3):
+                valid.append(one)
+        return valid
+
     def get_port_count(self, eqp_id: str) -> "int | None":
         """그 장비의 포트 수"""
         indices = self.get_port_indices(eqp_id)
