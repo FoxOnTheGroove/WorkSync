@@ -1,203 +1,241 @@
-# 1회차 · 지도와 진입점 (+ SIM 뼈대 앞부분)
+# 1회차 · 지도와 SIM 뼈대
 
-> 목표: "킷이 켜질 때부터 SIM 버튼 / 웹 API 가 속(`EbsSimulate`)에 닿기까지" 를 막힘없이 말할 수 있게.
-> 시간: 1시간. 함수 본문 깊이 들어가지 말 것. **누가 누구를 부르나**만 본다.
+> 목표: **"킷이 켜지고 → init 이 돌고 → SIM 한 번이 끝나기까지"** 를 함수 이름으로 그릴 수 있게.
+> 시간: 약 1시간 10분. 함수 본문 속으로 들어가지 말 것. **누가 누구를 어떤 순서로 부르나**만 본다.
+> 오늘 그린 흐름도가 2~8회차의 지도가 된다. 매 회차는 이 그림의 한 칸을 채우는 일이다.
 
 ---
 
-## 0. 먼저 알고 들어갈 큰 그림 (5분)
+## 0. 큰 그림 (5분)
 
-파일 8개, 약 8,500줄. 역할은 이렇다.
-
-| 파일 | 줄 | 역할 | 오늘 |
+| 파일 | 줄 | 역할 | 언제 보나 |
 |---|---|---|---|
-| `extension.py` | 250 | 킷 진입점. 시작/종료, 자동 init, 키보드 | **정독** |
-| `ebs_simulate_service.py` | 98 | 웹이 부르는 API 창구. 전부 한 줄 위임 | **정독** |
-| `ebs_simulate_shared.py` | 157 | 상수 모음 + `children()` | 훑기 |
-| `dummy_ui.py` | 485 | 시험용 창. **숨겨져 있지만 auto init 을 대신 돌린다** | 훑기 |
-| `ebs_simulate.py` | 3,372 | 속(본체). `EbsSimulate` 클래스 하나 | 앞부분만 |
-| `ebs_simulate_camera.py` | 661 | 카메라 | 5·6회차 |
-| `ebs_simulate_collide.py` | 1,595 | 간섭 엔진 | 6~8회차 |
-| `ebs_simulate_overlay.py` | 1,928 | 패널 / 기즈모 / 3D 마커 | 9·10회차 |
+| `extension.py` | 250 | 킷 진입점. 시작/종료, 자동 init, 키보드 | **오늘** (키는 8회차) |
+| `ebs_simulate_shared.py` | 157 | 상수 모음 + `children()` | **오늘 훑기** |
+| `ebs_simulate.py` | 3,372 | 본체. `EbsSimulate` 클래스 하나 | **오늘 뼈대**, 2~8회차 속 |
+| `ebs_simulate_camera.py` | 661 | 카메라 | 4회차 |
+| `ebs_simulate_collide.py` | 1,595 | 간섭 엔진 | 5·6회차 |
+| `ebs_simulate_overlay.py` | 1,928 | 패널 / 기즈모 / 3D 마커 | 7·8회차 |
+| `ebs_simulate_service.py` | 98 | 웹 API 창구 (전부 한 줄 위임) | 9회차 |
+| `dummy_ui.py` | 485 | 시험용 창 (숨겨져 있음) | 9회차 |
 
-호출 방향은 한 방향이다.
+호출 방향:
 
 ```
-킷 ──▶ extension.py ──▶ dummy_ui.py ──▶ service ──▶ EbsSimulate (ebs_simulate.py)
-웹 ─────────────────────────────────▶ service ──▶ EbsSimulate
-                                                   ├─▶ camera
-                                                   ├─▶ collide
-                                                   └─▶ overlay (attach 로 거꾸로 sim() 을 참조)
+킷 ─▶ extension ─▶ (dummy_ui) ─▶ service ─▶ EbsSimulate ─┬─▶ camera
+웹 ──────────────────────────▶ service ─▶ EbsSimulate   ├─▶ collide
+                                                        └─▶ overlay
+overlay 는 attach() 로 받아 둔 EbsSimulate 를 sim() 으로 거꾸로 참조한다.
 ```
 
+> service 와 dummy_ui 는 9회차에 본다. 오늘은 **"자동 init 이 dummy_ui 를 거쳐 돌고, 경로 기본값(PRESET)도 거기 있다"** 는 것만 기억.
+
 ---
 
-## 1. `extension.py` (20분)
+## 1. `extension.py` — 시작과 종료 (15분)
 
-### 1-1. 읽는 순서
+키 입력(`_watch_keys`, `_on_key`, `_repeat`, `_step`, `_settle*`, `_hold_off`, `_let_go`, `_log_camera`, `_ebs_refresh`)은 **건너뛴다** (8회차).
 
-1. **상수 (12–20)** — 무엇이 있는지만.
-   - `SHOW_DUMMY_UI = False` : 시험 창은 만들되 숨긴다.
-   - `BLOCK_SELECT = True` : 뷰포트 클릭 선택을 막는다.
-   - `KEY_*` : 방향키 관련 (9회차에서 다시 봄).
-2. **`on_startup` (26)** — 여기가 시작점. 순서대로:
-   1. `instance()` 로 `EbsSimulate` 단 하나를 만든다 (싱글턴).
-   2. `attach_overlay(self._sim)` : 오버레이가 `sim()` 으로 그 하나를 찾을 수 있게 걸어 둔다.
-   3. `EbsDummyUI` 생성 → `build_ui()` → `show(False)`. **창은 만들어지지만 안 보인다.**
-   4. 상태 변수 초기화.
-   5. 구독 3개: `_watch_layout`, `_watch_stage`, `_watch_keys`.
-3. **`_watch_stage` (174) → `_stage_step` (184) → `_stage_ready` (206)**
-   - 매 프레임 "스테이지가 열렸고 다 로드됐나" 를 본다.
-   - 준비되면 구독을 끊고(`self._stage = None`) → `_lock_select()` → `self._ui.auto_init()`.
-   - 즉 **자동 init 은 dummy_ui 를 거쳐서 돈다.**
-4. **`_lock_select` (192)** — `PickLock.hold` 로 선택을 끈다. (camera 파일에 있음)
-5. **`_watch_layout` (215) → `_raise_step` (225)** — 레이아웃이 창을 감추는 걸 막고, 우측 패널에 도킹. 최대 `RAISE_FRAMES` 프레임 후 포기.
-6. **`_watch_keys` (47) / `_on_key` (59)** — 오늘은 "어떤 키가 무엇을 하는지" 표만 만든다.
-7. **`on_shutdown` (236)** — 구독 해제 → 키 해제 → 선택 잠금 해제 → UI 파괴 → `forget()`.
+### 1-1. 상수 (12–20)
+- `SHOW_DUMMY_UI = False` : 시험 창은 만들되 숨긴다.
+- `BLOCK_SELECT = True` : 뷰포트 클릭 선택을 끈다.
+- `RAISE_FRAMES = 300` : 창 되살리기를 최대 몇 프레임 시도하나.
 
-### 1-2. 키 표 (직접 채워 보기 전에 보지 말 것)
+### 1-2. `on_startup` (26) — 시작점
+1. `instance()` → `EbsSimulate` 를 **딱 하나** 만든다.
+2. `attach_overlay(self._sim)` → 오버레이가 `sim()` 으로 그 하나를 찾게 걸어 둔다.
+3. `EbsDummyUI` 생성 → `build_ui()` → `show(False)` (만들지만 숨김).
+4. 상태 변수 초기화.
+5. 구독 셋: `_watch_layout`, `_watch_stage`, `_watch_keys`.
 
-| 키 | 동작 | 비고 |
+### 1-3. 자동 init 경로
+- **`_watch_stage` (174)** : 매 프레임 `_stage_step` 을 부르는 구독.
+- **`_stage_step` (184)** : `_stage_ready()` 가 참인 첫 프레임에
+  구독 끊기(`self._stage = None`) → `_lock_select()` → `self._ui.auto_init()`.
+- **`_stage_ready` (206)** : 스테이지가 있고 `loaded >= total`.
+- **`_lock_select` (192)** : `PickLock.hold(window)` 로 뷰포트 선택 끔.
+- 그 뒤 (9회차에 자세히): `EbsDummyUI.auto_init` → PRESET 값을 `set_*` 로 넘김 → `EbsSimulateService.auto_init` → **`EbsSimulate.init`**.
+
+### 1-4. 창 되살리기
+- **`_watch_layout` (215) → `_raise_step` (225)** : 레이아웃이 창을 감추면 되살리고 우측 패널에 도킹. 도킹되거나 300 프레임이 지나면 멈춤.
+
+### 1-5. `on_shutdown` (236)
+구독 해제 → 키보드 해제 → 반복/대기 작업 취소 → 선택 잠금 해제(`PickLock.drop`) → UI 파괴 → `forget()`.
+
+---
+
+## 2. `ebs_simulate_shared.py` 훑기 (5분)
+
+외우지 말고 **묶음** 만 눈에 넣는다.
+
+| 묶음 | 예 | 다시 볼 회차 |
 |---|---|---|
-| ← / → | `nudge_by(±KEY_STEP)` 5mm 이동 | SIM 중, 손잡이 안 잡았을 때만 |
-| 누르고 있기 | 에디터는 `KEY_REPEAT`, 웹은 `_repeat` 가 대신 반복 | 0.5초 뒤 0.05초마다, 최대 10초 |
-| 떼기 | `KEY_WAIT`(0.75초) 뒤 `run_nudge_settle` | 그 사이 또 누르면 취소 (`_hold_off`) |
-| R | `cam_refresh` | 임시 |
-| T | `ebs_refresh` (EBS 0mm) | 임시 |
-| P | 카메라 값 콘솔 출력 | 임시 |
+| 작업 이름 `WORK_*` | `WORK_SIM`, `WORK_CLEAR`, `WORK_SETTLE` | 오늘 |
+| 단계 표 `PHASES` | camera / place / skin / collide / overlay | 오늘 |
+| 실패 `CODE_*`, `SAY_*` | `CODE_PIVOT`, `SAY_PIVOT "유효하지 않은 pivot 데이터"` | 오늘 |
+| XML `*_KEY`, `*_PATTERN`, `CACHE_*` | `PORT_ID_KEY`, `CACHE_SUFFIX` | 2회차 |
+| 피봇 `ANCHOR_DEPTH`, `PIVOT_*`, `MODULE_*` | 6뎁스, MAINBODY → MAIN → EFEM | 3회차 |
+| 면 `FACE_*`, `COLLIDE_STEPS` | left / ceiling / right, 단계별 진행률 비중 | 5회차 |
+| 높이 비율 `*_HEIGHT` | `VERDICT_HEIGHT 0.8`, `NAME_HEIGHT 0.45` | 7회차 |
+| 프림 루트 `*_ROOT`, `OURS` | `/EbsCollisionMarkers`, `/EbsGrip`, `/EbsSkin` | 5·8회차 |
 
-### 1-3. 분석 포인트
-
-- 키 핸들러는 **항상 `True` 를 반환** 한다 (키 이벤트를 먹는다).
-- `_repeats` 는 한 번이라도 `KEY_REPEAT` 이 오면 True 가 되고, 이후 자체 반복을 안 띄운다. → 에디터/웹 겸용 처리.
-- 비동기 작업 두 개를 들고 있다: `_turbo`(반복), `_waiting`(재측정 대기). 둘 다 cancel 로 정리.
+- 유일한 함수 **`children(prim)`** : 인스턴스 안쪽까지 자식을 본다. 코드 전체의 자식 순회가 이걸 쓴다.
 
 ---
 
-## 2. `ebs_simulate_service.py` (10분)
+## 3. `EbsSimulate` 의 몸통 (15분)
 
-- 모든 메서드가 `instance().xxx()` 한 줄. **로직 없음.**
-- 구획 3개: **동작 / 질의 / 설정**.
+### 3-1. 파일 맨 위 (1–153)
+- `_remote`, `_stamp_of`, `_read_bytes`, `_write_text` : 로컬 / `omniverse://` 둘 다 읽고 쓰는 도우미. (2회차)
+- `_PortScan` (91) : XML 훑기 수집기. (2회차)
 
-| 서비스 | 속에서 부르는 것 | async? |
-|---|---|---|
-| `auto_init` | `init` | X (동기 — 도는 동안 킷이 멈춘다) |
-| `simulate` | `run_simulate` | O |
-| `clear` | `run_clear` | O |
-| `ebs_refresh` | `run_ebs_refresh` | O |
-| `cam_refresh` | `run_cam_refresh` | X |
-| `valid_ids` | `valid_ids` | X |
-| `get_result` | `get_result` | X |
-| `busy` / `get_progress` | 같은 이름 | X |
-| `set_*` 8개 | 같은 이름 | X |
+### 3-2. `__init__` (157–233) — 상태 변수 약 75개, 무리로만
 
-- 규칙: 속 함수 중 **`run_` 이 붙은 것 = 서비스용 진입점**. 바쁨 표시(`begin_work/end_work`)와 결과 정리를 감싼다 (2회차).
-
----
-
-## 3. `dummy_ui.py` 훑기 (10분)
-
-### 3-1. 볼 것만
-
-- **`auto_init` (239)** : `_apply_settings()` → `EbsSimulateService.auto_init()` → `_apply_views()` → `_reset_nudge()` → `_render()`.
-  - **`_apply_settings` (444)** : 입력칸 값(=`PRESET`)을 `set_*` 로 넘긴다. **실제 경로 설정은 여기 PRESET 에서 온다.**
-  - `_apply_views` : `VIEW_PATHS` 줄마다 보임/숨김 적용.
-- **`build_ui` (126)** : 화면 구성. 버튼 → 핸들러 연결만 확인.
-- 버튼 두 종류의 차이:
-  - SIM / Refresh / Clear → **`_spawn` (406)** : 서비스 한 줄을 띄우고 결과를 상태 줄에.
-  - 1 Camera / 2 Align / 3 Collide → **`_start` (414)** : 바쁘면 거절, `begin_work` 를 UI 가 직접 세운다. (단계별 시험용)
-- **`_watched` (431)** : 작업이 도는 동안 매 프레임 `busy()` + `get_progress()` 를 상태 줄에.
-- `_watch_settings` : 입력칸이 바뀌는 즉시 서비스 setter 호출.
-
-### 3-2. 건너뛸 것
-
-- `SweepLog` 클래스 (38–98) — **현재 아무도 안 쓴다** (예전 포트 전수조사 CSV 용 잔재).
-
----
-
-## 4. `ebs_simulate_shared.py` 훑기 (5분)
-
-상수를 **묶음으로만** 인식한다. 외우지 말 것.
-
-| 묶음 | 예 | 언제 다시 보나 |
-|---|---|---|
-| 작업 이름 `WORK_*` | `WORK_SIM`, `WORK_SETTLE` | 2회차 |
-| XML 키/패턴 | `PORT_ID_KEY`, `ADDR_PATTERN`, `CACHE_SUFFIX` | 3회차 |
-| 높이 비율 | `VERDICT_HEIGHT 0.8`, `NAME_HEIGHT 0.45` | 9회차 |
-| 프림 루트 `*_ROOT` | `/EbsCollisionMarkers`, `/EbsGrip`, `/EbsSkin` | 10·11회차 |
-| `OURS` | 우리가 만든 프림 루트 목록 → 간섭 판정에서 제외용 | 7회차 |
-| 면 `FACE_*` | left / ceiling / right | 6회차 |
-| `COLLIDE_STEPS` | 충돌 단계와 진행률 비중 | 6회차 |
-| 피봇 `ANCHOR_DEPTH`, `PIVOT_*`, `MODULE_*` | 6뎁스, MAINBODY → MAIN → EFEM | 4회차 |
-| 실패 `CODE_*`, `SAY_*` | 실패 코드와 한국어 사유 | 2회차 |
-
-- 유일한 함수 `children(prim)` : **인스턴스 안쪽까지** 자식을 본다. 코드 전체에서 자식 순회는 이걸 쓴다.
-
----
-
-## 5. `ebs_simulate.py` 앞부분 (10분)
-
-### 5-1. 파일 맨 위 (1–153)
-
-- 모듈 함수: `_remote`, `_stamp_of`, `_read_bytes`, `_write_text` → **로컬/원격(omniverse://) 파일 둘 다 다루는 입출력 도우미.** (3회차)
-- `_PortScan` (91) : XML 파서 콜백. 3회차에 본다. 지금은 "XML 한 번 훑는 수집기" 로만.
-
-### 5-2. `EbsSimulate.__init__` (157–233)
-
-상태 변수 약 75개. **이름 앞부분으로 무리 짓기** 만 한다.
-
-| 무리 | 변수 예 |
+| 무리 | 대표 |
 |---|---|
-| 설정 | `_xml_path`, `_usd_path`, `_ebs_path_2port/3port`, `_search_root`, `_rail_root`, `_skin`, `_min_gap` |
-| 색인/표 | `_eqp_index`, `_port_map`, `_port_offsets`, `_addr_cad`, `_addr_next`, `_rail_index` |
+| 설정 | `_usd_path`, `_xml_path`, `_ebs_path_2port/3port`, `_search_root`, `_rail_root`, `_skin`, `_min_gap` |
+| 색인 / 표 | `_eqp_index`, `_port_map`, `_port_offsets`, `_addr_cad`, `_addr_next`, `_rail_index` |
 | 충돌 캐시 | `_triangles`, `_eqp_boxes`, `_bounds`, `_stage_index`, `_leaves`, `_parts`, `_faces` |
-| 스킨 | `_skin_made`, `_skin_worn`, `_skin_opened`, `_skin_remote` … |
-| 진행/계측 | `_busy`, `_progress`, `_legs`, `_leg`, `_phases`, `_timings`, `_notes`, `_started` |
+| 스킨 | `_skin_made`, `_skin_worn`, `_skin_opened`, `_skin_remote` |
+| 진행 / 계측 | `_busy`, `_progress`, `_legs`, `_leg`, `_phases`, `_timings`, `_notes`, `_started` |
 | 현재 SIM | `_ready`, `_target`, `_next`, `_tried`, `_aligned`, `_nudge`, `_verdict`, `_result`, `_results` |
 | 부품 | `_camera` (EbsSimulateCamera) |
 
-> 핵심 세 개: **`_ready`**(init 끝났나), **`_target`**(지금 SIM 대상 묶음), **`_busy`**(지금 도는 일 이름).
+> **핵심 다섯**: `_ready`(init 끝났나) · `_busy`(지금 도는 일) · `_target`(지금 SIM 대상 묶음) · `_aligned`(EBS 를 놓았나) · `_result`(마지막 결과).
 
-### 5-3. 작업/로그 기반 (957–1048) — SIM 뼈대의 공용 부품
+### 3-3. 작업 / 로그 기반 (957–1048)
 
 | 함수 | 하는 일 |
 |---|---|
-| `_begin(step)` | 한 단계 시작. 진행률·시간·로그 비움, 시작 시각 기록 |
-| `_done(payload)` | 단계 결과를 notes 에 한 줄 남기고 그대로 반환 |
-| `_fail(key, reason, short)` | 실패 사유를 `_why` 에 두고 **None 반환** |
-| `_phase(name)` (with 문) | 그 블록 시간을 `_phases[name]` 에 누적 |
-| `add_phase` / `phase_line` / `say_phases` | 단계별 시간 한 줄 (`[ebs] Simulate : 3.2s \| Camera : …`) |
-| `busy` / `begin_work` / `end_work` | 바쁨 표시 세우기/내리기 |
-| `_note` / `_loud` | notes 에 추가 (지금은 둘이 **똑같다**) |
-| `_hush(loud)` | loud 가 아니면 print 를 삼킨다 |
-| `_stage_timer(label)` (with 문) | 구간 ms 를 `_timings` 에 |
+| `_begin(step)` | 단계 시작. 진행률·시간·로그 비우고 시작 시각 기록 |
+| `_done(payload)` | notes 에 한 줄 남기고 그대로 반환 |
+| `_fail(key, reason, short)` | 사유를 `_why` 와 notes 에 두고 **None 반환** |
+| `_phase(name)` *(with)* | 블록 시간을 `_phases[name]` 에 누적 → 콘솔 한 줄용 |
+| `_stage_timer(label)` *(with)* | 구간 ms 를 `_timings` 목록에 → payload 용 |
+| `add_phase` / `phase_line` / `say_phases` | `[ebs] simulate : 3.2s \| Camera : 0.4s \| …` |
+| `busy` / `begin_work` / `end_work` | `_busy` 세우기/내리기. 바쁘면 다른 run_* 이 거절 |
+| `_note` / `_loud` | notes 에 추가 (지금은 둘이 같다) |
+| `_hush(loud)` | loud 가 아니면 그 안의 print 를 삼킨다 |
 
-### 5-4. 파일 맨 끝 (3323–3372)
+### 3-4. 진행률 (1774–1803) — 짧게
+- `set_legs(n)` : 막대 하나를 n 구간으로 나눔. `next_leg()` : 다음 구간. `get_progress()` : `(leg + 구간 안 진행) / legs × 100`.
+- `_at(step, done)` : 충돌 단계 안의 진행. `COLLIDE_STEPS` 비중을 쓴다.
 
-- **`_payload`** : 모든 동작의 반환값 모양. 키: `ok, code, reason, say, equipment, equipment_id, port_count, ebs, anchor, cells, hit_count, distances, rows, equipment_hit, timings, notes, total_ms`.
-  → **웹이 받는 응답이 이 dict.** 키 이름을 한 번 눈에 넣어 둘 것.
-- **`instance()` / `forget()`** : 싱글턴 생성/정리. `forget` 은 `teardown()` 을 부른다.
+### 3-5. 파일 맨 끝 (3323–3372)
+- **`_payload(ok, reason, …)`** : 모든 동작의 반환값. **웹이 받는 응답이 이것.** 부를 때마다 `self._result` 에도 저장한다.
+  키: `ok, code, reason, say, equipment, equipment_id, port_count, ebs, anchor, cells, hit_count, distances, rows, equipment_hit, timings, notes, total_ms`
+- `instance()` / `forget()` : 싱글턴 생성 / `teardown()` 후 정리.
 
 ---
 
-## 6. 읽으면서 눈에 띈 것 (참고, 수정 대상 아님)
+## 4. init 뼈대 (`init`, 1050) (5분)
 
-- 상수 중복: `STATE_CLEAR/TIGHT/CLASH` 가 shared 와 overlay 에, `EQP_PREFIX` 가 shared 와 dummy_ui 에 따로 있다. 바꿀 때 두 곳.
-- `set_usd_path` 에 `self._ready = False` 가 두 번.
+속은 2회차. 오늘은 순서만.
+
+```
+_begin("init") → 상태 비우기 (_ready=False, _target=None …)
+→ open_stage()            USD 열기 (동기)
+→ camera.make()           SIM 카메라 프림 준비
+→ hide_ebs()              EBS 두 개 숨기기
+→ build_index()           장비 색인            ┐
+→ Collide._stage_boxes()  장비 상자 목록       ├ 2회차
+→ load_ports()            포트 표 (캐시 우선)  ┘
+→ _ready = 장비>0 and 포트>0
+→ camera.go_home()        처음 카메라 자리
+→ _copy_skin()            씬 머티리얼 복사 (스킨이 "/" 경로일 때)
+→ _payload(...)
+```
+
+> init 은 **동기** 다. 도는 동안 킷 메인 스레드가 멈춰 API 응답이 init 끝(skin copy 뒤)에 몰린다.
+
+---
+
+## 5. SIM 뼈대 (25분) — 오늘의 핵심
+
+### 5-1. `run_simulate` (1357) — 바깥 껍데기
+```
+_busy 면 그냥 return (None)
+_tried = ""
+패널 hide → wake
+begin_work(WORK_SIM)
+_veil(True)                     마커·손잡이 뿌리 통째로 숨김
+try:
+    told = await simulate_async(eqp)
+    패널 show
+    실패면 패널 fail("사유 : 시도한 id")
+    _veil(False)                다 같이 다시 보이기
+    await settle()              킷이 잠잠해질 때까지 프레임 돌리기
+    say_phases()                콘솔 한 줄
+    return told
+finally:
+    _veil(False); end_work()    어떻게 끝나든 정리
+```
+- `_panel()` (1344) : 오버레이 클래스를 늦게 import.
+- `_paint(work)` (1349) : 오버레이 작업 시간을 "overlay" 단계에 얹는다.
+- `_veil(on)` (1383) : `MARKER_ROOT`, `GRIP_ROOT` 의 visibility 를 세션 레이어에 씀.
+
+### 5-2. `simulate_async` (1477) — 실제 순서
+```
+_begin("simulate"); set_legs(3)
+_ready 아니면 → 실패 (SAY_INIT)
+① _do_prepare(eqp)      장비·EBS·피봇 고르기          → 3회차
+② _do_stage()           마커 걷고 EBS 배치            → 4회차
+③ _do_focus()           카메라 맞추기                 → 4회차
+④ await _reach_skin()   원격 MDL 연결 확인/재연결     → 8회차
+   wear_skin() 했으면 await settle_skin()
+   next_leg()                                         (막대 1/3 → 2/3)
+⑤ show_ebs()            EBS 보이기
+⑥ for _ in _collide_steps(): await _wait_frame()      → 5·6회차
+   next_leg()                                         (막대 2/3 → 3/3)
+⑦ result = self._result  ← _collide_steps 가 마지막에 _payload 로 채워 둔 것
+   timings / notes / total_ms 붙여 반환
+```
+어느 단계든 `ok` 가 아니면 그 자리에서 `_done(…)` 으로 반환.
+
+### 5-3. 꼭 이해할 세 가지
+1. **`_do_prepare` (1510) 는 실패해도 지금 SIM 을 안 깬다.** 새 후보를 `_next` 에만 담고, 성공했을 때만 `_target` 으로 바꾼다. 실패면 `_rail_frame` 도 되돌린다.
+2. **`_collide_steps` 는 제너레이터.** 단계마다 `yield` 하고, 그때마다 바깥에서 프레임 하나를 넘긴다 → 킷이 안 멈추고 진행률이 움직인다. 결과는 반환값이 아니라 **`self._result` 로** 나온다.
+3. **`settle()` (563)** : 프레임 간격이 `SETTLE_FRAME`(0.02초) 이하로 `SETTLE_CALM`(3) 번 연속 나오면 "잠잠해졌다" 고 보고 끝. 최대 `SETTLE_MOST`(600) 프레임.
+
+### 5-4. 같은 모양의 형제들 (모양만 확인, 1분)
+`run_clear` (1402), `run_ebs_refresh` (1420), `run_nudge_settle` (1454), `run_cam_refresh` (1471) 모두
+**`_busy` 확인 → `begin_work` → try … finally `end_work`** 틀이다. 속은 8·9회차.
+
+### 5-5. 단계별 시험 함수 (이름만)
+`prepare` (1090), `align` (1097), `align_async` (1107), `focus` (1113), `collide` (1126), `collide_async` (1765) — dummy UI 의 1·2·3 버튼용.
+`simulate` (1320, 동기판) — **지금 아무도 안 부른다.**
+
+---
+
+## 6. 흐름도 그리기 (5분)
+
+종이에 아래 칸을 직접 채운다. 위를 보지 않고.
+
+```
+[킷 시작] → ? → ? → [init] → ? → ? → ? → ? → [_ready]
+[SIM]     → run_simulate → simulate_async → ① ? → ② ? → ③ ? → ④ ? → ⑤ ? → ⑥ ? → [결과]
+          → 패널 show / fail → ? → ? → end_work
+```
+
+---
+
+## 7. 읽으며 눈에 띈 것 (참고, 수정 대상 아님)
+
+- `simulate` (동기판) · `SweepLog`(dummy_ui) 미사용.
 - `_note` 와 `_loud` 가 같은 동작.
-- `SweepLog` 미사용.
-- 경로 기본값(PRESET)이 **dummy_ui 안에** 있다. 창이 숨겨져 있어도 auto init 이 여기 값을 쓴다.
-- `auto_init` 은 동기라서 도는 동안 API 응답이 밀린다 (지난번 "skin copy 뒤에 응답" 현상의 원인).
+- `set_usd_path` 에 `self._ready = False` 가 두 번.
+- 상수 중복: `STATE_*` 는 shared 와 overlay, `EQP_PREFIX` 는 shared 와 dummy_ui.
+- `run_*` 은 바쁘면 **아무것도 반환하지 않는다(None)** — 웹은 None 을 "바빠서 무시됨" 으로 받아야 한다.
 
 ---
 
-## 7. 마무리 (5분) — 메모 5줄
+## 8. 마무리 메모 (5분)
 
-본인 말로 적기:
+본인 말로 5줄:
 1. 킷이 켜지면 무엇이 생기나
-2. 자동 init 은 누가 언제 누르나
-3. 웹 API 는 어디로 들어와 어디에 닿나
-4. 결과 dict 는 어디서 만들어지나
+2. init 은 누가 언제 누르고, 무엇을 순서대로 하나
+3. SIM 한 번의 7단계
+4. 결과 dict 는 어디서 만들어져 어디로 가나
 5. 오늘 이해 안 된 것 1개
 
 ---
@@ -207,127 +245,115 @@
 > 답을 먼저 쓰고 아래 정답과 맞춰 볼 것. 80% 이상이면 2회차로.
 
 ### A. 구조
-
-1. 이 익스텐션의 파일 8개를 역할과 함께 말하라.
+1. 파일 8개를 역할과 함께 말하라.
 2. `EbsSimulate` 객체는 몇 개 존재하나? 누가, 어떤 함수로 만드나?
 3. 오버레이는 `EbsSimulate` 를 어떻게 찾나? 그 연결은 언제 걸리나?
-4. 웹 요청과 dummy UI 버튼이 공통으로 거치는 층은?
-5. 서비스 메서드 중 로직이 들어 있는 것은?
+4. 오늘 건너뛴 파일 둘과, 그중 오늘 꼭 알아야 했던 사실 하나.
 
 ### B. 시작과 종료
+5. `on_startup` 에서 일어나는 일을 순서대로 5단계.
+6. `SHOW_DUMMY_UI = False` 인데 dummy UI 객체는 만들어지나? 왜?
+7. 자동 init 이 도는 조건은? 몇 번 도나?
+8. 자동 init 의 호출 경로를 extension 부터 `EbsSimulate.init` 까지.
+9. 자동 init 직전에 함께 실행되는 동작은?
+10. `_watch_layout` 은 무엇을 하고 언제 멈추나?
+11. `on_shutdown` 에서 정리하는 것을 빠짐없이.
+12. `forget()` 은 무엇을 부르나?
 
-6. `on_startup` 에서 일어나는 일을 순서대로 5단계 이상.
-7. `SHOW_DUMMY_UI = False` 인데 dummy UI 객체는 만들어지나? 왜 필요한가?
-8. 자동 init 이 도는 조건은? 몇 번 도나?
-9. 자동 init 의 호출 경로를 함수 이름으로 끝까지 (extension → … → EbsSimulate).
-10. 자동 init 이 쓰는 USD / XML 경로 값은 어디에 적혀 있나?
-11. 자동 init 직전에 같이 실행되는 "선택" 관련 동작은?
-12. `_watch_layout` 은 무엇을 하고, 언제 멈추나?
-13. `on_shutdown` 에서 정리하는 것들을 빠짐없이.
-14. `forget()` 은 무엇을 부르나?
+### C. shared
+13. `children(prim)` 이 `prim.GetChildren()` 과 다른 점은?
+14. 실패 사유 한국어 문구의 상수 묶음 이름과 예 2개.
+15. `PHASES` 에 들어 있는 단계 다섯.
+16. `OURS` 는 무엇의 목록일까?
 
-### C. 키보드
+### D. EbsSimulate 몸통
+17. 핵심 상태 변수 다섯과 각 의미.
+18. `_fail` 은 무엇을 반환하고, 사유는 어디에 남나?
+19. `_phase` 와 `_stage_timer` 의 차이 (저장 위치와 용도).
+20. `begin_work` / `end_work` 가 바꾸는 변수는? 그 변수가 차 있으면 어떤 일이 생기나?
+21. `get_progress` 가 0~100 을 만드는 방식. SIM 은 몇 구간이고 각 구간은 무엇인가?
+22. `_payload` 의 반환 키를 최소 10개.
+23. `_payload` 를 부르면 반환 말고 또 무슨 일이 생기나?
+24. 웹이 실패 사유를 사람에게 보여 주려면 어떤 키를, 실패 갈래를 기계적으로 나누려면 어떤 키를 쓰나?
 
-15. ← → 한 번 누르면 EBS 가 얼마나, 어떤 함수로 움직이나?
-16. 방향키가 안 먹히는 조건 2가지.
-17. 키를 떼면 무엇이 언제 일어나나? 그 사이 다시 누르면?
-18. 웹 스트리밍에서 꾹 누름이 되는 방법은? 에디터에서는 왜 그게 중복 실행되지 않나?
-19. 꾹 누름 자동 반복의 시작 지연, 간격, 최대 시간은?
-20. 임시 키 3개와 각각의 동작.
-21. `_on_key` 가 항상 True 를 반환하는 의미는?
+### E. init
+25. init 의 순서를 빠짐없이 (함수 이름).
+26. `_ready` 는 어떤 조건에서 True 가 되나?
+27. init 이 동기라서 생기는 실제 증상은?
+28. 스킨 복사는 init 의 어디에서, 어떤 조건일 때 하나?
 
-### D. 서비스
+### F. SIM
+29. `run_simulate` 가 `simulate_async` 앞뒤로 하는 일을 순서대로.
+30. `_veil` 은 무엇을 어떻게 숨기나? 왜 SIM 중에 숨기나?
+31. `_veil(False)` 가 두 번(본문, finally) 있는 이유는?
+32. `simulate_async` 의 단계 ①~⑦.
+33. 단계 중 하나가 실패하면 어떻게 되나?
+34. 실패 패널 문구는 어떻게 만들어지나? "시도한 id" 는 어디서 오나?
+35. `_do_prepare` 가 실패했을 때 지금 보이던 SIM 은 어떻게 되나? 그 원리(`_next`, `_target`)는?
+36. `_collide_steps` 가 제너레이터인 이유와, 결과가 나오는 곳.
+37. `settle()` 은 언제 끝나나? (세 상수)
+38. 바쁜 중에 `run_simulate` 를 또 부르면 무엇이 반환되나?
+39. `run_clear` 가 `run_simulate` 와 다르게 먼저 확인하는 조건 하나.
+40. `run_*` 형제들의 공통 틀.
+41. 동기판 `simulate` 는 지금 쓰이나?
 
-22. 서비스의 3개 구획 이름과 각 구획 메서드.
-23. 서비스 중 async 인 것을 모두.
-24. `auto_init` 이 동기라서 생기는 실제 증상은?
-25. 속 함수 이름에 `run_` 이 붙은 것의 의미는?
-26. `valid_ids` 는 무엇을 기준으로 유효를 판정하나? (지난 대화 복습)
-
-### E. dummy UI
-
-27. `SIM` 버튼과 `2 Align` 버튼은 실행 방식이 어떻게 다른가? (`_spawn` vs `_start`)
-28. 작업 중 상태 줄에 진행률이 나오는 원리는?
-29. 입력칸 값을 바꾸면 언제 서비스에 반영되나?
-30. Refresh 버튼은 서비스 무엇을 몇 번 부르나?
-31. `SweepLog` 는 지금 쓰이나?
-
-### F. shared
-
-32. `OURS` 는 무엇의 목록이고 왜 필요할까?
-33. `children(prim)` 이 `prim.GetChildren()` 과 다른 점은?
-34. 실패 사유 한국어 문구는 어느 상수 묶음인가? 예 2개.
-35. 이름표 높이, 판정 패널 높이 상수와 값.
-36. 피봇 선정 모듈 우선순위 상수와 그 순서.
-
-### G. EbsSimulate 앞뒤
-
-37. `__init__` 의 상태 변수 중 "init 끝났나", "현재 대상", "지금 도는 일" 은 각각 무엇인가?
-38. `_fail` 은 무엇을 반환하나? 사유는 어디에 남나?
-39. `_phase` 와 `_stage_timer` 의 차이는?
-40. `begin_work` / `end_work` 가 바꾸는 변수와, 그것을 밖에서 읽는 서비스 메서드.
-41. `_payload` 반환 dict 의 키를 아는 만큼 (최소 8개).
-42. 웹이 SIM 실패 사유를 사람에게 보여 주려면 어떤 키를 쓰면 되나?
-43. `_remote` / `_read_bytes` 같은 모듈 함수가 따로 있는 이유는?
-
-### H. 응용
-
-44. "이름표 높이를 바꾸고 싶다" — 오늘 본 범위에서 어디부터 찾나?
-45. "웹에서 API 가 응답이 안 온다" — 오늘 본 것 중 의심할 곳 2개.
-46. 새 API `foo()` 를 웹에 열려면 최소 어디 두 곳을 손대나?
-47. 키 하나(예: H)로 카메라 홈 복귀를 넣으려면 어느 함수에 몇 줄?
+### G. 응용
+42. "SIM 이 진행률 66% 에서 오래 멈춘다" — 어느 단계를 의심하나?
+43. "SIM 이 끝났는데 마커와 손잡이가 안 보인다" — 오늘 본 것 중 의심할 곳.
+44. "웹 SIM 요청이 None 으로 끝났다" — 이유는? "응답이 한참 늦게 왔다" 와는 원인이 어떻게 다른가?
+45. "SIM 실패 후 이전 장비 판정 화면이 그대로 남는다" — 버그인가, 의도인가?
+46. 새 단계(예: 판정 전 경고음)를 SIM 에 끼우려면 어느 함수의 어디쯤?
 
 ---
 
 <details>
 <summary><b>정답 (펼치기)</b></summary>
 
-1. extension(진입/키), service(API 창구), shared(상수), dummy_ui(시험 창·auto init 경유), ebs_simulate(본체), camera, collide(간섭 엔진), overlay(패널·기즈모·마커).
-2. 하나. `ebs_simulate.instance()` 가 처음 불릴 때 만든다 (`on_startup` 첫 줄).
+1. extension(진입·자동 init·키), shared(상수), ebs_simulate(본체), camera(카메라), collide(간섭 엔진), overlay(패널·기즈모·마커), service(웹 API 창구), dummy_ui(시험 창, auto init 경유).
+2. 하나. `instance()` 가 처음 불릴 때 (`on_startup` 첫 줄).
 3. `attach(simulate)` 로 모듈 전역 `_SIM` 에 걸고 `sim()` 으로 꺼낸다. `on_startup` 두 번째 줄.
-4. `EbsSimulateService`.
-5. 없다. 전부 `instance().xxx()` 한 줄.
-6. instance 생성 → overlay attach → DummyUI 생성·build·숨김 → 상태 변수 초기화 → 레이아웃/스테이지/키 구독.
-7. 만들어진다. 자동 init 이 dummy UI 의 `auto_init` 을 거치고, 경로 PRESET 도 거기 있기 때문.
-8. 스테이지가 열리고 `loaded >= total` 인 첫 프레임. 한 번 (돌자마자 구독을 끊음).
-9. `_watch_stage` → `_stage_step` → `EbsDummyUI.auto_init` → `_apply_settings` → `EbsSimulateService.auto_init` → `EbsSimulate.init`.
-10. `dummy_ui.py` 의 `PRESET` (입력칸 기본값).
-11. `_lock_select` → `PickLock.hold` 로 뷰포트 클릭 선택 끔.
-12. 레이아웃이 창을 감추면 되살리고 우측에 도킹. 도킹 성공 또는 `RAISE_FRAMES`(300) 프레임 후 멈춤.
-13. 레이아웃·스테이지 구독, 키보드 구독, 반복 작업(`_let_go`), 재측정 대기(`_hold_off`), 선택 잠금(`PickLock.drop`), UI 파괴(오버레이 포함), `_sim=None`, `forget()`.
-14. `teardown()` 후 싱글턴을 None 으로.
-15. 5mm (`KEY_STEP 0.005`), `EbsSimulate.nudge_by`.
-16. SIM 상태가 아님(`nudge_by` 가 ok 아님), 기즈모 손잡이를 잡고 있음(`EbsSimulateGrip.held()`).
-17. 0.75초 뒤 `run_nudge_settle`(재판정). 그 전에 다시 누르면 `_hold_off` 로 취소되고 다시 대기.
-18. PRESS 때 `_repeat` 코루틴을 띄워 직접 반복. 에디터는 KEY_REPEAT 이 오면 `_repeats=True` 가 되어 이후 자체 반복을 안 띄우고, REPEAT 이 오면 도는 반복도 `_let_go` 로 끈다.
-19. 0.5초 / 0.05초 / 10초.
-20. R = cam_refresh, T = ebs_refresh(0mm), P = 카메라 값 콘솔 출력.
-21. 그 키 이벤트를 소비했다는 뜻 (`True` 반환).
-22. 동작: auto_init, simulate, clear, ebs_refresh, cam_refresh, valid_ids, get_result / 질의: busy, get_progress / 설정: set_usd_path, set_xml_path, set_ebs_paths, set_search_root, set_rail_root, set_skin, set_near_span, set_min_gaps.
-23. simulate, clear, ebs_refresh 3개. 나머지는 전부 동기.
-24. init 동안 킷 메인 스레드가 막혀 그 사이 들어온 API 응답이 init 끝(skin copy 뒤)에 몰려 나온다.
-25. 서비스용 진입점. 바쁨 표시·결과 정리·예외 처리를 감싼다.
-26. XML(캐시)의 포트 표에 있고 포트 수가 2 또는 3.
-27. `_spawn` 은 서비스를 그냥 띄우고 결과만 적음. `_start` 는 바쁘면 거절하고, UI 가 `begin_work` 를 직접 세우고 끝나면 `end_work`.
-28. `_watched` 가 작업이 끝날 때까지 매 프레임 `busy()` 와 `get_progress()` 를 읽어 적는다.
-29. 바뀌는 즉시 (`_watch_settings` 의 value_changed 콜백). auto init 때는 `_apply_settings` 로 한꺼번에.
-30. `ebs_refresh` 1번, `cam_refresh` 1번.
-31. 안 쓰인다.
-32. 우리가 만든 프림 루트들(마커, 손잡이, 레이저, 스윕, 카메라, 스킨). 간섭 판정·순회에서 자기 것을 빼기 위해.
-33. 인스턴스 프록시 안쪽 자식까지 본다.
-34. `SAY_*`. 예: `SAY_PIVOT "유효하지 않은 pivot 데이터"`, `SAY_PORTS "포트 개수 불일치 ({0}개)"`.
-35. `NAME_HEIGHT 0.45`, `VERDICT_HEIGHT 0.8` (EBS 높이 비율).
-36. `MODULE_TIERS = (MAINBODY, MAIN, EFEM)`, MAINT 는 `MODULE_SKIP` 으로 제외.
-37. `_ready`, `_target`, `_busy`.
-38. None. 사유는 `_why`(짧은 것) 와 `_notes`(긴 것).
-39. `_phase` 는 이름별 초 누적(`_phases`, 한 줄 요약용), `_stage_timer` 는 구간 ms 를 목록(`_timings`, payload 용)에.
-40. `_busy`. 서비스 `busy()`.
-41. ok, code, reason, say, equipment, equipment_id, port_count, ebs, anchor, cells, hit_count, distances, rows, equipment_hit, timings, notes, total_ms.
-42. `say` (사람용 한국어 사유). `code` 로 갈래 구분.
-43. 로컬 경로와 omniverse:// 원격 경로를 같은 방식으로 읽고 쓰려고.
-44. shared 의 `NAME_HEIGHT`. (실제 적용 위치는 9회차 `build_verdict`)
-45. init 이 아직 도는 중(동기라 막힘), `busy()` 상태로 run_* 이 거절 중.
-46. `EbsSimulate` 에 함수 추가, `EbsSimulateService` 에 한 줄 위임 추가.
-47. `extension.py` 의 `_on_key` 에 R/T/P 와 같은 모양으로 3줄 (조건 + 호출 + return True).
+4. service, dummy_ui. 자동 init 이 dummy_ui 의 `auto_init` 을 거쳐 돌고 경로 기본값(PRESET)이 거기 있다.
+5. instance 생성 → overlay attach → DummyUI 생성·build·숨김 → 상태 변수 초기화 → 레이아웃/스테이지/키 구독.
+6. 만들어진다. 자동 init 경로와 경로 기본값이 거기 있기 때문.
+7. 스테이지가 열리고 `loaded >= total` 인 첫 프레임. 한 번 (돌자마자 구독을 끊는다).
+8. `_watch_stage` → `_stage_step` → `EbsDummyUI.auto_init` → `EbsSimulateService.auto_init` → `EbsSimulate.init`.
+9. `_lock_select` → `PickLock.hold` (뷰포트 클릭 선택 끔).
+10. 레이아웃이 창을 감추면 되살리고 우측 패널에 도킹. 도킹 성공 또는 300 프레임 후 멈춤.
+11. 레이아웃·스테이지 구독, 키보드 구독(`_drop_keys`), 반복 작업(`_let_go`), 재측정 대기(`_hold_off`), 선택 잠금(`PickLock.drop`), UI 파괴(오버레이 포함), `_sim=None`, `forget()`.
+12. `teardown()` 을 부르고 싱글턴을 None 으로.
+13. 인스턴스 프록시 안쪽 자식까지 본다.
+14. `SAY_*`. 예: `SAY_PIVOT "유효하지 않은 pivot 데이터"`, `SAY_PORTS "포트 개수 불일치 ({0}개)"`, `SAY_INIT "초기화되지 않음"`.
+15. camera, place, skin, collide, overlay.
+16. 우리가 만든 프림 루트들 (마커, 손잡이, 레이저, 스윕, 카메라, 스킨). 순회·판정에서 자기 것을 빼려고.
+17. `_ready` init 완료 / `_busy` 지금 도는 일 이름 / `_target` 현재 SIM 대상 묶음 / `_aligned` EBS 배치 완료 / `_result` 마지막 payload.
+18. None. 짧은 사유는 `_why`, 긴 사유는 `_notes`.
+19. `_phase` 는 이름별 초를 `_phases` 에 누적 (콘솔 한 줄 요약용), `_stage_timer` 는 구간 ms 를 `_timings` 목록에 (payload 용).
+20. `_busy`. 차 있으면 다른 `run_*` 이 즉시 return (거절).
+21. `(_leg + _progress/100) / _legs × 100`. SIM 은 3구간: 준비~스킨 / 충돌 / 마무리.
+22. ok, code, reason, say, equipment, equipment_id, port_count, ebs, anchor, cells, hit_count, distances, rows, equipment_hit, timings, notes, total_ms.
+23. 같은 내용이 `self._result` 에 저장된다.
+24. 사람용은 `say` (없으면 `reason`), 갈래는 `code` (`ok`/`port`/`pivot`/`other`).
+25. `_begin` → 상태 비우기 → `open_stage` → `camera.make` → `hide_ebs` → `build_index` → `Collide._stage_boxes` → `load_ports` → `_ready` 결정 → `camera.go_home` → `_copy_skin` → `_payload`.
+26. 장비 수 > 0 이고 포트 항목 수 > 0.
+27. 도는 동안 메인 스레드가 막혀, 그 사이 들어온 API 응답이 init 끝(skin copy 뒤)에 몰려 나온다.
+28. `go_home` 다음, 마지막. 스킨 설정이 "/" 로 시작하는 씬 경로일 때.
+29. 바쁨 확인 → `_tried` 비움 → 패널 hide·wake → `begin_work(WORK_SIM)` → `_veil(True)` → (simulate_async) → 패널 show → 실패면 fail 패널 → `_veil(False)` → `settle` → `say_phases` → finally `_veil(False)`·`end_work`.
+30. `MARKER_ROOT`, `GRIP_ROOT` 의 visibility 를 세션 레이어에 invisible 로. 중간 상태가 보였다 사라지지 않고 끝나서 한꺼번에 뜨게.
+31. 본문은 정상 종료 때 settle 전에 보이게, finally 는 예외로 빠져나가도 숨긴 채 남지 않게.
+32. ① `_do_prepare` ② `_do_stage` ③ `_do_focus` ④ `_reach_skin` + `wear_skin`(+`settle_skin`) ⑤ `show_ebs` ⑥ `_collide_steps` 를 프레임마다 ⑦ `self._result` 에 시간·로그 붙여 반환.
+33. 그 자리에서 그 단계의 payload 를 `_done` 으로 반환. 뒤 단계는 안 돈다.
+34. `f"{say 또는 reason} : {입력 id 또는 _tried}"`. 입력이 비었으면 `_prepare` 가 적어 둔 `_tried`.
+35. 그대로 남는다. 새 후보는 `_next` 에만 담기고, 성공했을 때만 `_target` 으로 바뀐다. 실패면 `_rail_frame` 도 원래대로.
+36. 단계마다 멈춰 프레임을 넘겨 킷이 안 얼고 진행률이 보이게. 결과는 `self._result` (마지막 `_payload` 호출).
+37. 프레임 간격 ≤ `SETTLE_FRAME`(0.02초) 가 `SETTLE_CALM`(3) 번 연속이면. 최대 `SETTLE_MOST`(600) 프레임.
+38. None (아무것도 안 하고 return).
+39. `_ready` — init 전이면 "Init not finished, clear ignored".
+40. `_busy` 확인 → `begin_work` → try 본문 → finally `end_work`.
+41. 아니다. 미사용.
+42. 66% 는 2구간(충돌) 끝 = 3구간 시작. `_collide_steps` 의 마지막 단계(판정·마커)나 그 직후 패널 show. `settle` 이 돌기 시작하면 다시 올라간다. (구간 경계는 `next_leg` 위치로 판단)
+43. `_veil` — `_veil(False)` 가 실행됐는지, 프림이 세션 레이어에서 invisible 로 남았는지.
+44. None 은 다른 작업이 도는 중(`_busy`)이라 거절된 것. 늦게 온 것은 동기 init 이 메인 스레드를 막아 요청 처리 자체가 밀린 것.
+45. 의도. `_do_prepare` 가 실패하면 지금 SIM 을 유지하도록 만들었다.
+46. `simulate_async` 의 ⑥(`_collide_steps`) 앞뒤, 또는 판정 직후라면 `run_simulate` 의 `panel.show` 근처.
 
 </details>
