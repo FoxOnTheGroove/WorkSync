@@ -223,7 +223,6 @@ _ready 아니면 → 실패 (SAY_INIT)
 
 - `simulate` (동기판) · `SweepLog`(dummy_ui) 미사용.
 - `_note` 와 `_loud` 가 같은 동작.
-- `set_usd_path` 에 `self._ready = False` 가 두 번.
 - 상수 중복: `STATE_*` 는 shared 와 overlay, `EQP_PREFIX` 는 shared 와 dummy_ui.
 - `run_*` 은 바쁘면 **아무것도 반환하지 않는다(None)** — 웹은 None 을 "바빠서 무시됨" 으로 받아야 한다.
 
