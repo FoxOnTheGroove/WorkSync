@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import math
@@ -610,8 +611,8 @@ class EbsSimulate:
         import omni.client
         healed, reached = False, True
         for url in sorted(self._skin_remote):
-            result, _ = await omni.client.stat_async(url)
-            if result == omni.client.Result.OK:
+            ok, result = await self._stat_within(url)
+            if ok:
                 continue
             print(f"[ebs] skin: connection lost to {url} ({result})")
             print(f"[ebs] skin: reconnecting to {url}")
@@ -619,8 +620,13 @@ class EbsSimulate:
                 omni.client.reconnect(url)
             except Exception as e:
                 print(f"[ebs] skin: reconnect failed: {type(e).__name__}: {e}")
-            result, _ = await omni.client.stat_async(url)
-            if result == omni.client.Result.OK:
+            for turn in range(1, SKIN_RETRIES + 1):
+                await asyncio.sleep(SKIN_RETRY_GAP)
+                ok, result = await self._stat_within(url)
+                if ok:
+                    break
+                print(f"[ebs] skin: try {turn}/{SKIN_RETRIES} on {url} ({result})")
+            if ok:
                 print(f"[ebs] skin: reconnected to {url}")
                 healed = True
             else:
@@ -631,6 +637,19 @@ class EbsSimulate:
             self._skin_made = ""
             self.strip_skin()
         return reached
+
+    @staticmethod
+    async def _stat_within(url: str) -> tuple:
+        """원격 에셋에 SKIN_STAT_WAIT 초 안에 닿나. 못 받으면 timeout 으로 본다"""
+        import omni.client
+        try:
+            result, _ = await asyncio.wait_for(omni.client.stat_async(url),
+                                               SKIN_STAT_WAIT)
+        except asyncio.TimeoutError:
+            return False, f"timeout {SKIN_STAT_WAIT:g}s"
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+        return result == omni.client.Result.OK, result
 
     def _copy_skin(self, stage):
         """씬 머티리얼을 세션 레이어에 통째로 복사해 둔다. 에셋 경로는 푼 절대 경로로 옮긴다"""
