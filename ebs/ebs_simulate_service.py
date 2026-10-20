@@ -39,6 +39,11 @@ class EbsSimulateService:
         return instance().valid_ids(ids)
 
     @classmethod
+    def equipment_by_model(cls, model):
+        """그 MODEL 을 가진 장비 id 목록"""
+        return instance().equipment_by_model(model)
+
+    @classmethod
     def get_result(cls, equipment=""):
         """그 장비의 마지막 판정"""
         return instance().get_result(equipment)
