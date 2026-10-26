@@ -228,7 +228,6 @@ class EbsSimulate:
         self._target: dict = None
         self._next: dict = None
         self._tried: str = ""
-        self._model_surveyed: bool = False
         self._aligned: bool = False
         self._result: dict = {}
         self._marker_draw = None
@@ -1501,9 +1500,6 @@ class EbsSimulate:
         if not self._ready:
             return self._done(self._payload(False, "Run Init first",
                                             say=SAY_INIT))
-        if not self._model_surveyed:
-            self._model_surveyed = True
-            self._survey_models()
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return self._done(result)
@@ -1529,57 +1525,6 @@ class EbsSimulate:
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
         return self._done(result)
 
-
-    def _survey_models(self) -> None:
-        """임시. 장비마다 6뎁스 프림 전부의 MODEL 을 읽어 한 장비 안에서 같은지 유형별로 찍는다"""
-        stage = self._get_stage()
-        if stage is None:
-            return
-        want = re.sub(r"[^a-z0-9]", "", MODEL_ATTR.lower())
-        started = time.perf_counter()
-        kinds = {"same": [], "differ": [], "partial same": [],
-                 "partial differ": [], "no model": [], "no depth 6": []}
-        seen, tips_total = {}, 0
-        for name in sorted(self._eqp_index):
-            prim = stage.GetPrimAtPath(self._eqp_index[name])
-            if prim is None or not prim.IsValid():
-                continue
-            level = [prim]
-            for _ in range(ANCHOR_DEPTH):
-                level = [kid for one in level for kid in self._level_kids(one)]
-            tips_total += len(level)
-            if not level:
-                kinds["no depth 6"].append(name)
-                continue
-            values = []
-            for tip in level:
-                for attr in tip.GetAttributes():
-                    if re.sub(r"[^a-z0-9]", "", attr.GetName().lower()) == want:
-                        value = attr.Get()
-                        values.append(str(value).strip() if value is not None else "")
-                        break
-            found = set(values)
-            if not values:
-                kinds["no model"].append(name)
-                continue
-            whole = len(values) == len(level)
-            key = (("same" if whole else "partial same") if len(found) == 1
-                   else ("differ" if whole else "partial differ"))
-            kinds[key].append(name)
-            seen[name] = (len(values), len(level), sorted(found))
-        total = len(self._eqp_index)
-        print(f"[ebs] model survey: {total} equipment, {tips_total} depth-6 prims, "
-              f"{time.perf_counter() - started:.2f}s")
-        for key, names in kinds.items():
-            if not names:
-                continue
-            shown = []
-            for name in names[:5]:
-                got = seen.get(name)
-                shown.append(name if got is None else
-                             f"{name} {got[0]}/{got[1]} {got[2][:3]}")
-            print(f"[ebs] model survey {key}: {len(names)}/{total} -- "
-                  + "; ".join(shown) + (" ..." if len(names) > 5 else ""))
 
     def _do_prepare(self, equipment: str) -> dict:
         """새 장비를 잡는다. 못 잡으면 지금 SIM 은 그대로 두고, 잡으면 그때 바꾼다"""

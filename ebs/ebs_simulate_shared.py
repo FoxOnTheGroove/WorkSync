@@ -127,7 +127,6 @@ MODULE_BODY = "MAINBODY"
 MODULE_MAIN = "MAIN"
 MODULE_SKIP = "MAINT"
 MODULE_TIERS = (MODULE_BODY, MODULE_MAIN, "EFEM")
-MODEL_ATTR  = "omni:hoops:metadata:Identity Data:MODEL"
 
 CODE_OK    = "ok"
 CODE_PORT  = "port"
