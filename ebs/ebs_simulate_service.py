@@ -9,9 +9,9 @@ class EbsSimulateService:
     # -- 동작 -------------------------------------------------------------------
 
     @classmethod
-    def auto_init(cls):
+    async def auto_init(cls):
         """USD 를 열고 색인과 포트 표를 만든다"""
-        return instance().init()
+        return await instance().init()
 
     @classmethod
     async def simulate(cls, equipment=""):

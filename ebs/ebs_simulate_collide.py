@@ -1,4 +1,5 @@
 import array
+import time
 
 from pxr import Usd, UsdGeom, Gf
 
@@ -1115,43 +1116,57 @@ class EbsSimulateCollide:
     @classmethod
     def _stage_boxes(cls, sim, cache=None) -> list:
         """스테이지의 상자 목록. EBS 는 뺀다"""
+        for _ in cls._stage_boxes_steps(sim, cache):
+            pass
+        return sim._stage_index if sim._stage_index is not None else []
+
+    @classmethod
+    def _stage_boxes_steps(cls, sim, cache=None):
+        """스테이지의 상자 목록을 만든다. INIT_SLICE 초를 쓸 때마다 한 번 멈춘다"""
         if sim._stage_index is not None:
-            return sim._stage_index
+            return
         stage = sim._get_stage()
         if stage is None:
-            return []
+            return
         cache = cache if cache is not None else cls._bounds_cache(sim)
         ours_ebs = frozenset(p for p in (sim._ebs_path_2port,
                                          sim._ebs_path_3port) if p)
         under_ebs = tuple(p + "/" for p in ours_ebs)
         index = []
-        with sim._stage_timer("stage: index"):
-            stack = [(prim, ()) for prim in children(stage.GetPseudoRoot())]
-            while stack:
-                prim, chain = stack.pop()
-                path = str(prim.GetPath())
-                if path in OURS or path.startswith(OURS_UNDER):
-                    continue
-                if path in ours_ebs or path.startswith(under_ebs):
-                    continue
-                type_name = prim.GetTypeName()
-                if type_name in SKIP_TYPES or type_name.endswith("Light"):
-                    continue
-                box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-                if box.IsEmpty():
-                    continue
-                if (type_name in GEOMETRY_TYPES
-                        or prim.GetName().upper().startswith(EQP_PREFIX)):
-                    lo, hi = box.GetMin(), box.GetMax()
-                    index.append((path,
-                                  (lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]),
-                                  box, prim, chain))
-                    continue
-                stack.extend((kid, chain + ((prim, path),))
-                             for kid in children(prim))
+        spent, started = 0.0, time.perf_counter()
+        stack = [(prim, ()) for prim in children(stage.GetPseudoRoot())]
+        while stack:
+            if time.perf_counter() - started >= INIT_SLICE:
+                spent += time.perf_counter() - started
+                yield
+                started = time.perf_counter()
+            prim, chain = stack.pop()
+            if not prim.IsValid():
+                continue
+            path = str(prim.GetPath())
+            if path in OURS or path.startswith(OURS_UNDER):
+                continue
+            if path in ours_ebs or path.startswith(under_ebs):
+                continue
+            type_name = prim.GetTypeName()
+            if type_name in SKIP_TYPES or type_name.endswith("Light"):
+                continue
+            box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+            if box.IsEmpty():
+                continue
+            if (type_name in GEOMETRY_TYPES
+                    or prim.GetName().upper().startswith(EQP_PREFIX)):
+                lo, hi = box.GetMin(), box.GetMax()
+                index.append((path,
+                              (lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]),
+                              box, prim, chain))
+                continue
+            stack.extend((kid, chain + ((prim, path),))
+                         for kid in children(prim))
+        spent += time.perf_counter() - started
+        sim._timings.append(["stage: index", spent * 1000.0])
         sim._stage_index = index
         sim._note(f"stage index: {len(index)} boxes")
-        return index
 
     @classmethod
     def _stop_at(cls, one, two, axis: int, patch):

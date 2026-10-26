@@ -40,6 +40,7 @@ class EbsExtension(omni.ext.IExt):
         self._waiting = None
         self._turbo = None
         self._repeats = False
+        self._init_task = None
         self._watch_layout()
         self._watch_stage()
         self._watch_keys()
@@ -187,7 +188,7 @@ class EbsExtension(omni.ext.IExt):
             return
         self._stage = None
         self._lock_select()
-        self._ui.auto_init()
+        self._init_task = asyncio.ensure_future(self._ui.auto_init())
 
     def _lock_select(self):
         """뷰포트에서 눌러 고르는 것을 익스텐션이 떠 있는 내내 끈다"""
@@ -237,6 +238,9 @@ class EbsExtension(omni.ext.IExt):
         """익스텐션 종료"""
         self._raise = None
         self._stage = None
+        if self._init_task is not None and not self._init_task.done():
+            self._init_task.cancel()
+        self._init_task = None
         self._drop_keys()
         self._let_go()
         self._hold_off()

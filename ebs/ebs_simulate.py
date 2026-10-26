@@ -240,8 +240,8 @@ class EbsSimulate:
             self._ready = False
         self._usd_path = path
 
-    def open_stage(self) -> bool:
-        """그 USD 를 연다. 같은 것이 이미 열려 있으면 안 연다"""
+    async def open_stage(self) -> bool:
+        """그 USD 를 연다. 같은 것이 이미 열려 있으면 안 연다. 여는 동안 킷을 막지 않는다"""
         if not self._usd_path:
             return True
         context = omni.usd.get_context()
@@ -255,10 +255,15 @@ class EbsSimulate:
             return True
         with self._stage_timer("USD: open"):
             try:
-                told = context.open_stage(self._usd_path)
+                told = await context.open_stage_async(self._usd_path)
             except Exception as e:
                 self._note(f"could not open {self._usd_path}: {e}")
                 return False
+            while True:
+                _, loaded, total = context.get_stage_loading_status()
+                if loaded >= total:
+                    break
+                await self._wait_frame()
         ok = told[0] if isinstance(told, tuple) else told
         if ok is False:
             self._note(f"could not open {self._usd_path}: "
@@ -1066,8 +1071,8 @@ class EbsSimulate:
             self._timings.append([label, (time.perf_counter() - started) * 1000.0])
 
 
-    def init(self) -> dict:
-        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다"""
+    async def init(self) -> dict:
+        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다. 단계 사이마다 프레임을 넘긴다"""
         self._begin("init")
         self._eqp_boxes = None
         self._bounds = None
@@ -1083,8 +1088,9 @@ class EbsSimulate:
         self._local = {}
         self._faces = {}
         self._parts = {}
-        if not self.open_stage():
+        if not await self.open_stage():
             return self._payload(False, f"Could not open {self._usd_path}")
+        await self._wait_frame()
         if self._get_stage() is None:
             return self._payload(False, "No stage open - give a USD path")
         if self._camera.make(self._get_stage()):
@@ -1092,12 +1098,17 @@ class EbsSimulate:
                        f"to it when the camera step runs)")
 
         self.hide_ebs()
-        equipment = self.build_index()
-        Collide._stage_boxes(self)
+        await self._wait_frame()
         ports = self.load_ports()
+        await self._wait_frame()
+        equipment = self.build_index()
+        await self._wait_frame()
+        for _ in Collide._stage_boxes_steps(self):
+            await self._wait_frame()
         self._ready = equipment > 0 and ports > 0
         self._note(f"indexed {equipment} equipment, {ports} port entries")
         self._camera.go_home(self._get_stage())
+        await self._wait_frame()
         if self._skin.startswith("/") and self._get_stage() is not None:
             self._copy_skin(self._get_stage())
         if not equipment:
