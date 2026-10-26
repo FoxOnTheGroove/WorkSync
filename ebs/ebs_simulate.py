@@ -228,7 +228,7 @@ class EbsSimulate:
         self._target: dict = None
         self._next: dict = None
         self._tried: str = ""
-        self._model_index: dict = {}
+        self._model_surveyed: bool = False
         self._aligned: bool = False
         self._result: dict = {}
         self._marker_draw = None
@@ -961,7 +961,6 @@ class EbsSimulate:
         self.clear_sweep()
         self.hide_ebs()
         self._eqp_index = {}
-        self._model_index = {}
         self._port_map = {}
         self._triangles = {}
         self._local = {}
@@ -1095,7 +1094,6 @@ class EbsSimulate:
 
         self.hide_ebs()
         equipment = self.build_index()
-        self.build_models()
         Collide._stage_boxes(self)
         ports = self.load_ports()
         self._ready = equipment > 0 and ports > 0
@@ -1503,6 +1501,9 @@ class EbsSimulate:
         if not self._ready:
             return self._done(self._payload(False, "Run Init first",
                                             say=SAY_INIT))
+        if not self._model_surveyed:
+            self._model_surveyed = True
+            self._survey_models()
         result = self._do_prepare(equipment)
         if not result["ok"]:
             return self._done(result)
@@ -1528,6 +1529,57 @@ class EbsSimulate:
         result["total_ms"] = (time.perf_counter() - self._started) * 1000.0
         return self._done(result)
 
+
+    def _survey_models(self) -> None:
+        """임시. 장비마다 6뎁스 프림 전부의 MODEL 을 읽어 한 장비 안에서 같은지 유형별로 찍는다"""
+        stage = self._get_stage()
+        if stage is None:
+            return
+        want = re.sub(r"[^a-z0-9]", "", MODEL_ATTR.lower())
+        started = time.perf_counter()
+        kinds = {"same": [], "differ": [], "partial same": [],
+                 "partial differ": [], "no model": [], "no depth 6": []}
+        seen, tips_total = {}, 0
+        for name in sorted(self._eqp_index):
+            prim = stage.GetPrimAtPath(self._eqp_index[name])
+            if prim is None or not prim.IsValid():
+                continue
+            level = [prim]
+            for _ in range(ANCHOR_DEPTH):
+                level = [kid for one in level for kid in self._level_kids(one)]
+            tips_total += len(level)
+            if not level:
+                kinds["no depth 6"].append(name)
+                continue
+            values = []
+            for tip in level:
+                for attr in tip.GetAttributes():
+                    if re.sub(r"[^a-z0-9]", "", attr.GetName().lower()) == want:
+                        value = attr.Get()
+                        values.append(str(value).strip() if value is not None else "")
+                        break
+            found = set(values)
+            if not values:
+                kinds["no model"].append(name)
+                continue
+            whole = len(values) == len(level)
+            key = (("same" if whole else "partial same") if len(found) == 1
+                   else ("differ" if whole else "partial differ"))
+            kinds[key].append(name)
+            seen[name] = (len(values), len(level), sorted(found))
+        total = len(self._eqp_index)
+        print(f"[ebs] model survey: {total} equipment, {tips_total} depth-6 prims, "
+              f"{time.perf_counter() - started:.2f}s")
+        for key, names in kinds.items():
+            if not names:
+                continue
+            shown = []
+            for name in names[:5]:
+                got = seen.get(name)
+                shown.append(name if got is None else
+                             f"{name} {got[0]}/{got[1]} {got[2][:3]}")
+            print(f"[ebs] model survey {key}: {len(names)}/{total} -- "
+                  + "; ".join(shown) + (" ..." if len(names) > 5 else ""))
 
     def _do_prepare(self, equipment: str) -> dict:
         """새 장비를 잡는다. 못 잡으면 지금 SIM 은 그대로 두고, 잡으면 그때 바꾼다"""
@@ -2179,41 +2231,6 @@ class EbsSimulate:
         self._timings.append([f"build index (visited {visited})",
                               (time.perf_counter() - started) * 1000.0])
         return len(self._eqp_index)
-
-    def build_models(self) -> int:
-        """장비마다 6뎁스 프림 전부의 MODEL 을 읽어 모델 -> 장비 id 색인을 만든다"""
-        self._model_index = {}
-        stage = self._get_stage()
-        if stage is None:
-            return 0
-        want = re.sub(r"[^a-z0-9]", "", MODEL_ATTR.lower())
-        started = time.perf_counter()
-        for name in sorted(self._eqp_index):
-            prim = stage.GetPrimAtPath(self._eqp_index[name])
-            if prim is None or not prim.IsValid():
-                continue
-            level = [prim]
-            for _ in range(ANCHOR_DEPTH):
-                level = [kid for one in level for kid in self._level_kids(one)]
-            found = set()
-            for tip in level:
-                for attr in tip.GetAttributes():
-                    if re.sub(r"[^a-z0-9]", "", attr.GetName().lower()) == want:
-                        value = attr.Get()
-                        model = str(value).strip().upper() if value is not None else ""
-                        if model:
-                            found.add(model)
-                        break
-            eqp_id = self._equipment_id(prim)
-            for model in found:
-                self._model_index.setdefault(model, []).append(eqp_id)
-        self._timings.append(["model index", (time.perf_counter() - started) * 1000.0])
-        self._note(f"model index: {len(self._model_index)} models")
-        return len(self._model_index)
-
-    def equipment_by_model(self, model) -> list:
-        """그 MODEL 을 가진 장비 id 목록. 장비 안 6뎁스 중 하나라도 맞으면 든다"""
-        return list(self._model_index.get(str(model or "").strip().upper(), ()))
 
     def _walk(self, stage: Usd.Stage):
         """프림을 훑는다. PRUNE_TYPES 아래로는 안 내려간다"""
