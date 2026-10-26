@@ -1105,12 +1105,12 @@ class EbsSimulate:
         await self._wait_frame()
         for _ in Collide._stage_boxes_steps(self):
             await self._wait_frame()
-        self._ready = equipment > 0 and ports > 0
         self._note(f"indexed {equipment} equipment, {ports} port entries")
         self._camera.go_home(self._get_stage())
         await self._wait_frame()
         if self._skin.startswith("/") and self._get_stage() is not None:
             self._copy_skin(self._get_stage())
+        self._ready = equipment > 0 and ports > 0
         if not equipment:
             return self._payload(False, "No EQP_ prims found - check the search root")
         if not ports:
