@@ -228,6 +228,7 @@ class EbsSimulate:
         self._target: dict = None
         self._next: dict = None
         self._tried: str = ""
+        self._initing: bool = False
         self._aligned: bool = False
         self._result: dict = {}
         self._marker_draw = None
@@ -245,6 +246,7 @@ class EbsSimulate:
         if not self._usd_path:
             return True
         context = omni.usd.get_context()
+        await self._stage_settled(context)
         now = ""
         try:
             now = str(context.get_stage_url() or "")
@@ -254,11 +256,19 @@ class EbsSimulate:
             self._note(f"stage already open: {now}")
             return True
         with self._stage_timer("USD: open"):
-            try:
-                told = await context.open_stage_async(self._usd_path)
-            except Exception as e:
-                self._note(f"could not open {self._usd_path}: {e}")
-                return False
+            told = None
+            for turn in range(1, STAGE_RETRIES + 1):
+                try:
+                    told = await context.open_stage_async(self._usd_path)
+                except Exception as e:
+                    told = (False, f"{type(e).__name__}: {e}")
+                ok = told[0] if isinstance(told, tuple) else told
+                why = str(told[1]) if isinstance(told, tuple) and len(told) > 1 else ""
+                if ok is not False or "busy" not in why.lower():
+                    break
+                print(f"[ebs] stage busy, open try {turn}/{STAGE_RETRIES}: {why}")
+                await asyncio.sleep(STAGE_RETRY_GAP)
+                await self._stage_settled(context)
             while True:
                 _, loaded, total = context.get_stage_loading_status()
                 if loaded >= total:
@@ -272,6 +282,20 @@ class EbsSimulate:
             return False
         self._note(f"stage opened: {self._usd_path}")
         return True
+
+    async def _stage_settled(self, context) -> bool:
+        """UsdContext 가 열고 닫는 중이 아닐 때까지 STAGE_WAIT_MOST 초 안에서 기다린다"""
+        started = time.perf_counter()
+        while time.perf_counter() - started < STAGE_WAIT_MOST:
+            try:
+                state = context.get_stage_state()
+                if state in (omni.usd.StageState.OPENED, omni.usd.StageState.CLOSED):
+                    return True
+            except Exception:
+                return True
+            await self._wait_frame()
+        print(f"[ebs] stage still opening or closing after {STAGE_WAIT_MOST:g}s")
+        return False
 
     def set_xml_path(self, path: str) -> None:
         """포트 XML 경로"""
@@ -1072,6 +1096,16 @@ class EbsSimulate:
 
 
     async def init(self) -> dict:
+        """init 이 이미 도는 중이면 겹쳐 돌리지 않는다"""
+        if self._initing:
+            return {"ok": False, "reason": "Init already running"}
+        self._initing = True
+        try:
+            return await self._init()
+        finally:
+            self._initing = False
+
+    async def _init(self) -> dict:
         """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다. 단계 사이마다 프레임을 넘긴다"""
         self._begin("init")
         self._eqp_boxes = None

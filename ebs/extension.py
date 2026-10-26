@@ -210,6 +210,11 @@ class EbsExtension(omni.ext.IExt):
         context = omni.usd.get_context()
         if context.get_stage() is None:
             return False
+        try:
+            if context.get_stage_state() != omni.usd.StageState.OPENED:
+                return False
+        except Exception:
+            pass
         _, loaded, total = context.get_stage_loading_status()
         return loaded >= total
 
