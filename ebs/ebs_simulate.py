@@ -1056,6 +1056,10 @@ class EbsSimulate:
         """지금 도는 일의 이름. 없으면 빈 칸"""
         return self._busy
 
+    def ready(self) -> bool:
+        """init 이 끝나 SIM 을 받을 수 있나"""
+        return bool(self._ready)
+
     def begin_work(self, label: str) -> str:
         """그 일이 시작됐다고 세운다"""
         self._busy = label or "Working"

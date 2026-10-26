@@ -46,6 +46,11 @@ class EbsSimulateService:
     # -- 질의 -------------------------------------------------------------------
 
     @classmethod
+    def ready(cls):
+        """init 이 끝나 SIM 을 받을 수 있으면 True"""
+        return instance().ready()
+
+    @classmethod
     def busy(cls):
         """지금 도는 일의 이름. 없으면 빈 칸"""
         return instance().busy()
