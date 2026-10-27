@@ -21,6 +21,7 @@ PULS_KEY    = "distance-puls"
 ADDR_PATTERN = re.compile(r"^addr0*(\d+)$", re.IGNORECASE)
 PORT_PATTERN = re.compile(r"^([A-Za-z0-9]+)_(\d+)$")
 CACHE_SUFFIX  = ".ebscache.json"
+BOX_CACHE_SUFFIX = ".ebsboxes.json"
 CACHE_VERSION = 1
 READ_BLOCK    = 8 << 20
 CAD_PER_UNIT    = 100.0 / 3.0

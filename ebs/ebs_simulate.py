@@ -1141,8 +1141,10 @@ class EbsSimulate:
         await self._wait_frame()
         equipment = self.build_index()
         await self._wait_frame()
-        for _ in Collide._stage_boxes_steps(self):
-            await self._wait_frame()
+        if not self._load_box_cache():
+            for _ in Collide._stage_boxes_steps(self):
+                await self._wait_frame()
+            self._save_box_cache()
         self._note(f"indexed {equipment} equipment, {ports} port entries")
         self._camera.go_home(self._get_stage())
         await self._wait_frame()
@@ -2588,6 +2590,93 @@ class EbsSimulate:
                 self._note(f"xml cache not written: {e}")
                 return
         self._note(f"xml cache written: {path} "
+                   f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
+
+    def _box_source(self) -> str:
+        """상자 목록 캐시의 기준이 될 루트 USD 경로. 저장 안 된 스테이지면 빈 칸"""
+        stage = self._get_stage()
+        if stage is None:
+            return ""
+        layer = stage.GetRootLayer()
+        if layer is None or layer.anonymous:
+            return ""
+        if _remote(layer.identifier):
+            return layer.identifier
+        return layer.realPath or layer.identifier or ""
+
+    def _box_stamp(self, source: str) -> list:
+        """상자 목록 캐시와 견줄 표식. 루트 USD 의 판본·크기·수정 시각과 EBS 경로"""
+        return _stamp_of(source) + [self._ebs_path_2port, self._ebs_path_3port]
+
+    def _load_box_cache(self) -> bool:
+        """상자 목록 캐시를 읽어 _stage_index 를 채운다. 표식이 다르거나 프림이 없으면 버린다"""
+        source = self._box_source()
+        stage = self._get_stage()
+        if not source or stage is None:
+            return False
+        path = source + BOX_CACHE_SUFFIX
+        try:
+            want = self._box_stamp(source)
+        except OSError as e:
+            self._note(f"box cache: usd not readable: {e}")
+            return False
+        with self._stage_timer("stage: cache read"):
+            try:
+                blob = json.loads(_read_bytes(path).decode("utf-8"))
+            except Exception as e:
+                self._note(f"box cache unusable, measuring again: {e}")
+                return False
+            if blob.get("stamp") != want:
+                self._note(f"box cache stale, measuring again "
+                           f"(cache {blob.get('stamp')}, source {want})")
+                return False
+            prims = {}
+
+            def prim_at(where):
+                """경로의 프림. 한 번 찾은 것은 다시 안 찾는다"""
+                found = prims.get(where)
+                if found is None:
+                    found = stage.GetPrimAtPath(where)
+                    prims[where] = found
+                return found
+
+            index = []
+            try:
+                for where, lo, hi, chain in blob["boxes"]:
+                    prim = prim_at(where)
+                    links = tuple((prim_at(one), one) for one in chain)
+                    if not prim.IsValid() or not all(one.IsValid() for one, _ in links):
+                        self._note(f"box cache misses {where}, measuring again")
+                        return False
+                    index.append((where, tuple(lo), tuple(hi),
+                                  Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi)),
+                                  prim, links))
+            except Exception as e:
+                self._note(f"box cache unusable, measuring again: {e}")
+                return False
+        self._stage_index = index
+        self._note(f"box cache hit: {path} ({len(index)} boxes)")
+        return True
+
+    def _save_box_cache(self) -> None:
+        """상자 목록을 루트 USD 옆에 캐시로 남긴다"""
+        source = self._box_source()
+        if not source or self._stage_index is None:
+            return
+        path = source + BOX_CACHE_SUFFIX
+        with self._stage_timer("stage: cache write"):
+            try:
+                blob = {"stamp": self._box_stamp(source),
+                        "boxes": [[where, list(lo), list(hi),
+                                   [one for _, one in chain]]
+                                  for where, lo, hi, _, _, chain
+                                  in self._stage_index]}
+                text = json.dumps(blob)
+                _write_text(path, text)
+            except Exception as e:
+                self._note(f"box cache not written: {e}")
+                return
+        self._note(f"box cache written: {path} "
                    f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
 
     def valid_ids(self, ids) -> list:
