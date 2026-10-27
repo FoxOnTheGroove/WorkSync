@@ -228,7 +228,6 @@ class EbsSimulate:
         self._target: dict = None
         self._next: dict = None
         self._tried: str = ""
-        self._initing: bool = False
         self._aligned: bool = False
         self._result: dict = {}
         self._marker_draw = None
@@ -241,12 +240,11 @@ class EbsSimulate:
             self._ready = False
         self._usd_path = path
 
-    async def open_stage(self) -> bool:
-        """그 USD 를 연다. 같은 것이 이미 열려 있으면 안 연다. 여는 동안 킷을 막지 않는다"""
+    def open_stage(self) -> bool:
+        """그 USD 를 연다. 같은 것이 이미 열려 있으면 안 연다"""
         if not self._usd_path:
             return True
         context = omni.usd.get_context()
-        await self._stage_settled(context)
         now = ""
         try:
             now = str(context.get_stage_url() or "")
@@ -256,24 +254,11 @@ class EbsSimulate:
             self._note(f"stage already open: {now}")
             return True
         with self._stage_timer("USD: open"):
-            told = None
-            for turn in range(1, STAGE_RETRIES + 1):
-                try:
-                    told = await context.open_stage_async(self._usd_path)
-                except Exception as e:
-                    told = (False, f"{type(e).__name__}: {e}")
-                ok = told[0] if isinstance(told, tuple) else told
-                why = str(told[1]) if isinstance(told, tuple) and len(told) > 1 else ""
-                if ok is not False or "busy" not in why.lower():
-                    break
-                print(f"[ebs] stage busy, open try {turn}/{STAGE_RETRIES}: {why}")
-                await asyncio.sleep(STAGE_RETRY_GAP)
-                await self._stage_settled(context)
-            while True:
-                _, loaded, total = context.get_stage_loading_status()
-                if loaded >= total:
-                    break
-                await self._wait_frame()
+            try:
+                told = context.open_stage(self._usd_path)
+            except Exception as e:
+                self._note(f"could not open {self._usd_path}: {e}")
+                return False
         ok = told[0] if isinstance(told, tuple) else told
         if ok is False:
             self._note(f"could not open {self._usd_path}: "
@@ -282,20 +267,6 @@ class EbsSimulate:
             return False
         self._note(f"stage opened: {self._usd_path}")
         return True
-
-    async def _stage_settled(self, context) -> bool:
-        """UsdContext 가 열고 닫는 중이 아닐 때까지 STAGE_WAIT_MOST 초 안에서 기다린다"""
-        started = time.perf_counter()
-        while time.perf_counter() - started < STAGE_WAIT_MOST:
-            try:
-                state = context.get_stage_state()
-                if state in (omni.usd.StageState.OPENED, omni.usd.StageState.CLOSED):
-                    return True
-            except Exception:
-                return True
-            await self._wait_frame()
-        print(f"[ebs] stage still opening or closing after {STAGE_WAIT_MOST:g}s")
-        return False
 
     def set_xml_path(self, path: str) -> None:
         """포트 XML 경로"""
@@ -1099,18 +1070,8 @@ class EbsSimulate:
             self._timings.append([label, (time.perf_counter() - started) * 1000.0])
 
 
-    async def init(self) -> dict:
-        """init 이 이미 도는 중이면 겹쳐 돌리지 않는다"""
-        if self._initing:
-            return {"ok": False, "reason": "Init already running"}
-        self._initing = True
-        try:
-            return await self._init()
-        finally:
-            self._initing = False
-
-    async def _init(self) -> dict:
-        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다. 단계 사이마다 프레임을 넘긴다"""
+    def init(self) -> dict:
+        """USD 를 열고 장비 색인·상자 목록·포트 표를 만든다"""
         self._begin("init")
         self._eqp_boxes = None
         self._bounds = None
@@ -1126,9 +1087,8 @@ class EbsSimulate:
         self._local = {}
         self._faces = {}
         self._parts = {}
-        if not await self.open_stage():
+        if not self.open_stage():
             return self._payload(False, f"Could not open {self._usd_path}")
-        await self._wait_frame()
         if self._get_stage() is None:
             return self._payload(False, "No stage open - give a USD path")
         if self._camera.make(self._get_stage()):
@@ -1136,18 +1096,11 @@ class EbsSimulate:
                        f"to it when the camera step runs)")
 
         self.hide_ebs()
-        await self._wait_frame()
-        ports = self.load_ports()
-        await self._wait_frame()
         equipment = self.build_index()
-        await self._wait_frame()
-        if not self._load_box_cache():
-            for _ in Collide._stage_boxes_steps(self):
-                await self._wait_frame()
-            self._save_box_cache()
+        Collide._stage_boxes(self)
+        ports = self.load_ports()
         self._note(f"indexed {equipment} equipment, {ports} port entries")
         self._camera.go_home(self._get_stage())
-        await self._wait_frame()
         if self._skin.startswith("/") and self._get_stage() is not None:
             self._copy_skin(self._get_stage())
         self._ready = equipment > 0 and ports > 0
@@ -2590,93 +2543,6 @@ class EbsSimulate:
                 self._note(f"xml cache not written: {e}")
                 return
         self._note(f"xml cache written: {path} "
-                   f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
-
-    def _box_source(self) -> str:
-        """상자 목록 캐시의 기준이 될 루트 USD 경로. 저장 안 된 스테이지면 빈 칸"""
-        stage = self._get_stage()
-        if stage is None:
-            return ""
-        layer = stage.GetRootLayer()
-        if layer is None or layer.anonymous:
-            return ""
-        if _remote(layer.identifier):
-            return layer.identifier
-        return layer.realPath or layer.identifier or ""
-
-    def _box_stamp(self, source: str) -> list:
-        """상자 목록 캐시와 견줄 표식. 루트 USD 의 판본·크기·수정 시각과 EBS 경로"""
-        return _stamp_of(source) + [self._ebs_path_2port, self._ebs_path_3port]
-
-    def _load_box_cache(self) -> bool:
-        """상자 목록 캐시를 읽어 _stage_index 를 채운다. 표식이 다르거나 프림이 없으면 버린다"""
-        source = self._box_source()
-        stage = self._get_stage()
-        if not source or stage is None:
-            return False
-        path = source + BOX_CACHE_SUFFIX
-        try:
-            want = self._box_stamp(source)
-        except OSError as e:
-            self._note(f"box cache: usd not readable: {e}")
-            return False
-        with self._stage_timer("stage: cache read"):
-            try:
-                blob = json.loads(_read_bytes(path).decode("utf-8"))
-            except Exception as e:
-                self._note(f"box cache unusable, measuring again: {e}")
-                return False
-            if blob.get("stamp") != want:
-                self._note(f"box cache stale, measuring again "
-                           f"(cache {blob.get('stamp')}, source {want})")
-                return False
-            prims = {}
-
-            def prim_at(where):
-                """경로의 프림. 한 번 찾은 것은 다시 안 찾는다"""
-                found = prims.get(where)
-                if found is None:
-                    found = stage.GetPrimAtPath(where)
-                    prims[where] = found
-                return found
-
-            index = []
-            try:
-                for where, lo, hi, chain in blob["boxes"]:
-                    prim = prim_at(where)
-                    links = tuple((prim_at(one), one) for one in chain)
-                    if not prim.IsValid() or not all(one.IsValid() for one, _ in links):
-                        self._note(f"box cache misses {where}, measuring again")
-                        return False
-                    index.append((where, tuple(lo), tuple(hi),
-                                  Gf.Range3d(Gf.Vec3d(*lo), Gf.Vec3d(*hi)),
-                                  prim, links))
-            except Exception as e:
-                self._note(f"box cache unusable, measuring again: {e}")
-                return False
-        self._stage_index = index
-        self._note(f"box cache hit: {path} ({len(index)} boxes)")
-        return True
-
-    def _save_box_cache(self) -> None:
-        """상자 목록을 루트 USD 옆에 캐시로 남긴다"""
-        source = self._box_source()
-        if not source or self._stage_index is None:
-            return
-        path = source + BOX_CACHE_SUFFIX
-        with self._stage_timer("stage: cache write"):
-            try:
-                blob = {"stamp": self._box_stamp(source),
-                        "boxes": [[where, list(lo), list(hi),
-                                   [one for _, one in chain]]
-                                  for where, lo, hi, _, _, chain
-                                  in self._stage_index]}
-                text = json.dumps(blob)
-                _write_text(path, text)
-            except Exception as e:
-                self._note(f"box cache not written: {e}")
-                return
-        self._note(f"box cache written: {path} "
                    f"({len(text.encode('utf-8')) / 1048576:.2f} MB)")
 
     def valid_ids(self, ids) -> list:

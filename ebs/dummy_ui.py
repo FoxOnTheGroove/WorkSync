@@ -236,10 +236,10 @@ class EbsDummyUI:
                 field.model.set_value(value)
         return field
 
-    async def auto_init(self) -> dict:
+    def auto_init(self) -> dict:
         """입력칸의 사전값으로 init 을 돌린다"""
         self._apply_settings()
-        result = await EbsSimulateService.auto_init()
+        result = EbsSimulateService.auto_init()
         self._apply_views()
         self._reset_nudge()
         self._render(result)
