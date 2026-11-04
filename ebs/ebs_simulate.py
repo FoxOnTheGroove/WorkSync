@@ -651,6 +651,127 @@ class EbsSimulate:
             return False, f"{type(e).__name__}: {e}"
         return result == omni.client.Result.OK, result
 
+    def _check_skin(self, stage) -> None:
+        """임시. 스킨 머티리얼이 파일 없이 씬 안에서 다시 만들 수 있는지 단계마다 판단해 찍는다"""
+        say = lambda text: print(f"[ebs] skin check: {text}")
+        found = stage.GetPrimAtPath(self._skin)
+        if found is None or not found.IsValid() or not UsdShade.Material(found):
+            say(f"{self._skin} is not a material, stop")
+            return
+        try:
+            import omni.kit.app
+            say(f"kit {omni.kit.app.get_app().get_build_version()}")
+        except Exception as e:
+            say(f"kit version unknown ({type(e).__name__})")
+        try:
+            import omni.ui
+            dynamic = getattr(omni.ui, "DynamicTextureProvider", None) is not None
+        except Exception:
+            dynamic = False
+        say(f"dynamic texture provider: {'yes' if dynamic else 'NO'}")
+        try:
+            from PIL import Image
+        except Exception:
+            Image = None
+        say(f"image decoder (PIL): {'yes' if Image else 'NO'}")
+        builtin = ("omnipbr.mdl", "omnisurface.mdl", "omnisurfacelite.mdl", "omniglass.mdl")
+        verdicts, textures = [], []
+
+        def texture(where: str, label: str) -> None:
+            """텍스처 하나를 메모리로만 읽어 크기와 해상도를 찍는다"""
+            try:
+                data = _read_bytes(where)
+            except Exception as e:
+                say(f"  texture {label}: cannot read {where} ({type(e).__name__}: {e})")
+                textures.append((label, None))
+                return
+            size = None
+            if Image is not None:
+                try:
+                    with Image.open(io.BytesIO(data)) as picture:
+                        size = (picture.size[0], picture.size[1], picture.mode)
+                except Exception as e:
+                    say(f"  texture {label}: read {len(data)} bytes, not decodable ({type(e).__name__})")
+            if size:
+                say(f"  texture {label}: {where} {len(data) / 1024:.0f} KB, "
+                    f"{size[0]}x{size[1]} {size[2]}, "
+                    f"{size[0] * size[1] * 4 / 1048576:.1f} MB as RGBA")
+            textures.append((label, size))
+
+        for one in Usd.PrimRange(found, Usd.TraverseInstanceProxies()):
+            shader = UsdShade.Shader(one)
+            if not shader:
+                continue
+            ident = shader.GetIdAttr().Get() if shader.GetIdAttr() else None
+            source = shader.GetImplementationSource()
+            say(f"shader {one.GetPath()} source={source} id={ident}")
+            for name in ("diffuseColor", "diffuse_color_constant", "roughness",
+                         "reflection_roughness_constant", "metallic", "metallic_constant"):
+                put = shader.GetInput(name)
+                if put and put.Get() is not None:
+                    say(f"  input {name} = {put.Get()}")
+            for put in shader.GetInputs():
+                value = put.Get()
+                if isinstance(value, Sdf.AssetPath) and value.path:
+                    say(f"  asset input {put.GetBaseName()}: {value.path!r} -> {value.resolvedPath!r}")
+                    texture(value.resolvedPath or value.path, put.GetBaseName())
+            if ident == "UsdPreviewSurface":
+                verdicts.append("UsdPreviewSurface: rebuild in scene with no file")
+                continue
+            if source != "sourceAsset":
+                verdicts.append(f"{one.GetName()}: {source} shader, not judged")
+                continue
+            asset = shader.GetSourceAsset("mdl")
+            module = shader.GetSourceAssetSubIdentifier("mdl")
+            if not asset or not asset.path:
+                verdicts.append(f"{one.GetName()}: no mdl asset")
+                continue
+            where = asset.resolvedPath or asset.path
+            name = asset.path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            say(f"  mdl {asset.path!r} -> {where!r}, material {module}")
+            if name in builtin and not _remote(asset.path):
+                verdicts.append(f"{name}: kit builtin, no fetch needed")
+                continue
+            try:
+                text = _read_bytes(where).decode("utf-8", "replace")
+            except Exception as e:
+                say(f"  mdl cannot read ({type(e).__name__}: {e})")
+                verdicts.append(f"{name}: mdl unreadable, not judged")
+                continue
+            imports = re.findall(r"^\s*(?:import|using)\s+([^;]+);", text, re.M)
+            exports = re.findall(r"export\s+material\s+(\w+)", text)
+            maps = re.findall(r'texture_2d\(\s*"([^"]+)"', text)
+            wraps = [one for one in ("OmniPBR", "OmniSurface", "OmniGlass") if one in text]
+            say(f"  mdl {len(text)} chars, exports {exports[:5]}")
+            say(f"  mdl imports {imports[:8]}")
+            say(f"  mdl uses {wraps or 'no builtin material'}, {len(maps)} texture(s) inside")
+            for one_map in maps[:8]:
+                try:
+                    import omni.client
+                    url = omni.client.combine_urls(where, one_map)
+                except Exception:
+                    url = one_map
+                texture(url, f"mdl:{one_map}")
+            others = [one for one in imports
+                      if not one.strip().startswith(("::anno", "::df", "::math", "::state",
+                                                     "::tex", "::base", "::limits",
+                                                     "::OmniPBR", "::OmniSurface",
+                                                     "::OmniGlass", "::nvidia", "::alg"))]
+            if wraps and not others:
+                verdicts.append(f"{name}: wraps {wraps[0]} -> can move to kit builtin {wraps[0]}")
+            elif wraps:
+                verdicts.append(f"{name}: wraps {wraps[0]} but imports {others[:3]}, check by eye")
+            else:
+                verdicts.append(f"{name}: own mdl code -> cannot move, needs the file")
+        decoded = [one for one in textures if one[1]]
+        memory = sum(one[1][0] * one[1][1] * 4 for one in decoded) / 1048576
+        say(f"textures: {len(textures)} found, {len(decoded)} decodable, {memory:.1f} MB as RGBA")
+        if textures:
+            say("textures -> " + ("can feed as dynamic textures" if dynamic and len(decoded) == len(textures)
+                                  else "dynamic texture path NOT ready (provider or decode missing)"))
+        for line in verdicts:
+            say(f"verdict {line}")
+
     def _copy_skin(self, stage):
         """씬 머티리얼을 세션 레이어에 통째로 복사해 둔다. 에셋 경로는 푼 절대 경로로 옮긴다"""
         where = f"{SKIN_ROOT}/{SKIN_NAME}"
@@ -1102,6 +1223,7 @@ class EbsSimulate:
         self._note(f"indexed {equipment} equipment, {ports} port entries")
         self._camera.go_home(self._get_stage())
         if self._skin.startswith("/") and self._get_stage() is not None:
+            self._check_skin(self._get_stage())
             self._copy_skin(self._get_stage())
         self._ready = equipment > 0 and ports > 0
         if not equipment:
