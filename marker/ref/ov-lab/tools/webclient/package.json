@@ -1,0 +1,15 @@
+{
+  "name": "morph-webclient-test",
+  "private": true,
+  "type": "module",
+  "description": "MORPH Lab 스트리밍 앱 브라우저 테스트 페이지 (영상 + morph 웹 메시지 왕복)",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort"
+  },
+  "dependencies": {
+    "@nvidia/omniverse-webrtc-streaming-library": "5.18.2"
+  },
+  "devDependencies": {
+    "vite": "6.4.5"
+  }
+}

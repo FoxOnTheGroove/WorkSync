@@ -1,0 +1,54 @@
+[package]
+title = "MORPH Annotation Overlay"
+version = "0.4.1"  # Semantic Versioning is used: https://semver.org/
+description = "뷰포트 3D 주석 표시·편집: 라벨, inlet/outlet 화살표, 절단면 위치 (prim 계층과 무관, 장면 옆 JSON)"
+category = "MORPH"
+changelog = "docs/CHANGELOG.md"
+icon = "data/icon.png"
+keywords = ["morph", "annotation", "overlay", "label", "inlet", "outlet", "section", "face"]
+preview_image = "data/preview.png"
+readme  = "docs/README.md"
+repository = "https://github.com/MorphKR/ov-lab"
+
+
+[dependencies]
+"morph.stream.messaging" = { version = "1.0" }  # 1.0: 웹 등록·회신·푸시
+"morph.perf.monitor" = { version = "1.0" }  # 1.0: scope (그리기 갱신 시간)
+"omni.usd" = {}
+"omni.ui" = {}  # 편집 창 "MORPH Annotations"
+"omni.ui.scene" = {}
+"omni.kit.viewport.registry" = { optional = true }  # 모든 뷰포트 창(분할 뷰 포함)에 scene 레이어 등록. 없으면 그리기 생략(데이터·웹은 동작)
+"omni.kit.viewport.utility" = { optional = true }  # pick: 창 이름 -> viewport_api, 찍기 중 Kit 클릭 선택 끄기
+"omni.kit.menu.utils" = { optional = true }  # Window > MORPH Annotations 메뉴
+
+
+[settings]
+exts."morph.annotation.overlay".visible = true
+exts."morph.annotation.overlay".autoLoad = true
+exts."morph.annotation.overlay".sidecarSuffix = ".annotations.json"
+exts."morph.annotation.overlay".textScale = 1.0
+exts."morph.annotation.overlay".showDescription = "always"  # "always" | "never"
+exts."morph.annotation.overlay".maxAnnotations = 512
+exts."morph.annotation.overlay".editorWindow = false  # true면 시작할 때 편집 창을 연다 (데스크톱 앱)
+exts."morph.annotation.overlay".fontPath = ""  # 편집 창 스타일 글꼴. "" = 스타일 없음, 앱 글꼴을 따름 (한글은 앱 /app/font/customFontPath + customRegionFiles)
+
+
+[[python.module]]
+name = "morph.annotation.overlay"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+dependencies = [
+    "omni.kit.viewport.registry",  # RegisterScene factory test (pure Python, no viewport window)
+    "omni.kit.viewport.utility",  # pick: viewport lookup by window name (no window -> KeyError path)
+]
+
+args = [
+]

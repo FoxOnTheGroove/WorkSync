@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MORPH Lab Web Test</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #15171a; color: #ddd; display: grid; grid-template-columns: 1fr 380px; grid-template-rows: 100vh; height: 100vh; overflow: hidden; }
+    #stage { position: relative; background: #000; min-width: 0; min-height: 0; overflow: hidden; }
+    #remote-video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    #status { position: absolute; z-index: 2; left: 8px; top: 8px; background: #000a; padding: 4px 8px; border-radius: 4px; pointer-events: none; }
+    /* 영상 위 입력 레이어: 마우스를 라이브러리(Kit 기본 입력)로 넘기지 않고 morph 메시지로 보낸다 */
+    /* AppStreamer가 video를 stage 끝으로 옮기고 transform을 걸어(쌓임 맥락) 입력 레이어를 덮는다 -> z-index로 위에 둔다 */
+    #input { position: absolute; inset: 0; z-index: 1; cursor: grab; touch-action: none; }
+    #input.drag { cursor: grabbing; }
+    #focus-box { position: absolute; z-index: 2; border: 2px solid #4da3ff; box-sizing: border-box; pointer-events: none; display: none; }
+    #perf { padding: 8px; border-bottom: 1px solid #333; font: 12px/1.5 ui-monospace, monospace; }
+    #perf .k { color: #888; } #perf .warn { color: #e6c07b; }
+    aside { display: flex; flex-direction: column; border-left: 1px solid #333; min-width: 0; min-height: 0; }
+    .controls { padding: 8px; display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid #333; }
+    button { background: #2b2f36; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+    button:hover { background: #363b44; }
+    .panel { padding: 8px; border-bottom: 1px solid #333; display: flex; flex-direction: column; gap: 4px; }
+    .panel .row { display: flex; gap: 6px; align-items: center; }
+    .panel .row > span:first-child { width: 64px; color: #888; } .panel .row.focused > span:first-child { color: #4da3ff; }
+    .panel select, .panel input { flex: 1; min-width: 0; background: #1e2126; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 3px 4px; }
+    .panel .muted { color: #888; }
+    #anno-rows .row.sel > span { color: #4da3ff; } #anno-rows [data-anno-sel] { cursor: pointer; }
+    .anno-edit { border-top: 1px solid #333; padding-top: 4px; display: flex; flex-direction: column; gap: 4px; }
+    #ae-pick.on, #ae-face.on { background: #2b6cb0; color: #fff; } #ae-msg.err { color: #f66; }
+    #input.picking { cursor: crosshair; }
+    #results { padding: 8px; border-bottom: 1px solid #333; }
+    #results div.pass { color: #7fd17f; } #results div.fail { color: #ff7b7b; }
+    #log { flex: 1; overflow: auto; padding: 8px; font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+    #log .in { color: #9cc9ff; } #log .out { color: #e6c07b; } #log .sys { color: #888; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="remote-video" autoplay playsinline muted tabindex="-1"></video>
+    <audio id="remote-audio" muted></audio>
+    <div id="input"></div>
+    <div id="focus-box"></div>
+    <div id="status">연결 중…</div>
+  </div>
+  <aside>
+    <div class="controls">
+      <button data-layout="1x1">1x1</button>
+      <button data-layout="1x2">1x2</button>
+      <button data-layout="2x1">2x1</button>
+      <button data-layout="2x2">2x2</button>
+      <button data-layout="1+3">1+3</button>
+      <button data-focus="0">focus 0</button>
+      <button data-focus="1">focus 1</button>
+      <button data-orbit="15">orbit +15°</button>
+      <button data-orbit="-15">orbit −15°</button>
+      <button data-zoom="0.8">zoom in</button>
+      <button data-zoom="1.25">zoom out</button>
+      <button id="selftest">self test</button>
+      <span style="color:#888;width:100%">영상 위: 왼쪽 드래그 회전 · 오른쪽(또는 Shift) 드래그 이동 · 휠 확대/축소 · 클릭 뷰 포커스</span>
+    </div>
+    <div class="panel" id="scenes"><div class="row"><span>장면</span><span id="scene-cur" class="muted">-</span><button id="scene-refresh">목록 새로고침</button><button id="scene-reload">다시 불러오기</button><button id="scene-new">새 장면</button></div><div id="scene-rows" class="muted">목록 대기 중</div></div>
+    <div class="panel" id="annos"><div class="row"><span>주석</span><label class="muted"><input id="anno-visible" type="checkbox" checked style="flex:none" /> 전체 표시</label><label class="muted"><input id="anno-desc" type="checkbox" checked style="flex:none" /> 설명</label><input id="anno-scale" type="range" min="0.5" max="2" step="0.1" value="1" style="flex:none;width:70px" title="글자 크기" /><span id="anno-file" class="muted">-</span><button id="anno-reload">다시 읽기</button><button id="anno-save">저장</button></div><div id="anno-rows" class="muted">없음</div><div id="anno-edit" class="anno-edit"><div class="row"><span>편집</span><select id="ae-kind" style="flex:none"><option value="label">라벨</option><option value="inlet">입구</option><option value="outlet">출구</option><option value="plane">단면</option></select><input id="ae-id" placeholder="id (비우면 자동)" /><input id="ae-color" type="color" value="#ffffff" style="flex:none;width:32px;padding:0" title="색 (바꾸면 적용)" /></div>
+<div class="row"><span>이름</span><input id="ae-label" placeholder="라벨" /></div>
+<div class="row"><span>설명</span><input id="ae-desc" placeholder="설명" /></div>
+<div class="row" data-ae="position"><span id="ae-pos-name">위치</span><input data-f="p0" type="number" step="0.01" /><input data-f="p1" type="number" step="0.01" /><input data-f="p2" type="number" step="0.01" /></div>
+<div class="row" data-ae="direction"><span id="ae-dir-name">흐름</span><input data-f="d0" type="number" step="0.1" /><input data-f="d1" type="number" step="0.1" /><input data-f="d2" type="number" step="0.1" /></div>
+<div class="row" data-ae="size"><span>크기</span><input data-f="s0" type="number" step="0.1" min="0" /><input data-f="s1" type="number" step="0.1" min="0" placeholder="높이" /></div>
+<div class="row" data-ae="up"><span>위쪽</span><input data-f="u0" type="number" step="0.1" placeholder="(선택)" /><input data-f="u1" type="number" step="0.1" /><input data-f="u2" type="number" step="0.1" /></div>
+<div class="row"><span></span><button id="ae-pick">뷰에서 위치 찍기</button><button id="ae-face">면 선택</button><button id="ae-new">새로</button><button id="ae-apply">적용</button><button id="ae-del">삭제</button></div>
+<div id="ae-msg" class="muted"></div><div class="row" id="ae-face-row"><span>선택 면</span><span id="ae-face-info" class="muted" style="flex:1">없음</span><button id="ae-face-use">면 중심을 폼에</button><button id="ae-face-clear">해제</button></div></div>
+<div class="row"><span>추가</span><input id="anno-json" placeholder='{"kind":"label","label":"메모","position":[0,0,1]}' /><button id="anno-add">추가</button></div></div>
+    <div class="panel" id="side"><div class="row"><span>1+3 오른쪽 폭</span><input id="side-ratio" type="range" min="0.1" max="0.5" step="0.01" value="0.25" /><span id="side-ratio-val">0.25</span></div></div>
+    <div class="panel" id="views"><div class="row"><span>뷰 카메라</span><button id="cam-refresh">카메라 목록 새로고침</button></div><div id="view-rows" class="muted">split 상태 대기 중</div></div>
+    <div class="panel" id="presets"><div class="row"><span>프리셋</span><input id="preset-name" placeholder="이름 1~64자 (포커스 뷰 카메라 저장)" /><button id="preset-save">저장</button></div><div id="preset-rows" class="muted">없음</div></div>
+    <div id="perf">성능: 리포트 대기 중</div>
+    <div id="results"></div>
+    <div id="log"></div>
+  </aside>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[package]
+title = "MORPH Stream Messaging"
+version = "1.0.1"  # Semantic Versioning is used: https://semver.org/
+description = "웹 클라이언트 ↔ Kit 메시지 통로, 타입 등록·라우팅"
+category = "MORPH"  # How to categorize this in the Extension Manager
+changelog = "docs/CHANGELOG.md"
+icon = "data/icon.png"  # Icon to show in the Extension Manager
+keywords = ["morph", "stream", "messaging"]  # Search keywords for the Extension Manager
+preview_image = "data/preview.png"  # Preview to show in the Extension Manager
+readme  = "docs/README.md"  # Path (relative to the root) or content of readme markdown file for UI
+repository = "https://github.com/MorphKR/ov-lab"  # URL of the extension source repository
+
+
+[dependencies]
+# 선택 의존: 앱에 livestream이 있으면 먼저 로드되게 순서만 보장한다. 없으면 이벤트 채널만 동작.
+"omni.kit.livestream.messaging" = { optional = true }
+
+
+[settings]
+exts."morph.stream.messaging".validate = true  # 스키마 검증 사용
+exts."morph.stream.messaging".maxQueue = 1024  # 송신/수신 큐 최대 길이
+# connectEvents / disconnectEvents: 연결 상태로 매핑할 carb 이벤트 이름 목록 또는 문자열 하나 (기본 없음)
+
+
+[[python.module]]  # Main python module this extension provides, it will be publicly available as "import morph.stream.messaging"
+name = "morph.stream.messaging"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+dependencies = [
+]
+
+args = [
+]
+
+# test_integration.test_handler_exception_replies_same_type가 의도적으로 남기는 핸들러 예외 로그만 제외한다.
+# (그 테스트 전용 type 하나로 한정. 다른 [Error]는 계속 실패 처리)
+stdoutFailPatterns.exclude = [
+    "*handler for 'morph.testint.owner.boom' (owner morph.testint.owner) raised*",
+]

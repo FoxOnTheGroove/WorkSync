@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[package]
+title = "MORPH Camera Control"
+version = "1.1.1"  # Semantic Versioning is used: https://semver.org/
+description = "카메라 조작·프리셋·전환"
+category = "MORPH"  # How to categorize this in the Extension Manager
+changelog = "docs/CHANGELOG.md"
+icon = "data/icon.png"  # Icon to show in the Extension Manager
+keywords = ["morph", "camera", "control"]  # Search keywords for the Extension Manager
+preview_image = "data/preview.png"  # Preview to show in the Extension Manager
+readme  = "docs/README.md"  # Path (relative to the root) or content of readme markdown file for UI
+repository = "https://github.com/MorphKR/ov-lab"  # URL of the extension source repository
+
+
+[dependencies]
+"morph.stream.messaging" = { version = "1.0" }  # 1.0: <owner>.<name> type 규칙, ctx.reply_ok/reply_error (is_connected·register_* 포함)
+"morph.perf.monitor" = { version = "1.0" }  # scope/counter만 사용 (stable 1.0 기준, 1.1 시스템 지표 미사용)
+"omni.usd" = {}
+"omni.kit.viewport.utility" = {}
+# morph.viewport.split 은 의존 선언하지 않는다 (morph.viewport.focus_changed 이벤트만 구독).
+
+
+[settings]
+exts."morph.camera.control".orbitSpeed = 1.0
+exts."morph.camera.control".stateRateHz = 30.0
+
+
+[[python.module]]  # Main python module this extension provides, it will be publicly available as "import morph.camera.control"
+name = "morph.camera.control"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+dependencies = [
+]
+
+args = [
+]

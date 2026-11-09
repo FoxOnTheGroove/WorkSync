@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[package]
+title = "MORPH Perf Monitor"
+version = "1.1.1"  # Semantic Versioning is used: https://semver.org/
+description = "공통 측정 API, 지표 수집·전송"
+category = "MORPH"  # How to categorize this in the Extension Manager
+changelog = "docs/CHANGELOG.md"
+icon = "data/icon.png"  # Icon to show in the Extension Manager
+keywords = ["morph", "perf", "monitor"]  # Search keywords for the Extension Manager
+preview_image = "data/preview.png"  # Preview to show in the Extension Manager
+readme  = "docs/README.md"  # Path (relative to the root) or content of readme markdown file for UI
+repository = "https://github.com/MorphKR/ov-lab"  # URL of the extension source repository
+
+
+[dependencies]
+"morph.stream.messaging" = { version = "1.0" }  # 1.0: <ext-id>.<name> type 규칙, ctx.reply_ok/reply_error 회신
+# 선택: 앱에 있으면 GPU 메모리 지표를 읽는다 (먼저 로드되도록 순서만 보장, 없으면 조용히 건너뜀).
+"omni.hydra.engine.stats" = { optional = true }
+
+
+[settings]
+exts."morph.perf.monitor".enabled = true
+exts."morph.perf.monitor".periodSec = 1.0
+exts."morph.perf.monitor".webReport = false
+exts."morph.perf.monitor".maxMetrics = 512
+exts."morph.perf.monitor".maxSamples = 4096
+exts."morph.perf.monitor".systemMetrics = true
+
+
+[[python.module]]  # Main python module this extension provides, it will be publicly available as "import morph.perf.monitor"
+name = "morph.perf.monitor"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+dependencies = [
+]
+
+args = [
+]

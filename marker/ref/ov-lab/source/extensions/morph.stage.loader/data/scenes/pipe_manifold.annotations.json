@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "annotations": [
+    {
+      "id": "inlet_main",
+      "kind": "inlet",
+      "label": "Inlet",
+      "description": "Main inlet flange face (x = -2.1). Flow enters along +X.",
+      "position": [-2.1, 0.0, 1.0],
+      "direction": [1.0, 0.0, 0.0],
+      "size": 0.8
+    },
+    {
+      "id": "outlet_a",
+      "kind": "outlet",
+      "label": "Outlet A",
+      "description": "Branch outlet flange face (y = 1.28) after the 90 deg elbow. Flow leaves along +Y.",
+      "position": [-0.5, 1.28, 2.0],
+      "direction": [0.0, 1.0, 0.0],
+      "size": 0.8
+    },
+    {
+      "id": "outlet_b",
+      "kind": "outlet",
+      "label": "Outlet B",
+      "description": "Main line outlet flange face (x = 2.1). Flow leaves along +X.",
+      "position": [2.1, 0.0, 1.0],
+      "direction": [1.0, 0.0, 0.0],
+      "size": 0.8
+    },
+    {
+      "id": "section_a",
+      "kind": "plane",
+      "label": "Section A-A",
+      "description": "Main line cross section between the branch tee and valve V-101 (pipe OD 0.30).",
+      "origin": [0.3, 0.0, 1.0],
+      "normal": [1.0, 0.0, 0.0],
+      "size": [0.6, 0.6]
+    },
+    {
+      "id": "section_b",
+      "kind": "plane",
+      "label": "Section B-B",
+      "description": "Branch riser cross section at mid height (pipe OD 0.24).",
+      "origin": [-0.5, 0.0, 1.5],
+      "normal": [0.0, 0.0, 1.0],
+      "size": [0.5, 0.5],
+      "up": [0.0, 1.0, 0.0]
+    },
+    {
+      "id": "label_valve",
+      "kind": "label",
+      "label": "Valve V-101",
+      "description": "Manual gate valve on the main line, handwheel on top.",
+      "position": [0.8, 0.0, 1.49]
+    },
+    {
+      "id": "label_elbow",
+      "kind": "label",
+      "label": "Elbow 90",
+      "description": "Branch turns from +Z (riser) to +Y toward Outlet A.",
+      "position": [-0.5, 0.0, 2.14]
+    },
+    {
+      "id": "label_support",
+      "kind": "label",
+      "label": "Support S-02",
+      "description": "Pipe pedestal under the main line (one of two).",
+      "position": [1.5, -0.25, 0.425]
+    }
+  ]
+}

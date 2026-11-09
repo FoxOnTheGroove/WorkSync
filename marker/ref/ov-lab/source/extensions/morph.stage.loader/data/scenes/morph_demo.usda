@@ -1,0 +1,147 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary cameraSettings = {
+            dictionary Perspective = {
+                double3 position = (9, -9, 6.5)
+                double3 target = (0, 0, 0.5)
+            }
+            string boundCamera = "/OmniverseKit_Persp"
+        }
+    }
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+    doc = "morph.stage.loader built-in sample: ground, colored primitives, lights, 3 cameras"
+)
+
+def Xform "World"
+{
+    def Mesh "Ground"
+    {
+        float3[] extent = [(-10, -10, 0), (10, 10, 0)]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        point3f[] points = [(-10, -10, 0), (10, -10, 0), (10, 10, 0), (-10, 10, 0)]
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.45)]
+        uniform token subdivisionScheme = "none"
+        bool doubleSided = 1
+    }
+
+    def Xform "Objects"
+    {
+        def Cube "RedCube"
+        {
+            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+            double size = 1
+            color3f[] primvars:displayColor = [(0.85, 0.15, 0.12)]
+            double3 xformOp:translate = (0, 0, 0.5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Sphere "GreenSphere"
+        {
+            float3[] extent = [(-0.6, -0.6, -0.6), (0.6, 0.6, 0.6)]
+            double radius = 0.6
+            color3f[] primvars:displayColor = [(0.15, 0.7, 0.2)]
+            double3 xformOp:translate = (2.2, 0.4, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Cylinder "BlueCylinder"
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.4, -0.4, -0.75), (0.4, 0.4, 0.75)]
+            double height = 1.5
+            double radius = 0.4
+            color3f[] primvars:displayColor = [(0.15, 0.3, 0.85)]
+            double3 xformOp:translate = (-2.2, 0.6, 0.75)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Cube "YellowCube"
+        {
+            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+            double size = 1
+            color3f[] primvars:displayColor = [(0.95, 0.8, 0.1)]
+            double3 xformOp:translate = (0.6, 2.4, 0.35)
+            float3 xformOp:rotateXYZ = (0, 0, 30)
+            float3 xformOp:scale = (0.7, 0.7, 0.7)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        }
+
+        def Sphere "PurpleSphere"
+        {
+            float3[] extent = [(-0.35, -0.35, -0.35), (0.35, 0.35, 0.35)]
+            double radius = 0.35
+            color3f[] primvars:displayColor = [(0.6, 0.2, 0.75)]
+            double3 xformOp:translate = (-0.8, -2.2, 0.35)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+
+    def Xform "Lights"
+    {
+        def DistantLight "Sun"
+        {
+            float inputs:angle = 1
+            float inputs:intensity = 3000
+            color3f inputs:color = (1, 0.97, 0.92)
+            float3 xformOp:rotateXYZ = (40, 0, 30)
+            uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        }
+
+        def DomeLight "Sky"
+        {
+            float inputs:intensity = 600
+            color3f inputs:color = (0.85, 0.9, 1)
+            token inputs:texture:format = "latlong"
+        }
+    }
+
+    def Xform "Cameras"
+    {
+        # USD 카메라는 로컬 -Z를 보고 +Y가 위다. 세 카메라 모두 (0, 0, 0.5) 근처를 본다.
+        # Front: -Y 쪽에서 +Y 방향, 약 11도 내려다봄
+        def Camera "CamFront"
+        {
+            float2 clippingRange = (0.01, 10000)
+            float focalLength = 24
+            float horizontalAperture = 20.955
+            float verticalAperture = 15.2908
+            token projection = "perspective"
+            double3 xformOp:translate = (0, -10, 2.5)
+            float3 xformOp:rotateXYZ = (78.69, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        # Top: 위에서 -Z 방향으로 내려다봄 (화면 위쪽 = +Y)
+        def Camera "CamTop"
+        {
+            float2 clippingRange = (0.01, 10000)
+            float focalLength = 24
+            float horizontalAperture = 20.955
+            float verticalAperture = 15.2908
+            token projection = "perspective"
+            double3 xformOp:translate = (0, 0, 16)
+            float3 xformOp:rotateXYZ = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        # Side: +X 쪽에서 -X 방향, 약 11도 내려다봄
+        def Camera "CamSide"
+        {
+            float2 clippingRange = (0.01, 10000)
+            float focalLength = 24
+            float horizontalAperture = 20.955
+            float verticalAperture = 15.2908
+            token projection = "perspective"
+            double3 xformOp:translate = (10, 0, 2.5)
+            float3 xformOp:rotateXYZ = (78.69, 0, 90)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+    }
+}

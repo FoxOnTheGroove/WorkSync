@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[package]
+title = "MORPH Viewport Split"
+version = "1.5.1"  # Semantic Versioning is used: https://semver.org/
+description = "분할화면: 뷰포트 레이아웃 프리셋, 뷰별 카메라, 활성 뷰 포커스"
+category = "MORPH"  # How to categorize this in the Extension Manager
+changelog = "docs/CHANGELOG.md"
+icon = "data/icon.png"  # Icon to show in the Extension Manager
+keywords = ["morph", "viewport", "split"]  # Search keywords for the Extension Manager
+preview_image = "data/preview.png"  # Preview to show in the Extension Manager
+readme  = "docs/README.md"  # Path (relative to the root) or content of readme markdown file for UI
+repository = "https://github.com/MorphKR/ov-lab"  # URL of the extension source repository
+
+
+[dependencies]
+"morph.stream.messaging" = { version = "1.0" }  # 1.0.0: ext 단위 type, reply_ok/reply_error, register_*(owner, version), is_connected, client_connected
+"morph.perf.monitor" = { version = "1.0" }  # 1.0.0: scope/counter/gauge (stable). 1.1.0 시스템 지표는 쓰지 않음
+"omni.usd" = {}
+"omni.ui" = {}
+"omni.kit.viewport.utility" = {}
+"omni.kit.viewport.window" = { optional = true }  # 없으면 논리 전용 모드 (CONTRACT)
+"omni.kit.renderer.imgui" = { optional = true }  # omni.kit.imgui (dockSplitterSize). 없으면 경고 1회 후 생략
+
+
+[settings]
+exts."morph.viewport.split".defaultLayout = "1x1"
+exts."morph.viewport.split".focusOnClick = true
+exts."morph.viewport.split".hideTabBar = false
+exts."morph.viewport.split".sideRatio = 0.25  # "1+3" 오른쪽 열 폭 (0.1..0.5). set_side_ratio와 양방향 동기 (1.5.0)
+# viewPadding, dockSplitterSize: 기본은 설정 없음 (= 건드리지 않음). 앱 .kit에서 숫자로 지정한다.
+exts."morph.viewport.split".defaultCameras = []
+
+
+[[python.module]]  # Main python module this extension provides, it will be publicly available as "import morph.viewport.split"
+name = "morph.viewport.split"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+dependencies = [
+]
+
+args = [
+]

@@ -1,0 +1,114 @@
+# MORPH Lab 스트리밍: 웹에는 분할 뷰포트만 보낸다 (편집 패널·메뉴·툴바·뷰포트 메뉴바·HUD 없음).
+# 데스크톱 편집용은 morph.lab.kit. 웹 메시지 형식은 docs/WEB_MESSAGES.md.
+# 실행: py -3.12 tools/kit.py launch morph.lab_streaming.kit  (--no-window 자동)
+
+[package]
+title = "MORPH Lab Streaming"
+version = "0.5.0"
+description = "Viewport-only streaming configuration for MORPH extensions."
+keywords = ["app", "streaming"]
+
+
+[dependencies]
+# --- morph --- (^ 범위: 이 버전 이상 같은 major. 웹 클라이언트·스모크가 쓰는 기능 기준)
+"morph.stream.messaging" = { version = "1.0" }
+"morph.perf.monitor" = { version = "1.1" }  # 시스템 지표
+"morph.viewport.split" = { version = "1.5" }  # 웹 set_side_ratio
+"morph.camera.control" = { version = "1.1" }  # 웹 프리셋 목록·삭제
+"morph.stage.loader" = { version = "0.1" }  # 장면 목록·열기 (웹 장면 패널, 스모크 데모 장면)
+"morph.annotation.overlay" = { version = "0.4" }  # 뷰포트 주석: 라벨·inlet/outlet·절단면 (사이드카 JSON)
+
+# --- 렌더링 / 뷰포트 ---
+"omni.hydra.engine.stats" = {}  # GPU 메모리 지표 (morph.perf.monitor 1.1)
+"omni.hydra.rtx" = {}
+"omni.hydra.usdrt_delegate" = {}
+"omni.kit.mainwindow" = {}  # 도킹 공간 (분할 창이 붙는 곳)
+"omni.kit.manipulator.camera" = {}
+"omni.kit.renderer.core" = {}
+"omni.kit.viewport.utility" = {}
+"omni.kit.viewport.window" = {}
+"usdrt.scenegraph" = {}
+
+# --- 스트리밍 ---
+"omni.kit.livestream.app" = {}  # WebRTC livestream
+"omni.kit.livestream.messaging" = {}  # morph.stream.messaging의 웹 전송 계층
+
+
+[settings.persistent.app]
+viewport.noPadding = true  # 뷰포트 기본 테두리 제거
+
+
+[settings.app]
+# 한글 표시 (주석 라벨·편집 창): 앱 글꼴 + 한글 글리프 범위. 렌더러 시작 때 읽힘 (morph.annotation.overlay 0.3.1 "한글 표시")
+font.customFontPath = "C:/Windows/Fonts/malgun.ttf"
+font.customRegionFiles = ["${app}/fonts/korean_region.txt"]
+content.emptyStageOnStart = true
+fastShutdown = true
+name = "MORPH Lab Streaming"
+renderer.resolution.width = 0  # 0 = 뷰포트마다 창 크기를 따른다 (1+3처럼 16:9가 아닌 칸에 검은 띠 없음). 스트림 해상도는 window.*
+renderer.resolution.height = 0
+window.title = "MORPH Lab Streaming"
+window.width = 1920
+window.height = 1080
+file.ignoreUnsavedOnExit = true
+font.file = "${fonts}/OpenSans-SemiBold.ttf"
+font.size = 16
+viewport.grid.enabled = false  # RTX 격자 (legacy_gizmos 없이는 물체 위에 겹쳐 그려진다)
+
+
+[settings.app.viewport.defaults]
+fillViewport = true
+hud.visible = false  # FPS/메모리 표시 끔
+guide.axis.visible = false
+guide.grid.visible = false
+scene.cameras.visible = false
+scene.lights.visible = false
+
+
+[settings.app.extensions]
+registryEnabled = true
+supportedTargets.platform = []
+
+
+[settings.app.exts]
+folders.'++' = [
+	"${app}/../exts",
+	"${app}/../extscache"
+]
+
+
+[settings]
+renderer.gpuEnumeration.glInterop.enabled = false
+renderer.asyncInit = true
+rtx.post.aa.op = 3
+rtx.verifyDriverVersion.enabled = false
+telemetry.enableAnonymousData = false
+privacy.externalBuild = true
+exts."omni.kit.window.viewport".showContextMenu = false  # 뷰어: 우클릭 메뉴 없음
+exts."omni.appwindow".listenF7 = false  # F7(UI 숨김)은 분할을 없애므로 막는다
+exts."omni.appwindow".listenF11 = false
+# 분할화면 꾸밈 (morph.viewport.split 1.1)
+exts."morph.viewport.split".hideTabBar = true
+exts."morph.viewport.split".viewPadding = 0.0
+exts."morph.viewport.split".dockSplitterSize = 1.0
+exts."morph.perf.monitor".webReport = true  # 웹에 성능 리포트(morph.perf.monitor.report) 송신, 1초 주기
+
+
+########################################################################################################################
+# BEGIN GENERATED PART (Remove from 'BEGIN' to 'END' to regenerate)
+########################################################################################################################
+
+# Kit SDK Version: 110.1.3+production.349534.56c4c3a1.gl
+
+# Version lock for all dependencies:
+[settings.app.exts]
+enabled = [
+	"omni.kit.livestream.app-10.3.1",
+	"omni.kit.livestream.core-10.4.0",
+	"omni.kit.livestream.messaging-1.3.3",
+	"omni.kit.livestream.webrtc-10.7.0",
+]
+
+########################################################################################################################
+# END GENERATED PART
+########################################################################################################################

@@ -1,0 +1,52 @@
+[package]
+title = "MORPH Stage Loader"
+version = "0.1.3"  # Semantic Versioning is used: https://semver.org/
+description = "USD 장면 목록 조회·열기·다시 불러오기 (Python/웹), 장면 열림 이벤트"
+category = "MORPH"
+changelog = "docs/CHANGELOG.md"
+icon = "data/icon.png"
+keywords = ["morph", "stage", "loader", "usd", "scene"]
+preview_image = "data/preview.png"
+readme  = "docs/README.md"
+repository = "https://github.com/MorphKR/ov-lab"
+
+
+[dependencies]
+"morph.stream.messaging" = { version = "1.0" }  # 1.0: <ext-id>.<name> type, reply_ok/reply_error, 지연 회신, is_connected
+"morph.perf.monitor" = { version = "1.0" }  # 1.0: async_scope (열기 시간 측정)
+"omni.usd" = {}
+
+
+[settings]
+exts."morph.stage.loader".roots = []
+exts."morph.stage.loader".includeSamples = true
+exts."morph.stage.loader".fileExtensions = [".usd", ".usda", ".usdc", ".usdz"]
+exts."morph.stage.loader".maxDepth = 4
+exts."morph.stage.loader".maxScenes = 1000
+exts."morph.stage.loader".startupScene = ""
+
+
+[[python.module]]
+name = "morph.stage.loader"
+
+
+[documentation]
+pages = [
+    "docs/Overview.md",
+    "docs/CHANGELOG.md",
+]
+
+
+[[test]]
+# 의존(morph.stream.messaging, morph.perf.monitor, omni.usd)은 [dependencies]로 함께 켜진다.
+dependencies = [
+]
+
+args = [
+    "--/exts/morph.stage.loader/startupScene=",
+]
+
+# test_open_failed가 일부러 깨진 장면을 연다. omni.usd/USD가 남기는 그 파일 관련 오류 로그는 실패로 보지 않는다.
+stdoutFailPatterns.exclude = [
+    "*broken_scene_morph_test*",
+]

@@ -1,0 +1,15 @@
+# 로컬 Kit SDK (python tools/kit.py setup 으로 받는다)
+/kit-app-template/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 로컬 빌드/테스트 산출물
+_build/
+_repo/
+_testoutput/
+
+# Claude Code 개인 설정
+.claude/settings.local.json
+_smoke/

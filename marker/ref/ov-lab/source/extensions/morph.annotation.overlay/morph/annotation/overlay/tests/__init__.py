@@ -1,0 +1,12 @@
+from .test_model import *  # noqa: F401,F403
+from .test_overlay import *  # noqa: F401,F403
+from .test_sidecar import *  # noqa: F401,F403
+from .test_web import *  # noqa: F401,F403
+from .test_drawing import *  # noqa: F401,F403
+from .test_extension import *  # noqa: F401,F403
+from .test_pick import *  # noqa: F401,F403
+from .test_select import *  # noqa: F401,F403
+from .test_editor import *  # noqa: F401,F403
+from .test_fonts import *  # noqa: F401,F403
+from .test_face import *  # noqa: F401,F403
+from .test_face_select import *  # noqa: F401,F403
