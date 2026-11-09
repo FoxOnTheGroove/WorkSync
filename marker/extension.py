@@ -1,9 +1,8 @@
 import omni.ext
 
 from .annotation import instance, forget
+from .annotation_constant import SHOW_DUMMY_UI
 from .dummy_ui import AnnotationDummyUI
-
-SHOW_DUMMY_UI = True
 
 
 class AnnotationExtension(omni.ext.IExt):

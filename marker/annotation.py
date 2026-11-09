@@ -3,65 +3,11 @@ import copy
 import math
 import unicodedata
 
-__all__ = ["Annotation", "instance", "forget", "KINDS",
+from .annotation_constant import *
+
+__all__ = ["Annotation", "instance", "forget",
            "text_width", "fit_line", "wrap_lines", "panel_layout",
            "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal"]
-
-TAG = "[annotation]"
-NAME = "marker.annotation"
-
-KINDS = ("label", "inlet", "outlet")
-ARROW_KINDS = ("inlet", "outlet")
-
-DEFAULT_COLORS = {
-    "label": [0.95, 0.95, 0.95],
-    "inlet": [0.2, 0.55, 1.0],
-    "outlet": [1.0, 0.45, 0.1],
-}
-MAX_LABEL = 128
-MAX_DESCRIPTION = 1000
-
-# 패널 글자. 글자 크기 조절은 따로 붙인다 (TEXT_SCALE 자리만)
-TEXT_SCALE = 1.0
-FONT_PX = 14.0
-DESC_RATIO = 0.8
-LINE_HEIGHT = 1.3
-PAD_PX = 5.0
-AUTO_WIDE_PX = 260.0
-AUTO_DESC_LINES = 2
-MIN_WIDE_PX = 48.0
-WIDE_EM = 1.0
-NARROW_EM = 0.66
-ELLIPSIS = "…"
-
-# 패널 자리와 모양. offset 은 앵커에서 본 상자 왼쪽 위 (화면 px, y 위로)
-DEFAULT_OFFSET = (32.0, 40.0)
-BOX_BG = (0.08, 0.08, 0.08, 0.72)
-DESC_COLOR = (0.85, 0.85, 0.85, 1.0)
-DIM_COLOR = (0.6, 0.6, 0.6, 1.0)
-HANDLE_COLOR = (1.0, 1.0, 1.0, 1.0)
-HANDLE_PX = 9.0
-BORDER_PX = 1.0
-BORDER_PICKED_PX = 3.0
-LEADER_PX = 1.5
-DOT_PX = 8.0
-HIGHLIGHT_MIX = 0.45
-CORNERS = ((-1, 1), (1, 1), (-1, -1), (1, -1))
-
-# 화살표 (월드 크기). 길이는 만들 때 카메라 거리의 몫으로 정해 저장한다
-ARROW_LINE_PX = 3.0
-ARROW_HEAD = 0.25
-ARROW_RADIUS = 0.08
-CONE_SEGMENTS = 12
-ARROW_VIEW_SHARE = 0.08
-ARROW_FALLBACK = 1.0
-
-# 찍기와 손짓
-PICK_TIMEOUT_S = 5.0
-NEIGHBOR_PX = 2
-GESTURE_PRIORITY = 1000
-ARM_PRIORITY = 2000
-REGISTRY_TRIES = 600
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -693,7 +639,7 @@ class _MarkerView:
         if marker["kind"] not in ARROW_KINDS:
             return
         tail, tip = _arrow_ends(marker)
-        thick = ARROW_LINE_PX * (2.0 if picked else 1.0)
+        thick = ARROW_LINE_PX * (PICKED_LINE_SCALE if picked else 1.0)
         with self._deco:
             _build_arrow(sc, ui, tail, tip, self._color(marker, picked), marker["size"], thick)
 
@@ -705,7 +651,7 @@ class _MarkerView:
             return
         with self._dot:
             sc.Points([[0.0, 0.0, 0.0]], colors=[_rgba(self._color(marker, picked))],
-                      sizes=[DOT_PX * (1.5 if picked else 1.0)])
+                      sizes=[DOT_PX * (PICKED_DOT_SCALE if picked else 1.0)])
 
     def _build_leader(self, marker, layout, picked: bool) -> None:
         """앵커에서 상자 가장 가까운 점까지"""
@@ -717,7 +663,7 @@ class _MarkerView:
         with self._leader:
             sc.Line([0.0, 0.0, 0.0], [end[0], end[1], 0.0],
                     color=ui.color(*_rgba(self._color(marker, picked))),
-                    thickness=LEADER_PX * (2.0 if picked else 1.0))
+                    thickness=LEADER_PX * (PICKED_LINE_SCALE if picked else 1.0))
 
     def _build_content(self, marker, layout, picked: bool) -> None:
         """상자 바탕(손짓을 받음), 테두리, 글"""
@@ -730,7 +676,7 @@ class _MarkerView:
         color = self._color(marker, picked)
         w, h, pad = layout["w"], layout["h"], layout["pad"]
         with self._content:
-            with sc.Transform(transform=_move(sc, w / 2.0, -h / 2.0, -1.0)):
+            with sc.Transform(transform=_move(sc, w / 2.0, -h / 2.0, BOX_Z)):
                 sc.Rectangle(w, h, color=ui.color(*BOX_BG), gesture=[
                     Hover(lambda: view.hold(key), lambda: view.release(key), name="panel_hover"),
                     Click(lambda _m: owner._panel_clicked(mid), name="panel_click"),
@@ -760,7 +706,7 @@ class _MarkerView:
             self._view.release_prefix(f"h:{self.id}:")
         w, h = layout["w"], layout["h"]
         for (cx, cy), xf in self._corners.items():
-            xf.transform = _move(sc, w if cx > 0 else 0.0, 0.0 if cy > 0 else -h, 1.0)
+            xf.transform = _move(sc, w if cx > 0 else 0.0, 0.0 if cy > 0 else -h, HANDLE_Z)
 
     def show(self, on: bool) -> None:
         """카메라 뒤면 숨긴다"""
@@ -808,11 +754,11 @@ class _View:
 
     @property
     def name(self) -> str:
-        return "Markers"
+        return SCENE_NAME
 
     @property
     def categories(self):
-        return ["annotation"]
+        return [SCENE_CATEGORY]
 
     @property
     def visible(self) -> bool:
@@ -1000,7 +946,7 @@ class Annotation:
         except ImportError:
             return False
         try:
-            self._registration = RegisterScene(self._factory, f"{NAME}.scene")
+            self._registration = RegisterScene(self._factory, SCENE_ID)
         except Exception as e:
             print(f"{TAG} could not register the scene: {type(e).__name__}: {e}")
             return False

@@ -2,16 +2,13 @@ import functools
 
 import omni.ui as ui
 
+from .annotation_constant import (
+    FIELD_LABEL_WIDE, KIND_BUTTONS, LIST_HIGH, PICKED_ROW_BG, QUIET_REASONS, ROW_BG, ROW_HIGH,
+    STATUS_COLOR, WINDOW_HIGH, WINDOW_TITLE, WINDOW_WIDE,
+)
 from .annotation_service import AnnotationService
 
 __all__ = ["AnnotationDummyUI"]
-
-WINDOW_TITLE = "Annotation"
-KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))
-QUIET = ("panel",)
-PICKED_BG = 0xFF7A5A2A
-ROW_BG = 0xFF2A2A2A
-STATUS_COLOR = 0xFFAAAAAA
 
 
 class AnnotationDummyUI:
@@ -29,7 +26,7 @@ class AnnotationDummyUI:
 
     def build_ui(self):
         """만들기 버튼, 상태, 마커 목록, 고른 마커의 글 칸"""
-        self._window = ui.Window(WINDOW_TITLE, width=380, height=420,
+        self._window = ui.Window(WINDOW_TITLE, width=WINDOW_WIDE, height=WINDOW_HIGH,
                                  dockPreference=ui.DockPreference.RIGHT_BOTTOM)
         with self._window.frame:
             with ui.VStack(spacing=5, style={"margin": 3}):
@@ -41,15 +38,15 @@ class AnnotationDummyUI:
                                         style={"color": STATUS_COLOR})
                 ui.Separator(height=6)
                 ui.Label("마커", height=0)
-                with ui.ScrollingFrame(height=120):
+                with ui.ScrollingFrame(height=LIST_HIGH):
                     self._list = ui.VStack(height=0, spacing=1)
                 ui.Separator(height=6)
                 self._picked = ui.Label("선택: 없음", height=0)
                 with ui.HStack(height=0, spacing=4):
-                    ui.Label("label", width=80)
+                    ui.Label("label", width=FIELD_LABEL_WIDE)
                     self._label = ui.StringField()
                 with ui.HStack(height=0, spacing=4):
-                    ui.Label("description", width=80)
+                    ui.Label("description", width=FIELD_LABEL_WIDE)
                     self._desc = ui.StringField()
                 with ui.HStack(height=0, spacing=4):
                     ui.Button("적용", clicked_fn=self._apply)
@@ -79,7 +76,7 @@ class AnnotationDummyUI:
 
     def _on_change(self, reason: str):
         """끄는 중의 잦은 알림은 넘기고 나머지는 다시 채운다"""
-        if reason in QUIET:
+        if reason in QUIET_REASONS:
             return
         self._refresh(fill=reason == "text")
 
@@ -104,11 +101,11 @@ class AnnotationDummyUI:
         with self._list:
             markers = AnnotationService.markers()
             if not markers:
-                ui.Label("(없음)", height=20, style={"color": STATUS_COLOR})
+                ui.Label("(없음)", height=ROW_HIGH, style={"color": STATUS_COLOR})
             for m in markers:
                 text = f"[{m['kind']}] {m['label'] or '(이름 없음)'}   ({m['id']})"
-                ui.Button(text, height=22, alignment=ui.Alignment.LEFT_CENTER,
-                          style={"Button": {"background_color": PICKED_BG if m["id"] == sel else ROW_BG}},
+                ui.Button(text, height=ROW_HIGH, alignment=ui.Alignment.LEFT_CENTER,
+                          style={"Button": {"background_color": PICKED_ROW_BG if m["id"] == sel else ROW_BG}},
                           clicked_fn=functools.partial(AnnotationService.select, m["id"]))
 
     # -- 창 ---------------------------------------------------------------------
