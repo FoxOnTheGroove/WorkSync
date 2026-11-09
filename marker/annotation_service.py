@@ -4,20 +4,82 @@ __all__ = ["AnnotationService"]
 
 
 class AnnotationService:
-    """웹이 부르는 API 표면"""
+    """밖에서 부르는 API 표면"""
 
-    # -- 동작 -------------------------------------------------------------------
+    # -- 만들기 -------------------------------------------------------------------
+
+    @classmethod
+    def create(cls, kind):
+        """label / inlet / outlet 을 만들 준비. 다음 클릭한 모델 표면에 생긴다"""
+        return instance().create(kind)
+
+    @classmethod
+    def cancel_create(cls):
+        """찍기 대기를 거둔다"""
+        return instance().cancel_create()
+
+    # -- 고르기와 고치기 ------------------------------------------------------------
+
+    @classmethod
+    def select(cls, marker_id):
+        """그 마커를 고른다. None 이면 풀기"""
+        return instance().select(marker_id)
+
+    @classmethod
+    def set_text(cls, marker_id, label, description):
+        """패널 글"""
+        return instance().set_text(marker_id, label, description)
+
+    @classmethod
+    def reset_panel(cls, marker_id):
+        """패널을 처음 자리, 글에 맞춘 크기로"""
+        return instance().reset_panel(marker_id)
+
+    @classmethod
+    def remove(cls, marker_id):
+        """마커 하나를 지운다"""
+        return instance().remove(marker_id)
+
+    @classmethod
+    def clear(cls):
+        """모두 지운다"""
+        return instance().clear()
 
     # -- 질의 -------------------------------------------------------------------
 
     @classmethod
-    def ready(cls):
-        """일을 받을 수 있으면 True"""
-        return instance().ready()
+    def markers(cls):
+        """모든 마커 (사본)"""
+        return instance().markers()
 
     @classmethod
-    def busy(cls):
-        """지금 도는 일의 이름. 없으면 빈 칸"""
-        return instance().busy()
+    def get(cls, marker_id):
+        """마커 하나 (사본). 없으면 None"""
+        return instance().get(marker_id)
 
-    # -- 설정 -------------------------------------------------------------------
+    @classmethod
+    def selected(cls):
+        """고른 마커 id. 없으면 None"""
+        return instance().selected()
+
+    @classmethod
+    def creating(cls):
+        """찍기를 기다리는 종류. 아니면 빈 칸"""
+        return instance().creating()
+
+    @classmethod
+    def status(cls):
+        """마지막 상태 글"""
+        return instance().status()
+
+    # -- 알림 -------------------------------------------------------------------
+
+    @classmethod
+    def add_listener(cls, fn):
+        """바뀔 때마다 fn(reason)"""
+        return instance().add_listener(fn)
+
+    @classmethod
+    def remove_listener(cls, fn):
+        """알림을 끊는다"""
+        return instance().remove_listener(fn)
