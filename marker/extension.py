@@ -1,8 +1,9 @@
 import omni.ext
 
 from .annotation import instance, forget
-from .annotation_constant import SHOW_DUMMY_UI
 from .dummy_ui import AnnotationDummyUI
+
+SHOW_DUMMY_UI = True                    # 시작할 때 시험 창을 띄우나
 
 
 class AnnotationExtension(omni.ext.IExt):
