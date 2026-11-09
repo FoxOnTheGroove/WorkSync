@@ -2,13 +2,21 @@ import functools
 
 import omni.ui as ui
 
-from .annotation_constant import (
-    FIELD_LABEL_WIDE, KIND_BUTTONS, LIST_HIGH, PICKED_ROW_BG, QUIET_REASONS, ROW_BG, ROW_HIGH,
-    STATUS_COLOR, WINDOW_HIGH, WINDOW_TITLE, WINDOW_WIDE,
-)
 from .annotation_service import AnnotationService
 
 __all__ = ["AnnotationDummyUI"]
+
+WINDOW_TITLE = "Annotation"             # 시험 창 제목
+WINDOW_WIDE = 380                       # 시험 창 폭
+WINDOW_HIGH = 420                       # 시험 창 높이
+LIST_HIGH = 120                         # 마커 목록 칸 높이
+ROW_HIGH = 22                           # 마커 목록 한 줄 높이
+FIELD_LABEL_WIDE = 80                   # 글 칸 앞 이름 폭
+KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))  # 만들기 버튼 (종류, 글)
+QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 알림 (끄는 중 잦은 것)
+PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
+ROW_BG = 0xFF2A2A2A                     # 목록 줄 바탕
+STATUS_COLOR = 0xFFAAAAAA               # 상태 글자색
 
 
 class AnnotationDummyUI:

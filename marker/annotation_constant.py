@@ -71,17 +71,6 @@ GESTURE_PRIORITY = 1000                 # 패널, 손잡이 제스처 우선순�
 ARM_PRIORITY = 2000                     # 찍기 대기 클릭 우선순위 (패널보다 위)
 REGISTRY_TRIES = 600                    # 뷰포트 레지스트리를 기다리는 프레임 수
 
-# -- 시험 창 -----------------------------------------------------------------------
+# -- 시작 ---------------------------------------------------------------------------
 
 SHOW_DUMMY_UI = True                    # 시작할 때 시험 창을 띄우나
-WINDOW_TITLE = "Annotation"             # 시험 창 제목
-WINDOW_WIDE = 380                       # 시험 창 폭
-WINDOW_HIGH = 420                       # 시험 창 높이
-LIST_HIGH = 120                         # 마커 목록 칸 높이
-ROW_HIGH = 22                           # 마커 목록 한 줄 높이
-FIELD_LABEL_WIDE = 80                   # 글 칸 앞 이름 폭
-KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))  # 만들기 버튼 (종류, 글)
-QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 알림 (끄는 중 잦은 것)
-PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
-ROW_BG = 0xFF2A2A2A                     # 목록 줄 바탕
-STATUS_COLOR = 0xFFAAAAAA               # 상태 글자색
