@@ -292,6 +292,15 @@ def _xy(ndc):
         return None
 
 
+def _dbg(text: str) -> None:
+    """DEBUG_GESTURES 가 켜져 있으면 손짓 순서를 콘솔에 한 줄"""
+    if DEBUG_GESTURES:
+        print(f"{TAG} [gesture] {text}")
+
+
+ZONE_NAMES = {None: "body", (-1, 0): "L", (1, 0): "R", (0, 1): "T", (0, -1): "B"}
+
+
 def _later(fn) -> None:
     """다음 루프에 부른다. 지금 지우는 도형의 콜백 안에서 부르지 않으려고"""
     def run():
@@ -332,6 +341,7 @@ class _Cursor:
     @classmethod
     def _apply(cls) -> None:
         shape = list(cls._holds.values())[-1] if cls._holds else None
+        _dbg(f"  cursor {({'h': '<->', 'v': 'up/down'}).get(shape, 'normal')}")
         try:
             way = cls._find()
             if not way:
@@ -549,7 +559,9 @@ def _gesture_types():
 
         def on_ended(self, *_args):
             if self.state == sc.GestureState.CANCELED:
+                _dbg(f"{self._name} click CANCELED")
                 return
+            _dbg(f"{self._name} click")
             self._fn(mouse_of(self))
 
         @property
@@ -567,12 +579,18 @@ def _gesture_types():
             self._priority, self._name = priority, name
 
         def on_began(self, *_args):
+            self._moves = 0
+            _dbg(f"{self._name} drag BEGAN state={self.state}")
             self._began(mouse_of(self))
 
         def on_changed(self, *_args):
+            self._moves = getattr(self, "_moves", 0) + 1
+            if self._moves == 1:
+                _dbg(f"{self._name} drag first move state={self.state}")
             self._changed(mouse_of(self))
 
         def on_ended(self, *_args):
+            _dbg(f"{self._name} drag ENDED state={self.state} moves={getattr(self, '_moves', 0)}")
             self._ended()
 
         @property
@@ -589,12 +607,14 @@ def _gesture_types():
             self._began, self._changed, self._ended, self._name = began, changed, ended, name
 
         def on_began(self, *_args):
+            _dbg(f"{self._name} hover ON")
             self._began(mouse_of(self))
 
         def on_changed(self, *_args):
             self._changed(mouse_of(self))
 
         def on_ended(self, *_args):
+            _dbg(f"{self._name} hover OFF")
             self._ended()
 
         @property
@@ -834,6 +854,7 @@ class _MarkerView:
         owner, mid = view.owner, self.id
         key = f"h:{mid}:{'body' if zone is None else f'{zone[0]}{zone[1]}'}"
         shape = None if zone is None else ("h" if zone[0] else "v")
+        tag = f"{mid}/{ZONE_NAMES[zone]}"
 
         def enter(_m):
             view.hold(key)
@@ -847,11 +868,11 @@ class _MarkerView:
         xf = sc.Transform()
         with xf:
             rect = sc.Rectangle(1.0, 1.0, color=ui.color(*HIT_COLOR), gesture=[
-                Hover(enter, lambda _m: None, leave, name="zone_hover"),
-                Click(lambda _m: owner._panel_clicked(mid, zone), name="zone_click"),
+                Hover(enter, lambda _m: None, leave, name=tag),
+                Click(lambda _m: owner._panel_clicked(mid, zone), name=tag),
                 Drag(lambda m: owner._drag_began(view, mid, zone, m),
                      lambda m: owner._drag_changed(view, m),
-                     lambda: owner._drag_ended(view), name="zone_drag"),
+                     lambda: owner._drag_ended(view), name=tag),
             ])
         return xf, rect
 
@@ -1047,6 +1068,7 @@ class _View:
             if not self._blocked:
                 self._blocked = True
                 self._token = _block_selection(self.api)
+                _dbg(f"  kit click-select OFF (held by {sorted(self._holds)})")
             return
         if not self._blocked:
             return
@@ -1063,6 +1085,7 @@ class _View:
         if not self._holds and self._blocked:
             self._blocked = False
             self._token = None
+            _dbg("  kit click-select ON")
 
     # -- 찍기 대기 ---------------------------------------------------------------
 
@@ -1507,16 +1530,23 @@ class Annotation:
     def _panel_clicked(self, marker_id: str, zone) -> None:
         """클릭. 고른 패널의 변 띠(크기 커서 자리)면 무시, 아니면 고른다 (다음 루프에)"""
         if zone is not None and marker_id == self._selected:
+            _dbg(f"  -> click ignored (resize band {ZONE_NAMES[zone]} of the selected panel)")
             return
+        _dbg(f"  -> select {marker_id}")
         _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
     def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
         """끌기 시작. 변 띠에서 시작하면 그 변 크기 조절, 몸통이면 이동. 먼저 클릭해서 고른 패널만"""
         m = self._find(marker_id)
         if m is None or self._creating or marker_id != self._selected:
+            why = "no marker" if m is None else ("creating" if self._creating else
+                                                 f"not selected (selected={self._selected})")
+            _dbg(f"  -> drag ignored: {why}")
             return
         if self._drag is not None:  # 끝 신호를 못 받은 끌기는 버린다
+            _dbg(f"  -> dropping a stale drag on {self._drag['id']}/{ZONE_NAMES[self._drag['edge']]}")
             self._end_drag()
+        _dbg(f"  -> START {'resize ' + ZONE_NAMES[edge] if edge else 'move'} on {marker_id}")
         layout = self._layout(m)
         self._drag = {
             "view": view, "id": marker_id, "edge": edge,
@@ -1532,13 +1562,18 @@ class Annotation:
         """끄는 중. 끝 위치 기준으로 다시 계산해 뷰포트마다 그 패널만 고친다"""
         d = self._drag
         if d is None or d["view"] is not view:
+            if d is None and DEBUG_GESTURES and not getattr(self, "_told_no_drag", False):
+                self._told_no_drag = True
+                _dbg("  -> move ignored: no drag started")
             return
+        self._told_no_drag = False
         m = self._find(d["id"])
         if m is None:
             self._end_drag()
             return
         delta = self._delta(d, view, ndc)
         if delta is None:
+            _dbg("  -> move ignored: no mouse position")
             return
         picked = m["id"] == self._selected
         if d["edge"] is None:
@@ -1555,8 +1590,16 @@ class Annotation:
         """끌기 끝"""
         d = self._drag
         if d is None or d["view"] is not view:
+            self._told_no_drag = False
             return
         self._end_drag()
+        m = self._find(d["id"]) or {}
+        if d["edge"]:
+            box = [round(v, 1) for v in (m.get("box") or d["box"])]
+            _dbg(f"  -> END resize {ZONE_NAMES[d['edge']]}: box {[round(v, 1) for v in d['box']]} -> {box}")
+        else:
+            off = [round(v, 1) for v in m.get("offset", d["offset"])]
+            _dbg(f"  -> END move: offset {[round(v, 1) for v in d['offset']]} -> {off}")
         if d["moved"]:
             self._notify("panel")
 
