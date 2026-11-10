@@ -543,7 +543,10 @@ def head_triangle(tail, tip, size: float, toward=None) -> tuple:
     side = _unit(_cross(d, toward)) if toward is not None else None
     if side is None:
         side = _perp_basis(d)[0]
-    return base, [list(tip), _add(base, _mul(side, half)), _sub(base, _mul(side, half))]
+    tri = [list(tip), _add(base, _mul(side, half)), _sub(base, _mul(side, half))]
+    if toward is not None and _dot(_cross(_sub(tri[1], tri[0]), _sub(tri[2], tri[0])), toward) < 0.0:
+        tri[1], tri[2] = tri[2], tri[1]  # 앞면이 카메라를 보게
+    return base, tri
 
 
 def _move(sc, x: float, y: float, z: float = 0.0):
@@ -579,8 +582,8 @@ class _MarkerView:
                         self._arrow = (*_arrow_local(marker), ARROW_PX)
                         base, tri = head_triangle(*self._arrow)
                         self._shaft = sc.Line(self._arrow[0], base, color=white, thickness=ARROW_LINE_PX)
-                        self._head = sc.PolygonMesh(tri, [[1.0, 1.0, 1.0, 1.0]] * 3, [3, 3],
-                                                    [0, 1, 2, 0, 2, 1])  # 앞뒤 두 면이라 어느 쪽에서도 보인다
+                        self._head = sc.PolygonMesh(tri, [[1.0, 1.0, 1.0, 1.0]] * 3, [3], [0, 1, 2])
+                    self._head_rgba = [1.0, 1.0, 1.0, 1.0]
                     self._attach_xf = sc.Transform()
                     with self._attach_xf:
                         with sc.Transform(look_at=sc.Transform.LookAt.CAMERA):
@@ -617,26 +620,29 @@ class _MarkerView:
                                     self._desc.append((xf, label))
                                 self._handles = sc.Transform()
                                 with self._handles:
-                                    for edge in EDGES:
-                                        self._edges[edge] = self._edge(edge)
+                                    for spot in HANDLES:
+                                        self._edges[spot] = self._edge(spot)
         self.restyle(marker, layout, picked)
 
-    def _edge(self, edge) -> tuple:
-        """변 손잡이 하나. 상자 바깥 띠(잡는 곳) + 가운데 막대(보이는 곳)"""
+    def _edge(self, spot):
+        """크기 손잡이 하나 (변 가운데나 꼭짓점). 보이는 작은 네모는 테두리 위에, 잡는 큰 네모는
+        바깥쪽으로 비껴 둬서 몸통과 거의 안 겹친다. 자리만 옮기고 다시 짓지 않는다"""
         sc, ui, view = self._view.sc, self._view.ui, self._view
         _click, Drag, Hover = _gesture_types()
         owner, mid = view.owner, self.id
-        key = f"h:{mid}:{edge[0]}{edge[1]}"
+        key = f"h:{mid}:{spot[0]}{spot[1]}"
+        out = (HANDLE_HIT_PX - HANDLE_GRIP_PX) / 2.0
         xf = sc.Transform()
         with xf:
-            hit = sc.Rectangle(1.0, 1.0, color=ui.color(*EDGE_HIT_COLOR), gesture=[
-                Hover(lambda: view.hold(key), lambda: view.release(key), name="edge_hover"),
-                Drag(lambda m: owner._drag_began(view, mid, edge, m),
-                     lambda m: owner._drag_changed(view, m),
-                     lambda: owner._drag_ended(view), priority=HANDLE_PRIORITY, name="edge"),
-            ])
-            bar = sc.Rectangle(1.0, 1.0, color=ui.color(*HANDLE_COLOR))
-        return xf, hit, bar
+            with sc.Transform(transform=_move(sc, spot[0] * out, spot[1] * out)):
+                sc.Rectangle(HANDLE_HIT_PX, HANDLE_HIT_PX, color=ui.color(*HANDLE_HIT_COLOR), gesture=[
+                    Hover(lambda: view.hold(key), lambda: view.release(key), name="handle_hover"),
+                    Drag(lambda m: owner._drag_began(view, mid, spot, m),
+                         lambda m: owner._drag_changed(view, m),
+                         lambda: owner._drag_ended(view), priority=HANDLE_PRIORITY, name="handle"),
+                ])
+            sc.Rectangle(HANDLE_GRIP_PX, HANDLE_GRIP_PX, color=ui.color(*HANDLE_COLOR))
+        return xf
 
     # -- 맞추기 (도형은 그대로, 속성만) ---------------------------------------------
 
@@ -659,7 +665,7 @@ class _MarkerView:
         if self._shaft is not None:
             self._shaft.color = ink
             self._shaft.thickness = ARROW_LINE_PX * (PICKED_LINE_SCALE if picked else 1.0)
-            self._head.colors = [_rgba(color)] * 3
+            self._head_rgba = _rgba(color)
         self.aim()
         self.relayout(marker, layout, picked)
 
@@ -671,6 +677,7 @@ class _MarkerView:
         toward = _camera_of(self._view.api, self.anchor)[0] if self._view.api is not None else None
         _base, tri = head_triangle(tail, tip, size, toward)
         self._head.positions = tri
+        self._head.colors = [list(self._head_rgba)] * 3  # 점을 옮길 때마다 색도 다시 (늘 같은 색)
 
     def relayout(self, marker, layout, picked: bool) -> None:
         """상자 크기가 바뀌었을 때. 바탕, 글, 손잡이, 자리, 지시선"""
@@ -710,24 +717,15 @@ class _MarkerView:
         self._leader_xf.visible = True
 
     def _place_handles(self, layout, picked: bool) -> None:
-        """손잡이는 고른 것에만, 상자 네 변 바깥에"""
+        """손잡이는 고른 것에만. 네 변 가운데와 네 꼭짓점"""
         sc = self._view.sc
         self._handles.visible = bool(picked)
         if not picked:
             self._view.release_prefix(f"h:{self.id}:")
-        w, h, t = layout["w"], layout["h"], EDGE_HIT_PX
-        for (ex, ey), (xf, hit, bar) in self._edges.items():
-            if ex:
-                length, x, y = h, (w + t / 2.0 if ex > 0 else -t / 2.0), -h / 2.0
-            else:
-                length, x, y = w, w / 2.0, (t / 2.0 if ey > 0 else -h - t / 2.0)
-            grip = min(EDGE_GRIP_LEN_PX, length * 0.6)
-            if ex:
-                hit.width, hit.height = t, length
-                bar.width, bar.height = EDGE_GRIP_PX, grip
-            else:
-                hit.width, hit.height = length, t
-                bar.width, bar.height = grip, EDGE_GRIP_PX
+        w, h = layout["w"], layout["h"]
+        for (ex, ey), xf in self._edges.items():
+            x = w / 2.0 if ex == 0 else (w if ex > 0 else 0.0)
+            y = -h / 2.0 if ey == 0 else (0.0 if ey > 0 else -h)
             xf.transform = _move(sc, x, y, HANDLE_Z)
 
     def _color(self, marker, picked: bool):
@@ -1267,9 +1265,11 @@ class Annotation:
         _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
     def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
-        """끌기 시작. edge 가 None 이면 옮기기, 아니면 그 변으로 크기"""
+        """끌기 시작. edge 가 None 이면 옮기기, 아니면 그 손잡이(변이나 꼭짓점)로 크기"""
         m = self._find(marker_id)
         if m is None or self._creating:
+            return
+        if marker_id != self._selected:  # 먼저 클릭해서 고른 패널만 옮기고 크기를 바꾼다
             return
         if self._drag is not None:  # 끝 신호를 못 받은 끌기(도형이 지워진 경우)는 버린다
             self._end_drag()
@@ -1306,16 +1306,13 @@ class Annotation:
         d["moved"] = True
 
     def _drag_ended(self, view) -> None:
-        """끌기 끝. 옮긴 패널은 고른다"""
+        """끌기 끝"""
         d = self._drag
         if d is None or d["view"] is not view:
             return
         self._end_drag()
         if d["moved"]:
             self._notify("panel")
-        if d["edge"] is None:
-            marker_id = d["id"]
-            _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
     def _end_drag(self) -> None:
         d, self._drag = self._drag, None
