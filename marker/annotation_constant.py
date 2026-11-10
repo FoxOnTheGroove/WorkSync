@@ -58,12 +58,20 @@ HIGHLIGHT_MIX = 0.45                    # 고른 색 = 원래 색을 흰색 쪽�
 PICKED_LINE_SCALE = 2.0                 # 고른 마커의 지시선 두께 배율
 PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 
-# -- 화살표 (ui.scene, 화면 크기 고정) --------------------------------------------------
+# -- 화살표 (세션 레이어 USD 메시, 월드 크기) ---------------------------------------------
 
-ARROW_PX = 150.0                        # 화살표 길이 (화면 px). 모든 inlet, outlet 이 같고 줌과 무관
-ARROW_LINE_PX = 3.0                     # 화살표 몸통 선 두께 (화면 px)
-ARROW_HEAD = 0.25                       # 화살촉 삼각형 길이 = 화살표 길이 x 이 값
-ARROW_RADIUS = 0.1                      # 화살촉 삼각형 반폭 = 화살표 길이 x 이 값
+MARKER_ROOT = "/AnnotationMarkers"      # 마커 3D 몸체를 담는 뿌리 (세션 레이어, 클릭, 선택에서 뺌)
+ARROW_SCOPE = f"{MARKER_ROOT}/Arrows"   # 화살표 메시 자리
+LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표 머티리얼 자리
+ARROW_LENGTH_M = 0.3                    # 화살표 길이 (m). 모든 inlet, outlet 이 같고, 장면 단위로 환산한다
+ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
+ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
+ARROW_SHAFT = 0.025                     # 몸통 반지름 = 화살표 길이 x 이 값
+ARROW_RINGS = 32                        # 몸통, 원뿔 둘레 조각 수
+ARROW_ROUGHNESS = 0.4                   # 화살표 표면 거칠기 (0 매끈 .. 1 무광)
+ARROW_EMISSION = 0.0                    # 평소 발광 세기 (0 = 조명만 받음)
+ARROW_PICKED_EMISSION = 600.0           # 고른 화살표 발광 세기 (OmniPBR emissive_intensity)
+ARROW_PREVIEW_GLOW = 0.5                # 고른 화살표 preview 셰이더 발광 = 색 x 이 값
 
 # -- 찍기와 손짓 ---------------------------------------------------------------------
 

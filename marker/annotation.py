@@ -7,7 +7,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "fit_line", "wrap_lines", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "head_triangle"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -211,21 +211,22 @@ def _bright(color):
     return [float(c) + (1.0 - float(c)) * HIGHLIGHT_MIX for c in color[:3]]
 
 
-def _arrow_local(marker):
-    """(꼬리, 머리). 마커 위치를 원점으로 한 화면 크기 공간(px)에서. inlet 은 머리가, outlet 은 꼬리가 표면"""
+def _arrow_ends(marker, length: float):
+    """(꼬리, 머리) 월드. inlet 은 머리가 표면, outlet 은 꼬리가 표면"""
+    p = marker["position"]
     d = _unit(marker["direction"]) or [0.0, 0.0, 1.0]
     if marker["kind"] == "inlet":
-        return _mul(d, -ARROW_PX), [0.0, 0.0, 0.0]
-    return [0.0, 0.0, 0.0], _mul(d, ARROW_PX)
+        return _sub(p, _mul(d, length)), list(p)
+    return list(p), _add(p, _mul(d, length))
 
 
-def _panel_attach(marker):
-    """패널이 매달리는 점 (마커 위치 원점, 화면 px). label 은 점, inlet 은 꼬리, outlet 은 머리"""
+def _panel_anchor(marker, length: float):
+    """패널이 매달리는 월드 점. label 은 점, inlet 은 꼬리, outlet 은 머리"""
     if marker["kind"] == "inlet":
-        return _arrow_local(marker)[0]
+        return _arrow_ends(marker, length)[0]
     if marker["kind"] == "outlet":
-        return _arrow_local(marker)[1]
-    return [0.0, 0.0, 0.0]
+        return _arrow_ends(marker, length)[1]
+    return list(marker["position"])
 
 
 def _title_of(marker) -> str:
@@ -330,8 +331,8 @@ class _Mouse:
 
 
 def _hit(args):
-    """쿼리 콜백 값을 (prim 경로, [x, y, z]) 로. 빈 곳이면 None"""
-    if not args or not args[0]:
+    """쿼리 콜백 값을 (prim 경로, [x, y, z]) 로. 빈 곳이거나 우리 화살표면 None"""
+    if not args or not args[0] or str(args[0]).startswith(MARKER_ROOT):
         return None
     try:
         pos = [float(args[1][0]), float(args[1][1]), float(args[1][2])]
@@ -532,21 +533,168 @@ def _gesture_types():
     return _GESTURES
 
 
-def head_triangle(tail, tip, size: float, toward=None) -> tuple:
-    """(몸통 끝, 삼각형 세 점). 화살 방향을 따라 눕히고, 넓은 면이 카메라 쪽(toward)을 보게 세운다.
-    카메라를 모르거나 화살이 카메라를 똑바로 가리키면 아무 수직 방향으로"""
+def arrow_mesh(tail, tip, size: float) -> dict:
+    """화살표 메시 (월드). 원통 몸통 + 원뿔 머리, 뚜껑까지 막고 면 꼭짓점마다 법선을 단다.
+    돌려주는 것: points, counts, indices, normals (faceVarying)"""
     d = _unit(_sub(tip, tail)) or [0.0, 0.0, 1.0]
     length = math.sqrt(_dot(_sub(tip, tail), _sub(tip, tail)))
     head = min(ARROW_HEAD * size, length)
-    half = ARROW_RADIUS * size
+    r_head = ARROW_RADIUS * size
+    r_shaft = min(ARROW_SHAFT * size, r_head)
     base = _sub(tip, _mul(d, head))
-    side = _unit(_cross(d, toward)) if toward is not None else None
-    if side is None:
-        side = _perp_basis(d)[0]
-    tri = [list(tip), _add(base, _mul(side, half)), _sub(base, _mul(side, half))]
-    if toward is not None and _dot(_cross(_sub(tri[1], tri[0]), _sub(tri[2], tri[0])), toward) < 0.0:
-        tri[1], tri[2] = tri[2], tri[1]  # 앞면이 카메라를 보게
-    return base, tri
+    u, v = _perp_basis(d)
+    k = ARROW_RINGS
+    dirs = []
+    for i in range(k + 1):
+        a = 2.0 * math.pi * i / k
+        dirs.append(_add(_mul(u, math.cos(a)), _mul(v, math.sin(a))))
+    slope = _unit([head, r_head, 0.0])  # 원뿔 옆면 법선 = 바깥 x cos + 앞 x sin
+    points, counts, indices, normals = [], [], [], []
+
+    def face(pts, nrm):
+        start = len(points)
+        points.extend(pts)
+        normals.extend(nrm)
+        counts.append(len(pts))
+        indices.extend(range(start, start + len(pts)))
+
+    back = _mul(d, -1.0)
+    for i in range(k):  # 몸통 옆면 (바깥이 앞면)
+        a, b = dirs[i], dirs[i + 1]
+        face([_add(tail, _mul(a, r_shaft)), _add(tail, _mul(b, r_shaft)),
+              _add(base, _mul(b, r_shaft)), _add(base, _mul(a, r_shaft))], [a, b, b, a])
+    face([_add(tail, _mul(dirs[i], r_shaft)) for i in reversed(range(k))], [back] * k)  # 꼬리 뚜껑
+    face([_add(base, _mul(dirs[i], r_head)) for i in reversed(range(k))], [back] * k)  # 원뿔 밑면
+    for i in range(k):  # 원뿔 옆면
+        a, b = dirs[i], dirs[i + 1]
+        mid = _unit(_add(a, b)) or a
+        na = _add(_mul(a, slope[0]), _mul(d, slope[1]))
+        nb = _add(_mul(b, slope[0]), _mul(d, slope[1]))
+        nt = _add(_mul(mid, slope[0]), _mul(d, slope[1]))
+        face([_add(base, _mul(a, r_head)), _add(base, _mul(b, r_head)), list(tip)], [na, nb, nt])
+    return {"points": points, "counts": counts, "indices": indices, "normals": normals}
+
+
+class _Arrows:
+    """inlet / outlet 화살표. 세션 레이어 USD 메시라 RTX 가 그리고 형상 뒤면 가려진다.
+    스테이지에 하나씩이라 뷰포트마다가 아니라 여기서 한 번만 쓴다"""
+
+    def __init__(self):
+        self._warned = False
+
+    def _fail(self, what: str, e: Exception) -> None:
+        if not self._warned:
+            self._warned = True
+            print(f"{TAG} arrows: could not {what}: {type(e).__name__}: {e}")
+
+    @staticmethod
+    def _stage():
+        import omni.usd
+        return omni.usd.get_context().get_stage()
+
+    def draw(self, marker, picked: bool, length: float) -> bool:
+        """그 마커의 화살표를 (다시) 쓴다. 길이는 모든 화살표가 같은 length. 고른 것은 밝은 머티리얼"""
+        try:
+            from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+            stage = self._stage()
+            if stage is None:
+                return False
+            tail, tip = _arrow_ends(marker, length)
+            mesh_data = arrow_mesh(tail, tip, length)
+            color = _bright(marker["color"]) if picked else marker["color"]
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                self._root(stage, UsdGeom)
+                mesh = UsdGeom.Mesh.Define(stage, f"{ARROW_SCOPE}/{marker['id']}")
+                pts = mesh_data["points"]
+                mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
+                mesh.CreateFaceVertexCountsAttr(Vt.IntArray(mesh_data["counts"]))
+                mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(mesh_data["indices"]))
+                mesh.CreateNormalsAttr(Vt.Vec3fArray([Gf.Vec3f(*n) for n in mesh_data["normals"]]))
+                mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+                mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+                mesh.CreateDoubleSidedAttr(False)
+                mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
+                low = [min(p[i] for p in pts) for i in range(3)]
+                high = [max(p[i] for p in pts) for i in range(3)]
+                mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
+                mesh.GetPrim().CreateAttribute("primvars:doNotCastShadows",
+                                               Sdf.ValueTypeNames.Bool).Set(True)
+                look = self._material(stage, f"{marker['kind']}{'_picked' if picked else ''}", color,
+                                      ARROW_PICKED_EMISSION if picked else ARROW_EMISSION)
+                UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(look)  # 새 USD 는 Apply 가 있어야 바인딩을 본다
+            return True
+        except Exception as e:
+            self._fail("draw", e)
+            return False
+
+    def _root(self, stage, UsdGeom) -> None:
+        """뿌리를 세우고 클릭, 선택에서 뺀다 (찍기가 화살표에 막히지 않게)"""
+        if stage.GetPrimAtPath(ARROW_SCOPE).IsValid():
+            return
+        root = UsdGeom.Scope.Define(stage, MARKER_ROOT).GetPrim()
+        UsdGeom.Scope.Define(stage, ARROW_SCOPE)
+        UsdGeom.Scope.Define(stage, LOOKS_SCOPE)
+        try:
+            root.SetMetadata("hide_in_stage_window", True)
+        except Exception:
+            pass
+        try:
+            import omni.usd
+            omni.usd.get_context().set_pickable(MARKER_ROOT, False)
+        except Exception as e:
+            print(f"{TAG} arrows stay pickable (query filter still skips them): {e}")
+
+    @staticmethod
+    def _material(stage, name: str, color, emission: float):
+        """조명을 받는 머티리얼. preview 와 OmniPBR 두 셰이더. 고른 것은 조금 빛나게"""
+        from pxr import Gf, Sdf, UsdShade
+        path = f"{LOOKS_SCOPE}/{name}"
+        material = UsdShade.Material.Define(stage, path)
+        rgb = Gf.Vec3f(*[float(c) for c in color[:3]])
+        preview = UsdShade.Shader.Define(stage, path + "/shader")
+        preview.CreateIdAttr("UsdPreviewSurface")
+        preview.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(rgb)
+        preview.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
+            rgb * (ARROW_PREVIEW_GLOW if emission > 0 else 0.0))
+        preview.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(ARROW_ROUGHNESS)
+        preview.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        material.CreateSurfaceOutput().ConnectToSource(preview.ConnectableAPI(), "surface")
+        mdl = UsdShade.Shader.Define(stage, path + "/mdl")
+        mdl.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
+        mdl.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
+        for key, kind, value in (
+                ("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, rgb),
+                ("reflection_roughness_constant", Sdf.ValueTypeNames.Float, ARROW_ROUGHNESS),
+                ("metallic_constant", Sdf.ValueTypeNames.Float, 0.0),
+                ("enable_emission", Sdf.ValueTypeNames.Bool, emission > 0),
+                ("emissive_color", Sdf.ValueTypeNames.Color3f, rgb),
+                ("emissive_intensity", Sdf.ValueTypeNames.Float, float(emission))):
+            mdl.CreateInput(key, kind).Set(value)
+        material.CreateSurfaceOutput("mdl").ConnectToSource(mdl.ConnectableAPI(), "out")
+        return material
+
+    def drop(self, marker_id: str) -> None:
+        """그 마커의 화살표를 지운다"""
+        self._remove(f"{ARROW_SCOPE}/{marker_id}")
+
+    def clear(self) -> None:
+        """화살표를 다 지운다"""
+        self._remove(ARROW_SCOPE)
+
+    def teardown(self) -> None:
+        """뿌리째 치운다 (머티리얼까지)"""
+        self._remove(MARKER_ROOT)
+
+    def _remove(self, path: str) -> None:
+        try:
+            from pxr import Usd
+            stage = self._stage()
+            if stage is None or not stage.GetPrimAtPath(path).IsValid():
+                return
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                stage.RemovePrim(path)
+        except Exception as e:
+            self._fail("remove", e)
 
 
 def _move(sc, x: float, y: float, z: float = 0.0):
@@ -575,53 +723,43 @@ class _MarkerView:
         with self.top:
             self._anchor_xf = sc.Transform()
             with self._anchor_xf:
-                with sc.Transform(scale_to=sc.Space.SCREEN):  # 여기부터 1 = 화면 1 px, 축은 월드 그대로
-                    self._shaft = self._head = None
-                    self._arrow = None
-                    if marker["kind"] in ARROW_KINDS:
-                        self._arrow = (*_arrow_local(marker), ARROW_PX)
-                        base, tri = head_triangle(*self._arrow)
-                        self._shaft = sc.Line(self._arrow[0], base, color=white, thickness=ARROW_LINE_PX)
-                        self._head = sc.PolygonMesh(tri, [[1.0, 1.0, 1.0, 1.0]] * 3, [3], [0, 1, 2])
-                    self._head_rgba = [1.0, 1.0, 1.0, 1.0]
-                    self._attach_xf = sc.Transform()
-                    with self._attach_xf:
-                        with sc.Transform(look_at=sc.Transform.LookAt.CAMERA):
-                            self._dot = None
-                            if marker["kind"] == "label":
-                                self._dot = sc.Points([[0.0, 0.0, 0.0]], colors=[[1.0, 1.0, 1.0, 1.0]], sizes=[DOT_PX])
-                            self._leader_xf = sc.Transform()
-                            with self._leader_xf:
-                                self._leader = sc.Line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], color=white,
-                                                       thickness=LEADER_PX)
-                            self._panel = sc.Transform()
-                            with self._panel:
-                                self._bg_xf = sc.Transform()
-                                with self._bg_xf:
-                                    self._bg = sc.Rectangle(1.0, 1.0, color=ui.color(*BOX_BG), gesture=[
-                                        Hover(lambda: view.hold(bg_key), lambda: view.release(bg_key),
-                                              name="panel_hover"),
-                                        Click(lambda _m: owner._panel_clicked(mid), name="panel_click"),
-                                        Drag(lambda m: owner._drag_began(view, mid, None, m),
-                                             lambda m: owner._drag_changed(view, m),
-                                             lambda: owner._drag_ended(view), name="panel_move"),
-                                    ])
-                                    self._border = sc.Rectangle(1.0, 1.0, color=white, wireframe=True,
-                                                                thickness=BORDER_PX)
-                                self._title_xf = sc.Transform()
-                                with self._title_xf:
-                                    self._title = sc.Label("", color=white, size=FONT_PX,
-                                                           alignment=ui.Alignment.LEFT_CENTER)
-                                for _ in range(MAX_PANEL_LINES):
-                                    xf = sc.Transform()
-                                    with xf:
-                                        label = sc.Label("", color=ui.color(*DESC_COLOR), size=FONT_PX,
-                                                         alignment=ui.Alignment.LEFT_CENTER)
-                                    self._desc.append((xf, label))
-                                self._handles = sc.Transform()
-                                with self._handles:
-                                    for spot in HANDLES:
-                                        self._edges[spot] = self._edge(spot)
+                with sc.Transform(scale_to=sc.Space.SCREEN):
+                    with sc.Transform(look_at=sc.Transform.LookAt.CAMERA):
+                        self._dot = None
+                        if marker["kind"] == "label":
+                            self._dot = sc.Points([[0.0, 0.0, 0.0]], colors=[[1.0, 1.0, 1.0, 1.0]], sizes=[DOT_PX])
+                        self._leader_xf = sc.Transform()
+                        with self._leader_xf:
+                            self._leader = sc.Line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], color=white,
+                                                   thickness=LEADER_PX)
+                        self._panel = sc.Transform()
+                        with self._panel:
+                            self._bg_xf = sc.Transform()
+                            with self._bg_xf:
+                                self._bg = sc.Rectangle(1.0, 1.0, color=ui.color(*BOX_BG), gesture=[
+                                    Hover(lambda: view.hold(bg_key), lambda: view.release(bg_key),
+                                          name="panel_hover"),
+                                    Click(lambda _m: owner._panel_clicked(mid), name="panel_click"),
+                                    Drag(lambda m: owner._drag_began(view, mid, None, m),
+                                         lambda m: owner._drag_changed(view, m),
+                                         lambda: owner._drag_ended(view), name="panel_move"),
+                                ])
+                                self._border = sc.Rectangle(1.0, 1.0, color=white, wireframe=True,
+                                                            thickness=BORDER_PX)
+                            self._title_xf = sc.Transform()
+                            with self._title_xf:
+                                self._title = sc.Label("", color=white, size=FONT_PX,
+                                                       alignment=ui.Alignment.LEFT_CENTER)
+                            for _ in range(MAX_PANEL_LINES):
+                                xf = sc.Transform()
+                                with xf:
+                                    label = sc.Label("", color=ui.color(*DESC_COLOR), size=FONT_PX,
+                                                     alignment=ui.Alignment.LEFT_CENTER)
+                                self._desc.append((xf, label))
+                            self._handles = sc.Transform()
+                            with self._handles:
+                                for spot in HANDLES:
+                                    self._edges[spot] = self._edge(spot)
         self.restyle(marker, layout, picked)
 
     def _edge(self, spot):
@@ -650,8 +788,7 @@ class _MarkerView:
         """다 맞춘다. 고른 상태, 글, 색이 바뀌었을 때"""
         sc, ui = self._view.sc, self._view.ui
         self.anchor = list(marker["position"])
-        self._anchor_xf.transform = _move(sc, *marker["position"])
-        self._attach_xf.transform = _move(sc, *_panel_attach(marker))
+        self._anchor_xf.transform = _move(sc, *_panel_anchor(marker, self._view.owner.arrow_length()))
         color = self._color(marker, picked)
         ink = ui.color(*_rgba(color))
         if self._dot is not None:
@@ -662,22 +799,7 @@ class _MarkerView:
         self._border.color = ink
         self._border.thickness = BORDER_PICKED_PX if picked else BORDER_PX
         self._title.color = ink if marker["label"] else ui.color(*DIM_COLOR)
-        if self._shaft is not None:
-            self._shaft.color = ink
-            self._shaft.thickness = ARROW_LINE_PX * (PICKED_LINE_SCALE if picked else 1.0)
-            self._head_rgba = _rgba(color)
-        self.aim()
         self.relayout(marker, layout, picked)
-
-    def aim(self) -> None:
-        """화살촉 삼각형을 지금 카메라 쪽으로 세운다 (도형은 그대로, 점 자리만)"""
-        if self._head is None:
-            return
-        tail, tip, size = self._arrow
-        toward = _camera_of(self._view.api, self.anchor)[0] if self._view.api is not None else None
-        _base, tri = head_triangle(tail, tip, size, toward)
-        self._head.positions = tri
-        self._head.colors = [list(self._head_rgba)] * 3  # 점을 옮길 때마다 색도 다시 (늘 같은 색)
 
     def relayout(self, marker, layout, picked: bool) -> None:
         """상자 크기가 바뀌었을 때. 바탕, 글, 손잡이, 자리, 지시선"""
@@ -926,8 +1048,7 @@ class _View:
         view, perspective = self._camera()
         for mv in self.marks.values():
             self._cull_one(mv, view, perspective)
-            if mv.shown:
-                mv.aim()
+
 
 
 class Annotation:
@@ -947,6 +1068,7 @@ class Annotation:
         self._queries: set = set()
         self._drag = None
         self._closed = False
+        self._arrows = _Arrows()
 
     # -- 시작과 정리 --------------------------------------------------------------
 
@@ -1008,6 +1130,7 @@ class Annotation:
         for view in list(self._views):
             view.destroy()
         self._views = []
+        self._arrows.teardown()
         self._listeners = []
         self._markers = []
         self._selected = None
@@ -1079,6 +1202,18 @@ class Annotation:
         """마지막 상태 글"""
         return self._status
 
+    @staticmethod
+    def arrow_length() -> float:
+        """모든 화살표가 쓰는 길이 (스테이지 단위). ARROW_LENGTH_M 을 장면의 metersPerUnit 으로 환산"""
+        try:
+            import omni.usd
+            from pxr import UsdGeom
+            stage = omni.usd.get_context().get_stage()
+            mpu = float(UsdGeom.GetStageMetersPerUnit(stage)) if stage is not None else 1.0
+        except Exception:
+            mpu = 1.0
+        return ARROW_LENGTH_M / mpu if mpu > 0 else ARROW_LENGTH_M
+
     def _find(self, marker_id):
         for m in self._markers:
             if m["id"] == marker_id:
@@ -1144,12 +1279,14 @@ class Annotation:
             return
         if result is None:
             self._each(lambda v: v.arm(True))
-            self._say("빈 곳입니다. 모델 위를 클릭하세요", "create")
+            self._say("빈 곳(또는 화살표 위)입니다. 모델 위를 클릭하세요", "create")
             return
         self._creating = ""
         marker = self._new_marker(kind, result, api)
         self._markers.append(marker)
         layout = self._layout(marker)
+        if kind in ARROW_KINDS:
+            self._arrows.draw(marker, False, self.arrow_length())
         self._each(lambda v: v.add(marker, layout, False))
         self._notify("add")
         self.select(marker["id"])
@@ -1197,6 +1334,8 @@ class Annotation:
             return
         layout = self._layout(m)
         picked = marker_id == self._selected
+        if m["kind"] in ARROW_KINDS:
+            self._arrows.draw(m, picked, self.arrow_length())
         self._each(lambda v: v.restyle(m, layout, picked))
 
     def set_text(self, marker_id, label: str, description: str) -> bool:
@@ -1240,6 +1379,7 @@ class Annotation:
         if self._drag is not None and self._drag["id"] == marker_id:
             self._end_drag()
         self._markers.remove(m)
+        self._arrows.drop(marker_id)
         self._each(lambda v: v.drop(marker_id))
         if self._selected == marker_id:
             self._selected = None
@@ -1252,6 +1392,7 @@ class Annotation:
         if self._drag is not None:
             self._end_drag()
         self._markers = []
+        self._arrows.clear()
         self._each(lambda v: v.drop_all())
         if self._selected is not None:
             self._selected = None
