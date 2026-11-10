@@ -60,7 +60,7 @@ PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 
 # -- 화살표 (ui.scene, 화면 크기 고정) --------------------------------------------------
 
-ARROW_PX = 60.0                         # 화살표 길이 (화면 px). 모든 inlet, outlet 이 같고 줌과 무관
+ARROW_PX = 150.0                        # 화살표 길이 (화면 px). 모든 inlet, outlet 이 같고 줌과 무관
 ARROW_LINE_PX = 3.0                     # 화살표 몸통 선 두께 (화면 px)
 ARROW_HEAD = 0.25                       # 화살촉 삼각형 길이 = 화살표 길이 x 이 값
 ARROW_RADIUS = 0.1                      # 화살촉 삼각형 반폭 = 화살표 길이 x 이 값
