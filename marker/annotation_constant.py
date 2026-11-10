@@ -27,6 +27,7 @@ LINE_HEIGHT = 1.3                       # 줄 간격 = 글자 크기 x 이 값
 PAD_PX = 5.0                            # 상자 안쪽 여백
 AUTO_WIDE_PX = 260.0                    # 크기를 정하지 않은 상자의 최대 글 폭
 AUTO_DESC_LINES = 2                     # 크기를 정하지 않은 상자의 description 최대 줄 수
+MAX_PANEL_LINES = 12                    # 상자 하나에 보이는 description 최대 줄 수 (글 칸을 미리 이만큼 짓는다)
 MIN_WIDE_PX = 48.0                      # 상자 최소 폭 (최소 높이는 첫 줄 하나)
 WIDE_EM = 1.0                           # 전각 글자 폭 어림 (em)
 NARROW_EM = 0.66                        # 그 밖의 글자 폭 어림 (em). 넉넉하게 잡는다
@@ -54,15 +55,22 @@ HANDLE_Z = 1.0                          # 손잡이의 앞뒤 자리 (상자 앞
 # -- 고른 마커 강조 ------------------------------------------------------------------
 
 HIGHLIGHT_MIX = 0.45                    # 고른 색 = 원래 색을 흰색 쪽으로 이만큼
-PICKED_LINE_SCALE = 2.0                 # 고른 마커의 선(지시선, 화살표) 두께 배율
+PICKED_LINE_SCALE = 2.0                 # 고른 마커의 지시선 두께 배율
 PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 
-# -- 화살표 (월드 크기) ---------------------------------------------------------------
+# -- 화살표 (세션 레이어 USD 메시, 월드 크기) ---------------------------------------------
 
-ARROW_LINE_PX = 3.0                     # 화살표 몸통 두께 (화면 px)
+MARKER_ROOT = "/AnnotationMarkers"      # 마커 3D 몸체를 담는 뿌리 (세션 레이어, 클릭, 선택에서 뺌)
+ARROW_SCOPE = f"{MARKER_ROOT}/Arrows"   # 화살표 메시 자리
+LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표 머티리얼 자리
 ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
 ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
-CONE_SEGMENTS = 12                      # 원뿔 머리 둘레 조각 수
+ARROW_SHAFT = 0.025                     # 몸통 반지름 = 화살표 길이 x 이 값
+ARROW_RINGS = 32                        # 몸통, 원뿔 둘레 조각 수
+ARROW_ROUGHNESS = 0.4                   # 화살표 표면 거칠기 (0 매끈 .. 1 무광)
+ARROW_EMISSION = 0.0                    # 평소 발광 세기 (0 = 조명만 받음)
+ARROW_PICKED_EMISSION = 600.0           # 고른 화살표 발광 세기 (OmniPBR emissive_intensity)
+ARROW_PREVIEW_GLOW = 0.5                # 고른 화살표 preview 셰이더 발광 = 색 x 이 값
 ARROW_VIEW_SHARE = 0.08                 # 새 화살표 길이 = 찍을 때 카메라 거리 x 이 값
 ARROW_FALLBACK = 1.0                    # 카메라 거리를 모를 때 화살표 길이 (스테이지 단위)
 
