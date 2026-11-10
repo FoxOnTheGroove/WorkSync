@@ -7,7 +7,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "fit_line", "wrap_lines", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "edge_at", "next_id", "surface_normal", "arrow_mesh"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -140,20 +140,6 @@ def leader_end(offset, size):
     return [cx * t, cy * t]
 
 
-def edge_at(x: float, y: float, w: float, h: float, inside: float = None, outside: float = None):
-    """패널 안 점 (왼쪽 위 원점, y 위로) 이 어느 변 위인가. 변에서 안쪽 inside, 바깥 outside px 안이면
-    그 변 (-1,0) (1,0) (0,1) (0,-1), 몸통이면 None, 잡는 영역 밖이면 False. 꼭짓점 근처는 더 가까운 변"""
-    inside = EDGE_IN_PX if inside is None else inside
-    outside = EDGE_OUT_PX if outside is None else outside
-    if x < -outside or x > w + outside or y > outside or y < -h - outside:
-        return False
-    near = []
-    for edge, dist in (((-1, 0), x), ((1, 0), w - x), ((0, 1), -y), ((0, -1), h + y)):
-        if -outside <= dist <= inside:  # dist: 변에서 안쪽으로 잰 거리 (바깥은 음수)
-            near.append((abs(dist), edge))
-    return min(near)[1] if near else None
-
-
 def next_id(kind: str, taken) -> str:
     """비어 있는 가장 작은 <kind>_<n>"""
     taken = set(taken)
@@ -263,23 +249,6 @@ def _camera_of(api, point):
         return [back[0], back[1], back[2]], None
     except Exception:
         return None, None
-
-
-def _ndc_of(api, point):
-    """월드 점의 뷰포트 NDC (x, y). 못 구하면 None"""
-    try:
-        try:
-            from pxr import Gf
-            at = Gf.Vec3d(*point)
-        except ImportError:
-            at = tuple(point)
-        to_ndc = getattr(api, "world_to_ndc", None)
-        if to_ndc is None:
-            to_ndc = api.view * api.projection
-        p = to_ndc.Transform(at)
-        return float(p[0]), float(p[1])
-    except Exception:
-        return None
 
 
 def _resolution(api):
@@ -819,7 +788,6 @@ class _MarkerView:
         self.shown = True
         self._desc = []
         white = ui.color(1.0, 1.0, 1.0, 1.0)
-        bg_key = f"bg:{mid}"
         with view.root:
             self.top = sc.Transform()
         with self.top:
@@ -841,17 +809,6 @@ class _MarkerView:
                                 self._bg = sc.Rectangle(1.0, 1.0, color=ui.color(*BOX_BG))
                                 self._border = sc.Rectangle(1.0, 1.0, color=white, wireframe=True,
                                                             thickness=BORDER_PX)
-                                # 잡는 곳은 이것 하나. 커서 모양과 이동 / 크기 조절을 같은 위치 판정으로 정한다
-                                self._hit = sc.Rectangle(1.0, 1.0, color=ui.color(*HIT_COLOR), gesture=[
-                                    Hover(lambda m: (view.hold(bg_key), owner._panel_hover(view, mid, m)),
-                                          lambda m: owner._panel_hover(view, mid, m),
-                                          lambda: (view.release(bg_key), owner._panel_leave(view, mid)),
-                                          name="panel_hover"),
-                                    Click(lambda m: owner._panel_clicked(view, mid, m), name="panel_click"),
-                                    Drag(lambda m: owner._drag_began(view, mid, m),
-                                         lambda m: owner._drag_changed(view, m),
-                                         lambda: owner._drag_ended(view), name="panel_drag"),
-                                ])
                             self._title_xf = sc.Transform()
                             with self._title_xf:
                                 self._title = sc.Label("", color=white, size=FONT_PX,
@@ -862,7 +819,59 @@ class _MarkerView:
                                     label = sc.Label("", color=ui.color(*DESC_COLOR), size=FONT_PX,
                                                      alignment=ui.Alignment.LEFT_CENTER)
                                 self._desc.append((xf, label))
+                            # 잡는 곳: 겹치지 않게 타일로 나눈 사각형 다섯 (몸통 + 변 띠 넷).
+                            # 어느 사각형 위인가가 곧 판정이라, 커서와 동작이 늘 같다
+                            self._zones = {}
+                            for zone in ZONES:
+                                self._zones[zone] = self._zone_rect(zone)
         self.restyle(marker, layout, picked)
+
+    def _zone_rect(self, zone):
+        """잡는 사각형 하나. zone None = 몸통 (클릭 고르기, 끌기 이동), 변 = 그 변 (커서, 끌기 크기).
+        고르지 않은 패널에서는 변 띠도 몸통처럼 클릭으로 고르기만 한다"""
+        sc, ui, view = self._view.sc, self._view.ui, self._view
+        Click, Drag, Hover = _gesture_types()
+        owner, mid = view.owner, self.id
+        key = f"h:{mid}:{'body' if zone is None else f'{zone[0]}{zone[1]}'}"
+        shape = None if zone is None else ("h" if zone[0] else "v")
+
+        def enter(_m):
+            view.hold(key)
+            if shape and mid == owner.selected():
+                _Cursor.hold(key, shape)
+
+        def leave():
+            view.release(key)
+            _Cursor.release(key)
+
+        xf = sc.Transform()
+        with xf:
+            rect = sc.Rectangle(1.0, 1.0, color=ui.color(*HIT_COLOR), gesture=[
+                Hover(enter, lambda _m: None, leave, name="zone_hover"),
+                Click(lambda _m: owner._panel_clicked(mid, zone), name="zone_click"),
+                Drag(lambda m: owner._drag_began(view, mid, zone, m),
+                     lambda m: owner._drag_changed(view, m),
+                     lambda: owner._drag_ended(view), name="zone_drag"),
+            ])
+        return xf, rect
+
+    def _place_zones(self, layout) -> None:
+        """잡는 사각형 다섯을 상자에 맞춘다. 변 띠는 테두리 안쪽 EDGE_IN_PX ~ 바깥 EDGE_OUT_PX,
+        좌우 띠가 꼭짓점까지 덮고, 위아래 띠는 그 사이만. 서로 안 겹친다"""
+        sc = self._view.sc
+        w, h, i, o = layout["w"], layout["h"], EDGE_IN_PX, EDGE_OUT_PX
+        inner_w, inner_h = max(w - 2.0 * i, 1.0), max(h - 2.0 * i, 1.0)
+        places = {
+            None: (w / 2.0, -h / 2.0, inner_w, inner_h),
+            (-1, 0): ((i - o) / 2.0, -h / 2.0, i + o, h + 2.0 * o),
+            (1, 0): (w + (o - i) / 2.0, -h / 2.0, i + o, h + 2.0 * o),
+            (0, 1): (w / 2.0, (o - i) / 2.0, inner_w, i + o),
+            (0, -1): (w / 2.0, -h - (o - i) / 2.0, inner_w, i + o),
+        }
+        for zone, (xf, rect) in self._zones.items():
+            x, y, rw, rh = places[zone]
+            rect.width, rect.height = rw, rh
+            xf.transform = _move(sc, x, y)
 
     # -- 맞추기 (도형은 그대로, 속성만) ---------------------------------------------
 
@@ -890,7 +899,7 @@ class _MarkerView:
         self._bg_xf.transform = _move(sc, w / 2.0, -h / 2.0, BOX_Z)
         for rect in (self._bg, self._border):
             rect.width, rect.height = w, h
-        self._hit.width, self._hit.height = w + 2.0 * EDGE_OUT_PX, h + 2.0 * EDGE_OUT_PX
+        self._place_zones(layout)
         y = -pad
         self._title_xf.transform = _move(sc, pad, y - layout["th"] / 2.0)
         self._title.text = layout["title"]
@@ -907,7 +916,7 @@ class _MarkerView:
             elif xf.visible:
                 xf.visible = False
         if not picked:
-            self._view.owner._panel_leave(self._view, self.id)
+            _Cursor.release_prefix(f"h:{self.id}:")
         self.place(marker, layout, picked)
 
     def place(self, marker, layout, picked: bool) -> None:
@@ -934,7 +943,9 @@ class _MarkerView:
     def destroy(self) -> None:
         """그린 것과 걸어 둔 선택 잠금을 놓는다"""
         self._view.release_prefix(f"bg:{self.id}")
-        self._view.owner._panel_leave(self._view, self.id)
+        self._view.release_prefix(f"h:{self.id}:")
+        _Cursor.release_prefix(f"h:{self.id}:")
+        self._zones = {}
         self._desc = []
         self.top.clear()
         self.top.visible = False
@@ -1492,56 +1503,17 @@ class Annotation:
 
     # -- 패널 끌기 (씬 손짓) ---------------------------------------------------------
 
-    def _panel_xy(self, view, marker_id: str, ndc):
-        """제스처 마우스(NDC) 를 그 패널 안 좌표로 (왼쪽 위 원점, y 위로, 장면 px). 못 구하면 None"""
-        m = self._find(marker_id)
-        xy, res = _xy(ndc), _resolution(view.api)
-        if m is None or xy is None or res is None:
-            return None
-        at = _ndc_of(view.api, _panel_anchor(m, self.arrow_length()))
-        if at is None:
-            return None
-        x = (xy[0] - at[0]) * res[0] / 2.0 - m["offset"][0]
-        y = (xy[1] - at[1]) * res[1] / 2.0 - m["offset"][1]
-        return x, y
-
-    def _zone(self, view, marker_id: str, ndc):
-        """그 자리가 어느 변 위인가 (크기 조절), 몸통이면 None (이동). 고른 패널만 변이 있다"""
-        if marker_id != self._selected:
-            return None
-        m, at = self._find(marker_id), self._panel_xy(view, marker_id, ndc)
-        if m is None or at is None:
-            return None
-        layout = self._layout(m)
-        return edge_at(at[0], at[1], layout["w"], layout["h"]) or None
-
-    def _panel_hover(self, view, marker_id: str, ndc) -> None:
-        """패널 위 마우스. 변 위면 크기 커서, 아니면 보통 커서"""
-        if self._drag is not None:
-            return  # 끄는 동안은 시작할 때 정한 커서 그대로
-        edge = self._zone(view, marker_id, ndc)
-        if edge:
-            _Cursor.hold("edge", "h" if edge[0] else "v")
-        else:
-            _Cursor.release("edge")
-
-    def _panel_leave(self, view, marker_id: str) -> None:
-        if self._drag is None:
-            _Cursor.release("edge")
-
-    def _panel_clicked(self, view, marker_id: str, ndc) -> None:
-        """패널 클릭. 변 위(크기 커서 자리)면 무시. 지금 그 도형의 콜백 안이라 다음 루프에 고른다"""
-        if self._zone(view, marker_id, ndc):
+    def _panel_clicked(self, marker_id: str, zone) -> None:
+        """클릭. 고른 패널의 변 띠(크기 커서 자리)면 무시, 아니면 고른다 (다음 루프에)"""
+        if zone is not None and marker_id == self._selected:
             return
         _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
-    def _drag_began(self, view, marker_id: str, ndc) -> None:
-        """끌기 시작. 누른 자리가 변 위(커서가 바뀌는 자리)면 그 변 크기 조절, 몸통이면 이동.
-        먼저 클릭해서 고른 패널만"""
+    def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
+        """끌기 시작. 변 띠에서 시작하면 그 변 크기 조절, 몸통이면 이동. 먼저 클릭해서 고른 패널만"""
         m = self._find(marker_id)
         if m is None or self._creating or marker_id != self._selected:
             return
-        edge = self._zone(view, marker_id, ndc)
         if self._drag is not None:  # 끝 신호를 못 받은 끌기는 버린다
             self._end_drag()
         layout = self._layout(m)
@@ -1590,7 +1562,6 @@ class Annotation:
     def _end_drag(self) -> None:
         d, self._drag = self._drag, None
         _Cursor.release("drag")
-        _Cursor.release("edge")
         if d is not None and d["view"] in self._views:
             d["view"].release("drag")
 
