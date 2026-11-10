@@ -58,19 +58,19 @@ HIGHLIGHT_MIX = 0.45                    # 고른 색 = 원래 색을 흰색 쪽�
 PICKED_LINE_SCALE = 2.0                 # 고른 마커의 지시선 두께 배율
 PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 
-# -- 화살표 (세션 레이어 USD 메시, 월드 크기) ---------------------------------------------
+# -- 화살표 (ui.scene, 월드 크기) -----------------------------------------------------
 
-MARKER_ROOT = "/AnnotationMarkers"      # 마커 3D 몸체를 담는 뿌리 (세션 레이어, 클릭, 선택에서 뺌)
-ARROW_SCOPE = f"{MARKER_ROOT}/Arrows"   # 화살표 메시 자리
-LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표 머티리얼 자리
+ARROW_LINE_PX = 3.0                     # 화살표 몸통 선 두께 (화면 px)
 ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
 ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
-ARROW_SHAFT = 0.025                     # 몸통 반지름 = 화살표 길이 x 이 값
-ARROW_RINGS = 32                        # 몸통, 원뿔 둘레 조각 수
-ARROW_ROUGHNESS = 0.4                   # 화살표 표면 거칠기 (0 매끈 .. 1 무광)
-ARROW_EMISSION = 0.0                    # 평소 발광 세기 (0 = 조명만 받음)
-ARROW_PICKED_EMISSION = 600.0           # 고른 화살표 발광 세기 (OmniPBR emissive_intensity)
-ARROW_PREVIEW_GLOW = 0.5                # 고른 화살표 preview 셰이더 발광 = 색 x 이 값
+CONE_SEGMENTS = 32                      # 원뿔 둘레 조각 수
+CONE_AMBIENT = 0.35                     # 원뿔 음영: 빛이 안 닿는 쪽 밝기
+CONE_DIFFUSE = 0.75                     # 원뿔 음영: 빛을 정면으로 받을 때 더해지는 밝기
+CONE_SPECULAR = 0.25                    # 원뿔 음영: 반짝임 세기
+CONE_SHININESS = 24.0                   # 원뿔 음영: 반짝임 좁기 (클수록 작은 점)
+CONE_LIGHT_UP = 0.6                     # 빛을 카메라에서 위로 비키는 정도
+CONE_LIGHT_LEFT = 0.3                   # 빛을 카메라에서 왼쪽으로 비키는 정도
+CONE_FALLBACK_LIGHT = (0.37, 0.56, 0.74)  # 카메라를 모를 때 빛 방향 (월드, 단위 벡터)
 ARROW_VIEW_SHARE = 0.08                 # 새 화살표 길이 = 찍을 때 카메라 거리 x 이 값
 ARROW_FALLBACK = 1.0                    # 카메라 거리를 모를 때 화살표 길이 (스테이지 단위)
 
