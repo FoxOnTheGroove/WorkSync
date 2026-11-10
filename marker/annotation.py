@@ -858,11 +858,13 @@ class _MarkerView:
 
         def enter(_m):
             view.hold(key)
+            owner._hover_on(view, mid, zone)
             if shape and mid == owner.selected():
                 _Cursor.hold(key, shape)
 
         def leave():
             view.release(key)
+            owner._hover_off(view, mid, zone)
             _Cursor.release(key)
 
         xf = sc.Transform()
@@ -871,8 +873,8 @@ class _MarkerView:
                 Hover(enter, lambda _m: None, leave, name=tag),
                 Click(lambda _m: owner._panel_clicked(mid, zone), name=tag),
                 Drag(lambda m: owner._drag_began(view, mid, zone, m),
-                     lambda m: owner._drag_changed(view, m),
-                     lambda: owner._drag_ended(view), name=tag),
+                     lambda m: owner._drag_changed(view, m, zone),
+                     lambda: owner._drag_ended(view, zone), name=tag),
             ])
         return xf, rect
 
@@ -1193,6 +1195,7 @@ class Annotation:
         self._retries = 0
         self._queries: set = set()
         self._drag = None
+        self._hover_edge = None  # 마우스가 올라간 변 띠 (view, marker id, edge): 커서가 크기 모양인 곳
         self._closed = False
         self._arrows = _Arrows()
 
@@ -1527,6 +1530,15 @@ class Annotation:
 
     # -- 패널 끌기 (씬 손짓) ---------------------------------------------------------
 
+    def _hover_on(self, view, marker_id: str, zone) -> None:
+        """변 띠에 마우스가 들어오면 기억한다. 커서가 크기 모양인 동안의 끌기는 이 변의 크기 조절"""
+        if zone is not None:
+            self._hover_edge = (view, marker_id, zone)
+
+    def _hover_off(self, view, marker_id: str, zone) -> None:
+        if zone is not None and self._hover_edge == (view, marker_id, zone):
+            self._hover_edge = None
+
     def _panel_clicked(self, marker_id: str, zone) -> None:
         """클릭. 고른 패널의 변 띠(크기 커서 자리)면 무시, 아니면 고른다 (다음 루프에)"""
         if zone is not None and marker_id == self._selected:
@@ -1543,13 +1555,28 @@ class Annotation:
                                                  f"not selected (selected={self._selected})")
             _dbg(f"  -> drag ignored: {why}")
             return
-        if self._drag is not None:  # 끝 신호를 못 받은 끌기는 버린다
-            _dbg(f"  -> dropping a stale drag on {self._drag['id']}/{ZONE_NAMES[self._drag['edge']]}")
+        zone = edge  # 끌기를 보낸 영역 (None = 몸통)
+        h = self._hover_edge
+        if edge is None and h is not None and h[0] is view and h[1] == marker_id:
+            edge = h[2]  # 커서가 크기 모양이면 몸통 끌기라도 그 변의 크기 조절
+            _dbg(f"  -> resize cursor is up on {ZONE_NAMES[edge]}: this drag resizes")
+        d = self._drag
+        if d is not None and d["id"] == marker_id and d["view"] is view and not d["moved"]:
+            # 같은 누름에 두 영역이 끌기를 보냈다: 하나로 합치고, 변이 있으면 크기 조절
+            d["zones"].add(zone)
+            if edge and not d["edge"]:
+                d["edge"] = edge
+                _Cursor.hold("drag", "h" if edge[0] else "v")
+            _dbg(f"  -> same press, merged into {'resize ' + ZONE_NAMES[d['edge']] if d['edge'] else 'move'}"
+                 f" (zones {sorted(ZONE_NAMES[z] for z in d['zones'])})")
+            return
+        if d is not None:  # 끝 신호를 못 받은 끌기는 버린다
+            _dbg(f"  -> dropping a stale drag on {d['id']}/{ZONE_NAMES[d['edge']]}")
             self._end_drag()
         _dbg(f"  -> START {'resize ' + ZONE_NAMES[edge] if edge else 'move'} on {marker_id}")
         layout = self._layout(m)
         self._drag = {
-            "view": view, "id": marker_id, "edge": edge,
+            "view": view, "id": marker_id, "edge": edge, "zones": {zone},
             "mouse": _Mouse.at(), "ndc": _xy(ndc), "res": _resolution(view.api),
             "offset": list(m["offset"]), "box": [layout["w"], layout["h"]],
             "min": layout["min"], "moved": False,
@@ -1558,7 +1585,7 @@ class Annotation:
         if edge:
             _Cursor.hold("drag", "h" if edge[0] else "v")
 
-    def _drag_changed(self, view, ndc) -> None:
+    def _drag_changed(self, view, ndc, zone=None) -> None:
         """끄는 중. 끝 위치 기준으로 다시 계산해 뷰포트마다 그 패널만 고친다"""
         d = self._drag
         if d is None or d["view"] is not view:
@@ -1586,11 +1613,15 @@ class Annotation:
             self._each(lambda v: v.relayout(m, layout, picked))
         d["moved"] = True
 
-    def _drag_ended(self, view) -> None:
-        """끌기 끝"""
+    def _drag_ended(self, view, zone=None) -> None:
+        """끌기 끝. 합친 끌기는 마지막 영역이 끝날 때 끝난다 (Kit 이 한쪽을 막아 먼저 끝내도 이어간다)"""
         d = self._drag
         if d is None or d["view"] is not view:
             self._told_no_drag = False
+            return
+        d["zones"].discard(zone)
+        if d["zones"]:
+            _dbg(f"  -> {ZONE_NAMES[zone]} ended, drag goes on with {sorted(ZONE_NAMES[z] for z in d['zones'])}")
             return
         self._end_drag()
         m = self._find(d["id"]) or {}
