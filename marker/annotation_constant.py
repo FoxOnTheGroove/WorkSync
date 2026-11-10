@@ -78,5 +78,7 @@ NEIGHBOR_PX = 2                         # 법선을 구할 이웃 픽셀 거리
 GESTURE_PRIORITY = 1000                 # 패널 몸통 제스처 우선순위 (Kit 선택보다 위)
 HANDLE_PRIORITY = 1500                  # 크기 손잡이 제스처 우선순위 (패널 몸통보다 위)
 ARM_PRIORITY = 2000                     # 찍기 대기 클릭 우선순위 (패널보다 위)
+EDGE_GRACE_S = 0.15                     # 변 띠를 벗어난 뒤에도 크기 커서(=크기 조절)를 유지하는 시간 (초)
+SAME_PRESS_S = 0.05                     # 이 안에 시작한 두 끌기는 한 번 누른 것으로 본다 (초)
 SELECT_RELEASE_S = 0.25                 # 패널, 손잡이를 다 놓은 뒤 Kit 클릭 선택을 되살리기까지 (초)
 REGISTRY_TRIES = 600                    # 뷰포트 레지스트리를 기다리는 프레임 수

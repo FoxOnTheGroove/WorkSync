@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import math
+import time
 import unicodedata
 
 from .annotation_constant import *
@@ -809,9 +810,9 @@ class _MarkerView:
                                     Hover(lambda: view.hold(bg_key), lambda: view.release(bg_key),
                                           name="panel_hover"),
                                     Click(lambda _m: owner._panel_clicked(mid), name="panel_click"),
-                                    Drag(lambda m: owner._drag_began(view, mid, None, m),
+                                    Drag(lambda m: owner._drag_began(view, mid, None, m, bg_key),
                                          lambda m: owner._drag_changed(view, m),
-                                         lambda: owner._drag_ended(view), name="panel_move"),
+                                         lambda: owner._drag_ended(view, bg_key), name="panel_move"),
                                 ])
                                 self._border = sc.Rectangle(1.0, 1.0, color=white, wireframe=True,
                                                             thickness=BORDER_PX)
@@ -838,23 +839,22 @@ class _MarkerView:
         _click, Drag, Hover = _gesture_types()
         owner, mid = view.owner, self.id
         key = f"h:{mid}:{spot[0]}{spot[1]}"
-        shape = "h" if spot[0] else "v"
 
         def enter():
             view.hold(key)
-            _Cursor.hold(key, shape)
+            owner._edge_enter(view, mid, spot)
 
         def leave():
             view.release(key)
-            _Cursor.release(key)
+            owner._edge_leave(view, mid, spot)
 
         xf = sc.Transform()
         with xf:
             strip = sc.Rectangle(1.0, 1.0, color=ui.color(*HANDLE_HIT_COLOR), gesture=[
                 Hover(enter, leave, name="edge_hover"),
-                Drag(lambda m: owner._drag_began(view, mid, spot, m),
+                Drag(lambda m: owner._drag_began(view, mid, spot, m, key),
                      lambda m: owner._drag_changed(view, m),
-                     lambda: owner._drag_ended(view), priority=HANDLE_PRIORITY, name="edge"),
+                     lambda: owner._drag_ended(view, key), priority=HANDLE_PRIORITY, name="edge"),
             ])
         return xf, strip
 
@@ -920,7 +920,7 @@ class _MarkerView:
         self._handles.visible = bool(picked)
         if not picked:
             self._view.release_prefix(f"h:{self.id}:")
-            _Cursor.release_prefix(f"h:{self.id}:")
+            self._view.owner._edge_forget(self.id)
         w, h, t = layout["w"], layout["h"], EDGE_HIT_PX
         out = t / 2.0 - EDGE_INSET_PX  # 띠 가운데를 테두리에서 바깥으로
         for (ex, ey), (xf, strip) in self._edges.items():
@@ -944,7 +944,7 @@ class _MarkerView:
         """그린 것과 걸어 둔 선택 잠금을 놓는다"""
         self._view.release_prefix(f"bg:{self.id}")
         self._view.release_prefix(f"h:{self.id}:")
-        _Cursor.release_prefix(f"h:{self.id}:")
+        self._view.owner._edge_forget(self.id)
         self._edges = {}
         self._desc = []
         self.top.clear()
@@ -1169,6 +1169,8 @@ class Annotation:
         self._retries = 0
         self._queries: set = set()
         self._drag = None
+        self._edge_hover = None  # 크기 커서가 떠 있는 변: (view, marker id, edge)
+        self._edge_leave_timer = None
         self._closed = False
         self._arrows = _Arrows()
 
@@ -1503,22 +1505,67 @@ class Annotation:
 
     # -- 패널 끌기 (씬 손짓) ---------------------------------------------------------
 
+    # 크기 커서: 변 띠 위에 있는 동안 (벗어난 뒤 EDGE_GRACE_S 까지) 그 변을 기억한다.
+    # 누르는 순간 hover 끝이 먼저 와도, 몸통 제스처가 이겨도, 그 끌기는 이 변의 크기 조절이다
+
+    def _edge_enter(self, view, marker_id: str, edge) -> None:
+        if self._edge_leave_timer is not None:
+            self._edge_leave_timer.cancel()
+            self._edge_leave_timer = None
+        self._edge_hover = (view, marker_id, edge)
+        _Cursor.hold("edge", "h" if edge[0] else "v")
+
+    def _edge_leave(self, view, marker_id: str, edge) -> None:
+        if self._edge_hover != (view, marker_id, edge):
+            return
+        if self._edge_leave_timer is not None:
+            self._edge_leave_timer.cancel()
+
+        def gone():
+            self._edge_leave_timer = None
+            if self._edge_hover == (view, marker_id, edge):
+                self._edge_hover = None
+                _Cursor.release("edge")
+
+        self._edge_leave_timer = asyncio.get_event_loop().call_later(EDGE_GRACE_S, gone)
+
+    def _edge_forget(self, marker_id: str) -> None:
+        """그 마커의 손잡이가 사라질 때 (선택 풀림, 지움)"""
+        if self._edge_hover is not None and self._edge_hover[1] == marker_id:
+            if self._edge_leave_timer is not None:
+                self._edge_leave_timer.cancel()
+                self._edge_leave_timer = None
+            self._edge_hover = None
+            _Cursor.release("edge")
+
+    def _edge_under(self, view, marker_id: str):
+        """지금 크기 커서가 이 패널의 어느 변에 떠 있나. 아니면 None"""
+        h = self._edge_hover
+        return h[2] if h is not None and h[0] is view and h[1] == marker_id else None
+
     def _panel_clicked(self, marker_id: str) -> None:
-        """패널 클릭. 지금 지우게 될 바탕의 콜백 안이라 다음 루프에 고른다"""
+        """패널 클릭. 크기 커서가 떠 있으면 무시. 지금 지우게 될 바탕의 콜백 안이라 다음 루프에 고른다"""
+        if self._edge_hover is not None and self._edge_hover[1] == marker_id:
+            return
         _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
-    def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
-        """끌기 시작. edge 가 None 이면 옮기기, 아니면 그 변으로 크기"""
+    def _drag_began(self, view, marker_id: str, edge, ndc, source: str = "") -> None:
+        """끌기 시작. 크기 커서가 떠 있으면 무조건 그 변의 크기 조절, 아니면 edge 가 None 이면 옮기기.
+        한 번 누른 것에 몸통과 띠 제스처가 같이 시작하면 처음 것 하나만 쓴다"""
         m = self._find(marker_id)
         if m is None or self._creating:
             return
         if marker_id != self._selected:  # 먼저 클릭해서 고른 패널만 옮기고 크기를 바꾼다
             return
-        if self._drag is not None:  # 끝 신호를 못 받은 끌기(도형이 지워진 경우)는 버린다
-            self._end_drag()
+        edge = self._edge_under(view, marker_id) or edge
+        d = self._drag
+        if d is not None:
+            if d["id"] == marker_id and d["view"] is view and time.monotonic() - d["t"] < SAME_PRESS_S:
+                return  # 같은 누름의 두 번째 제스처
+            self._end_drag()  # 끝 신호를 못 받은 끌기(도형이 지워진 경우)는 버린다
         layout = self._layout(m)
         self._drag = {
-            "view": view, "id": marker_id, "edge": edge,
+            "view": view, "id": marker_id, "edge": edge, "source": source, "t": time.monotonic(),
             "mouse": _Mouse.at(), "ndc": _xy(ndc), "res": _resolution(view.api),
             "offset": list(m["offset"]), "box": [layout["w"], layout["h"]],
             "min": layout["min"], "moved": False,
@@ -1550,10 +1597,10 @@ class Annotation:
             self._each(lambda v: v.relayout(m, layout, picked))
         d["moved"] = True
 
-    def _drag_ended(self, view) -> None:
-        """끌기 끝"""
+    def _drag_ended(self, view, source: str = "") -> None:
+        """끌기 끝. 끌기를 시작한 제스처가 끝낼 때만"""
         d = self._drag
-        if d is None or d["view"] is not view:
+        if d is None or d["view"] is not view or (source and d["source"] and source != d["source"]):
             return
         self._end_drag()
         if d["moved"]:
