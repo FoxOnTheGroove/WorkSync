@@ -36,6 +36,11 @@ class AnnotationService:
         return instance().set_font_size(marker_id, px)
 
     @classmethod
+    def set_arrow_scale(cls, scale):
+        """화살표 크기 배수 (모든 inlet, outlet 공통)"""
+        return instance().set_arrow_scale(scale)
+
+    @classmethod
     def reset_panel(cls, marker_id):
         """패널을 처음 자리, 글에 맞춘 크기로"""
         return instance().reset_panel(marker_id)
@@ -71,6 +76,11 @@ class AnnotationService:
     def clicked(cls):
         """마지막으로 클릭한 패널의 마커 id. 없으면 None"""
         return instance().clicked()
+
+    @classmethod
+    def arrow_scale(cls):
+        """화살표 크기 배수"""
+        return instance().arrow_scale()
 
     @classmethod
     def creating(cls):

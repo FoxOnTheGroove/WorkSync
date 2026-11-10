@@ -61,7 +61,9 @@ PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 MARKER_ROOT = "/AnnotationMarkers"      # 마커 3D 몸체를 담는 뿌리 (세션 레이어, 클릭, 선택에서 뺌)
 ARROW_SCOPE = f"{MARKER_ROOT}/Arrows"   # 화살표 메시 자리
 LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표 머티리얼 자리
-ARROW_LENGTH_M = 0.3                    # 화살표 길이 (m). 모든 inlet, outlet 이 같고, 장면 단위로 환산한다
+ARROW_LENGTH_M = 0.3                    # 화살표 기본 길이 (m), 배수 1 일 때. 모든 inlet, outlet 이 같고, 장면 단위로 환산한다
+MIN_ARROW_SCALE = 0.1                   # 화살표 크기 배수 최소
+MAX_ARROW_SCALE = 10.0                  # 화살표 크기 배수 최대
 ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
 ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
 ARROW_SHAFT = 0.025                     # 몸통 반지름 = 화살표 길이 x 이 값

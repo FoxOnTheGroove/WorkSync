@@ -33,6 +33,7 @@ class AnnotationDummyUI:
         self._label = None
         self._desc = None
         self._font = None
+        self._arrow = None
         self._shown_id = None
 
     def build_ui(self):
@@ -54,6 +55,9 @@ class AnnotationDummyUI:
                 ui.Separator(height=6)
                 with ui.HStack(height=0, spacing=4):
                     self._picked = ui.Label("선택: 없음")
+                    ui.Label("화살표 x", width=0)
+                    self._arrow = ui.FloatField(width=FONT_FIELD_WIDE)
+                    self._arrow.model.add_end_edit_fn(lambda _m: self._apply_arrow())
                     ui.Label("글자 크기", width=0)
                     self._font = ui.FloatField(width=FONT_FIELD_WIDE)
                     self._font.model.add_end_edit_fn(lambda _m: self._apply_font())
@@ -69,6 +73,7 @@ class AnnotationDummyUI:
                     ui.Button("삭제", clicked_fn=self._remove)
                     ui.Button("선택 해제", clicked_fn=functools.partial(AnnotationService.select, None))
         AnnotationService.add_listener(self._on_change)
+        self._arrow.model.set_value(AnnotationService.arrow_scale())
         self._refresh(fill=True)
 
     # -- 버튼 -------------------------------------------------------------------
@@ -85,6 +90,11 @@ class AnnotationDummyUI:
         if not AnnotationService.set_font_size(sel, self._font.model.get_value_as_float()):
             self._fill_font(AnnotationService.get(sel) if sel else None)
 
+    def _apply_arrow(self):
+        """칸의 배수를 모든 화살표에. 안 되면 칸을 지금 값으로 되돌린다"""
+        if not AnnotationService.set_arrow_scale(self._arrow.model.get_value_as_float()):
+            self._arrow.model.set_value(AnnotationService.arrow_scale())
+
     def _reset(self):
         """고른 마커의 패널을 처음 자리로"""
         AnnotationService.reset_panel(AnnotationService.selected())
@@ -98,6 +108,10 @@ class AnnotationDummyUI:
     def _on_change(self, reason: str):
         """끄는 중의 잦은 알림은 넘긴다. 패널을 클릭하면 그 패널의 글을 칸에 채운다"""
         if reason in QUIET_REASONS:
+            return
+        if reason == "arrow":
+            self._arrow.model.set_value(AnnotationService.arrow_scale())
+            self._status.text = AnnotationService.status()
             return
         if reason == "font":
             sel = AnnotationService.selected()

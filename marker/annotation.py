@@ -1160,6 +1160,7 @@ class Annotation:
         self._drag = None
         self._hover_edge = None  # 마우스가 올라간 변 띠 (view, marker id, edge): 커서가 크기 모양인 곳
         self._clicked = None  # 마지막으로 클릭한 패널
+        self._arrow_scale = 1.0  # 화살표 크기 배수 (모든 화살표 공통)
         self._closed = False
         self._arrows = _Arrows()
 
@@ -1253,7 +1254,7 @@ class Annotation:
     # -- 알림 --------------------------------------------------------------------
 
     def add_listener(self, fn) -> None:
-        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, panel, create, status"""
+        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, panel, create, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1299,9 +1300,8 @@ class Annotation:
         """마지막 상태 글"""
         return self._status
 
-    @staticmethod
-    def arrow_length() -> float:
-        """모든 화살표가 쓰는 길이 (스테이지 단위). ARROW_LENGTH_M 을 장면의 metersPerUnit 으로 환산"""
+    def arrow_length(self) -> float:
+        """모든 화살표가 쓰는 길이 (스테이지 단위). ARROW_LENGTH_M x 화살표 배수를 장면의 metersPerUnit 으로 환산"""
         try:
             import omni.usd
             from pxr import UsdGeom
@@ -1309,7 +1309,27 @@ class Annotation:
             mpu = float(UsdGeom.GetStageMetersPerUnit(stage)) if stage is not None else 1.0
         except Exception:
             mpu = 1.0
-        return ARROW_LENGTH_M / mpu if mpu > 0 else ARROW_LENGTH_M
+        metres = ARROW_LENGTH_M * self._arrow_scale
+        return metres / mpu if mpu > 0 else metres
+
+    def arrow_scale(self) -> float:
+        """화살표 크기 배수 (모든 inlet, outlet 공통)"""
+        return self._arrow_scale
+
+    def set_arrow_scale(self, scale) -> bool:
+        """화살표 크기 배수. 모든 inlet, outlet 이 함께 바뀌어 늘 같은 크기다"""
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(float(scale)):
+            self._say("화살표 배수는 숫자여야 합니다")
+            return False
+        if not MIN_ARROW_SCALE <= float(scale) <= MAX_ARROW_SCALE:
+            self._say(f"화살표 배수는 {MIN_ARROW_SCALE:g} ~ {MAX_ARROW_SCALE:g} 입니다")
+            return False
+        self._arrow_scale = float(scale)
+        for m in self._markers:  # 화살표와, 화살표 끝에 붙은 패널 자리
+            if m["kind"] in ARROW_KINDS:
+                self._restyle(m["id"])
+        self._notify("arrow")
+        return True
 
     def _find(self, marker_id):
         for m in self._markers:
