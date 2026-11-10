@@ -61,16 +61,8 @@ PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 # -- 화살표 (ui.scene, 월드 크기) -----------------------------------------------------
 
 ARROW_LINE_PX = 3.0                     # 화살표 몸통 선 두께 (화면 px)
-ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
-ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
-CONE_SEGMENTS = 32                      # 원뿔 둘레 조각 수
-CONE_AMBIENT = 0.35                     # 원뿔 음영: 빛이 안 닿는 쪽 밝기
-CONE_DIFFUSE = 0.75                     # 원뿔 음영: 빛을 정면으로 받을 때 더해지는 밝기
-CONE_SPECULAR = 0.25                    # 원뿔 음영: 반짝임 세기
-CONE_SHININESS = 24.0                   # 원뿔 음영: 반짝임 좁기 (클수록 작은 점)
-CONE_LIGHT_UP = 0.6                     # 빛을 카메라에서 위로 비키는 정도
-CONE_LIGHT_LEFT = 0.3                   # 빛을 카메라에서 왼쪽으로 비키는 정도
-CONE_FALLBACK_LIGHT = (0.37, 0.56, 0.74)  # 카메라를 모를 때 빛 방향 (월드, 단위 벡터)
+ARROW_HEAD = 0.25                       # 화살촉 삼각형 길이 = 화살표 길이 x 이 값
+ARROW_RADIUS = 0.08                     # 화살촉 삼각형 반폭 = 화살표 길이 x 이 값
 ARROW_VIEW_SHARE = 0.08                 # 새 화살표 길이 = 찍을 때 카메라 거리 x 이 값
 ARROW_FALLBACK = 1.0                    # 카메라 거리를 모를 때 화살표 길이 (스테이지 단위)
 

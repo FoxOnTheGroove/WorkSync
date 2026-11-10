@@ -7,7 +7,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "fit_line", "wrap_lines", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "cone_mesh", "cone_colors"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "head_triangle"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -534,78 +534,18 @@ def _gesture_types():
     return _GESTURES
 
 
-def cone_mesh(tail, tip, size: float) -> dict:
-    """화살표 원뿔 머리 (월드). 옆면 + 밑면, 삼각형마다 점을 따로 둬서 꼭짓점 색으로 음영을 칠한다.
-    돌려주는 것: points, counts, indices, normals (점마다), faces [(면 법선, 면 가운데)], base (몸통 끝)"""
+def head_triangle(tail, tip, size: float, toward=None) -> tuple:
+    """(몸통 끝, 삼각형 세 점). 화살 방향을 따라 눕히고, 넓은 면이 카메라 쪽(toward)을 보게 세운다.
+    카메라를 모르거나 화살이 카메라를 똑바로 가리키면 아무 수직 방향으로"""
     d = _unit(_sub(tip, tail)) or [0.0, 0.0, 1.0]
     length = math.sqrt(_dot(_sub(tip, tail), _sub(tip, tail)))
     head = min(ARROW_HEAD * size, length)
-    r = ARROW_RADIUS * size
+    half = ARROW_RADIUS * size
     base = _sub(tip, _mul(d, head))
-    u, v = _perp_basis(d)
-    k = CONE_SEGMENTS
-    dirs = [_add(_mul(u, math.cos(2.0 * math.pi * i / k)), _mul(v, math.sin(2.0 * math.pi * i / k)))
-            for i in range(k + 1)]
-    slope = _unit([head, r, 0.0]) or [1.0, 0.0, 0.0]  # 옆면 법선 = 바깥 x cos + 앞 x sin
-    out = {"points": [], "counts": [], "indices": [], "normals": [], "faces": [], "base": base}
-
-    def tri(pts, nrm):
-        start = len(out["points"])
-        out["points"].extend(pts)
-        out["normals"].extend(nrm)
-        out["counts"].append(3)
-        out["indices"].extend((start, start + 1, start + 2))
-        flat = _unit(_cross(_sub(pts[1], pts[0]), _sub(pts[2], pts[0]))) or nrm[0]
-        out["faces"].append((flat, _mul(_add(_add(pts[0], pts[1]), pts[2]), 1.0 / 3.0)))
-
-    for i in range(k):  # 옆면 (바깥이 앞면)
-        a, b = dirs[i], dirs[i + 1]
-        mid = _unit(_add(a, b)) or a
-        tri([_add(base, _mul(a, r)), _add(base, _mul(b, r)), list(tip)],
-            [_add(_mul(n, slope[0]), _mul(d, slope[1])) for n in (a, b, mid)])
-    back = _mul(d, -1.0)
-    for i in range(k):  # 밑면 (뒤가 앞면)
-        a, b = dirs[i], dirs[i + 1]
-        tri([list(base), _add(base, _mul(b, r)), _add(base, _mul(a, r))], [back, back, back])
-    return out
-
-
-def cone_colors(mesh: dict, color, light, toward_of=None) -> list:
-    """원뿔 꼭짓점 색. 빛(light, 단위 벡터)에 따라 밝기를 칠하고, 카메라 반대쪽 면은 투명하게.
-    toward_of(점) 은 그 점에서 카메라 쪽 벡터 (모르면 None, 그때는 모든 면을 보인다)"""
-    rgb = [float(c) for c in color[:3]]
-    half = _unit(_add(light, [0.0, 0.0, 1.0])) or light
-    out = []
-    for f, (flat, centre) in enumerate(mesh["faces"]):
-        toward = toward_of(centre) if toward_of is not None else None
-        if toward is not None:
-            half = _unit(_add(light, _unit(toward) or light)) or light
-            if _dot(flat, toward) <= 0.0:
-                out.extend([[0.0, 0.0, 0.0, 0.0]] * 3)
-                continue
-        for n in mesh["normals"][3 * f:3 * f + 3]:
-            lit = CONE_AMBIENT + CONE_DIFFUSE * max(0.0, _dot(n, light))
-            spec = CONE_SPECULAR * max(0.0, _dot(n, half)) ** CONE_SHININESS
-            out.append([min(1.0, c * lit + spec) for c in rgb] + [1.0])
-    return out
-
-
-def _view_light(api):
-    """(눈 위치 | None, 빛 방향). 빛은 카메라에서 위, 왼쪽으로 조금 비켜 비춘다. 못 물으면 None"""
-    try:
-        from pxr import Gf
-        inv = Gf.Matrix4d(api.view).GetInverse()
-        back = inv.TransformDir(Gf.Vec3d(0.0, 0.0, 1.0))
-        up = inv.TransformDir(Gf.Vec3d(0.0, 1.0, 0.0))
-        right = inv.TransformDir(Gf.Vec3d(1.0, 0.0, 0.0))
-        light = _unit([back[i] + up[i] * CONE_LIGHT_UP - right[i] * CONE_LIGHT_LEFT for i in range(3)])
-        eye = None
-        if abs(api.projection[3][3]) < 1e-9:
-            e = inv.Transform(Gf.Vec3d(0.0, 0.0, 0.0))
-            eye = [e[0], e[1], e[2]]
-        return eye, light, [back[0], back[1], back[2]]
-    except Exception:
-        return None
+    side = _unit(_cross(d, toward)) if toward is not None else None
+    if side is None:
+        side = _perp_basis(d)[0]
+    return base, [list(tip), _add(base, _mul(side, half)), _sub(base, _mul(side, half))]
 
 
 def _move(sc, x: float, y: float, z: float = 0.0):
@@ -632,15 +572,14 @@ class _MarkerView:
         with view.root:
             self.top = sc.Transform()
         with self.top:
-            self._shaft = self._cone = self._cone_mesh = None
-            self._arrow_color = marker["color"]
+            self._shaft = self._head = None
+            self._arrow = None
             if marker["kind"] in ARROW_KINDS:
-                tail, tip = _arrow_ends(marker)
-                self._cone_mesh = cone_mesh(tail, tip, marker["size"])
-                self._shaft = sc.Line(tail, self._cone_mesh["base"], color=white, thickness=ARROW_LINE_PX)
-                n = len(self._cone_mesh["points"])
-                self._cone = sc.PolygonMesh(self._cone_mesh["points"], [[1.0, 1.0, 1.0, 1.0]] * n,
-                                            self._cone_mesh["counts"], self._cone_mesh["indices"])
+                self._arrow = (*_arrow_ends(marker), marker["size"])
+                base, tri = head_triangle(*self._arrow)
+                self._shaft = sc.Line(self._arrow[0], base, color=white, thickness=ARROW_LINE_PX)
+                self._head = sc.PolygonMesh(tri, [[1.0, 1.0, 1.0, 1.0]] * 3, [3, 3],
+                                            [0, 1, 2, 0, 2, 1])  # 앞뒤 두 면이라 어느 쪽에서도 보인다
             self._anchor_xf = sc.Transform()
             with self._anchor_xf:
                 with sc.Transform(scale_to=sc.Space.SCREEN):
@@ -719,22 +658,18 @@ class _MarkerView:
         if self._shaft is not None:
             self._shaft.color = ink
             self._shaft.thickness = ARROW_LINE_PX * (PICKED_LINE_SCALE if picked else 1.0)
-        self._arrow_color = color
-        self.shade()
+            self._head.colors = [_rgba(color)] * 3
+        self.aim()
         self.relayout(marker, layout, picked)
 
-    def shade(self) -> None:
-        """원뿔 음영을 지금 카메라에 맞춰 다시 칠한다 (도형은 그대로, 색만)"""
-        if self._cone is None:
+    def aim(self) -> None:
+        """화살촉 삼각형을 지금 카메라 쪽으로 세운다 (도형은 그대로, 점 자리만)"""
+        if self._head is None:
             return
-        frame = _view_light(self._view.api)
-        if frame is None:
-            colors = cone_colors(self._cone_mesh, self._arrow_color, CONE_FALLBACK_LIGHT)
-        else:
-            eye, light, back = frame
-            toward = (lambda c: _sub(eye, c)) if eye is not None else (lambda c: back)
-            colors = cone_colors(self._cone_mesh, self._arrow_color, light, toward)
-        self._cone.colors = colors
+        tail, tip, size = self._arrow
+        toward = _camera_of(self._view.api, tip)[0] if self._view.api is not None else None
+        _base, tri = head_triangle(tail, tip, size, toward)
+        self._head.positions = tri
 
     def relayout(self, marker, layout, picked: bool) -> None:
         """상자 크기가 바뀌었을 때. 바탕, 글, 손잡이, 자리, 지시선"""
@@ -993,7 +928,7 @@ class _View:
         for mv in self.marks.values():
             self._cull_one(mv, view, perspective)
             if mv.shown:
-                mv.shade()
+                mv.aim()
 
 
 class Annotation:
