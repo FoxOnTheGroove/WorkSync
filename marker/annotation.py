@@ -303,6 +303,75 @@ def _later(fn) -> None:
     asyncio.get_event_loop().call_soon(run)
 
 
+class _Cursor:
+    """앱 창 커서 모양. 변 손잡이 위에서는 <-> / 위아래 화살표, 끝나면 되돌린다.
+    여럿이 잡을 수 있게 key 별로 쥐고, 마지막에 잡은 모양을 쓴다. 바꿀 수 없으면 조용히 그대로 둔다"""
+
+    _holds = {}
+    _way = None  # 바꾸는 방법: ("window", 커서 창) / ("carb", (windowing, app window)) / False
+
+    @classmethod
+    def hold(cls, key: str, shape: str) -> None:
+        cls._holds.pop(key, None)
+        cls._holds[key] = shape
+        cls._apply()
+
+    @classmethod
+    def release(cls, key: str) -> None:
+        if cls._holds.pop(key, None) is not None:
+            cls._apply()
+
+    @classmethod
+    def release_prefix(cls, prefix: str) -> None:
+        keys = [k for k in cls._holds if k.startswith(prefix)]
+        for k in keys:
+            del cls._holds[k]
+        if keys:
+            cls._apply()
+
+    @classmethod
+    def _apply(cls) -> None:
+        shape = list(cls._holds.values())[-1] if cls._holds else None
+        try:
+            way = cls._find()
+            if not way:
+                return
+            import carb.windowing
+            std = carb.windowing.CursorStandardShape
+            kind = {"h": std.HORIZONTAL_RESIZE, "v": std.VERTICAL_RESIZE}.get(shape)
+            if way[0] == "window":
+                if kind is None:
+                    way[1].clear_overridden_cursor_shape()
+                else:
+                    way[1].override_cursor_shape(kind)
+            else:
+                windowing, app_window = way[1]
+                windowing.set_cursor(app_window, windowing.create_cursor_standard(kind or std.ARROW))
+        except Exception as e:
+            cls._way = False
+            print(f"{TAG} cursor shape stays as is: {type(e).__name__}: {e}")
+
+    @classmethod
+    def _find(cls):
+        if cls._way is not None:
+            return cls._way
+        try:
+            import omni.kit.window.cursor as cursor_ext
+            cls._way = ("window", cursor_ext.get_main_window())
+            return cls._way
+        except Exception:
+            pass
+        try:
+            import carb.windowing
+            import omni.appwindow
+            cls._way = ("carb", (carb.windowing.acquire_windowing_interface(),
+                                 omni.appwindow.get_default_app_window().get_window()))
+        except Exception as e:
+            cls._way = False
+            print(f"{TAG} cursor shape stays as is: {type(e).__name__}: {e}")
+        return cls._way
+
+
 class _Mouse:
     """앱 창 기준 커서 자리 (ui 픽셀, y 아래로). 끄는 거리를 픽셀로 재는 데 쓴다"""
 
@@ -763,24 +832,31 @@ class _MarkerView:
         self.restyle(marker, layout, picked)
 
     def _edge(self, spot):
-        """크기 손잡이 하나 (변 가운데나 꼭짓점). 보이는 작은 네모는 테두리 위에, 잡는 큰 네모는
-        바깥쪽으로 비껴 둬서 몸통과 거의 안 겹친다. 자리만 옮기고 다시 짓지 않는다"""
+        """변 손잡이 하나. 변 전체를 따라 테두리에 걸친 얇은 띠. 위에 오면 커서가 <-> (위아래 변은 세로)
+        로 바뀐다. 자리와 크기만 바꾸고 다시 짓지 않는다"""
         sc, ui, view = self._view.sc, self._view.ui, self._view
         _click, Drag, Hover = _gesture_types()
         owner, mid = view.owner, self.id
         key = f"h:{mid}:{spot[0]}{spot[1]}"
-        out = (HANDLE_HIT_PX - HANDLE_GRIP_PX) / 2.0
+        shape = "h" if spot[0] else "v"
+
+        def enter():
+            view.hold(key)
+            _Cursor.hold(key, shape)
+
+        def leave():
+            view.release(key)
+            _Cursor.release(key)
+
         xf = sc.Transform()
         with xf:
-            with sc.Transform(transform=_move(sc, spot[0] * out, spot[1] * out)):
-                sc.Rectangle(HANDLE_HIT_PX, HANDLE_HIT_PX, color=ui.color(*HANDLE_HIT_COLOR), gesture=[
-                    Hover(lambda: view.hold(key), lambda: view.release(key), name="handle_hover"),
-                    Drag(lambda m: owner._drag_began(view, mid, spot, m),
-                         lambda m: owner._drag_changed(view, m),
-                         lambda: owner._drag_ended(view), priority=HANDLE_PRIORITY, name="handle"),
-                ])
-            sc.Rectangle(HANDLE_GRIP_PX, HANDLE_GRIP_PX, color=ui.color(*HANDLE_COLOR))
-        return xf
+            strip = sc.Rectangle(1.0, 1.0, color=ui.color(*HANDLE_HIT_COLOR), gesture=[
+                Hover(enter, leave, name="edge_hover"),
+                Drag(lambda m: owner._drag_began(view, mid, spot, m),
+                     lambda m: owner._drag_changed(view, m),
+                     lambda: owner._drag_ended(view), priority=HANDLE_PRIORITY, name="edge"),
+            ])
+        return xf, strip
 
     # -- 맞추기 (도형은 그대로, 속성만) ---------------------------------------------
 
@@ -839,16 +915,20 @@ class _MarkerView:
         self._leader_xf.visible = True
 
     def _place_handles(self, layout, picked: bool) -> None:
-        """손잡이는 고른 것에만. 네 변 가운데와 네 꼭짓점"""
+        """손잡이는 고른 것에만. 네 변을 따라, 테두리 가운데에 걸치게. 끝은 띠 두께만큼 줄여 꼭짓점에서 안 겹친다"""
         sc = self._view.sc
         self._handles.visible = bool(picked)
         if not picked:
             self._view.release_prefix(f"h:{self.id}:")
-        w, h = layout["w"], layout["h"]
-        for (ex, ey), xf in self._edges.items():
-            x = w / 2.0 if ex == 0 else (w if ex > 0 else 0.0)
-            y = -h / 2.0 if ey == 0 else (0.0 if ey > 0 else -h)
-            xf.transform = _move(sc, x, y, HANDLE_Z)
+            _Cursor.release_prefix(f"h:{self.id}:")
+        w, h, t = layout["w"], layout["h"], EDGE_HIT_PX
+        for (ex, ey), (xf, strip) in self._edges.items():
+            if ex:
+                strip.width, strip.height = t, max(h - t, 1.0)
+                xf.transform = _move(sc, w if ex > 0 else 0.0, -h / 2.0, HANDLE_Z)
+            else:
+                strip.width, strip.height = max(w - t, 1.0), t
+                xf.transform = _move(sc, w / 2.0, 0.0 if ey > 0 else -h, HANDLE_Z)
 
     def _color(self, marker, picked: bool):
         return _bright(marker["color"]) if picked else marker["color"]
@@ -863,6 +943,7 @@ class _MarkerView:
         """그린 것과 걸어 둔 선택 잠금을 놓는다"""
         self._view.release_prefix(f"bg:{self.id}")
         self._view.release_prefix(f"h:{self.id}:")
+        _Cursor.release_prefix(f"h:{self.id}:")
         self._edges = {}
         self._desc = []
         self.top.clear()
@@ -1406,7 +1487,7 @@ class Annotation:
         _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
     def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
-        """끌기 시작. edge 가 None 이면 옮기기, 아니면 그 손잡이(변이나 꼭짓점)로 크기"""
+        """끌기 시작. edge 가 None 이면 옮기기, 아니면 그 변으로 크기"""
         m = self._find(marker_id)
         if m is None or self._creating:
             return
@@ -1422,6 +1503,8 @@ class Annotation:
             "min": layout["min"], "moved": False,
         }
         view.hold("drag")
+        if edge is not None:
+            _Cursor.hold("drag", "h" if edge[0] else "v")
 
     def _drag_changed(self, view, ndc) -> None:
         """끄는 중. 끝 위치 기준으로 다시 계산해 뷰포트마다 그 패널만 고친다"""
@@ -1457,6 +1540,7 @@ class Annotation:
 
     def _end_drag(self) -> None:
         d, self._drag = self._drag, None
+        _Cursor.release("drag")
         if d is not None and d["view"] in self._views:
             d["view"].release("drag")
 
