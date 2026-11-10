@@ -13,11 +13,12 @@ __all__ = ["Annotation", "instance", "forget",
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
 
 def text_width(text: str, size: float) -> float:
-    """글자 폭 어림. 전각은 1em, 나머지는 0.66em 로 넉넉하게"""
+    """글자 폭 어림. sc.Label(size) 의 실제 글자는 size x GLYPH_EM 크기라 그 em 으로 잰다.
+    전각은 WIDE_EM, 나머지는 NARROW_EM (넉넉하게)"""
     em = 0.0
     for ch in text:
         em += WIDE_EM if unicodedata.east_asian_width(ch) in ("W", "F") else NARROW_EM
-    return em * size
+    return em * size * GLYPH_EM
 
 
 def _with_ellipsis(text: str, max_px: float, size: float) -> str:
