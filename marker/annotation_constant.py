@@ -21,7 +21,9 @@ MAX_DESCRIPTION = 1000                  # description 최대 글자 수
 # -- 패널 글자 (화면 px) ------------------------------------------------------------
 
 TEXT_SCALE = 1.0                        # 패널 글자 배율. 글자 크기 조절이 붙을 자리
-FONT_PX = 14.0                          # 첫 줄(label) 글자 크기
+FONT_PX = 14.0                          # 첫 줄(label) 기본 글자 크기. 마커마다 font_px 로 바꾼다
+MIN_FONT_PX = 6.0                       # 마커 글자 크기 최소
+MAX_FONT_PX = 72.0                      # 마커 글자 크기 최대
 DESC_RATIO = 0.8                        # description 글자 크기 = FONT_PX x 이 값
 LINE_HEIGHT = 1.3                       # 줄 간격 = 글자 크기 x 이 값
 PAD_PX = 5.0                            # 상자 안쪽 여백
@@ -77,5 +79,5 @@ NEIGHBOR_PX = 2                         # 법선을 구할 이웃 픽셀 거리
 GESTURE_PRIORITY = 1000                 # 패널 몸통 제스처 우선순위 (Kit 선택보다 위)
 ARM_PRIORITY = 2000                     # 찍기 대기 클릭 우선순위 (패널보다 위)
 SELECT_RELEASE_S = 0.25                 # 패널, 손잡이를 다 놓은 뒤 Kit 클릭 선택을 되살리기까지 (초)
-DRAG_SCALE = 1.0                        # 끌기 배율 보정. 패널이 마우스보다 느리면 키우고 빠르면 줄인다
+DRAG_SCALE = 2.0                        # 끌기 배율 (마우스 ui px -> 패널 px). 원인 확인 전까지 2.0 고정
 REGISTRY_TRIES = 600                    # 뷰포트 레지스트리를 기다리는 프레임 수

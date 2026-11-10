@@ -295,16 +295,6 @@ def _xy(ndc):
 ZONE_NAMES = {None: "body", (-1, 0): "L", (1, 0): "R", (0, 1): "T", (0, -1): "B"}
 
 
-def _dpi_scale() -> float:
-    """Kit 화면 배율 (ui px -> 물리 px). 못 물으면 1"""
-    try:
-        import omni.ui as ui
-        v = float(ui.Workspace.get_dpi_scale())
-        return v if math.isfinite(v) and v > 0 else 1.0
-    except Exception:
-        return 1.0
-
-
 def _later(fn) -> None:
     """다음 루프에 부른다. 지금 지우는 도형의 콜백 안에서 부르지 않으려고"""
     def run():
@@ -1187,6 +1177,7 @@ class Annotation:
         self._queries: set = set()
         self._drag = None
         self._hover_edge = None  # 마우스가 올라간 변 띠 (view, marker id, edge): 커서가 크기 모양인 곳
+        self._clicked = None  # 마지막으로 클릭한 패널
         self._closed = False
         self._arrows = _Arrows()
 
@@ -1280,7 +1271,7 @@ class Annotation:
     # -- 알림 --------------------------------------------------------------------
 
     def add_listener(self, fn) -> None:
-        """바뀔 때마다 fn(reason). reason: add, remove, select, text, panel, create, status"""
+        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, panel, create, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1314,6 +1305,10 @@ class Annotation:
         """고른 마커 id. 없으면 None"""
         return self._selected
 
+    def clicked(self):
+        """마지막으로 클릭한 패널의 마커 id. 없으면 None"""
+        return self._clicked
+
     def creating(self) -> str:
         """찍기를 기다리는 종류. 아니면 빈 칸"""
         return self._creating
@@ -1341,7 +1336,9 @@ class Annotation:
         return None
 
     def _layout(self, marker) -> dict:
-        return panel_layout(_title_of(marker), marker["description"], marker.get("box"))
+        font = marker.get("font_px") or FONT_PX
+        return panel_layout(_title_of(marker), marker["description"], marker.get("box"),
+                            TEXT_SCALE * font / FONT_PX)
 
     # -- 만들기 ------------------------------------------------------------------
 
@@ -1430,6 +1427,7 @@ class Annotation:
             marker["direction"] = [sign * float(c) for c in n]
         marker["offset"] = list(DEFAULT_OFFSET)
         marker["box"] = None
+        marker["font_px"] = FONT_PX
         return marker
 
     # -- 고르기와 고치기 ------------------------------------------------------------
@@ -1473,6 +1471,24 @@ class Annotation:
         m["label"], m["description"] = label, description
         self._restyle(marker_id)
         self._notify("text")
+        return True
+
+    def set_font_size(self, marker_id, px) -> bool:
+        """그 마커 패널의 글자 크기 (첫 줄 px, description 은 DESC_RATIO 배). 상자 크기를 정해 뒀으면
+        그 안에 들어가는 만큼만 보인다"""
+        m = self._find(marker_id)
+        if m is None:
+            self._say("글자 크기를 바꿀 마커가 없습니다")
+            return False
+        if isinstance(px, bool) or not isinstance(px, (int, float)) or not math.isfinite(float(px)):
+            self._say("글자 크기는 숫자여야 합니다")
+            return False
+        if not MIN_FONT_PX <= float(px) <= MAX_FONT_PX:
+            self._say(f"글자 크기는 {MIN_FONT_PX:g} ~ {MAX_FONT_PX:g} 입니다")
+            return False
+        m["font_px"] = float(px)
+        self._restyle(marker_id)
+        self._notify("font")
         return True
 
     def reset_panel(self, marker_id) -> bool:
@@ -1534,7 +1550,15 @@ class Annotation:
         """클릭. 고른 패널의 변 띠(크기 커서 자리)면 무시, 아니면 고른다 (다음 루프에)"""
         if zone is not None and marker_id == self._selected:
             return
-        _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
+
+        def clicked():
+            if self._find(marker_id) is None:
+                return
+            self.select(marker_id)
+            self._clicked = marker_id
+            self._notify("click")
+
+        _later(clicked)
 
     def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
         """끌기 시작. 변 띠에서 시작하면 그 변 크기 조절, 몸통이면 이동. 먼저 클릭해서 고른 패널만"""
@@ -1609,9 +1633,9 @@ class Annotation:
 
     @staticmethod
     def _delta(d, view, ndc):
-        """시작부터 끈 거리 (패널 단위, y 위로). 패널의 화면 px 는 물리 픽셀이라
-        앱 커서 이동(ui px) x 화면 배율(DPI) 로 잰다. 커서를 못 물으면 NDC x 해상도 / 2 x 배율로 어림"""
-        scale = _dpi_scale() * DRAG_SCALE
+        """시작부터 끈 거리 (패널 단위, y 위로). 앱 커서 이동(ui px) x DRAG_SCALE.
+        커서를 못 물으면 NDC x 해상도 / 2 x DRAG_SCALE 로 어림"""
+        scale = DRAG_SCALE
         now = _Mouse.at()
         if now is not None and d["mouse"] is not None:
             return (now[0] - d["mouse"][0]) * scale, (d["mouse"][1] - now[1]) * scale

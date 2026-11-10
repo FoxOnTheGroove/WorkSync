@@ -12,6 +12,7 @@ WINDOW_HIGH = 420                       # 시험 창 높이
 LIST_HIGH = 120                         # 마커 목록 칸 높이
 ROW_HIGH = 22                           # 마커 목록 한 줄 높이
 FIELD_LABEL_WIDE = 80                   # 글 칸 앞 이름 폭
+FONT_FIELD_WIDE = 50                    # 글자 크기 칸 폭
 KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))  # 만들기 버튼 (종류, 글)
 QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 알림 (끄는 중 잦은 것)
 PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
@@ -30,6 +31,7 @@ class AnnotationDummyUI:
         self._picked = None
         self._label = None
         self._desc = None
+        self._font = None
         self._shown_id = None
 
     def build_ui(self):
@@ -49,7 +51,11 @@ class AnnotationDummyUI:
                 with ui.ScrollingFrame(height=LIST_HIGH):
                     self._list = ui.VStack(height=0, spacing=1)
                 ui.Separator(height=6)
-                self._picked = ui.Label("선택: 없음", height=0)
+                with ui.HStack(height=0, spacing=4):
+                    self._picked = ui.Label("선택: 없음")
+                    ui.Label("글자 크기", width=0)
+                    self._font = ui.FloatField(width=FONT_FIELD_WIDE)
+                    self._font.model.add_end_edit_fn(lambda _m: self._apply_font())
                 with ui.HStack(height=0, spacing=4):
                     ui.Label("label", width=FIELD_LABEL_WIDE)
                     self._label = ui.StringField()
@@ -72,6 +78,12 @@ class AnnotationDummyUI:
                                    self._label.model.get_value_as_string(),
                                    self._desc.model.get_value_as_string())
 
+    def _apply_font(self):
+        """칸의 글자 크기를 고른 마커에. 안 되면(범위 밖 등) 칸을 지금 값으로 되돌린다"""
+        sel = AnnotationService.selected()
+        if not AnnotationService.set_font_size(sel, self._font.model.get_value_as_float()):
+            self._fill_font(AnnotationService.get(sel) if sel else None)
+
     def _reset(self):
         """고른 마커의 패널을 처음 자리로"""
         AnnotationService.reset_panel(AnnotationService.selected())
@@ -83,10 +95,14 @@ class AnnotationDummyUI:
     # -- 다시 채우기 --------------------------------------------------------------
 
     def _on_change(self, reason: str):
-        """끄는 중의 잦은 알림은 넘기고 나머지는 다시 채운다"""
+        """끄는 중의 잦은 알림은 넘긴다. 패널을 클릭하면 그 패널의 글을 칸에 채운다"""
         if reason in QUIET_REASONS:
             return
-        self._refresh(fill=reason == "text")
+        if reason == "font":
+            sel = AnnotationService.selected()
+            self._fill_font(AnnotationService.get(sel) if sel else None)
+            return
+        self._refresh(fill=reason in ("text", "click"))
 
     def _refresh(self, fill: bool = False):
         """상태, 목록, 고른 마커. 고른 것이 바뀌었을 때만 글 칸을 덮어쓴다"""
@@ -101,6 +117,12 @@ class AnnotationDummyUI:
             self._shown_id = sel
             self._label.model.set_value(one["label"] if one else "")
             self._desc.model.set_value(one["description"] if one else "")
+            self._fill_font(one)
+
+    def _fill_font(self, one):
+        """글자 크기 칸. 고른 것이 없으면 0"""
+        if self._font is not None:
+            self._font.model.set_value(float(one.get("font_px") or 0.0) if one else 0.0)
 
     def _fill_list(self):
         """마커마다 한 줄. 누르면 고른다"""

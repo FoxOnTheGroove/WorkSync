@@ -31,6 +31,11 @@ class AnnotationService:
         return instance().set_text(marker_id, label, description)
 
     @classmethod
+    def set_font_size(cls, marker_id, px):
+        """패널 글자 크기 (첫 줄 px)"""
+        return instance().set_font_size(marker_id, px)
+
+    @classmethod
     def reset_panel(cls, marker_id):
         """패널을 처음 자리, 글에 맞춘 크기로"""
         return instance().reset_panel(marker_id)
@@ -61,6 +66,11 @@ class AnnotationService:
     def selected(cls):
         """고른 마커 id. 없으면 None"""
         return instance().selected()
+
+    @classmethod
+    def clicked(cls):
+        """마지막으로 클릭한 패널의 마커 id. 없으면 None"""
+        return instance().clicked()
 
     @classmethod
     def creating(cls):
