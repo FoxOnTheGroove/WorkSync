@@ -211,23 +211,21 @@ def _bright(color):
     return [float(c) + (1.0 - float(c)) * HIGHLIGHT_MIX for c in color[:3]]
 
 
-def _arrow_ends(marker):
-    """(꼬리, 머리). inlet 은 머리가 표면, outlet 은 꼬리가 표면"""
-    p = marker["position"]
+def _arrow_local(marker):
+    """(꼬리, 머리). 마커 위치를 원점으로 한 화면 크기 공간(px)에서. inlet 은 머리가, outlet 은 꼬리가 표면"""
     d = _unit(marker["direction"]) or [0.0, 0.0, 1.0]
-    size = marker["size"]
     if marker["kind"] == "inlet":
-        return _sub(p, _mul(d, size)), list(p)
-    return list(p), _add(p, _mul(d, size))
+        return _mul(d, -ARROW_PX), [0.0, 0.0, 0.0]
+    return [0.0, 0.0, 0.0], _mul(d, ARROW_PX)
 
 
-def _panel_anchor(marker):
-    """패널이 매달리는 월드 점. label 은 점, inlet 은 꼬리, outlet 은 머리"""
+def _panel_attach(marker):
+    """패널이 매달리는 점 (마커 위치 원점, 화면 px). label 은 점, inlet 은 꼬리, outlet 은 머리"""
     if marker["kind"] == "inlet":
-        return _arrow_ends(marker)[0]
+        return _arrow_local(marker)[0]
     if marker["kind"] == "outlet":
-        return _arrow_ends(marker)[1]
-    return list(marker["position"])
+        return _arrow_local(marker)[1]
+    return [0.0, 0.0, 0.0]
 
 
 def _title_of(marker) -> str:
@@ -572,53 +570,55 @@ class _MarkerView:
         with view.root:
             self.top = sc.Transform()
         with self.top:
-            self._shaft = self._head = None
-            self._arrow = None
-            if marker["kind"] in ARROW_KINDS:
-                self._arrow = (*_arrow_ends(marker), marker["size"])
-                base, tri = head_triangle(*self._arrow)
-                self._shaft = sc.Line(self._arrow[0], base, color=white, thickness=ARROW_LINE_PX)
-                self._head = sc.PolygonMesh(tri, [[1.0, 1.0, 1.0, 1.0]] * 3, [3, 3],
-                                            [0, 1, 2, 0, 2, 1])  # 앞뒤 두 면이라 어느 쪽에서도 보인다
             self._anchor_xf = sc.Transform()
             with self._anchor_xf:
-                with sc.Transform(scale_to=sc.Space.SCREEN):
-                    with sc.Transform(look_at=sc.Transform.LookAt.CAMERA):
-                        self._dot = None
-                        if marker["kind"] == "label":
-                            self._dot = sc.Points([[0.0, 0.0, 0.0]], colors=[[1.0, 1.0, 1.0, 1.0]], sizes=[DOT_PX])
-                        self._leader_xf = sc.Transform()
-                        with self._leader_xf:
-                            self._leader = sc.Line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], color=white,
-                                                   thickness=LEADER_PX)
-                        self._panel = sc.Transform()
-                        with self._panel:
-                            self._bg_xf = sc.Transform()
-                            with self._bg_xf:
-                                self._bg = sc.Rectangle(1.0, 1.0, color=ui.color(*BOX_BG), gesture=[
-                                    Hover(lambda: view.hold(bg_key), lambda: view.release(bg_key),
-                                          name="panel_hover"),
-                                    Click(lambda _m: owner._panel_clicked(mid), name="panel_click"),
-                                    Drag(lambda m: owner._drag_began(view, mid, None, m),
-                                         lambda m: owner._drag_changed(view, m),
-                                         lambda: owner._drag_ended(view), name="panel_move"),
-                                ])
-                                self._border = sc.Rectangle(1.0, 1.0, color=white, wireframe=True,
-                                                            thickness=BORDER_PX)
-                            self._title_xf = sc.Transform()
-                            with self._title_xf:
-                                self._title = sc.Label("", color=white, size=FONT_PX,
-                                                       alignment=ui.Alignment.LEFT_CENTER)
-                            for _ in range(MAX_PANEL_LINES):
-                                xf = sc.Transform()
-                                with xf:
-                                    label = sc.Label("", color=ui.color(*DESC_COLOR), size=FONT_PX,
-                                                     alignment=ui.Alignment.LEFT_CENTER)
-                                self._desc.append((xf, label))
-                            self._handles = sc.Transform()
-                            with self._handles:
-                                for edge in EDGES:
-                                    self._edges[edge] = self._edge(edge)
+                with sc.Transform(scale_to=sc.Space.SCREEN):  # 여기부터 1 = 화면 1 px, 축은 월드 그대로
+                    self._shaft = self._head = None
+                    self._arrow = None
+                    if marker["kind"] in ARROW_KINDS:
+                        self._arrow = (*_arrow_local(marker), ARROW_PX)
+                        base, tri = head_triangle(*self._arrow)
+                        self._shaft = sc.Line(self._arrow[0], base, color=white, thickness=ARROW_LINE_PX)
+                        self._head = sc.PolygonMesh(tri, [[1.0, 1.0, 1.0, 1.0]] * 3, [3, 3],
+                                                    [0, 1, 2, 0, 2, 1])  # 앞뒤 두 면이라 어느 쪽에서도 보인다
+                    self._attach_xf = sc.Transform()
+                    with self._attach_xf:
+                        with sc.Transform(look_at=sc.Transform.LookAt.CAMERA):
+                            self._dot = None
+                            if marker["kind"] == "label":
+                                self._dot = sc.Points([[0.0, 0.0, 0.0]], colors=[[1.0, 1.0, 1.0, 1.0]], sizes=[DOT_PX])
+                            self._leader_xf = sc.Transform()
+                            with self._leader_xf:
+                                self._leader = sc.Line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], color=white,
+                                                       thickness=LEADER_PX)
+                            self._panel = sc.Transform()
+                            with self._panel:
+                                self._bg_xf = sc.Transform()
+                                with self._bg_xf:
+                                    self._bg = sc.Rectangle(1.0, 1.0, color=ui.color(*BOX_BG), gesture=[
+                                        Hover(lambda: view.hold(bg_key), lambda: view.release(bg_key),
+                                              name="panel_hover"),
+                                        Click(lambda _m: owner._panel_clicked(mid), name="panel_click"),
+                                        Drag(lambda m: owner._drag_began(view, mid, None, m),
+                                             lambda m: owner._drag_changed(view, m),
+                                             lambda: owner._drag_ended(view), name="panel_move"),
+                                    ])
+                                    self._border = sc.Rectangle(1.0, 1.0, color=white, wireframe=True,
+                                                                thickness=BORDER_PX)
+                                self._title_xf = sc.Transform()
+                                with self._title_xf:
+                                    self._title = sc.Label("", color=white, size=FONT_PX,
+                                                           alignment=ui.Alignment.LEFT_CENTER)
+                                for _ in range(MAX_PANEL_LINES):
+                                    xf = sc.Transform()
+                                    with xf:
+                                        label = sc.Label("", color=ui.color(*DESC_COLOR), size=FONT_PX,
+                                                         alignment=ui.Alignment.LEFT_CENTER)
+                                    self._desc.append((xf, label))
+                                self._handles = sc.Transform()
+                                with self._handles:
+                                    for edge in EDGES:
+                                        self._edges[edge] = self._edge(edge)
         self.restyle(marker, layout, picked)
 
     def _edge(self, edge) -> tuple:
@@ -644,7 +644,8 @@ class _MarkerView:
         """다 맞춘다. 고른 상태, 글, 색이 바뀌었을 때"""
         sc, ui = self._view.sc, self._view.ui
         self.anchor = list(marker["position"])
-        self._anchor_xf.transform = _move(sc, *_panel_anchor(marker))
+        self._anchor_xf.transform = _move(sc, *marker["position"])
+        self._attach_xf.transform = _move(sc, *_panel_attach(marker))
         color = self._color(marker, picked)
         ink = ui.color(*_rgba(color))
         if self._dot is not None:
@@ -667,7 +668,7 @@ class _MarkerView:
         if self._head is None:
             return
         tail, tip, size = self._arrow
-        toward = _camera_of(self._view.api, tip)[0] if self._view.api is not None else None
+        toward = _camera_of(self._view.api, self.anchor)[0] if self._view.api is not None else None
         _base, tri = head_triangle(tail, tip, size, toward)
         self._head.positions = tri
 
@@ -1168,11 +1169,10 @@ class Annotation:
             "position": pos,
         }
         if kind in ARROW_KINDS:
-            toward, distance = _camera_of(api, pos)
+            toward, _distance = _camera_of(api, pos)
             n = hit.get("normal") or _unit(toward) or [0.0, 0.0, 1.0]
             sign = -1.0 if kind == "inlet" else 1.0
             marker["direction"] = [sign * float(c) for c in n]
-            marker["size"] = distance * ARROW_VIEW_SHARE if distance else ARROW_FALLBACK
         marker["offset"] = list(DEFAULT_OFFSET)
         marker["box"] = None
         return marker
