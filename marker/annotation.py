@@ -915,20 +915,21 @@ class _MarkerView:
         self._leader_xf.visible = True
 
     def _place_handles(self, layout, picked: bool) -> None:
-        """손잡이는 고른 것에만. 네 변을 따라, 테두리 가운데에 걸치게. 끝은 띠 두께만큼 줄여 꼭짓점에서 안 겹친다"""
+        """손잡이는 고른 것에만. 네 변을 따라 거의 바깥에 (몸통과는 EDGE_INSET_PX 만 겹침). 끝을 줄여 꼭짓점에서 안 겹친다"""
         sc = self._view.sc
         self._handles.visible = bool(picked)
         if not picked:
             self._view.release_prefix(f"h:{self.id}:")
             _Cursor.release_prefix(f"h:{self.id}:")
         w, h, t = layout["w"], layout["h"], EDGE_HIT_PX
+        out = t / 2.0 - EDGE_INSET_PX  # 띠 가운데를 테두리에서 바깥으로
         for (ex, ey), (xf, strip) in self._edges.items():
             if ex:
-                strip.width, strip.height = t, max(h - t, 1.0)
-                xf.transform = _move(sc, w if ex > 0 else 0.0, -h / 2.0, HANDLE_Z)
+                strip.width, strip.height = t, max(h - 2.0 * EDGE_INSET_PX, 1.0)
+                xf.transform = _move(sc, w + out if ex > 0 else -out, -h / 2.0, HANDLE_Z)
             else:
-                strip.width, strip.height = max(w - t, 1.0), t
-                xf.transform = _move(sc, w / 2.0, 0.0 if ey > 0 else -h, HANDLE_Z)
+                strip.width, strip.height = max(w - 2.0 * EDGE_INSET_PX, 1.0), t
+                xf.transform = _move(sc, w / 2.0, out if ey > 0 else -h - out, HANDLE_Z)
 
     def _color(self, marker, picked: bool):
         return _bright(marker["color"]) if picked else marker["color"]
@@ -967,6 +968,7 @@ class _View:
         self._holds = set()
         self._blocked = False
         self._token = None
+        self._unblock = None
         self._visible = True
         self._view_sub = None
         api = self.api
@@ -1002,7 +1004,7 @@ class _View:
         self.arm(False)
         self.drop_all()
         self._holds = set()
-        self._sync_block()
+        self._sync_block(now=True)
         sub, self._view_sub = self._view_sub, None
         if sub is not None and callable(getattr(sub, "destroy", None)):
             try:
@@ -1033,12 +1035,31 @@ class _View:
         self._holds = {k for k in self._holds if not k.startswith(prefix)}
         self._sync_block()
 
-    def _sync_block(self) -> None:
-        want = bool(self._holds)
-        if want and not self._blocked:
-            self._blocked = True
-            self._token = _block_selection(self.api)
-        elif not want and self._blocked:
+    def _sync_block(self, now: bool = False) -> None:
+        """쥔 것이 있으면 Kit 선택을 끄고, 다 놓으면 SELECT_RELEASE_S 뒤에 되살린다.
+        바로 되살리지 않는 것은: 누르는 순간 hover 끝이 drag 시작보다 먼저 오면 잠금이 한순간 비는데,
+        그때 껐다 켜면 Kit 이 선택 레이어를 다시 지으면서 막 시작한 끌기가 끊긴다"""
+        if self._holds:
+            if self._unblock is not None:
+                self._unblock.cancel()
+                self._unblock = None
+            if not self._blocked:
+                self._blocked = True
+                self._token = _block_selection(self.api)
+            return
+        if not self._blocked:
+            return
+        if now:
+            if self._unblock is not None:
+                self._unblock.cancel()
+                self._unblock = None
+            self._unblock_now()
+        elif self._unblock is None:
+            self._unblock = asyncio.get_event_loop().call_later(SELECT_RELEASE_S, self._unblock_now)
+
+    def _unblock_now(self) -> None:
+        self._unblock = None
+        if not self._holds and self._blocked:
             self._blocked = False
             self._token = None
 
