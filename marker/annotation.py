@@ -856,7 +856,8 @@ class _MarkerView:
         return xf, rect
 
     def _place_zones(self, layout) -> None:
-        """잡는 사각형 다섯을 상자에 맞춘다. 변 띠는 테두리 안쪽 EDGE_IN_PX ~ 바깥 EDGE_OUT_PX,
+        """잡는 사각형 다섯을 상자에 맞춘다. 몸통은 상자 전체(이동), 변 띠는 테두리 바깥 EDGE_OUT_PX
+        (크기 조절). 상자 안에는 바탕, 테두리, 글자가 겹쳐 있어 띠를 안으로 들이면 끌기가 안 먹는다.
         좌우 띠가 꼭짓점까지 덮고, 위아래 띠는 그 사이만. 서로 안 겹친다"""
         sc = self._view.sc
         w, h, i, o = layout["w"], layout["h"], EDGE_IN_PX, EDGE_OUT_PX
