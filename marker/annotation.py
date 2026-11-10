@@ -107,33 +107,37 @@ def move_rect(offset, delta) -> list:
     return [float(offset[0]) + delta[0], float(offset[1]) + delta[1]]
 
 
-def resize_rect(offset, size, corner, delta, minimum) -> tuple:
-    """그 모서리를 delta 만큼 끈 (왼쪽 위, [w, h]). 맞은편 모서리는 그대로, 최소 크기 아래로는 안 줄인다"""
+def resize_rect(offset, size, edge, delta, minimum) -> tuple:
+    """그 변을 delta 만큼 끈 (왼쪽 위, [w, h]). 맞은편 변은 그대로, 최소 크기 아래로는 안 줄인다.
+    edge 는 (x, y): x -1 왼쪽 / 1 오른쪽 / 0 안 움직임, y 1 위 / -1 아래 / 0 안 움직임"""
     left, top = float(offset[0]), float(offset[1])
     right, bottom = left + float(size[0]), top - float(size[1])
-    cx, cy = corner
+    ex, ey = edge
     dx, dy = delta
     min_w, min_h = minimum
-    if cx > 0:
+    if ex > 0:
         right = max(right + dx, left + min_w)
-    else:
+    elif ex < 0:
         left = min(left + dx, right - min_w)
-    if cy > 0:
+    if ey > 0:
         top = max(top + dy, bottom + min_h)
-    else:
+    elif ey < 0:
         bottom = min(bottom + dy, top - min_h)
     return [left, top], [right - left, top - bottom]
 
 
 def leader_end(offset, size):
-    """앵커(0, 0)에서 상자에 가장 가까운 점. 앵커가 상자 안이면 None"""
+    """앵커(0, 0)에서 상자 가운데를 향하는 선이 상자 테두리에 닿는 점. 앵커가 상자 안이면 None"""
     left, top = float(offset[0]), float(offset[1])
-    w, h = float(size[0]), float(size[1])
-    x = min(max(0.0, left), left + w)
-    y = min(max(0.0, top - h), top)
-    if abs(x) < 1e-9 and abs(y) < 1e-9:
+    right, bottom = left + float(size[0]), top - float(size[1])
+    if left <= 0.0 <= right and bottom <= 0.0 <= top:
         return None
-    return [x, y]
+    cx, cy = (left + right) / 2.0, (top + bottom) / 2.0
+    t = 0.0  # 앵커 -> 가운데 선이 상자에 들어가는 비율 (0..1)
+    for d, lo, hi in ((cx, left, right), (cy, bottom, top)):
+        if abs(d) > 1e-12:
+            t = max(t, min(lo / d, hi / d))
+    return [cx * t, cy * t]
 
 
 def next_id(kind: str, taken) -> str:
@@ -489,10 +493,10 @@ def _gesture_types():
             return self._priority
 
     class Drag(sc.DragGesture):
-        def __init__(self, began, changed, ended, name="drag"):
+        def __init__(self, began, changed, ended, priority=GESTURE_PRIORITY, name="drag"):
             super().__init__()
             self._began, self._changed, self._ended = began, changed, ended
-            self._name = name
+            self._priority, self._name = priority, name
 
         def on_began(self, *_args):
             self._began(mouse_of(self))
@@ -509,7 +513,7 @@ def _gesture_types():
 
         @property
         def priority(self):
-            return GESTURE_PRIORITY
+            return self._priority
 
     class Hover(sc.HoverGesture):
         def __init__(self, began, ended, name="hover"):
@@ -569,7 +573,7 @@ class _MarkerView:
         self.id = marker["id"]
         self.anchor = list(marker["position"])
         self.shown = True
-        self._corners = {}
+        self._edges = {}
         with view.root:
             self.top = sc.Transform()
         with self.top:
@@ -585,25 +589,37 @@ class _MarkerView:
                             self._content = sc.Transform()
                             self._handles = sc.Transform()
                             with self._handles:
-                                for corner in CORNERS:
-                                    self._corners[corner] = self._handle(corner)
+                                for edge in EDGES:
+                                    xf = sc.Transform()
+                                    with xf:
+                                        body = sc.Transform()
+                                    self._edges[edge] = {"xf": xf, "body": body, "len": None}
         self.restyle(marker, layout, picked)
 
-    def _handle(self, corner):
-        """모서리 손잡이 하나. 다시 짓지 않고 자리만 옮긴다"""
+    def _edge_key(self, edge) -> str:
+        return f"h:{self.id}:{edge[0]}{edge[1]}"
+
+    def _build_edge(self, edge, slot, length: float) -> None:
+        """변 손잡이 하나. 상자 바깥 띠(잡는 곳) + 가운데 막대(보이는 곳). 그 변 길이가 바뀔 때만 다시 짓는다"""
         sc, ui, view = self._view.sc, self._view.ui, self._view
         _click, Drag, Hover = _gesture_types()
         owner, mid = view.owner, self.id
-        key = f"h:{mid}:{corner[0]}{corner[1]}"
-        xf = sc.Transform()
-        with xf:
-            sc.Rectangle(HANDLE_PX, HANDLE_PX, color=ui.color(*HANDLE_COLOR), gesture=[
-                Hover(lambda: view.hold(key), lambda: view.release(key), name="corner_hover"),
-                Drag(lambda m: owner._drag_began(view, mid, corner, m),
+        key = self._edge_key(edge)
+        view.release(key)  # 지우는 띠의 hover 는 끝 신호가 안 온다
+        slot["body"].clear()
+        slot["len"] = length
+        upright = edge[0] != 0  # 왼쪽, 오른쪽 변은 세로 띠
+        grip = min(EDGE_GRIP_LEN_PX, length * 0.6)
+        hit_w, hit_h = (EDGE_HIT_PX, length) if upright else (length, EDGE_HIT_PX)
+        bar_w, bar_h = (EDGE_GRIP_PX, grip) if upright else (grip, EDGE_GRIP_PX)
+        with slot["body"]:
+            sc.Rectangle(hit_w, hit_h, color=ui.color(*EDGE_HIT_COLOR), gesture=[
+                Hover(lambda: view.hold(key), lambda: view.release(key), name="edge_hover"),
+                Drag(lambda m: owner._drag_began(view, mid, edge, m),
                      lambda m: owner._drag_changed(view, m),
-                     lambda: owner._drag_ended(view), name="corner"),
+                     lambda: owner._drag_ended(view), priority=HANDLE_PRIORITY, name="edge"),
             ])
-        return xf
+            sc.Rectangle(bar_w, bar_h, color=ui.color(*HANDLE_COLOR))
 
     # -- 그리기 ------------------------------------------------------------------
 
@@ -654,7 +670,7 @@ class _MarkerView:
                       sizes=[DOT_PX * (PICKED_DOT_SCALE if picked else 1.0)])
 
     def _build_leader(self, marker, layout, picked: bool) -> None:
-        """앵커에서 상자 가장 가까운 점까지"""
+        """앵커에서 상자 가운데를 향해, 상자 테두리까지"""
         sc, ui = self._view.sc, self._view.ui
         self._leader.clear()
         end = leader_end(marker["offset"], (layout["w"], layout["h"]))
@@ -699,14 +715,20 @@ class _MarkerView:
                 y -= layout["dh"]
 
     def _place_handles(self, layout, picked: bool) -> None:
-        """손잡이는 고른 것에만, 상자 네 모서리에"""
+        """손잡이는 고른 것에만, 상자 네 변 바깥에. 끄는 변은 길이가 그대로라 다시 짓지 않고 옮기기만 한다"""
         sc = self._view.sc
         self._handles.visible = bool(picked)
         if not picked:
             self._view.release_prefix(f"h:{self.id}:")
-        w, h = layout["w"], layout["h"]
-        for (cx, cy), xf in self._corners.items():
-            xf.transform = _move(sc, w if cx > 0 else 0.0, 0.0 if cy > 0 else -h, HANDLE_Z)
+        w, h, t = layout["w"], layout["h"], EDGE_HIT_PX
+        for (ex, ey), slot in self._edges.items():
+            if ex:
+                length, x, y = h, (w + t / 2.0 if ex > 0 else -t / 2.0), -h / 2.0
+            else:
+                length, x, y = w, w / 2.0, (t / 2.0 if ey > 0 else -h - t / 2.0)
+            slot["xf"].transform = _move(sc, x, y, HANDLE_Z)
+            if slot["len"] is None or abs(slot["len"] - length) > 1e-6:
+                self._build_edge((ex, ey), slot, length)
 
     def show(self, on: bool) -> None:
         """카메라 뒤면 숨긴다"""
@@ -718,7 +740,7 @@ class _MarkerView:
         """그린 것과 걸어 둔 선택 잠금을 놓는다"""
         self._view.release_prefix(f"bg:{self.id}")
         self._view.release_prefix(f"h:{self.id}:")
-        self._corners = {}
+        self._edges = {}
         self.top.clear()
         self.top.visible = False
 
@@ -1239,8 +1261,8 @@ class Annotation:
         """패널 클릭. 지금 지우게 될 바탕의 콜백 안이라 다음 루프에 고른다"""
         _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
-    def _drag_began(self, view, marker_id: str, corner, ndc) -> None:
-        """끌기 시작. corner 가 None 이면 옮기기, 아니면 그 모서리로 크기"""
+    def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
+        """끌기 시작. edge 가 None 이면 옮기기, 아니면 그 변으로 크기"""
         m = self._find(marker_id)
         if m is None or self._creating:
             return
@@ -1248,7 +1270,7 @@ class Annotation:
             self._end_drag()
         layout = self._layout(m)
         self._drag = {
-            "view": view, "id": marker_id, "corner": corner,
+            "view": view, "id": marker_id, "edge": edge,
             "mouse": _Mouse.at(), "ndc": _xy(ndc),
             "offset": list(m["offset"]), "box": [layout["w"], layout["h"]],
             "min": layout["min"], "moved": False,
@@ -1268,12 +1290,12 @@ class Annotation:
         if delta is None:
             return
         picked = m["id"] == self._selected
-        if d["corner"] is None:
+        if d["edge"] is None:
             m["offset"] = move_rect(d["offset"], delta)
             layout = self._layout(m)
             self._each(lambda v: v.place(m, layout, picked))
         else:
-            m["offset"], m["box"] = resize_rect(d["offset"], d["box"], d["corner"], delta, d["min"])
+            m["offset"], m["box"] = resize_rect(d["offset"], d["box"], d["edge"], delta, d["min"])
             layout = self._layout(m)
             self._each(lambda v: v.relayout(m, layout, picked))
         d["moved"] = True
@@ -1286,7 +1308,7 @@ class Annotation:
         self._end_drag()
         if d["moved"]:
             self._notify("panel")
-        if d["corner"] is None:
+        if d["edge"] is None:
             marker_id = d["id"]
             _later(lambda: self.select(marker_id) if self._find(marker_id) else None)
 
