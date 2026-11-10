@@ -77,5 +77,5 @@ NEIGHBOR_PX = 2                         # 법선을 구할 이웃 픽셀 거리
 GESTURE_PRIORITY = 1000                 # 패널 몸통 제스처 우선순위 (Kit 선택보다 위)
 ARM_PRIORITY = 2000                     # 찍기 대기 클릭 우선순위 (패널보다 위)
 SELECT_RELEASE_S = 0.25                 # 패널, 손잡이를 다 놓은 뒤 Kit 클릭 선택을 되살리기까지 (초)
-DEBUG_GESTURES = True                   # 손짓 순서(hover, 클릭, 끌기, 크기 조절, 커서, Kit 선택)를 콘솔에 찍는다
+DRAG_SCALE = 1.0                        # 끌기 배율 보정. 패널이 마우스보다 느리면 키우고 빠르면 줄인다
 REGISTRY_TRIES = 600                    # 뷰포트 레지스트리를 기다리는 프레임 수
