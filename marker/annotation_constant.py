@@ -28,9 +28,7 @@ DESC_RATIO = 0.8                        # description 글자 크기 = FONT_PX x 
 LINE_HEIGHT = 1.6                       # 줄 간격 = 글자 크기 x 이 값 (1.5 에서 줄이 맞닿는다 -> 0.1 만큼 틈)
 GLYPH_EM = 1.25                         # 실제 글자 크기 = 지정 크기 x 이 값 (줄 상자 1.5 = 1.2em 에서). 글자 폭 어림에 곱한다
 PAD_PX = 5.0                            # 상자 안쪽 여백
-AUTO_WIDE_PX = 260.0                    # 크기를 정하지 않은 상자의 최대 글 폭
-AUTO_DESC_LINES = 2                     # 크기를 정하지 않은 상자의 description 최대 줄 수
-MAX_PANEL_LINES = 12                    # 상자 하나에 보이는 description 최대 줄 수 (글 칸을 미리 이만큼 짓는다)
+MAX_PANEL_LINES = 12                    # 상자 하나에 보이는 description 최대 줄 수 (글 칸을 미리 이만큼 짓는다). 줄은 입력한 줄바꿈 그대로
 MIN_WIDE_PX = 48.0                      # 상자 최소 폭 (최소 높이는 첫 줄 하나)
 WIDE_EM = 1.0                           # 전각 글자 폭 어림 (실제 em 기준)
 NARROW_EM = 0.66                        # 그 밖의 글자 폭 어림 (실제 em 기준). 넉넉하게 잡는다

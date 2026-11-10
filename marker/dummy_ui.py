@@ -13,6 +13,7 @@ LIST_HIGH = 120                         # 마커 목록 칸 높이
 ROW_HIGH = 22                           # 마커 목록 한 줄 높이
 FIELD_LABEL_WIDE = 80                   # 글 칸 앞 이름 폭
 FONT_FIELD_WIDE = 50                    # 글자 크기 칸 폭
+DESC_FIELD_HIGH = 70                    # description 칸 높이 (여러 줄, 엔터로 줄바꿈)
 KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))  # 만들기 버튼 (종류, 글)
 QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 알림 (끄는 중 잦은 것)
 PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
@@ -59,9 +60,9 @@ class AnnotationDummyUI:
                 with ui.HStack(height=0, spacing=4):
                     ui.Label("label", width=FIELD_LABEL_WIDE)
                     self._label = ui.StringField()
-                with ui.HStack(height=0, spacing=4):
-                    ui.Label("description", width=FIELD_LABEL_WIDE)
-                    self._desc = ui.StringField()
+                with ui.HStack(height=DESC_FIELD_HIGH, spacing=4):
+                    ui.Label("description", width=FIELD_LABEL_WIDE, alignment=ui.Alignment.LEFT_TOP)
+                    self._desc = ui.StringField(multiline=True)
                 with ui.HStack(height=0, spacing=4):
                     ui.Button("적용", clicked_fn=self._apply)
                     ui.Button("패널 원위치", clicked_fn=self._reset)

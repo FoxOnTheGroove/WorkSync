@@ -6,7 +6,7 @@ import unicodedata
 from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
-           "text_width", "fit_line", "wrap_lines", "panel_layout",
+           "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
            "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh"]
 
 
@@ -31,53 +31,29 @@ def _with_ellipsis(text: str, max_px: float, size: float) -> str:
     return ELLIPSIS if text_width(ELLIPSIS, size) <= max_px else ""
 
 
-def fit_line(text: str, max_px: float, size: float) -> str:
-    """한 줄로. 넘치면 … 으로 자른다. 연속 공백은 하나로"""
-    text = " ".join((text or "").split())
+def one_line(text: str) -> str:
+    """label 용 한 줄. 줄바꿈은 공백으로"""
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
+
+
+def desc_lines(text: str) -> list:
+    """description 의 줄. 입력한 줄바꿈에서만 나누고, 빈 줄과 공백은 그대로"""
+    if not text:
+        return []
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def clip_line(text: str, max_px: float, size: float) -> str:
+    """폭을 넘으면 오른쪽을 … 으로 자른다. 안 넘으면 그대로"""
     if text_width(text, size) <= max_px:
         return text
     return _with_ellipsis(text, max_px, size)
 
 
-def _split_word(word: str, max_px: float, size: float) -> list:
-    """폭보다 긴 낱말을 폭에 맞게 자른다"""
-    out = []
-    while len(word) > 1 and text_width(word, size) > max_px:
-        k = len(word) - 1
-        while k > 1 and text_width(word[:k], size) > max_px:
-            k -= 1
-        out.append(word[:k])
-        word = word[k:]
-    if word:
-        out.append(word)
-    return out
-
-
-def wrap_lines(text: str, max_px: float, size: float, max_lines: int) -> list:
-    """폭에 맞춰 낱말 단위로 줄을 나눈다. 줄 수를 넘으면 마지막 줄을 … 로"""
-    if max_lines <= 0 or not (text or "").strip():
-        return []
-    tokens = []
-    for word in text.split():
-        tokens.extend(_split_word(word, max_px, size))
-    lines, cur = [], ""
-    for tok in tokens:
-        cand = f"{cur} {tok}" if cur else tok
-        if not cur or text_width(cand, size) <= max_px:
-            cur = cand
-            continue
-        lines.append(cur)
-        cur = tok
-    if cur:
-        lines.append(cur)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = _with_ellipsis(lines[-1], max_px, size)
-    return lines
-
-
 def panel_layout(title: str, desc: str, box=None, scale: float = TEXT_SCALE) -> dict:
-    """패널 크기와 줄. box 가 없으면 글자에 맞추고, 있으면 그 안에 들어가는 만큼만"""
+    """패널 크기와 줄. 줄은 사용자가 넣은 줄바꿈 그대로 (자동 줄바꿈 없음).
+    box 가 없으면 상자가 글에 맞춰 커지고 (폭 상한 없음), 있으면 폭을 넘는 줄은 … 으로 자르고
+    높이를 넘으면 마지막 보이는 줄 끝을 … 로. 줄 수는 MAX_PANEL_LINES 까지"""
     fs = FONT_PX * scale
     ds = fs * DESC_RATIO
     th = fs * LINE_HEIGHT
@@ -85,10 +61,13 @@ def panel_layout(title: str, desc: str, box=None, scale: float = TEXT_SCALE) -> 
     pad = PAD_PX * scale
     min_w = MIN_WIDE_PX * scale
     min_h = th + 2.0 * pad
+    head = one_line(title)
+    every = desc_lines(desc)
     if box is None:
-        room = AUTO_WIDE_PX * scale
-        head = fit_line(title, room, fs)
-        lines = wrap_lines(desc, room, ds, AUTO_DESC_LINES)
+        rows = MAX_PANEL_LINES
+        lines = every[:rows]
+        if len(every) > rows:
+            lines[-1] = lines[-1].rstrip() + ELLIPSIS
         inner = max([text_width(head, fs)] + [text_width(line, ds) for line in lines])
         w = max(inner + 2.0 * pad, min_w)
         h = max(th + dh * len(lines) + 2.0 * pad, min_h)
@@ -96,9 +75,11 @@ def panel_layout(title: str, desc: str, box=None, scale: float = TEXT_SCALE) -> 
         w = max(float(box[0]), min_w)
         h = max(float(box[1]), min_h)
         room = w - 2.0 * pad
-        head = fit_line(title, room, fs)
-        rows = min(int(math.floor((h - 2.0 * pad - th) / dh + 1e-6)), MAX_PANEL_LINES)
-        lines = wrap_lines(desc, room, ds, rows)
+        head = clip_line(head, room, fs)
+        rows = max(0, min(int(math.floor((h - 2.0 * pad - th) / dh + 1e-6)), MAX_PANEL_LINES))
+        lines = [clip_line(line, room, ds) for line in every[:rows]]
+        if len(every) > rows > 0 and not lines[-1].endswith(ELLIPSIS):
+            lines[-1] = _with_ellipsis(lines[-1], room, ds)  # 더 있다는 표시
     return {"w": w, "h": h, "title": head, "lines": lines, "fs": fs, "ds": ds,
             "th": th, "dh": dh, "pad": pad, "min": (min_w, min_h)}
 
@@ -1469,7 +1450,7 @@ class Annotation:
         if len(label) > MAX_LABEL or len(description) > MAX_DESCRIPTION:
             self._say(f"글이 너무 깁니다 (label ≤ {MAX_LABEL}, description ≤ {MAX_DESCRIPTION})")
             return False
-        m["label"], m["description"] = label, description
+        m["label"], m["description"] = one_line(label), description  # label 은 한 줄
         self._restyle(marker_id)
         self._notify("text")
         return True
