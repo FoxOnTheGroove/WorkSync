@@ -14,6 +14,11 @@ class AnnotationService:
         return instance().create(kind)
 
     @classmethod
+    def create_plane(cls, axis):
+        """원점을 지나는 축 평면 (xy / yz / zx) 을 바로 만든다"""
+        return instance().create_plane(axis)
+
+    @classmethod
     def cancel_create(cls):
         """찍기 대기를 거둔다"""
         return instance().cancel_create()
@@ -39,6 +44,16 @@ class AnnotationService:
     def set_arrow_scale(cls, scale):
         """화살표 크기 배수 (모든 inlet, outlet 공통)"""
         return instance().set_arrow_scale(scale)
+
+    @classmethod
+    def set_plane_at(cls, marker_id, at):
+        """평면 위치 (법선 축 방향 거리)"""
+        return instance().set_plane_at(marker_id, at)
+
+    @classmethod
+    def set_plane_size(cls, marker_id, w, h):
+        """평면 크기 [가로, 세로]"""
+        return instance().set_plane_size(marker_id, w, h)
 
     @classmethod
     def reset_panel(cls, marker_id):

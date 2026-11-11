@@ -7,7 +7,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -202,8 +202,35 @@ def _arrow_ends(marker, length: float):
     return list(p), _add(p, _mul(d, length))
 
 
+def plane_geometry(axis: str, at: float, size) -> dict:
+    """축 평면 (월드). axis 는 xy / yz / zx, at 은 법선 축 위치, size 는 [가로, 세로].
+    원점을 지나는 축 위에 가운데를 두고 at 만큼 법선 방향으로 옮긴다.
+    돌려주는 것: center, corners (4점, 둘레 순), top (위쪽 변 가운데, 패널 자리), normal"""
+    n, u, v = PLANE_AXES[axis]
+    w, h = float(size[0]), float(size[1])
+    center = [0.0, 0.0, 0.0]
+    center[n] = float(at)
+
+    def point(su, sv):
+        p = list(center)
+        p[u] += su * w / 2.0
+        p[v] += sv * h / 2.0
+        return p
+
+    normal = [0.0, 0.0, 0.0]
+    normal[n] = 1.0
+    return {"center": center, "corners": [point(-1, -1), point(1, -1), point(1, 1), point(-1, 1)],
+            "top": point(0, 1), "normal": normal}
+
+
+def _plane_of(marker) -> dict:
+    return plane_geometry(marker["axis"], marker["at"], marker["size"])
+
+
 def _panel_anchor(marker, length: float):
-    """패널이 매달리는 월드 점. label 은 점, inlet 은 꼬리, outlet 은 머리"""
+    """패널이 매달리는 월드 점. label 은 점, inlet 은 꼬리, outlet 은 머리, plane 은 위쪽 변 가운데"""
+    if marker["kind"] == "plane":
+        return _plane_of(marker)["top"]
     if marker["kind"] == "inlet":
         return _arrow_ends(marker, length)[0]
     if marker["kind"] == "outlet":
@@ -684,12 +711,46 @@ class _Arrows:
             self._fail("draw", e)
             return False
 
+    def draw_plane(self, marker, picked: bool) -> bool:
+        """그 plane 의 반투명 사각형을 (다시) 쓴다. 양면, 그림자 없음, 고른 것은 밝고 진하게"""
+        try:
+            from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+            stage = self._stage()
+            if stage is None:
+                return False
+            plane = _plane_of(marker)
+            color = _bright(marker["color"]) if picked else marker["color"]
+            opacity = PLANE_PICKED_OPACITY if picked else PLANE_OPACITY
+            pts = plane["corners"]
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                self._root(stage, UsdGeom)
+                mesh = UsdGeom.Mesh.Define(stage, f"{PLANE_SCOPE}/{marker['id']}")
+                mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
+                mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
+                mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3]))
+                mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+                mesh.CreateDoubleSidedAttr(True)
+                mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
+                mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
+                low = [min(p[i] for p in pts) for i in range(3)]
+                high = [max(p[i] for p in pts) for i in range(3)]
+                mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
+                mesh.GetPrim().CreateAttribute("primvars:doNotCastShadows",
+                                               Sdf.ValueTypeNames.Bool).Set(True)
+                look = self._material(stage, f"plane{'_picked' if picked else ''}", color, 0.0, opacity)
+                UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(look)
+            return True
+        except Exception as e:
+            self._fail("draw a plane", e)
+            return False
+
     def _root(self, stage, UsdGeom) -> None:
-        """뿌리를 세우고 클릭, 선택에서 뺀다 (찍기가 화살표에 막히지 않게)"""
-        if stage.GetPrimAtPath(ARROW_SCOPE).IsValid():
+        """뿌리를 세우고 클릭, 선택에서 뺀다 (찍기가 화살표, 평면에 막히지 않게)"""
+        if stage.GetPrimAtPath(ARROW_SCOPE).IsValid() and stage.GetPrimAtPath(PLANE_SCOPE).IsValid():
             return
         root = UsdGeom.Scope.Define(stage, MARKER_ROOT).GetPrim()
         UsdGeom.Scope.Define(stage, ARROW_SCOPE)
+        UsdGeom.Scope.Define(stage, PLANE_SCOPE)
         UsdGeom.Scope.Define(stage, LOOKS_SCOPE)
         try:
             root.SetMetadata("hide_in_stage_window", True)
@@ -702,8 +763,8 @@ class _Arrows:
             print(f"{TAG} arrows stay pickable (query filter still skips them): {e}")
 
     @staticmethod
-    def _material(stage, name: str, color, emission: float):
-        """조명을 받는 머티리얼. preview 와 OmniPBR 두 셰이더. 고른 것은 조금 빛나게"""
+    def _material(stage, name: str, color, emission: float, opacity: float = 1.0):
+        """조명을 받는 머티리얼. preview 와 OmniPBR 두 셰이더. 고른 것은 조금 빛나게, opacity < 1 이면 반투명"""
         from pxr import Gf, Sdf, UsdShade
         path = f"{LOOKS_SCOPE}/{name}"
         material = UsdShade.Material.Define(stage, path)
@@ -715,6 +776,7 @@ class _Arrows:
             rgb * (ARROW_PREVIEW_GLOW if emission > 0 else 0.0))
         preview.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(ARROW_ROUGHNESS)
         preview.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        preview.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(float(opacity))
         material.CreateSurfaceOutput().ConnectToSource(preview.ConnectableAPI(), "surface")
         mdl = UsdShade.Shader.Define(stage, path + "/mdl")
         mdl.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
@@ -725,18 +787,22 @@ class _Arrows:
                 ("metallic_constant", Sdf.ValueTypeNames.Float, 0.0),
                 ("enable_emission", Sdf.ValueTypeNames.Bool, emission > 0),
                 ("emissive_color", Sdf.ValueTypeNames.Color3f, rgb),
-                ("emissive_intensity", Sdf.ValueTypeNames.Float, float(emission))):
+                ("emissive_intensity", Sdf.ValueTypeNames.Float, float(emission)),
+                ("enable_opacity", Sdf.ValueTypeNames.Bool, opacity < 1.0),
+                ("opacity_constant", Sdf.ValueTypeNames.Float, float(opacity))):
             mdl.CreateInput(key, kind).Set(value)
         material.CreateSurfaceOutput("mdl").ConnectToSource(mdl.ConnectableAPI(), "out")
         return material
 
     def drop(self, marker_id: str) -> None:
-        """그 마커의 화살표를 지운다"""
+        """그 마커의 화살표나 평면을 지운다"""
         self._remove(f"{ARROW_SCOPE}/{marker_id}")
+        self._remove(f"{PLANE_SCOPE}/{marker_id}")
 
     def clear(self) -> None:
-        """화살표를 다 지운다"""
+        """화살표와 평면을 다 지운다"""
         self._remove(ARROW_SCOPE)
+        self._remove(PLANE_SCOPE)
 
     def teardown(self) -> None:
         """뿌리째 치운다 (머티리얼까지)"""
@@ -1254,7 +1320,7 @@ class Annotation:
     # -- 알림 --------------------------------------------------------------------
 
     def add_listener(self, fn) -> None:
-        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, panel, create, status"""
+        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, plane, panel, create, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1371,6 +1437,69 @@ class Annotation:
         self._each(lambda v: v.arm(False))
         self._say("찍기를 취소했습니다", "create")
 
+    def create_plane(self, axis: str) -> bool:
+        """원점을 지나는 축 평면 하나를 바로 만든다 (xy / yz / zx). 위치 0, 크기 PLANE_SIZE"""
+        if axis not in PLANE_AXES:
+            self._say(f"모르는 평면: {axis!r} (xy, yz, zx)")
+            return False
+        marker = {
+            "id": next_id("plane", (m["id"] for m in self._markers)),
+            "kind": "plane",
+            "axis": axis,
+            "at": 0.0,
+            "size": list(PLANE_SIZE),
+            "label": "",
+            "description": "",
+            "color": list(DEFAULT_COLORS["plane"]),
+            "offset": list(DEFAULT_OFFSET),
+            "box": None,
+            "font_px": FONT_PX,
+        }
+        marker["position"] = _plane_of(marker)["center"]
+        self._markers.append(marker)
+        self._arrows.draw_plane(marker, False)
+        layout = self._layout(marker)
+        self._each(lambda v: v.add(marker, layout, False))
+        self._notify("add")
+        self.select(marker["id"])
+        self._say(f"만들었습니다: {marker['id']} ({axis.upper()} 평면)")
+        return True
+
+    def _plane(self, marker_id):
+        m = self._find(marker_id)
+        if m is None or m["kind"] != "plane":
+            self._say("고른 것이 평면이 아닙니다")
+            return None
+        return m
+
+    def set_plane_at(self, marker_id, at) -> bool:
+        """평면 위치. 원점에서 법선 축 방향으로 at 만큼 (xy 면 z, yz 면 x, zx 면 y)"""
+        m = self._plane(marker_id)
+        if m is None:
+            return False
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(float(at)):
+            self._say("위치는 숫자여야 합니다")
+            return False
+        m["at"] = float(at)
+        m["position"] = _plane_of(m)["center"]
+        self._restyle(marker_id)
+        self._notify("plane")
+        return True
+
+    def set_plane_size(self, marker_id, w, h) -> bool:
+        """평면 크기 [가로, 세로] (스테이지 단위, 0 보다 크게)"""
+        m = self._plane(marker_id)
+        if m is None:
+            return False
+        for v in (w, h):
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or v <= 0:
+                self._say("크기는 0 보다 큰 숫자여야 합니다")
+                return False
+        m["size"] = [float(w), float(h)]
+        self._restyle(marker_id)
+        self._notify("plane")
+        return True
+
     def _view_clicked(self, view, ndc) -> None:
         """찍기 대기 중 클릭. 이미지 밖이면 계속 기다린다"""
         kind = self._creating
@@ -1456,6 +1585,8 @@ class Annotation:
         picked = marker_id == self._selected
         if m["kind"] in ARROW_KINDS:
             self._arrows.draw(m, picked, self.arrow_length())
+        elif m["kind"] == "plane":
+            self._arrows.draw_plane(m, picked)
         self._each(lambda v: v.restyle(m, layout, picked))
 
     def set_text(self, marker_id, label: str, description: str) -> bool:

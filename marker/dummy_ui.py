@@ -8,13 +8,15 @@ __all__ = ["AnnotationDummyUI"]
 
 WINDOW_TITLE = "Annotation"             # 시험 창 제목
 WINDOW_WIDE = 380                       # 시험 창 폭
-WINDOW_HIGH = 420                       # 시험 창 높이
+WINDOW_HIGH = 520                       # 시험 창 높이
 LIST_HIGH = 120                         # 마커 목록 칸 높이
 ROW_HIGH = 22                           # 마커 목록 한 줄 높이
 FIELD_LABEL_WIDE = 80                   # 글 칸 앞 이름 폭
 FONT_FIELD_WIDE = 50                    # 글자 크기 칸 폭
 DESC_FIELD_HIGH = 70                    # description 칸 높이 (여러 줄, 엔터로 줄바꿈)
 KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))  # 만들기 버튼 (종류, 글)
+PLANE_BUTTONS = (("xy", "XY"), ("yz", "YZ"), ("zx", "ZX"))  # 평면 만들기 버튼 (축, 글). 원점을 지나는 평면
+PLANE_FIELD_WIDE = 70                   # 평면 위치, 크기 칸 폭
 QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 알림 (끄는 중 잦은 것)
 PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
 ROW_BG = 0xFF2A2A2A                     # 목록 줄 바탕
@@ -34,6 +36,9 @@ class AnnotationDummyUI:
         self._desc = None
         self._font = None
         self._arrow = None
+        self._plane_at = None
+        self._plane_w = None
+        self._plane_h = None
         self._shown_id = None
 
     def build_ui(self):
@@ -46,6 +51,9 @@ class AnnotationDummyUI:
                     for kind, text in KIND_BUTTONS:
                         ui.Button(text, clicked_fn=functools.partial(AnnotationService.create, kind))
                     ui.Button("취소", clicked_fn=AnnotationService.cancel_create)
+                with ui.HStack(height=0, spacing=4):
+                    for axis, text in PLANE_BUTTONS:
+                        ui.Button(text, clicked_fn=functools.partial(AnnotationService.create_plane, axis))
                 self._status = ui.Label("", height=0, word_wrap=True,
                                         style={"color": STATUS_COLOR})
                 ui.Separator(height=6)
@@ -67,6 +75,16 @@ class AnnotationDummyUI:
                 with ui.HStack(height=DESC_FIELD_HIGH, spacing=4):
                     ui.Label("description", width=FIELD_LABEL_WIDE, alignment=ui.Alignment.LEFT_TOP)
                     self._desc = ui.StringField(multiline=True)
+                with ui.HStack(height=0, spacing=4):
+                    ui.Label("위치", width=FIELD_LABEL_WIDE)
+                    self._plane_at = ui.FloatField(width=PLANE_FIELD_WIDE)
+                    self._plane_at.model.add_end_edit_fn(lambda _m: self._apply_plane_at())
+                    ui.Label("크기", width=0)
+                    self._plane_w = ui.FloatField(width=PLANE_FIELD_WIDE)
+                    self._plane_w.model.add_end_edit_fn(lambda _m: self._apply_plane_size())
+                    ui.Label("x", width=0)
+                    self._plane_h = ui.FloatField(width=PLANE_FIELD_WIDE)
+                    self._plane_h.model.add_end_edit_fn(lambda _m: self._apply_plane_size())
                 with ui.HStack(height=0, spacing=4):
                     ui.Button("적용", clicked_fn=self._apply)
                     ui.Button("패널 원위치", clicked_fn=self._reset)
@@ -95,6 +113,19 @@ class AnnotationDummyUI:
         if not AnnotationService.set_arrow_scale(self._arrow.model.get_value_as_float()):
             self._arrow.model.set_value(AnnotationService.arrow_scale())
 
+    def _apply_plane_at(self):
+        """칸의 위치를 고른 평면에. 평면이 아니거나 안 되면 칸을 되돌린다"""
+        sel = AnnotationService.selected()
+        if not AnnotationService.set_plane_at(sel, self._plane_at.model.get_value_as_float()):
+            self._fill_plane(AnnotationService.get(sel) if sel else None)
+
+    def _apply_plane_size(self):
+        """칸의 크기를 고른 평면에. 평면이 아니거나 안 되면 칸을 되돌린다"""
+        sel = AnnotationService.selected()
+        if not AnnotationService.set_plane_size(sel, self._plane_w.model.get_value_as_float(),
+                                                self._plane_h.model.get_value_as_float()):
+            self._fill_plane(AnnotationService.get(sel) if sel else None)
+
     def _reset(self):
         """고른 마커의 패널을 처음 자리로"""
         AnnotationService.reset_panel(AnnotationService.selected())
@@ -111,6 +142,11 @@ class AnnotationDummyUI:
             return
         if reason == "arrow":
             self._arrow.model.set_value(AnnotationService.arrow_scale())
+            self._status.text = AnnotationService.status()
+            return
+        if reason == "plane":
+            sel = AnnotationService.selected()
+            self._fill_plane(AnnotationService.get(sel) if sel else None)
             self._status.text = AnnotationService.status()
             return
         if reason == "font":
@@ -133,6 +169,19 @@ class AnnotationDummyUI:
             self._label.model.set_value(one["label"] if one else "")
             self._desc.model.set_value(one["description"] if one else "")
             self._fill_font(one)
+            self._fill_plane(one)
+
+    def _fill_plane(self, one):
+        """평면 위치, 크기 칸. 평면이 아니면 위치 0, 크기는 새 평면 기본값"""
+        if self._plane_at is None:
+            return
+        if one is not None and one.get("kind") == "plane":
+            at, (w, h) = one["at"], one["size"]
+        else:
+            at, (w, h) = 0.0, (100.0, 100.0)
+        self._plane_at.model.set_value(float(at))
+        self._plane_w.model.set_value(float(w))
+        self._plane_h.model.set_value(float(h))
 
     def _fill_font(self, one):
         """글자 크기 칸. 고른 것이 없으면 0"""

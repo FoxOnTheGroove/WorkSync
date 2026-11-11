@@ -14,6 +14,7 @@ DEFAULT_COLORS = {                      # 종류별 기본색 (r, g, b 0..1)
     "label": [0.95, 0.95, 0.95],
     "inlet": [0.2, 0.55, 1.0],
     "outlet": [1.0, 0.45, 0.1],
+    "plane": [1.0, 0.85, 0.2],
 }
 MAX_LABEL = 128                         # label 최대 글자 수
 MAX_DESCRIPTION = 1000                  # description 최대 글자 수
@@ -60,7 +61,8 @@ PICKED_DOT_SCALE = 1.5                  # 고른 label 점 크기 배율
 
 MARKER_ROOT = "/AnnotationMarkers"      # 마커 3D 몸체를 담는 뿌리 (세션 레이어, 클릭, 선택에서 뺌)
 ARROW_SCOPE = f"{MARKER_ROOT}/Arrows"   # 화살표 메시 자리
-LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표 머티리얼 자리
+PLANE_SCOPE = f"{MARKER_ROOT}/Planes"   # 평면 메시 자리
+LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표, 평면 머티리얼 자리
 ARROW_LENGTH_M = 0.3                    # 화살표 기본 길이 (m), 배수 1 일 때. 모든 inlet, outlet 이 같고, 장면 단위로 환산한다
 MIN_ARROW_SCALE = 0.1                   # 화살표 크기 배수 최소
 MAX_ARROW_SCALE = 10.0                  # 화살표 크기 배수 최대
@@ -72,6 +74,13 @@ ARROW_ROUGHNESS = 0.4                   # 화살표 표면 거칠기 (0 매끈 .
 ARROW_EMISSION = 0.0                    # 평소 발광 세기 (0 = 조명만 받음)
 ARROW_PICKED_EMISSION = 600.0           # 고른 화살표 발광 세기 (OmniPBR emissive_intensity)
 ARROW_PREVIEW_GLOW = 0.5                # 고른 화살표 preview 셰이더 발광 = 색 x 이 값
+
+# -- 평면 (세션 레이어 USD 메시, 형상과 겹치면 형상 안에 묻힌다) ---------------------------------
+
+PLANE_AXES = {"xy": (2, 0, 1), "yz": (0, 1, 2), "zx": (1, 2, 0)}  # 평면별 (법선 축, 가로 축, 세로 축). 0=x 1=y 2=z
+PLANE_SIZE = (100.0, 100.0)             # 새 평면 크기 [가로, 세로] (스테이지 단위)
+PLANE_OPACITY = 0.25                    # 평면 불투명도 (0 투명 .. 1 불투명)
+PLANE_PICKED_OPACITY = 0.4              # 고른 평면 불투명도
 
 # -- 찍기와 손짓 ---------------------------------------------------------------------
 
