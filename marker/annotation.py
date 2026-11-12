@@ -737,7 +737,8 @@ class _Arrows:
                 mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
                 mesh.GetPrim().CreateAttribute("primvars:doNotCastShadows",
                                                Sdf.ValueTypeNames.Bool).Set(True)
-                look = self._material(stage, f"plane{'_picked' if picked else ''}", color, 0.0, opacity)
+                look = self._material(stage, f"plane{'_picked' if picked else ''}", color,
+                                      PLANE_EMISSION, opacity, unlit=True)  # 그림자, 조명과 무관한 색
                 UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(look)
             return True
         except Exception as e:
@@ -763,17 +764,19 @@ class _Arrows:
             print(f"{TAG} arrows stay pickable (query filter still skips them): {e}")
 
     @staticmethod
-    def _material(stage, name: str, color, emission: float, opacity: float = 1.0):
-        """조명을 받는 머티리얼. preview 와 OmniPBR 두 셰이더. 고른 것은 조금 빛나게, opacity < 1 이면 반투명"""
+    def _material(stage, name: str, color, emission: float, opacity: float = 1.0, unlit: bool = False):
+        """머티리얼. preview 와 OmniPBR 두 셰이더. 고른 것은 조금 빛나게, opacity < 1 이면 반투명.
+        unlit 이면 diffuse 를 끄고 색을 발광으로만 낸다 (조명, 그림자에 상관없이 늘 같은 색)"""
         from pxr import Gf, Sdf, UsdShade
         path = f"{LOOKS_SCOPE}/{name}"
         material = UsdShade.Material.Define(stage, path)
         rgb = Gf.Vec3f(*[float(c) for c in color[:3]])
+        dark = Gf.Vec3f(0.0, 0.0, 0.0)
         preview = UsdShade.Shader.Define(stage, path + "/shader")
         preview.CreateIdAttr("UsdPreviewSurface")
-        preview.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(rgb)
+        preview.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(dark if unlit else rgb)
         preview.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(
-            rgb * (ARROW_PREVIEW_GLOW if emission > 0 else 0.0))
+            rgb if unlit else rgb * (ARROW_PREVIEW_GLOW if emission > 0 else 0.0))
         preview.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(ARROW_ROUGHNESS)
         preview.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
         preview.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(float(opacity))
@@ -782,7 +785,9 @@ class _Arrows:
         mdl.SetSourceAsset(Sdf.AssetPath("OmniPBR.mdl"), "mdl")
         mdl.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
         for key, kind, value in (
-                ("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, rgb),
+                ("diffuse_color_constant", Sdf.ValueTypeNames.Color3f, dark if unlit else rgb),
+                ("diffuse_tint", Sdf.ValueTypeNames.Color3f, dark if unlit else Gf.Vec3f(1.0, 1.0, 1.0)),
+                ("specular_level", Sdf.ValueTypeNames.Float, 0.0 if unlit else 0.5),
                 ("reflection_roughness_constant", Sdf.ValueTypeNames.Float, ARROW_ROUGHNESS),
                 ("metallic_constant", Sdf.ValueTypeNames.Float, 0.0),
                 ("enable_emission", Sdf.ValueTypeNames.Bool, emission > 0),
