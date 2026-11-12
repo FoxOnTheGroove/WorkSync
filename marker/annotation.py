@@ -758,14 +758,17 @@ class _Arrows:
             plane = _plane_of(marker)
             color = _bright(marker["color"]) if picked else marker["color"]
             opacity = PLANE_PICKED_OPACITY if picked else PLANE_OPACITY
-            pts = plane["corners"]
+            # 뒷면은 법선 반대쪽으로 조금 띄운다. 같은 자리에 겹치면 두 면의 대각선이 X 자로 보였다
+            gap = PLANE_GAP_RATIO * max(marker["size"])
+            back = [_sub(p, _mul(plane["normal"], gap)) for p in plane["corners"]]
+            pts = plane["corners"] + back
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 self._root(stage, UsdGeom)
                 mesh = UsdGeom.Mesh.Define(stage, f"{PLANE_SCOPE}/{marker['id']}")
                 mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
                 # 앞면과 뒷면을 따로 둔다. doubleSided 만으로는 RTX 가 뒤에서 안 그렸다 (ebs 판도 같은 방식)
                 mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
-                mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3, 3, 2, 1, 0]))
+                mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3, 7, 6, 5, 4]))
                 mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
                 mesh.CreateDoubleSidedAttr(False)
                 mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
