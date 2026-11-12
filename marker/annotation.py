@@ -7,7 +7,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry", "ray_on_plane"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -228,6 +228,19 @@ def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0)) -> dict:
 
 def _plane_of(marker) -> dict:
     return plane_geometry(marker["axis"], marker["at"], marker["size"], marker.get("shift", (0.0, 0.0)))
+
+
+def plane_matrix(marker) -> list:
+    """sc.Rectangle (지역 XY, 가운데 원점) 을 그 평면에 눕히는 16 값 (Gf 와 같은 행 순서:
+    0행 = 가로 축, 1행 = 세로 축, 2행 = 법선, 3행 = 가운데)"""
+    n, u, v = PLANE_AXES[marker["axis"]]
+    rows = []
+    for k in (u, v, n):
+        row = [0.0, 0.0, 0.0, 0.0]
+        row[k] = 1.0
+        rows += row
+    c = _plane_of(marker)["center"]
+    return rows + [c[0], c[1], c[2], 1.0]
 
 
 def ray_on_plane(axis: str, at: float, origin, direction):
@@ -736,7 +749,7 @@ class _Arrows:
             return False
 
     def draw_plane(self, marker, picked: bool) -> bool:
-        """그 plane 의 반투명 사각형을 (다시) 쓴다. 양면, 그림자 없음, 고른 것은 밝고 진하게"""
+        """그 plane 의 반투명 사각형을 (다시) 쓴다. 앞뒤 두 면, 그림자 없음, 고른 것은 밝고 진하게"""
         try:
             from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
             stage = self._stage()
@@ -750,10 +763,11 @@ class _Arrows:
                 self._root(stage, UsdGeom)
                 mesh = UsdGeom.Mesh.Define(stage, f"{PLANE_SCOPE}/{marker['id']}")
                 mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
-                mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4]))
-                mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3]))
+                # 앞면과 뒷면을 따로 둔다. doubleSided 만으로는 RTX 가 뒤에서 안 그렸다 (ebs 판도 같은 방식)
+                mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
+                mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([0, 1, 2, 3, 3, 2, 1, 0]))
                 mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
-                mesh.CreateDoubleSidedAttr(True)
+                mesh.CreateDoubleSidedAttr(False)
                 mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
                 mesh.CreateDisplayOpacityAttr(Vt.FloatArray([opacity]))
                 low = [min(p[i] for p in pts) for i in range(3)]
@@ -878,8 +892,8 @@ class _MarkerView:
                 plane_key = f"h:{mid}:plane"
                 self._plane_hit_xf = sc.Transform()
                 with self._plane_hit_xf:
-                    self._plane_hit = sc.PolygonMesh(
-                        _plane_of(marker)["corners"], [list(HIT_COLOR)] * 4, [4, 4], [0, 1, 2, 3, 3, 2, 1, 0],
+                    self._plane_hit = sc.Rectangle(
+                        1.0, 1.0, color=view.ui.color(*HIT_COLOR),
                         gesture=[
                             Hover(lambda _m: view.hold(plane_key), lambda _m: None,
                                   lambda: view.release(plane_key), name="plane_hover"),
@@ -991,7 +1005,8 @@ class _MarkerView:
         self._border.thickness = BORDER_PICKED_PX if picked else BORDER_PX
         self._title.color = ink if marker["label"] else ui.color(*DIM_COLOR)
         if self._plane_hit is not None:
-            self._plane_hit.positions = _plane_of(marker)["corners"]
+            self._plane_hit_xf.transform = sc.Matrix44(*plane_matrix(marker))
+            self._plane_hit.width, self._plane_hit.height = marker["size"]
             self._plane_hit_xf.visible = bool(picked)
         self.relayout(marker, layout, picked)
 
@@ -1654,10 +1669,9 @@ class Annotation:
         m = self._find(marker_id)
         if m is None or m["kind"] != "plane" or marker_id != self._selected or self._creating:
             return
-        start = self._plane_point(m, payload)
-        if start is None:
-            return
-        self._plane_drag = {"view": view, "id": marker_id, "start": start, "shift": list(m.get("shift", [0.0, 0.0]))}
+        start = self._plane_point(m, payload)  # None 이면 제스처 이동량(moved)으로 따라간다
+        self._plane_drag = {"view": view, "id": marker_id, "start": start, "moved": [0.0, 0.0, 0.0],
+                            "shift": list(m.get("shift", [0.0, 0.0]))}
         view.hold("plane_drag")
 
     def _plane_move(self, view, payload) -> None:
@@ -1668,11 +1682,18 @@ class Annotation:
         if m is None:
             self._plane_release(view)
             return
-        now = self._plane_point(m, payload)
-        if now is None:
-            return
         _n, u, v = PLANE_AXES[m["axis"]]
-        m["shift"] = [d["shift"][0] + now[u] - d["start"][u], d["shift"][1] + now[v] - d["start"][v]]
+        now = self._plane_point(m, payload) if d["start"] is not None else None
+        if now is not None:
+            du, dv = now[u] - d["start"][u], now[v] - d["start"][v]
+        else:
+            try:  # 광선을 못 받으면 제스처가 주는 월드 이동량을 쌓는다 (평면 안 성분만)
+                step = [float(c) for c in payload.moved]
+            except Exception:
+                return
+            d["moved"] = [d["moved"][i] + step[i] for i in range(3)]
+            du, dv = d["moved"][u], d["moved"][v]
+        m["shift"] = [d["shift"][0] + du, d["shift"][1] + dv]
         m["position"] = _plane_of(m)["center"]
         self._restyle(d["id"])
 
