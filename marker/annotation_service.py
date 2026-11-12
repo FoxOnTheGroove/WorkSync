@@ -19,8 +19,13 @@ class AnnotationService:
         return instance().create_plane(axis)
 
     @classmethod
+    def relocate(cls, marker_id):
+        """그 label / inlet / outlet 을 다음 클릭한 자리로 옮길 준비. 빈 곳이면 취소"""
+        return instance().relocate(marker_id)
+
+    @classmethod
     def cancel_create(cls):
-        """찍기 대기를 거둔다"""
+        """찍기 대기 (만들기, 위치 재설정) 를 거둔다"""
         return instance().cancel_create()
 
     # -- 고르기와 고치기 ------------------------------------------------------------
@@ -101,6 +106,11 @@ class AnnotationService:
     def creating(cls):
         """찍기를 기다리는 종류. 아니면 빈 칸"""
         return instance().creating()
+
+    @classmethod
+    def relocating(cls):
+        """위치 재설정을 기다리는 마커 id. 아니면 None"""
+        return instance().relocating()
 
     @classmethod
     def status(cls):

@@ -7,7 +7,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry", "ray_on_plane"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -202,14 +202,17 @@ def _arrow_ends(marker, length: float):
     return list(p), _add(p, _mul(d, length))
 
 
-def plane_geometry(axis: str, at: float, size) -> dict:
-    """축 평면 (월드). axis 는 xy / yz / zx, at 은 법선 축 위치, size 는 [가로, 세로].
-    원점을 지나는 축 위에 가운데를 두고 at 만큼 법선 방향으로 옮긴다.
+def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0)) -> dict:
+    """축 평면 (월드). axis 는 xy / yz / zx, at 은 법선 축 위치, size 는 [가로, 세로],
+    shift 는 평면 안에서 옮긴 [가로 축, 세로 축] 거리. 원점을 지나는 축 위에 가운데를 두고 at 만큼
+    법선 방향으로, shift 만큼 평면 안에서 옮긴다.
     돌려주는 것: center, corners (4점, 둘레 순), top (위쪽 변 가운데, 패널 자리), normal"""
     n, u, v = PLANE_AXES[axis]
     w, h = float(size[0]), float(size[1])
     center = [0.0, 0.0, 0.0]
     center[n] = float(at)
+    center[u] += float(shift[0])
+    center[v] += float(shift[1])
 
     def point(su, sv):
         p = list(center)
@@ -224,7 +227,21 @@ def plane_geometry(axis: str, at: float, size) -> dict:
 
 
 def _plane_of(marker) -> dict:
-    return plane_geometry(marker["axis"], marker["at"], marker["size"])
+    return plane_geometry(marker["axis"], marker["at"], marker["size"], marker.get("shift", (0.0, 0.0)))
+
+
+def ray_on_plane(axis: str, at: float, origin, direction):
+    """광선이 그 축 평면(법선 축 = at)과 만나는 월드 점. 나란하면 None"""
+    n = PLANE_AXES[axis][0]
+    try:
+        o = [float(origin[i]) for i in range(3)]
+        d = [float(direction[i]) for i in range(3)]
+    except Exception:
+        return None
+    if abs(d[n]) < 1e-12:
+        return None
+    t = (float(at) - o[n]) / d[n]
+    return [o[i] + t * d[i] for i in range(3)]
 
 
 def _panel_anchor(marker, length: float):
@@ -554,6 +571,12 @@ def _gesture_types():
         except Exception:
             return None
 
+    def payload_of(gesture):
+        try:
+            return gesture.sender.gesture_payload
+        except Exception:
+            return None
+
     class Click(sc.ClickGesture):
         def __init__(self, fn, priority=GESTURE_PRIORITY, name="click"):
             super().__init__()
@@ -573,16 +596,17 @@ def _gesture_types():
             return self._priority
 
     class Drag(sc.DragGesture):
-        def __init__(self, began, changed, ended, priority=GESTURE_PRIORITY, name="drag"):
+        def __init__(self, began, changed, ended, priority=GESTURE_PRIORITY, name="drag", raw=False):
             super().__init__()
             self._began, self._changed, self._ended = began, changed, ended
             self._priority, self._name = priority, name
+            self._take = payload_of if raw else mouse_of  # raw: 광선까지 든 payload 를 넘긴다
 
         def on_began(self, *_args):
-            self._began(mouse_of(self))
+            self._began(self._take(self))
 
         def on_changed(self, *_args):
-            self._changed(mouse_of(self))
+            self._changed(self._take(self))
 
         def on_ended(self, *_args):
             self._ended()
@@ -847,6 +871,22 @@ class _MarkerView:
         with view.root:
             self.top = sc.Transform()
         with self.top:
+            self._plane_hit_xf = self._plane_hit = None
+            if marker["kind"] == "plane":
+                # 평면 본체(USD)는 손짓을 못 받는다. 고른 평면 위에만 같은 자리 투명 사각형을 깔아 끌기를 받는다
+                Click, Drag, Hover = _gesture_types()
+                plane_key = f"h:{mid}:plane"
+                self._plane_hit_xf = sc.Transform()
+                with self._plane_hit_xf:
+                    self._plane_hit = sc.PolygonMesh(
+                        _plane_of(marker)["corners"], [list(HIT_COLOR)] * 4, [4, 4], [0, 1, 2, 3, 3, 2, 1, 0],
+                        gesture=[
+                            Hover(lambda _m: view.hold(plane_key), lambda _m: None,
+                                  lambda: view.release(plane_key), name="plane_hover"),
+                            Drag(lambda p: owner._plane_grab(view, mid, p),
+                                 lambda p: owner._plane_move(view, p),
+                                 lambda: owner._plane_release(view), name="plane_move", raw=True),
+                        ])
             self._anchor_xf = sc.Transform()
             with self._anchor_xf:
                 with sc.Transform(scale_to=sc.Space.SCREEN):
@@ -950,6 +990,9 @@ class _MarkerView:
         self._border.color = ink
         self._border.thickness = BORDER_PICKED_PX if picked else BORDER_PX
         self._title.color = ink if marker["label"] else ui.color(*DIM_COLOR)
+        if self._plane_hit is not None:
+            self._plane_hit.positions = _plane_of(marker)["corners"]
+            self._plane_hit_xf.visible = bool(picked)
         self.relayout(marker, layout, picked)
 
     def relayout(self, marker, layout, picked: bool) -> None:
@@ -1221,6 +1264,8 @@ class Annotation:
         self._markers: list = []
         self._selected = None
         self._creating: str = ""
+        self._relocating = None  # 위치 재설정을 기다리는 마커 id
+        self._plane_drag = None
         self._status: str = ""
         self._views: list = []
         self._listeners: list = []
@@ -1325,7 +1370,7 @@ class Annotation:
     # -- 알림 --------------------------------------------------------------------
 
     def add_listener(self, fn) -> None:
-        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, plane, panel, create, status"""
+        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, plane, move, panel, create, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1431,11 +1476,37 @@ class Annotation:
         self._say(f"{kind}: 뷰포트에서 모델을 왼쪽 클릭하세요", "create")
         return True
 
+    def relocate(self, marker_id) -> bool:
+        """그 label / inlet / outlet 을 다음 클릭한 모델 표면으로 옮길 준비. 빈 곳을 찍으면 아무것도 안 바꾸고 취소"""
+        m = self._find(marker_id)
+        if m is None:
+            self._say("옮길 마커를 고르세요")
+            return False
+        if m["kind"] not in KINDS:
+            self._say("평면은 끌어서 옮깁니다 (고른 뒤 평면을 끌기)")
+            return False
+        if not self._views:
+            self._say("그릴 뷰포트가 없습니다")
+            return False
+        for q in list(self._queries):
+            q.cancel()
+        self._queries = set()
+        self._creating = ""
+        self._relocating = marker_id
+        self._each(lambda v: v.arm(True))
+        self._say(f"{marker_id}: 새 위치를 왼쪽 클릭하세요", "create")
+        return True
+
+    def relocating(self):
+        """위치 재설정을 기다리는 마커 id. 아니면 None"""
+        return self._relocating
+
     def cancel_create(self) -> None:
-        """찍기 대기를 거둔다. 묻는 중이던 답도 버린다"""
-        if not self._creating:
+        """찍기 대기(만들기, 위치 재설정)를 거둔다. 묻는 중이던 답도 버린다"""
+        if not self._creating and not self._relocating:
             return
         self._creating = ""
+        self._relocating = None
         for q in list(self._queries):
             q.cancel()
         self._queries = set()
@@ -1459,6 +1530,7 @@ class Annotation:
             "offset": list(DEFAULT_OFFSET),
             "box": None,
             "font_px": FONT_PX,
+            "shift": [0.0, 0.0],
         }
         marker["position"] = _plane_of(marker)["center"]
         self._markers.append(marker)
@@ -1507,8 +1579,8 @@ class Annotation:
 
     def _view_clicked(self, view, ndc) -> None:
         """찍기 대기 중 클릭. 이미지 밖이면 계속 기다린다"""
-        kind = self._creating
-        if not kind or self._closed or view.api is None:
+        kind, moving = self._creating, self._relocating
+        if not (kind or moving) or self._closed or view.api is None:
             return
         xy = _xy(ndc)
         pixel = _texture_pixel(view.api, xy) if xy is not None else None
@@ -1517,7 +1589,10 @@ class Annotation:
         self._each(lambda v: v.arm(False))
         self._say("위치 확인 중…", "create")
         api = view.api
-        q = _Query(api, pixel, lambda query, result: self._picked(query, api, kind, result))
+        if moving:
+            q = _Query(api, pixel, lambda query, result: self._relocated(query, api, moving, result))
+        else:
+            q = _Query(api, pixel, lambda query, result: self._picked(query, api, kind, result))
         if not q.over:
             self._queries.add(q)
 
@@ -1545,6 +1620,79 @@ class Annotation:
         self.select(marker["id"])
         self._say(f"만들었습니다: {marker['id']}", "create")
 
+    def _relocated(self, query, api, marker_id: str, result) -> None:
+        """위치 재설정 답. 맞으면 옮긴다 (inlet / outlet 은 방향도 새 표면으로), 아니면 그대로 두고 취소"""
+        self._queries.discard(query)
+        if self._closed or self._relocating != marker_id:
+            return
+        self._relocating = None
+        m = self._find(marker_id)
+        if m is None:
+            return
+        if isinstance(result, Exception) or result is None:
+            self._say("그 자리에는 놓을 수 없어 위치 재설정을 취소했습니다", "create")
+            return
+        pos = [float(c) for c in result["position"]]
+        m["position"] = pos
+        if m["kind"] in ARROW_KINDS:
+            m["direction"] = self._arrow_direction(m["kind"], result, api, pos)
+        self._restyle(marker_id)
+        self._each(lambda v: v.cull())
+        self._notify("move")
+        self._say(f"옮겼습니다: {marker_id}", "create")
+
+    def _arrow_direction(self, kind: str, hit: dict, api, pos) -> list:
+        """inlet 은 -법선, outlet 은 +법선. 법선을 못 얻으면 카메라 쪽"""
+        toward, _distance = _camera_of(api, pos)
+        n = hit.get("normal") or _unit(toward) or [0.0, 0.0, 1.0]
+        sign = -1.0 if kind == "inlet" else 1.0
+        return [sign * float(c) for c in n]
+
+    # -- 평면 끌기: 마우스 광선이 평면과 만나는 점을 따라, 평면 안에서만 ------------------------
+
+    def _plane_grab(self, view, marker_id: str, payload) -> None:
+        m = self._find(marker_id)
+        if m is None or m["kind"] != "plane" or marker_id != self._selected or self._creating:
+            return
+        start = self._plane_point(m, payload)
+        if start is None:
+            return
+        self._plane_drag = {"view": view, "id": marker_id, "start": start, "shift": list(m.get("shift", [0.0, 0.0]))}
+        view.hold("plane_drag")
+
+    def _plane_move(self, view, payload) -> None:
+        d = self._plane_drag
+        if d is None or d["view"] is not view:
+            return
+        m = self._find(d["id"])
+        if m is None:
+            self._plane_release(view)
+            return
+        now = self._plane_point(m, payload)
+        if now is None:
+            return
+        _n, u, v = PLANE_AXES[m["axis"]]
+        m["shift"] = [d["shift"][0] + now[u] - d["start"][u], d["shift"][1] + now[v] - d["start"][v]]
+        m["position"] = _plane_of(m)["center"]
+        self._restyle(d["id"])
+
+    def _plane_release(self, view) -> None:
+        d, self._plane_drag = self._plane_drag, None
+        if d is None:
+            return
+        if d["view"] in self._views:
+            d["view"].release("plane_drag")
+        self._each(lambda v: v.cull())
+        self._notify("plane")
+
+    @staticmethod
+    def _plane_point(m, payload):
+        """제스처 광선이 그 평면과 만나는 점"""
+        try:
+            return ray_on_plane(m["axis"], m["at"], payload.ray_origin, payload.ray_direction)
+        except Exception:
+            return None
+
     def _new_marker(self, kind: str, hit: dict, api) -> dict:
         """찍은 점으로 마커 하나. inlet 은 -법선, outlet 은 +법선 방향"""
         pos = [float(c) for c in hit["position"]]
@@ -1557,10 +1705,7 @@ class Annotation:
             "position": pos,
         }
         if kind in ARROW_KINDS:
-            toward, _distance = _camera_of(api, pos)
-            n = hit.get("normal") or _unit(toward) or [0.0, 0.0, 1.0]
-            sign = -1.0 if kind == "inlet" else 1.0
-            marker["direction"] = [sign * float(c) for c in n]
+            marker["direction"] = self._arrow_direction(kind, hit, api, pos)
         marker["offset"] = list(DEFAULT_OFFSET)
         marker["box"] = None
         marker["font_px"] = FONT_PX

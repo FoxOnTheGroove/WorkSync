@@ -88,6 +88,7 @@ class AnnotationDummyUI:
                 with ui.HStack(height=0, spacing=4):
                     ui.Button("적용", clicked_fn=self._apply)
                     ui.Button("패널 원위치", clicked_fn=self._reset)
+                    ui.Button("위치 재설정", clicked_fn=lambda: AnnotationService.relocate(AnnotationService.selected()))
                     ui.Button("삭제", clicked_fn=self._remove)
                     ui.Button("선택 해제", clicked_fn=functools.partial(AnnotationService.select, None))
         AnnotationService.add_listener(self._on_change)
