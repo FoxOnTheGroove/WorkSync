@@ -1,13 +1,16 @@
 import asyncio
 import copy
+import json
 import math
+import os
 import unicodedata
 
 from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane"]
+           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane",
+           "marker_file_of", "clean_marker"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -120,6 +123,115 @@ def leader_end(offset, size):
         if abs(d) > 1e-12:
             t = max(t, min(lo / d, hi / d))
     return [cx * t, cy * t]
+
+
+def marker_file_of(usd_path: str) -> str:
+    """형상 USD 와 같은 자리의 마커 파일. omniverse://srv/a/pump.usd -> omniverse://srv/a/pump_marker.json"""
+    path = (usd_path or "").strip()
+    if not path:
+        return ""
+    cut = max(path.rfind("/"), path.rfind("\\"))
+    folder, name = path[:cut + 1], path[cut + 1:]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return folder + stem + MARKER_FILE_SUFFIX
+
+
+def _remote(path: str) -> bool:
+    """omniverse:// 같은 원격 경로인가"""
+    head = path.split("://", 1)
+    return len(head) == 2 and head[0].isalpha()
+
+
+def _read_text(path: str):
+    """로컬이든 원격이든 글을 통째로 읽는다. 파일이 없으면 None"""
+    if _remote(path):
+        import omni.client
+        result, _version, content = omni.client.read_file(path)
+        if result == omni.client.Result.ERROR_NOT_FOUND:
+            return None
+        if result != omni.client.Result.OK:
+            raise OSError(f"{result} on {path}")
+        return memoryview(content).tobytes().decode("utf-8-sig")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8-sig") as handle:
+        return handle.read()
+
+
+def _write_text(path: str, text: str) -> None:
+    """글을 쓴다. 로컬은 옆자리에 썼다가 바꿔치기한다 (도중에 실패해도 기존 파일은 그대로)"""
+    if _remote(path):
+        import omni.client
+        result = omni.client.write_file(path, text.encode("utf-8"))
+        if result != omni.client.Result.OK:
+            raise OSError(f"{result} on {path}")
+        return
+    spare = path + ".part"
+    try:
+        with open(spare, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(spare, path)
+    except Exception:
+        try:
+            os.remove(spare)
+        except OSError:
+            pass
+        raise
+
+
+def _floats(v, n: int, positive: bool = False):
+    """길이 n 의 유한한 숫자 목록이면 float 목록, 아니면 None"""
+    if isinstance(v, (str, bytes, dict)) or not hasattr(v, "__len__") or len(v) != n:
+        return None
+    out = []
+    for c in v:
+        if isinstance(c, bool) or not isinstance(c, (int, float)) or not math.isfinite(float(c)):
+            return None
+        if positive and c <= 0:
+            return None
+        out.append(float(c))
+    return out
+
+
+def clean_marker(raw) -> dict:
+    """파일에서 읽은 마커 하나를 검사해 고친 사본. 쓸 수 없으면 ValueError (이유)"""
+    if not isinstance(raw, dict):
+        raise ValueError("not an object")
+    kind = raw.get("kind")
+    if kind not in KINDS and kind != "plane":
+        raise ValueError(f"unknown kind {kind!r}")
+    mid = raw.get("id")
+    m = {"id": mid if isinstance(mid, str) and mid else None, "kind": kind}
+    label, desc = raw.get("label", ""), raw.get("description", "")
+    m["label"] = one_line(label)[:MAX_LABEL] if isinstance(label, str) else ""
+    m["description"] = desc[:MAX_DESCRIPTION] if isinstance(desc, str) else ""
+    color = _floats(raw.get("color"), 3)
+    m["color"] = color if color and all(0.0 <= c <= 1.0 for c in color) else list(DEFAULT_COLORS[kind])
+    m["offset"] = _floats(raw.get("offset"), 2) or list(DEFAULT_OFFSET)
+    m["box"] = _floats(raw.get("box"), 2, positive=True)
+    font = raw.get("font_px")
+    ok_font = isinstance(font, (int, float)) and not isinstance(font, bool) and MIN_FONT_PX <= font <= MAX_FONT_PX
+    m["font_px"] = float(font) if ok_font else FONT_PX
+    if kind == "plane":
+        if raw.get("axis") not in PLANE_AXES:
+            raise ValueError(f"plane axis {raw.get('axis')!r}")
+        m["axis"] = raw["axis"]
+        at = raw.get("at", 0.0)
+        m["at"] = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at) else 0.0
+        m["size"] = _floats(raw.get("size"), 2, positive=True) or list(PLANE_SIZE)
+        m["shift"] = _floats(raw.get("shift"), 2) or [0.0, 0.0]
+        m["position"] = _plane_of(m)["center"]
+        return m
+    pos = _floats(raw.get("position"), 3)
+    if pos is None:
+        raise ValueError("position missing or not 3 numbers")
+    m["position"] = pos
+    if kind in ARROW_KINDS:
+        d = _floats(raw.get("direction"), 3)
+        if d is None or _unit(d) is None:
+            raise ValueError("direction missing or zero")
+        m["direction"] = d
+    return m
 
 
 def next_id(kind: str, taken) -> str:
@@ -1295,6 +1407,7 @@ class Annotation:
         self._hover_edge = None  # 마우스가 올라간 변 띠 (view, marker id, edge): 커서가 크기 모양인 곳
         self._clicked = None  # 마지막으로 클릭한 패널
         self._arrow_scale = 1.0  # 화살표 크기 배수 (모든 화살표 공통)
+        self._target_usd = ""  # 마커가 붙는 형상 USD 경로. 마커 파일은 그 옆 <이름>_marker.json
         self._closed = False
         self._arrows = _Arrows()
 
@@ -1388,7 +1501,8 @@ class Annotation:
     # -- 알림 --------------------------------------------------------------------
 
     def add_listener(self, fn) -> None:
-        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, plane, move, panel, create, status"""
+        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, plane, move, panel, create,
+        target(형상 경로), save, load, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1841,6 +1955,109 @@ class Annotation:
             self._selected = None
             self._notify("select")
         self._notify("remove")
+
+    # -- 형상 USD 와 마커 파일 --------------------------------------------------------
+
+    def set_target_usd(self, path: str) -> bool:
+        """마커가 붙는 형상 USD 경로 (omniverse:// 나 로컬). 익스텐션은 열지 않고 경로만 든다.
+        다른 형상으로 바뀌면 지금 마커는 그 형상 것이 아니므로 비운다"""
+        path = (path or "").strip()
+        if not isinstance(path, str) or not path:
+            self._say("형상 USD 경로가 비었습니다")
+            return False
+        if self._target_usd and path != self._target_usd and self._markers:
+            self.clear()  # 다른 형상으로 바뀜. 처음 정할 때는 지금 마커를 그 형상 것으로 둔다
+        self._target_usd = path
+        self._say(f"형상: {path}  (마커 파일: {marker_file_of(path)})", "target")
+        return True
+
+    def target_usd(self) -> str:
+        """마커가 붙는 형상 USD 경로. 없으면 빈 칸"""
+        return self._target_usd
+
+    def marker_file(self) -> str:
+        """저장, 불러오기에 쓰는 마커 파일 경로 (형상 USD 옆 <이름>_marker.json). 없으면 빈 칸"""
+        return marker_file_of(self._target_usd)
+
+    def save(self) -> bool:
+        """지금 마커를 형상 USD 옆 마커 파일에 쓴다"""
+        path = self.marker_file()
+        if not path:
+            self._say("형상 USD 경로를 먼저 정하세요")
+            return False
+        keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px",
+                "position", "direction", "axis", "at", "size", "shift")
+        data = {
+            "version": MARKER_FILE_VERSION,
+            "target_usd": self._target_usd,
+            "arrow_scale": self._arrow_scale,
+            "markers": [{k: copy.deepcopy(m[k]) for k in keep if k in m and not (m["kind"] == "plane" and k == "position")}
+                        for m in self._markers],
+        }
+        try:
+            _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        except Exception as e:
+            self._say(f"저장 실패: {type(e).__name__}: {e}")
+            return False
+        self._say(f"저장했습니다: {len(self._markers)}개 -> {path}", "save")
+        return True
+
+    def load(self) -> bool:
+        """형상 USD 옆 마커 파일을 읽어 지금 마커를 바꾼다. 파일이 없거나 깨졌으면 지금 것을 그대로 둔다.
+        잘못된 마커 하나는 건너뛰고 몇 개를 건너뛰었는지 알린다"""
+        path = self.marker_file()
+        if not path:
+            self._say("형상 USD 경로를 먼저 정하세요")
+            return False
+        try:
+            text = _read_text(path)
+        except Exception as e:
+            self._say(f"불러오기 실패: {type(e).__name__}: {e}")
+            return False
+        if text is None:
+            self._say(f"마커 파일이 없습니다: {path}")
+            return False
+        try:
+            data = json.loads(text)
+        except ValueError as e:
+            self._say(f"마커 파일이 깨졌습니다: {e}")
+            return False
+        if not isinstance(data, dict) or not isinstance(data.get("markers"), list):
+            self._say("마커 파일 형식이 아닙니다 (markers 목록 없음)")
+            return False
+        version = data.get("version", 1)
+        if not isinstance(version, int) or version > MARKER_FILE_VERSION:
+            self._say(f"더 새 판의 마커 파일입니다 (version {version})")
+            return False
+        loaded, skipped = [], []
+        for i, raw in enumerate(data["markers"]):
+            try:
+                m = clean_marker(raw)
+            except ValueError as e:
+                skipped.append(f"#{i}: {e}")
+                continue
+            taken = {x["id"] for x in loaded}
+            if m["id"] is None or m["id"] in taken:
+                m["id"] = next_id(m["kind"], taken)
+            loaded.append(m)
+        self.cancel_create()
+        self.clear()
+        scale = data.get("arrow_scale", 1.0)
+        if isinstance(scale, (int, float)) and not isinstance(scale, bool) and MIN_ARROW_SCALE <= scale <= MAX_ARROW_SCALE:
+            self._arrow_scale = float(scale)
+        for m in loaded:
+            self._markers.append(m)
+            if m["kind"] in ARROW_KINDS:
+                self._arrows.draw(m, False, self.arrow_length())
+            elif m["kind"] == "plane":
+                self._arrows.draw_plane(m, False)
+            layout = self._layout(m)
+            self._each(lambda v, m=m, layout=layout: v.add(m, layout, False))
+        self._notify("add")
+        self._notify("arrow")
+        note = f" ({len(skipped)}개 건너뜀: {'; '.join(skipped[:3])})" if skipped else ""
+        self._say(f"불러왔습니다: {len(loaded)}개 <- {path}{note}", "load")
+        return True
 
     # -- 패널 끌기 (씬 손짓) ---------------------------------------------------------
 

@@ -8,7 +8,7 @@ __all__ = ["AnnotationDummyUI"]
 
 WINDOW_TITLE = "Annotation"             # 시험 창 제목
 WINDOW_WIDE = 380                       # 시험 창 폭
-WINDOW_HIGH = 520                       # 시험 창 높이
+WINDOW_HIGH = 600                       # 시험 창 높이
 LIST_HIGH = 120                         # 마커 목록 칸 높이
 ROW_HIGH = 22                           # 마커 목록 한 줄 높이
 FIELD_LABEL_WIDE = 80                   # 글 칸 앞 이름 폭
@@ -36,6 +36,8 @@ class AnnotationDummyUI:
         self._desc = None
         self._font = None
         self._arrow = None
+        self._usd = None
+        self._file = None
         self._plane_at = None
         self._plane_w = None
         self._plane_h = None
@@ -54,6 +56,15 @@ class AnnotationDummyUI:
                 with ui.HStack(height=0, spacing=4):
                     for axis, text in PLANE_BUTTONS:
                         ui.Button(text, clicked_fn=functools.partial(AnnotationService.create_plane, axis))
+                with ui.HStack(height=0, spacing=4):
+                    ui.Label("형상 USD", width=FIELD_LABEL_WIDE)
+                    self._usd = ui.StringField()
+                    ui.Button("로드", width=60, clicked_fn=self._load_usd)
+                with ui.HStack(height=0, spacing=4):
+                    self._file = ui.Label("마커 파일: (형상 USD 없음)", elided_text=True,
+                                          style={"color": STATUS_COLOR})
+                    ui.Button("저장", width=60, clicked_fn=AnnotationService.save)
+                    ui.Button("불러오기", width=80, clicked_fn=AnnotationService.load)
                 self._status = ui.Label("", height=0, word_wrap=True,
                                         style={"color": STATUS_COLOR})
                 ui.Separator(height=6)
@@ -96,6 +107,26 @@ class AnnotationDummyUI:
         self._refresh(fill=True)
 
     # -- 버튼 -------------------------------------------------------------------
+
+    def _load_usd(self):
+        """시험용: 칸의 USD 를 씬에 열고, 열리면 그 경로를 마커의 형상으로 넘긴다.
+        여는 것은 익스텐션 일이 아니라 이 창에서만 한다"""
+        path = self._usd.model.get_value_as_string().strip()
+        if not path:
+            self._status.text = "형상 USD 경로를 넣으세요"
+            return
+        try:
+            import omni.usd
+            told = omni.usd.get_context().open_stage(path)
+        except Exception as e:
+            self._status.text = f"열지 못했습니다: {type(e).__name__}: {e}"
+            return
+        ok = told[0] if isinstance(told, tuple) else told
+        if ok is False:
+            why = str(told[1]) if isinstance(told, tuple) and len(told) > 1 else "열리지 않았습니다"
+            self._status.text = f"열지 못했습니다: {why}"
+            return
+        AnnotationService.set_target_usd(path)
 
     def _apply(self):
         """칸의 글을 고른 마커에"""
@@ -161,6 +192,7 @@ class AnnotationDummyUI:
         if self._window is None:
             return
         self._status.text = AnnotationService.status()
+        self._file.text = f"마커 파일: {AnnotationService.marker_file() or '(형상 USD 없음)'}"
         self._fill_list()
         sel = AnnotationService.selected()
         one = AnnotationService.get(sel) if sel else None

@@ -16,6 +16,8 @@ DEFAULT_COLORS = {                      # 종류별 기본색 (r, g, b 0..1)
     "outlet": [1.0, 0.45, 0.1],
     "plane": [1.0, 0.85, 0.2],
 }
+MARKER_FILE_SUFFIX = "_marker.json"     # 마커 파일 이름 = 형상 USD 이름(확장자 뺌) + 이것, 형상 USD 와 같은 자리
+MARKER_FILE_VERSION = 1                 # 마커 파일 판. 이보다 새 판은 읽지 않는다
 MAX_LABEL = 128                         # label 최대 글자 수
 MAX_DESCRIPTION = 1000                  # description 최대 글자 수
 

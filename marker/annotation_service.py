@@ -75,6 +75,33 @@ class AnnotationService:
         """모두 지운다"""
         return instance().clear()
 
+    # -- 형상 USD 와 마커 파일 ---------------------------------------------------------
+
+    @classmethod
+    def set_target_usd(cls, path):
+        """마커가 붙는 형상 USD 경로 (열지는 않는다)"""
+        return instance().set_target_usd(path)
+
+    @classmethod
+    def target_usd(cls):
+        """마커가 붙는 형상 USD 경로"""
+        return instance().target_usd()
+
+    @classmethod
+    def marker_file(cls):
+        """마커 파일 경로 (형상 USD 옆 <이름>_marker.json)"""
+        return instance().marker_file()
+
+    @classmethod
+    def save(cls):
+        """마커 파일에 저장"""
+        return instance().save()
+
+    @classmethod
+    def load(cls):
+        """마커 파일에서 불러오기"""
+        return instance().load()
+
     # -- 질의 -------------------------------------------------------------------
 
     @classmethod
