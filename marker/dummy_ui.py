@@ -1,3 +1,4 @@
+import asyncio
 import functools
 
 import omni.ui as ui
@@ -18,6 +19,7 @@ KIND_BUTTONS = (("label", "Label"), ("inlet", "Inlet"), ("outlet", "Outlet"))  #
 PLANE_BUTTONS = (("xy", "XY"), ("yz", "YZ"), ("zx", "ZX"))  # 평면 만들기 버튼 (축, 글). 원점을 지나는 평면
 PLANE_FIELD_WIDE = 70                   # 평면 위치, 크기 칸 폭
 QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 알림 (끄는 중 잦은 것)
+LIST_REASONS = ("add", "remove", "text", "load")  # 목록 줄을 다시 짓는 알림 (그 밖에는 줄 색만 바꾼다)
 PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
 ROW_BG = 0xFF2A2A2A                     # 목록 줄 바탕
 STATUS_COLOR = 0xFFAAAAAA               # 상태 글자색
@@ -42,6 +44,8 @@ class AnnotationDummyUI:
         self._plane_w = None
         self._plane_h = None
         self._shown_id = None
+        self._rows = {}  # 마커 id -> 목록 줄 버튼
+        self._rebuild_task = None
 
     def build_ui(self):
         """만들기 버튼, 상태, 마커 목록, 고른 마커의 글 칸"""
@@ -185,15 +189,19 @@ class AnnotationDummyUI:
             sel = AnnotationService.selected()
             self._fill_font(AnnotationService.get(sel) if sel else None)
             return
-        self._refresh(fill=reason in ("text", "click"))
+        self._refresh(fill=reason in ("text", "click"), rebuild=reason in LIST_REASONS)
 
-    def _refresh(self, fill: bool = False):
-        """상태, 목록, 고른 마커. 고른 것이 바뀌었을 때만 글 칸을 덮어쓴다"""
+    def _refresh(self, fill: bool = False, rebuild: bool = True):
+        """상태, 목록, 고른 마커. 고른 것이 바뀌었을 때만 글 칸을 덮어쓴다.
+        목록은 마커가 생기거나 없어지거나 글이 바뀔 때만 다시 짓고 (다음 프레임에), 선택만 바뀌면 줄 색만 바꾼다"""
         if self._window is None:
             return
         self._status.text = AnnotationService.status()
         self._file.text = f"마커 파일: {AnnotationService.marker_file() or '(형상 USD 없음)'}"
-        self._fill_list()
+        if rebuild:
+            self._rebuild_list_later()
+        else:
+            self._paint_rows()
         sel = AnnotationService.selected()
         one = AnnotationService.get(sel) if sel else None
         self._picked.text = f"선택: {sel} ({one['kind']})" if one else "선택: 없음"
@@ -221,19 +229,48 @@ class AnnotationDummyUI:
         if self._font is not None:
             self._font.model.set_value(float(one.get("font_px") or 0.0) if one else 0.0)
 
+    def _rebuild_list_later(self):
+        """목록을 다음 프레임에 다시 짓는다. 목록 버튼의 클릭 콜백 안에서 그 버튼을 지우면
+        omni.ui 가 새 줄을 제대로 못 그려 고른 줄만 남았다"""
+        if self._rebuild_task is not None and not self._rebuild_task.done():
+            return
+
+        async def later():
+            try:
+                import omni.kit.app
+                await omni.kit.app.get_app().next_update_async()
+            except Exception:
+                await asyncio.sleep(0)
+            self._rebuild_task = None
+            self._fill_list()
+
+        try:
+            self._rebuild_task = asyncio.ensure_future(later())
+        except RuntimeError:
+            self._fill_list()
+
     def _fill_list(self):
         """마커마다 한 줄. 누르면 고른다"""
+        if self._list is None:
+            return
         self._list.clear()
-        sel = AnnotationService.selected()
+        self._rows = {}
         with self._list:
             markers = AnnotationService.markers()
             if not markers:
                 ui.Label("(없음)", height=ROW_HIGH, style={"color": STATUS_COLOR})
             for m in markers:
                 text = f"[{m['kind']}] {m['label'] or '(이름 없음)'}   ({m['id']})"
-                ui.Button(text, height=ROW_HIGH, alignment=ui.Alignment.LEFT_CENTER,
-                          style={"Button": {"background_color": PICKED_ROW_BG if m["id"] == sel else ROW_BG}},
-                          clicked_fn=functools.partial(AnnotationService.select, m["id"]))
+                self._rows[m["id"]] = ui.Button(
+                    text, height=ROW_HIGH, alignment=ui.Alignment.LEFT_CENTER,
+                    clicked_fn=functools.partial(AnnotationService.select, m["id"]))
+        self._paint_rows()
+
+    def _paint_rows(self):
+        """고른 줄만 색을 바꾼다 (줄은 그대로 둔다)"""
+        sel = AnnotationService.selected()
+        for mid, row in self._rows.items():
+            row.style = {"Button": {"background_color": PICKED_ROW_BG if mid == sel else ROW_BG}}
 
     # -- 창 ---------------------------------------------------------------------
 
@@ -245,6 +282,9 @@ class AnnotationDummyUI:
     def destroy(self):
         """알림을 끊고 창을 닫는다"""
         AnnotationService.remove_listener(self._on_change)
+        if self._rebuild_task is not None and not self._rebuild_task.done():
+            self._rebuild_task.cancel()
+        self._rows = {}
         if self._window:
             self._window.destroy()
             self._window = None
