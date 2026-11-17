@@ -9,8 +9,8 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "next_id", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane",
-           "marker_file_of", "clean_marker"]
+           "resize_rect", "move_rect", "leader_end", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane",
+           "marker_file_of", "clean_marker", "id_number"]
 
 
 # -- 글자와 상자 (Kit 없이 도는 계산) ----------------------------------------------
@@ -234,16 +234,13 @@ def clean_marker(raw) -> dict:
     return m
 
 
-def next_id(kind: str, taken) -> str:
-    """비어 있는 가장 작은 <kind>_<n>"""
-    taken = set(taken)
-    n = 1
-    while f"{kind}_{n}" in taken:
-        n += 1
-    return f"{kind}_{n}"
+def id_number(marker_id, kind: str):
+    """'<kind>_<n>' 꼴이면 n, 아니면 None"""
+    if not isinstance(marker_id, str) or not marker_id.startswith(kind + "_"):
+        return None
+    tail = marker_id[len(kind) + 1:]
+    return int(tail) if tail.isdigit() else None
 
-
-# -- 벡터 -------------------------------------------------------------------------
 
 def _add(a, b):
     return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -1408,6 +1405,7 @@ class Annotation:
         self._clicked = None  # 마지막으로 클릭한 패널
         self._arrow_scale = 1.0  # 화살표 크기 배수 (모든 화살표 공통)
         self._target_usd = ""  # 마커가 붙는 형상 USD 경로. 마커 파일은 그 옆 <이름>_marker.json
+        self._next_ids = {}  # 종류별 다음 번호. 늘기만 하고 지운 번호는 다시 안 쓴다 (id 는 웹 파라미터와 1:1)
         self._closed = False
         self._arrows = _Arrows()
 
@@ -1579,6 +1577,22 @@ class Annotation:
         self._notify("arrow")
         return True
 
+    def _new_id(self, kind: str, taken=None) -> str:
+        """새 id '<kind>_<n>'. 번호는 늘기만 한다: 지운 마커의 id 를 다른 마커가 물려받지 않게
+        (웹에서 id 로 파라미터와 1:1 로 묶는다)"""
+        taken = set(taken) if taken is not None else {m["id"] for m in self._markers}
+        n = max(self._next_ids.get(kind, 1), 1)
+        while f"{kind}_{n}" in taken:
+            n += 1
+        self._next_ids[kind] = n + 1
+        return f"{kind}_{n}"
+
+    def _bump_id(self, marker_id: str, kind: str) -> None:
+        """이미 있는 id 의 번호보다 다음 번호가 작지 않게"""
+        n = id_number(marker_id, kind)
+        if n is not None:
+            self._next_ids[kind] = max(self._next_ids.get(kind, 1), n + 1)
+
     def _find(self, marker_id):
         for m in self._markers:
             if m["id"] == marker_id:
@@ -1651,7 +1665,7 @@ class Annotation:
             self._say(f"모르는 평면: {axis!r} (xy, yz, zx)")
             return False
         marker = {
-            "id": next_id("plane", (m["id"] for m in self._markers)),
+            "id": self._new_id("plane"),
             "kind": "plane",
             "axis": axis,
             "at": 0.0,
@@ -1835,7 +1849,7 @@ class Annotation:
         """찍은 점으로 마커 하나. inlet 은 -법선, outlet 은 +법선 방향"""
         pos = [float(c) for c in hit["position"]]
         marker = {
-            "id": next_id(kind, (m["id"] for m in self._markers)),
+            "id": self._new_id(kind),
             "kind": kind,
             "label": "",
             "description": "",
@@ -1965,8 +1979,10 @@ class Annotation:
         if not isinstance(path, str) or not path:
             self._say("형상 USD 경로가 비었습니다")
             return False
-        if self._target_usd and path != self._target_usd and self._markers:
-            self.clear()  # 다른 형상으로 바뀜. 처음 정할 때는 지금 마커를 그 형상 것으로 둔다
+        if self._target_usd and path != self._target_usd:
+            if self._markers:
+                self.clear()  # 다른 형상으로 바뀜. 처음 정할 때는 지금 마커를 그 형상 것으로 둔다
+            self._next_ids = {}  # 번호는 형상마다 따로
         self._target_usd = path
         self._say(f"형상: {path}  (마커 파일: {marker_file_of(path)})", "target")
         return True
@@ -1991,6 +2007,7 @@ class Annotation:
             "version": MARKER_FILE_VERSION,
             "target_usd": self._target_usd,
             "arrow_scale": self._arrow_scale,
+            "next_ids": dict(self._next_ids),
             "markers": [{k: copy.deepcopy(m[k]) for k in keep if k in m and not (m["kind"] == "plane" and k == "position")}
                         for m in self._markers],
         }
@@ -2032,16 +2049,31 @@ class Annotation:
         loaded, skipped = [], []
         for i, raw in enumerate(data["markers"]):
             try:
-                m = clean_marker(raw)
+                loaded.append(clean_marker(raw))
             except ValueError as e:
                 skipped.append(f"#{i}: {e}")
-                continue
-            taken = {x["id"] for x in loaded}
-            if m["id"] is None or m["id"] in taken:
-                m["id"] = next_id(m["kind"], taken)
-            loaded.append(m)
         self.cancel_create()
         self.clear()
+        # 번호: 파일의 카운터와 파일에 있는 id 중 큰 쪽부터. id 가 없거나 겹치면 새 id 를 주고 알린다
+        self._next_ids = {}
+        saved = data.get("next_ids")
+        if isinstance(saved, dict):
+            for kind, n in saved.items():
+                if isinstance(kind, str) and isinstance(n, int) and not isinstance(n, bool) and n >= 1:
+                    self._next_ids[kind] = n
+        taken, renamed = set(), []
+        for m in loaded:
+            if m["id"] is not None and m["id"] not in taken:
+                taken.add(m["id"])
+                self._bump_id(m["id"], m["kind"])
+            else:
+                m["_was"] = m["id"]
+        for m in loaded:
+            if "_was" in m:
+                was = m.pop("_was")
+                m["id"] = self._new_id(m["kind"], taken)
+                taken.add(m["id"])
+                renamed.append(f"{was or '(없음)'}->{m['id']}")
         scale = data.get("arrow_scale", 1.0)
         if isinstance(scale, (int, float)) and not isinstance(scale, bool) and MIN_ARROW_SCALE <= scale <= MAX_ARROW_SCALE:
             self._arrow_scale = float(scale)
@@ -2056,6 +2088,8 @@ class Annotation:
         self._notify("add")
         self._notify("arrow")
         note = f" ({len(skipped)}개 건너뜀: {'; '.join(skipped[:3])})" if skipped else ""
+        if renamed:
+            note += f" (id 가 없거나 겹쳐 새 id: {', '.join(renamed[:5])})"
         self._say(f"불러왔습니다: {len(loaded)}개 <- {path}{note}", "load")
         return True
 
