@@ -22,6 +22,8 @@ QUIET_REASONS = ("panel",)              # 시험 창이 다시 채우지 않는 
 LIST_REASONS = ("add", "remove", "text", "load")  # 목록 줄을 다시 짓는 알림 (그 밖에는 줄 색만 바꾼다)
 PICKED_ROW_BG = 0xFF7A5A2A              # 목록에서 고른 줄 바탕 (0xAABBGGRR)
 ROW_BG = 0xFF2A2A2A                     # 목록 줄 바탕
+EYE_WIDE = 50                           # 목록 줄 오른쪽 보이기 단추 폭
+HIDDEN_TEXT_COLOR = 0xFF777777          # 숨긴 마커 줄 글자색
 STATUS_COLOR = 0xFFAAAAAA               # 상태 글자색
 
 
@@ -44,7 +46,8 @@ class AnnotationDummyUI:
         self._plane_w = None
         self._plane_h = None
         self._shown_id = None
-        self._rows = {}  # 마커 id -> 목록 줄 버튼
+        self._rows = {}  # 마커 id -> (목록 줄 버튼, 보이기 단추)
+        self._all_eye = None
         self._rebuild_task = None
 
     def build_ui(self):
@@ -72,7 +75,9 @@ class AnnotationDummyUI:
                 self._status = ui.Label("", height=0, word_wrap=True,
                                         style={"color": STATUS_COLOR})
                 ui.Separator(height=6)
-                ui.Label("마커", height=0)
+                with ui.HStack(height=0, spacing=4):
+                    ui.Label("마커")
+                    self._all_eye = ui.Button("전체 숨기기", width=90, clicked_fn=self._toggle_all)
                 with ui.ScrollingFrame(height=LIST_HIGH):
                     self._list = ui.VStack(height=0, spacing=1)
                 ui.Separator(height=6)
@@ -138,6 +143,14 @@ class AnnotationDummyUI:
                                    self._label.model.get_value_as_string(),
                                    self._desc.model.get_value_as_string())
 
+    def _toggle_all(self):
+        """전체 보이기 / 숨기기"""
+        AnnotationService.set_all_visible(not AnnotationService.all_visible())
+
+    def _toggle_one(self, marker_id):
+        """그 마커 보이기 / 숨기기"""
+        AnnotationService.set_visible(marker_id, not AnnotationService.is_visible(marker_id))
+
     def _apply_font(self):
         """칸의 글자 크기를 고른 마커에. 안 되면(범위 밖 등) 칸을 지금 값으로 되돌린다"""
         sel = AnnotationService.selected()
@@ -172,9 +185,12 @@ class AnnotationDummyUI:
 
     # -- 다시 채우기 --------------------------------------------------------------
 
-    def _on_change(self, reason: str):
+    def _on_change(self, reason: str, marker_id=None):
         """끄는 중의 잦은 알림은 넘긴다. 패널을 클릭하면 그 패널의 글을 칸에 채운다"""
         if reason in QUIET_REASONS:
+            return
+        if reason == "visible":
+            self._paint_rows()
             return
         if reason == "arrow":
             self._arrow.model.set_value(AnnotationService.arrow_scale())
@@ -261,16 +277,27 @@ class AnnotationDummyUI:
                 ui.Label("(없음)", height=ROW_HIGH, style={"color": STATUS_COLOR})
             for m in markers:
                 text = f"[{m['kind']}] {m['label'] or '(이름 없음)'}   ({m['id']})"
-                self._rows[m["id"]] = ui.Button(
-                    text, height=ROW_HIGH, alignment=ui.Alignment.LEFT_CENTER,
-                    clicked_fn=functools.partial(AnnotationService.select, m["id"]))
+                with ui.HStack(height=ROW_HIGH, spacing=2):
+                    row = ui.Button(text, alignment=ui.Alignment.LEFT_CENTER,
+                                    clicked_fn=functools.partial(AnnotationService.select, m["id"]))
+                    eye = ui.Button("", width=EYE_WIDE,
+                                    clicked_fn=functools.partial(self._toggle_one, m["id"]))
+                self._rows[m["id"]] = (row, eye)
         self._paint_rows()
 
     def _paint_rows(self):
-        """고른 줄만 색을 바꾼다 (줄은 그대로 둔다)"""
+        """고른 줄 색, 보이기 단추 글을 바꾼다 (줄은 그대로 둔다)"""
         sel = AnnotationService.selected()
-        for mid, row in self._rows.items():
-            row.style = {"Button": {"background_color": PICKED_ROW_BG if mid == sel else ROW_BG}}
+        every = AnnotationService.all_visible()
+        for mid, (row, eye) in self._rows.items():
+            on = AnnotationService.is_visible(mid)
+            style = {"background_color": PICKED_ROW_BG if mid == sel else ROW_BG}
+            if not (on and every):
+                style["color"] = HIDDEN_TEXT_COLOR
+            row.style = {"Button": style, "Button.Label": {"color": style.get("color", 0xFFFFFFFF)}}
+            eye.text = "보임" if on else "숨김"
+        if self._all_eye is not None:
+            self._all_eye.text = "전체 숨기기" if every else "전체 보이기"
 
     # -- 창 ---------------------------------------------------------------------
 

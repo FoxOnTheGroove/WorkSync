@@ -36,6 +36,16 @@ class AnnotationService:
         return instance().select(marker_id)
 
     @classmethod
+    def set_visible(cls, marker_id, on):
+        """마커 하나 보이기 / 숨기기"""
+        return instance().set_visible(marker_id, on)
+
+    @classmethod
+    def set_all_visible(cls, on):
+        """전체 보이기 / 숨기기 (마커마다 값은 그대로)"""
+        return instance().set_all_visible(on)
+
+    @classmethod
     def set_text(cls, marker_id, label, description):
         """패널 글"""
         return instance().set_text(marker_id, label, description)
@@ -115,6 +125,16 @@ class AnnotationService:
         return instance().get(marker_id)
 
     @classmethod
+    def is_visible(cls, marker_id):
+        """마커 하나의 보이기 값"""
+        return instance().is_visible(marker_id)
+
+    @classmethod
+    def all_visible(cls):
+        """전체 표시"""
+        return instance().all_visible()
+
+    @classmethod
     def selected(cls):
         """고른 마커 id. 없으면 None"""
         return instance().selected()
@@ -148,7 +168,7 @@ class AnnotationService:
 
     @classmethod
     def add_listener(cls, fn):
-        """바뀔 때마다 fn(reason)"""
+        """바뀔 때마다 fn(reason, marker_id). 전체에 걸친 변경이면 marker_id 는 None"""
         return instance().add_listener(fn)
 
     @classmethod

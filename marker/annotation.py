@@ -212,6 +212,7 @@ def clean_marker(raw) -> dict:
     font = raw.get("font_px")
     ok_font = isinstance(font, (int, float)) and not isinstance(font, bool) and MIN_FONT_PX <= font <= MAX_FONT_PX
     m["font_px"] = float(font) if ok_font else FONT_PX
+    m["visible"] = raw.get("visible", True) if isinstance(raw.get("visible", True), bool) else True
     if kind == "plane":
         if raw.get("axis") not in PLANE_AXES:
             raise ValueError(f"plane axis {raw.get('axis')!r}")
@@ -949,6 +950,22 @@ class _Arrows:
         material.CreateSurfaceOutput("mdl").ConnectToSource(mdl.ConnectableAPI(), "out")
         return material
 
+    def show(self, marker_id: str, on: bool) -> None:
+        """그 마커의 화살표나 평면을 보이거나 숨긴다 (prim visibility)"""
+        try:
+            from pxr import Usd, UsdGeom
+            stage = self._stage()
+            if stage is None:
+                return
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                for path in (f"{ARROW_SCOPE}/{marker_id}", f"{PLANE_SCOPE}/{marker_id}"):
+                    prim = stage.GetPrimAtPath(path)
+                    if prim.IsValid():
+                        img = UsdGeom.Imageable(prim)
+                        img.MakeVisible() if on else img.MakeInvisible()
+        except Exception as e:
+            self._fail("show / hide", e)
+
     def drop(self, marker_id: str) -> None:
         """그 마커의 화살표나 평면을 지운다"""
         self._remove(f"{ARROW_SCOPE}/{marker_id}")
@@ -992,6 +1009,7 @@ class _MarkerView:
         self.id = mid
         self.anchor = list(marker["position"])
         self.shown = True
+        self.wanted = True
         self._desc = []
         white = ui.color(1.0, 1.0, 1.0, 1.0)
         with view.root:
@@ -1165,10 +1183,15 @@ class _MarkerView:
         return _bright(marker["color"]) if picked else marker["color"]
 
     def show(self, on: bool) -> None:
-        """카메라 뒤면 숨긴다"""
+        """카메라 뒤면 숨긴다. 보이기 값(wanted)이 꺼져 있으면 앞이어도 숨긴다"""
         if on != self.shown:
             self.shown = on
-            self.top.visible = on
+            self.top.visible = on and self.wanted
+
+    def set_wanted(self, on: bool) -> None:
+        """보이기 / 숨기기 (마커 값 x 전체 표시)"""
+        self.wanted = bool(on)
+        self.top.visible = self.shown and self.wanted
 
     def destroy(self) -> None:
         """그린 것과 걸어 둔 선택 잠금을 놓는다"""
@@ -1325,6 +1348,11 @@ class _View:
         self.marks[marker["id"]] = mv
         self._cull_one(mv, *self._camera())
 
+    def set_wanted(self, marker_id: str, on: bool) -> None:
+        mv = self.marks.get(marker_id)
+        if mv is not None:
+            mv.set_wanted(on)
+
     def drop(self, marker_id: str) -> None:
         mv = self.marks.pop(marker_id, None)
         if mv is not None:
@@ -1404,6 +1432,7 @@ class Annotation:
         self._hover_edge = None  # 마우스가 올라간 변 띠 (view, marker id, edge): 커서가 크기 모양인 곳
         self._clicked = None  # 마지막으로 클릭한 패널
         self._arrow_scale = 1.0  # 화살표 크기 배수 (모든 화살표 공통)
+        self._all_visible = True  # 전체 표시. 마커는 자기 visible 과 이것이 둘 다 켜져야 보인다
         self._target_usd = ""  # 마커가 붙는 형상 USD 경로. 마커 파일은 그 옆 <이름>_marker.json
         self._next_ids = {}  # 종류별 다음 번호. 늘기만 하고 지운 번호는 다시 안 쓴다 (id 는 웹 파라미터와 1:1)
         self._closed = False
@@ -1479,6 +1508,7 @@ class Annotation:
         self._views.append(view)
         for m in self._markers:
             view.add(m, self._layout(m), m["id"] == self._selected)
+            view.set_wanted(m["id"], self._shown(m))
         if self._creating:
             view.arm(True)
 
@@ -1499,8 +1529,9 @@ class Annotation:
     # -- 알림 --------------------------------------------------------------------
 
     def add_listener(self, fn) -> None:
-        """바뀔 때마다 fn(reason). reason: add, remove, select, click(패널 클릭), text, font, arrow, plane, move, panel, create,
-        target(형상 경로), save, load, status"""
+        """바뀔 때마다 fn(reason, marker_id). marker_id 는 바뀐 마커 (전체에 걸친 변경이면 None).
+        reason: add, remove, select(새로 고른 id), click(패널 클릭), text, font, panel, plane, move, visible,
+        arrow(전체), target, save, load(전체), create, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1508,16 +1539,16 @@ class Annotation:
         if fn in self._listeners:
             self._listeners.remove(fn)
 
-    def _notify(self, reason: str) -> None:
+    def _notify(self, reason: str, marker_id=None) -> None:
         for fn in list(self._listeners):
             try:
-                fn(reason)
+                fn(reason, marker_id)
             except Exception as e:
                 print(f"{TAG} listener failed: {type(e).__name__}: {e}")
 
-    def _say(self, text: str, reason: str = "status") -> None:
+    def _say(self, text: str, reason: str = "status", marker_id=None) -> None:
         self._status = text
-        self._notify(reason)
+        self._notify(reason, marker_id)
 
     # -- 질의 --------------------------------------------------------------------
 
@@ -1677,15 +1708,17 @@ class Annotation:
             "box": None,
             "font_px": FONT_PX,
             "shift": [0.0, 0.0],
+            "visible": True,
         }
         marker["position"] = _plane_of(marker)["center"]
         self._markers.append(marker)
         self._arrows.draw_plane(marker, False)
         layout = self._layout(marker)
         self._each(lambda v: v.add(marker, layout, False))
-        self._notify("add")
+        self._apply_visible(marker)
+        self._notify("add", marker["id"])
         self.select(marker["id"])
-        self._say(f"만들었습니다: {marker['id']} ({axis.upper()} 평면)")
+        self._say(f"만들었습니다: {marker['id']} ({axis.upper()} 평면)", "status", marker["id"])
         return True
 
     def _plane(self, marker_id):
@@ -1706,7 +1739,7 @@ class Annotation:
         m["at"] = float(at)
         m["position"] = _plane_of(m)["center"]
         self._restyle(marker_id)
-        self._notify("plane")
+        self._notify("plane", marker_id)
         return True
 
     def set_plane_size(self, marker_id, w, h) -> bool:
@@ -1720,7 +1753,7 @@ class Annotation:
                 return False
         m["size"] = [float(w), float(h)]
         self._restyle(marker_id)
-        self._notify("plane")
+        self._notify("plane", marker_id)
         return True
 
     def _view_clicked(self, view, ndc) -> None:
@@ -1762,9 +1795,10 @@ class Annotation:
         if kind in ARROW_KINDS:
             self._arrows.draw(marker, False, self.arrow_length())
         self._each(lambda v: v.add(marker, layout, False))
-        self._notify("add")
+        self._apply_visible(marker)
+        self._notify("add", marker["id"])
         self.select(marker["id"])
-        self._say(f"만들었습니다: {marker['id']}", "create")
+        self._say(f"만들었습니다: {marker['id']}", "create", marker["id"])
 
     def _relocated(self, query, api, marker_id: str, result) -> None:
         """위치 재설정 답. 맞으면 옮긴다 (inlet / outlet 은 방향도 새 표면으로), 아니면 그대로 두고 취소"""
@@ -1784,8 +1818,8 @@ class Annotation:
             m["direction"] = self._arrow_direction(m["kind"], result, api, pos)
         self._restyle(marker_id)
         self._each(lambda v: v.cull())
-        self._notify("move")
-        self._say(f"옮겼습니다: {marker_id}", "create")
+        self._notify("move", marker_id)
+        self._say(f"옮겼습니다: {marker_id}", "create", marker_id)
 
     def _arrow_direction(self, kind: str, hit: dict, api, pos) -> list:
         """inlet 은 -법선, outlet 은 +법선. 법선을 못 얻으면 카메라 쪽"""
@@ -1835,7 +1869,7 @@ class Annotation:
         if d["view"] in self._views:
             d["view"].release("plane_drag")
         self._each(lambda v: v.cull())
-        self._notify("plane")
+        self._notify("plane", d["id"])
 
     @staticmethod
     def _plane_point(m, payload):
@@ -1861,6 +1895,7 @@ class Annotation:
         marker["offset"] = list(DEFAULT_OFFSET)
         marker["box"] = None
         marker["font_px"] = FONT_PX
+        marker["visible"] = True
         return marker
 
     # -- 고르기와 고치기 ------------------------------------------------------------
@@ -1876,7 +1911,7 @@ class Annotation:
         for mid in (was, marker_id):
             if mid is not None:
                 self._restyle(mid)
-        self._notify("select")
+        self._notify("select", marker_id)
         return True
 
     def _restyle(self, marker_id: str) -> None:
@@ -1890,6 +1925,50 @@ class Annotation:
         elif m["kind"] == "plane":
             self._arrows.draw_plane(m, picked)
         self._each(lambda v: v.restyle(m, layout, picked))
+        self._arrows.show(m["id"], self._shown(m))
+
+    def _shown(self, m) -> bool:
+        return self._all_visible and m.get("visible", True)
+
+    def _apply_visible(self, m) -> None:
+        """그 마커의 패널(뷰포트마다)과 USD 몸체(화살표, 평면)를 지금 표시 상태로"""
+        on = self._shown(m)
+        self._each(lambda v: v.set_wanted(m["id"], on))
+        self._arrows.show(m["id"], on)
+
+    def set_visible(self, marker_id, on) -> bool:
+        """마커 하나 보이기 / 숨기기. 전체 표시가 꺼져 있으면 켜도 안 보인다 (값은 기억)"""
+        m = self._find(marker_id)
+        if m is None:
+            self._say("보이기 / 숨기기할 마커가 없습니다")
+            return False
+        if not isinstance(on, bool):
+            self._say("보이기 값은 True / False 입니다")
+            return False
+        m["visible"] = on
+        self._apply_visible(m)
+        self._notify("visible", marker_id)
+        return True
+
+    def is_visible(self, marker_id) -> bool:
+        """그 마커의 보이기 값 (전체 표시와 따로). 없으면 False"""
+        m = self._find(marker_id)
+        return bool(m is not None and m.get("visible", True))
+
+    def set_all_visible(self, on) -> bool:
+        """전체 보이기 / 숨기기. 마커마다의 보이기 값은 그대로 둔다"""
+        if not isinstance(on, bool):
+            self._say("보이기 값은 True / False 입니다")
+            return False
+        self._all_visible = on
+        for m in self._markers:
+            self._apply_visible(m)
+        self._notify("visible", None)
+        return True
+
+    def all_visible(self) -> bool:
+        """전체 표시"""
+        return self._all_visible
 
     def set_text(self, marker_id, label: str, description: str) -> bool:
         """패널 글. 상자 크기를 정해 둔 마커는 그 안에 들어가는 만큼만 보인다"""
@@ -1905,7 +1984,7 @@ class Annotation:
             return False
         m["label"], m["description"] = one_line(label), description  # label 은 한 줄
         self._restyle(marker_id)
-        self._notify("text")
+        self._notify("text", marker_id)
         return True
 
     def set_font_size(self, marker_id, px) -> bool:
@@ -1923,7 +2002,7 @@ class Annotation:
             return False
         m["font_px"] = float(px)
         self._restyle(marker_id)
-        self._notify("font")
+        self._notify("font", marker_id)
         return True
 
     def reset_panel(self, marker_id) -> bool:
@@ -1938,7 +2017,7 @@ class Annotation:
         layout = self._layout(m)
         picked = marker_id == self._selected
         self._each(lambda v: v.relayout(m, layout, picked))
-        self._notify("panel")
+        self._notify("panel", marker_id)
         return True
 
     def remove(self, marker_id) -> bool:
@@ -1954,8 +2033,8 @@ class Annotation:
         self._each(lambda v: v.drop(marker_id))
         if self._selected == marker_id:
             self._selected = None
-            self._notify("select")
-        self._notify("remove")
+            self._notify("select", None)
+        self._notify("remove", marker_id)
         return True
 
     def clear(self) -> None:
@@ -1967,8 +2046,8 @@ class Annotation:
         self._each(lambda v: v.drop_all())
         if self._selected is not None:
             self._selected = None
-            self._notify("select")
-        self._notify("remove")
+            self._notify("select", None)
+        self._notify("remove", None)
 
     # -- 형상 USD 와 마커 파일 --------------------------------------------------------
 
@@ -2001,13 +2080,14 @@ class Annotation:
         if not path:
             self._say("형상 USD 경로를 먼저 정하세요")
             return False
-        keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px",
+        keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px", "visible",
                 "position", "direction", "axis", "at", "size", "shift")
         data = {
             "version": MARKER_FILE_VERSION,
             "target_usd": self._target_usd,
             "arrow_scale": self._arrow_scale,
             "next_ids": dict(self._next_ids),
+            "all_visible": self._all_visible,
             "markers": [{k: copy.deepcopy(m[k]) for k in keep if k in m and not (m["kind"] == "plane" and k == "position")}
                         for m in self._markers],
         }
@@ -2074,6 +2154,8 @@ class Annotation:
                 m["id"] = self._new_id(m["kind"], taken)
                 taken.add(m["id"])
                 renamed.append(f"{was or '(없음)'}->{m['id']}")
+        if isinstance(data.get("all_visible", True), bool):
+            self._all_visible = data.get("all_visible", True)
         scale = data.get("arrow_scale", 1.0)
         if isinstance(scale, (int, float)) and not isinstance(scale, bool) and MIN_ARROW_SCALE <= scale <= MAX_ARROW_SCALE:
             self._arrow_scale = float(scale)
@@ -2085,8 +2167,10 @@ class Annotation:
                 self._arrows.draw_plane(m, False)
             layout = self._layout(m)
             self._each(lambda v, m=m, layout=layout: v.add(m, layout, False))
-        self._notify("add")
-        self._notify("arrow")
+            self._apply_visible(m)
+        self._notify("add", None)
+        self._notify("arrow", None)
+        self._notify("visible", None)
         note = f" ({len(skipped)}개 건너뜀: {'; '.join(skipped[:3])})" if skipped else ""
         if renamed:
             note += f" (id 가 없거나 겹쳐 새 id: {', '.join(renamed[:5])})"
@@ -2114,7 +2198,7 @@ class Annotation:
                 return
             self.select(marker_id)
             self._clicked = marker_id
-            self._notify("click")
+            self._notify("click", marker_id)
 
         _later(clicked)
 
@@ -2181,7 +2265,7 @@ class Annotation:
             return
         self._end_drag()
         if d["moved"]:
-            self._notify("panel")
+            self._notify("panel", d["id"])
 
     def _end_drag(self) -> None:
         d, self._drag = self._drag, None
