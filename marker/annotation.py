@@ -455,6 +455,58 @@ def _later(fn) -> None:
     asyncio.get_event_loop().call_soon(run)
 
 
+class _OrbitYield:
+    """orbit 익스텐션(카메라)이 독점한 마우스를 양보받는다. 메시지 버스로
+    click_enable False (양보 요청) / True (돌려주기) 를 보낸다. 앱 전체에 하나라 뷰포트마다가 아니라
+    쥔 쪽(뷰포트) 을 세서, 처음 쥘 때 한 번 요청하고 모두 놓을 때 한 번 돌려준다"""
+
+    _holders = set()
+    _type = None
+    _warned = False
+
+    @classmethod
+    def hold(cls, who) -> None:
+        first = not cls._holders
+        cls._holders.add(who)
+        if first:
+            cls._push(False)
+
+    @classmethod
+    def release(cls, who) -> None:
+        if who in cls._holders:
+            cls._holders.discard(who)
+            if not cls._holders:
+                cls._push(True)
+
+    @classmethod
+    def release_all(cls) -> None:
+        """익스텐션이 꺼질 때. 쥐고 있었으면 반드시 돌려준다"""
+        if cls._holders:
+            cls._holders = set()
+            cls._push(True)
+
+    @classmethod
+    def holding(cls) -> bool:
+        return bool(cls._holders)
+
+    @classmethod
+    def _push(cls, click_enable: bool) -> None:
+        if not ORBIT_YIELD:
+            return
+        try:
+            import carb.events
+            import omni.kit.app
+            if cls._type is None:
+                cls._type = carb.events.type_from_string(ORBIT_CLICK_EVENT)
+            omni.kit.app.get_app().get_message_bus_event_stream().push(
+                cls._type, payload={"click_enable": bool(click_enable), "feature": ORBIT_FEATURE})
+        except Exception as e:
+            if not cls._warned:
+                cls._warned = True
+                print(f"{TAG} could not tell the orbit extension (click_enable={click_enable}): "
+                      f"{type(e).__name__}: {e}")
+
+
 class _Cursor:
     """앱 창 커서 모양. 변 손잡이 위에서는 <-> / 위아래 화살표, 끝나면 되돌린다.
     여럿이 잡을 수 있게 key 별로 쥐고, 마지막에 잡은 모양을 쓴다. 바꿀 수 없으면 조용히 그대로 둔다"""
@@ -1299,6 +1351,7 @@ class _View:
             if not self._blocked:
                 self._blocked = True
                 self._token = _block_selection(self.api)
+                _OrbitYield.hold(id(self))  # orbit 이 쥔 마우스도 양보받는다 (누르기 전에)
             return
         if not self._blocked:
             return
@@ -1315,6 +1368,7 @@ class _View:
         if not self._holds and self._blocked:
             self._blocked = False
             self._token = None
+            _OrbitYield.release(id(self))
 
     # -- 찍기 대기 ---------------------------------------------------------------
 
@@ -1498,6 +1552,7 @@ class Annotation:
         for view in list(self._views):
             view.destroy()
         self._views = []
+        _OrbitYield.release_all()
         self._arrows.teardown()
         self._listeners = []
         self._markers = []

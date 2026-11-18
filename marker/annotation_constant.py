@@ -94,4 +94,7 @@ GESTURE_PRIORITY = 1000                 # 패널 몸통 제스처 우선순위 (
 ARM_PRIORITY = 2000                     # 찍기 대기 클릭 우선순위 (패널보다 위)
 SELECT_RELEASE_S = 0.25                 # 패널, 손잡이를 다 놓은 뒤 Kit 클릭 선택을 되살리기까지 (초)
 DRAG_SCALE = 2.0                        # 끌기 배율 (마우스 ui px -> 패널 px). 원인 확인 전까지 2.0 고정
+ORBIT_YIELD = True                      # 마우스를 쓸 때 orbit 익스텐션(카메라)에게 양보를 받는가
+ORBIT_CLICK_EVENT = "hyview_eqp_orbit_extension:gesture:click_enable"  # 양보 요청 / 돌려주기 메시지 버스 이벤트
+ORBIT_FEATURE = "marker"                # 그 이벤트 payload 의 feature (누가 마우스를 가져가는지)
 REGISTRY_TRIES = 600                    # 뷰포트 레지스트리를 기다리는 프레임 수
