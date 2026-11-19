@@ -30,7 +30,7 @@
 
 ## 그 밖에 남은 일
 - **면 정보** (면을 찍으면 중점, 법선, 면적 등). 레퍼런스 `ref/ov-lab/.../face.py` 를 얼마나 가져올지
-- **뷰포트 연결**: `bind_viewport(viewport_id, prim_path, usd_path)` 는 서비스에 있음 (아직 아무도 안 부름, 지금은 `set_target_usd`). 연결된 뷰포트에는 그 형상 마커 패널만 보임. 단 화살표 / 평면 USD 몸체는 스테이지에 하나라 뷰포트별로 못 숨김 (형상이 서로 다른 자리에 있으면 문제 없음)
+- **뷰포트 연결**: `bind_viewport(vph, prim_path, usd_path)` 가 그 vph 의 `ui_frame` 위에 SceneView 마커 층을 깔고 `viewport_api.add_scene_view` 한다 (registry 안 씀). bind 전에는 아무 뷰포트에도 안 그려짐. `unbind_viewport(viewport_id)` 는 층도 걷는다. 화살표 / 평면 USD 몸체는 스테이지에 하나라 뷰포트별로 못 숨김
 - **타겟 프림 기준**: 원점을 (0,0,0) 대신 타겟 프림 바운더리 중점으로 (`bind_viewport` 의 prim_path). 평면 위치도 그 기준
 - **화살표 배수**: 지금 전체 공통. 마커마다 따로 둘지 미정
 - **장면을 다시 열 때**: 세션 레이어가 바뀌어 화살표, 평면 몸체가 사라짐 -> 열릴 때 그 장면 마커 다시 그리기 / 불러오기
@@ -38,6 +38,8 @@
 - **같은 마커 파일을 웹과 Kit 이 함께 저장** 할 때 누가 맡을지
 
 ## Kit 에서 확인할 것
+- hytwin vph 의 `ui_frame` 을 다른 기능도 쓰는지 (`with frame:` 이 기존 내용을 덮는지). 덮으면 ui_frame 대신 겹쳐 쌓는 방식으로
+- orbit 양보 뒤 ui.scene 제스처가 hytwin 뷰포트에서 눌림을 받는지
 - orbit 양보: 마커가 마우스를 쓸 때 카메라가 안 움직이는지, 놓으면 카메라 조작이 돌아오는지. function9 등 다른 기능과 feature 간섭 여부 (지금은 없다고 가정)
 - 평면에 보이는 그림자: 비쳐 보이는 것인지 (`PLANE_OPACITY = 1.0` 으로 시험), 재질 연결이 안 된 것인지
 - 평면 뒤 모델 찍기가 막히는지 (`set_pickable` 을 렌더 쿼리가 따르는지)

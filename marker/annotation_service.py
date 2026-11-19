@@ -103,13 +103,13 @@ class AnnotationService:
         return instance().marker_file()
 
     @classmethod
-    def bind_viewport(cls, viewport_id, prim_path, usd_path):
-        """그 뷰포트가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에는 그 형상의 마커만"""
-        return instance().bind_viewport(viewport_id, prim_path, usd_path)
+    def bind_viewport(cls, vph, prim_path, usd_path):
+        """그 뷰포트(vph: viewport_api, ui_frame) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에 마커 층을 깔고 그 형상 마커를 그린다"""
+        return instance().bind_viewport(vph, prim_path, usd_path)
 
     @classmethod
     def unbind_viewport(cls, viewport_id):
-        """뷰포트 연결을 푼다"""
+        """뷰포트 연결을 풀고 마커 층을 걷는다"""
         return instance().unbind_viewport(viewport_id)
 
     @classmethod

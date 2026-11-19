@@ -1,10 +1,7 @@
 # -- 이름 -------------------------------------------------------------------------
 
 TAG = "[annotation]"                    # 콘솔 로그 머리말
-NAME = "marker.annotation"              # 제스처, 쿼리, 레지스트리 항목 이름의 앞머리
-SCENE_ID = f"{NAME}.scene"              # 뷰포트 레지스트리에 거는 장면 id
-SCENE_NAME = "Markers"                  # 뷰포트 장면 항목 이름 (뷰포트 표시 토글에 보임)
-SCENE_CATEGORY = "annotation"           # 뷰포트 장면 항목 분류
+NAME = "marker.annotation"              # 제스처, 쿼리 이름의 앞머리
 
 # -- 마커 종류와 데이터 ---------------------------------------------------------------
 
@@ -97,4 +94,3 @@ DRAG_SCALE = 2.0                        # 끌기 배율 (마우스 ui px -> 패�
 ORBIT_YIELD = True                      # 마우스를 쓸 때 orbit 익스텐션(카메라)에게 양보를 받는가
 ORBIT_CLICK_EVENT = "hyview_eqp_orbit_extension:gesture:click_enable"  # 양보 요청 / 돌려주기 메시지 버스 이벤트
 ORBIT_FEATURE = "marker"                # 그 이벤트 payload 의 feature (누가 마우스를 가져가는지)
-REGISTRY_TRIES = 600                    # 뷰포트 레지스트리를 기다리는 프레임 수

@@ -142,7 +142,7 @@ class AnnotationDummyUI:
         """지금 상태를 콘솔에 찍는다"""
         info = AnnotationService.diagnose()
         print("[annotation] ---- 진단 ----")
-        print(f"[annotation] registered={info['registered']} target_usd={info['target_usd']!r}")
+        print(f"[annotation] target_usd={info['target_usd']!r}")
         print(f"[annotation] bindings={info['bindings']}")
         for v in info["views"]:
             print(f"[annotation] view {v}")

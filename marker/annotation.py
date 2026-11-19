@@ -1256,18 +1256,40 @@ class _MarkerView:
         self.top.visible = False
 
 
-class _View:
-    """뷰포트 하나. 뷰포트 레지스트리가 뷰포트마다 만든다"""
+def _clip_frame(ui):
+    """뷰포트 밖으로 나간 부분을 잘라내는 Frame. 안 자르면 분할 화면에서 옆 뷰포트 위에 그려진다"""
+    try:
+        return ui.Frame(horizontal_clipping=True, vertical_clipping=True)
+    except TypeError:
+        frame = ui.Frame()
+        frame.horizontal_clipping = True
+        frame.vertical_clipping = True
+        return frame
 
-    def __init__(self, owner, desc):
-        """레지스트리가 열어 둔 자리에 뿌리를 짓고 주인에게 알린다"""
+
+class _View:
+    """뷰포트 하나의 마커 층. 호스트가 주는 vph 의 ui_frame 위에 SceneView 를 깔고 그 뷰포트 카메라에 잇는다
+    (ui_frame -> 자르는 Frame -> SceneView, viewport_api.add_scene_view)"""
+
+    def __init__(self, owner, viewport_api, frame):
+        """층을 짓고 주인에게 알린다"""
         import omni.ui as ui
         from omni.ui import scene as sc
         self.ui, self.sc = ui, sc
         self.owner = owner
-        self.api = (desc or {}).get("viewport_api")
-        self.root = sc.Transform()
-        self._pick_root = sc.Transform()
+        self.api = viewport_api
+        self.frame = frame
+        with frame:
+            self._clip = _clip_frame(ui)
+            with self._clip:
+                self._scene_view = sc.SceneView()
+        with self._scene_view.scene:
+            self.root = sc.Transform()
+            self._pick_root = sc.Transform()
+        try:
+            viewport_api.add_scene_view(self._scene_view)
+        except Exception as e:
+            print(f"{TAG} add_scene_view failed (markers will not follow the camera): {type(e).__name__}: {e}")
         self._screen = None
         self.marks = {}
         self._holds = set()
@@ -1284,28 +1306,8 @@ class _View:
                 print(f"{TAG} view change subscription failed: {e}")
         owner._attach(self)
 
-    # -- 레지스트리 항목 ---------------------------------------------------------
-
-    @property
-    def name(self) -> str:
-        return SCENE_NAME
-
-    @property
-    def categories(self):
-        return [SCENE_CATEGORY]
-
-    @property
-    def visible(self) -> bool:
-        return self._visible
-
-    @visible.setter
-    def visible(self, value: bool) -> None:
-        self._visible = bool(value)
-        if self.root is not None:
-            self.root.visible = self._visible
-
     def destroy(self) -> None:
-        """뷰포트가 닫힐 때"""
+        """뷰포트 연결을 풀 때. 층을 걷고 카메라 연결도 끊는다"""
         self.arm(False)
         self.drop_all()
         self._holds = set()
@@ -1321,9 +1323,26 @@ class _View:
             self._pick_root.clear()
         if self.root is not None:
             self.root.clear()
+        scene_view, self._scene_view = self._scene_view, None
+        if scene_view is not None:
+            try:
+                self.api.remove_scene_view(scene_view)
+            except Exception:
+                pass
+            try:
+                scene_view.destroy()
+            except Exception:
+                pass
+        clip, self._clip = self._clip, None
+        if clip is not None:
+            try:
+                clip.destroy()
+            except Exception:
+                pass
         self._pick_root = None
         self.root = None
         self.api = None
+        self.frame = None
 
     # -- Kit 선택 잠금 ------------------------------------------------------------
 
@@ -1478,9 +1497,6 @@ class Annotation:
         self._status: str = ""
         self._views: list = []
         self._listeners: list = []
-        self._registration = None
-        self._retry = None
-        self._retries = 0
         self._queries: set = set()
         self._drag = None
         self._hover_edge = None  # 마우스가 올라간 변 띠 (view, marker id, edge): 커서가 크기 모양인 곳
@@ -1496,60 +1512,18 @@ class Annotation:
     # -- 시작과 정리 --------------------------------------------------------------
 
     def start(self) -> bool:
-        """모든 뷰포트에 그릴 자리를 건다. 레지스트리가 아직 없으면 몇 프레임 더 해 본다"""
+        """시작. 그리는 자리는 bind_viewport(vph, ...) 로 받은 뷰포트에만 깐다"""
         self._closed = False
-        if self._register():
-            return True
-        try:
-            import omni.kit.app
-            self._retry = omni.kit.app.get_app().get_update_event_stream() \
-                .create_subscription_to_pop(lambda e: self._retry_step(),
-                                            name="annotation registry wait")
-        except Exception as e:
-            print(f"{TAG} viewport registry unavailable, nothing will be drawn: {e}")
-        return False
-
-    def _register(self) -> bool:
-        if self._registration is not None:
-            return True
-        try:
-            from omni.kit.viewport.registry import RegisterScene
-        except ImportError:
-            return False
-        try:
-            self._registration = RegisterScene(self._factory, SCENE_ID)
-        except Exception as e:
-            print(f"{TAG} could not register the scene: {type(e).__name__}: {e}")
-            return False
         return True
-
-    def _retry_step(self) -> None:
-        self._retries += 1
-        if self._register():
-            self._retry = None
-        elif self._retries >= REGISTRY_TRIES:
-            self._retry = None
-            print(f"{TAG} viewport registry never came, nothing will be drawn")
-
-    def _factory(self, desc):
-        """레지스트리가 뷰포트마다 부른다"""
-        return _View(self, desc)
 
     def teardown(self) -> None:
         """뷰포트에서 떼고 들고 있던 것을 놓는다"""
         self._closed = True
-        self._retry = None
         self._creating = ""
         for q in list(self._queries):
             q.cancel()
         self._queries = set()
         self._drag = None
-        reg, self._registration = self._registration, None
-        if reg is not None:
-            try:
-                reg.destroy()
-            except Exception as e:
-                print(f"{TAG} unregister failed: {e}")
         for view in list(self._views):
             view.destroy()
         self._views = []
@@ -2000,7 +1974,7 @@ class Annotation:
         """그 뷰포트에 그 마커를 보이나. 연결(bind) 안 된 뷰포트는 다 보이고, 연결된 뷰포트는
         그 뷰포트가 비추는 형상(원본 USD) 의 마커만"""
         bound = self._bindings.get(self._view_id(view))
-        return bound is None or m.get("target", "") == bound["usd"]
+        return bound is None or m.get("target", "") in ("", bound["usd"])
 
     def _apply_visible(self, m) -> None:
         """그 마커의 패널(뷰포트마다)과 USD 몸체(화살표, 평면)를 지금 표시 상태로"""
@@ -2010,27 +1984,44 @@ class Annotation:
 
     # -- 뷰포트 연결: 뷰포트는 형상 하나를 비춘다. 마커는 형상 것이고 뷰포트와는 상관없다 ------------
 
-    def bind_viewport(self, viewport_id, prim_path: str, usd_path: str) -> bool:
-        """그 뷰포트가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에는 그 형상의 마커만 보이고,
-        그 뷰포트에서 찍은 마커는 그 형상 것이 된다. 다른 형상으로 바뀌면 다시 부른다"""
-        vid = str(viewport_id) if viewport_id is not None else ""
-        if not vid or not isinstance(prim_path, str) or not isinstance(usd_path, str) or not usd_path.strip():
-            self._say("bind_viewport: 뷰포트 id, 프림 경로, USD 경로가 필요합니다")
+    def bind_viewport(self, vph, prim_path: str, usd_path: str) -> bool:
+        """그 뷰포트(vph) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트 ui_frame 위에 마커 층을 깔고
+        (처음 한 번), 그 형상의 마커를 그린다. 그 뷰포트에서 찍은 마커는 그 형상 것.
+        같은 뷰포트를 다시 부르면 층은 두고 연결만 바꾼다 (다른 형상으로 바뀔 때)"""
+        try:
+            api, frame = vph.viewport_api, vph.ui_frame
+            vid = str(getattr(api, "id", "") or "")
+        except Exception as e:
+            self._say(f"bind_viewport: vph 에서 viewport_api / ui_frame 을 못 얻었습니다: {e}")
+            return False
+        if not vid or frame is None:
+            self._say("bind_viewport: viewport_api.id 나 ui_frame 이 없습니다")
+            return False
+        if not isinstance(prim_path, str) or not isinstance(usd_path, str) or not usd_path.strip():
+            self._say("bind_viewport: 프림 경로, USD 경로가 필요합니다")
             return False
         self._bindings[vid] = {"prim": prim_path.strip(), "usd": usd_path.strip()}
+        view = next((v for v in self._views if self._view_id(v) == vid), None)
+        if view is not None and (view.api is not api or view.frame is not frame):
+            view.destroy()  # 같은 id 의 다른 뷰포트 위젯: 새로 깐다
+            view = None
+        if view is None:
+            _View(self, api, frame)  # 짓고 _attach 로 마커를 그린다
         for m in self._markers:
             self._apply_visible(m)
         self._notify("bind", None)
         return True
 
     def unbind_viewport(self, viewport_id) -> bool:
-        """그 뷰포트 연결을 푼다 (다시 다 보인다)"""
-        if self._bindings.pop(str(viewport_id), None) is None:
-            return False
-        for m in self._markers:
-            self._apply_visible(m)
-        self._notify("bind", None)
-        return True
+        """그 뷰포트 연결을 풀고 마커 층도 걷는다 (뷰포트가 없어질 때)"""
+        vid = str(viewport_id)
+        found = self._bindings.pop(vid, None) is not None
+        for v in [v for v in self._views if self._view_id(v) == vid]:
+            v.destroy()
+            found = True
+        if found:
+            self._notify("bind", None)
+        return found
 
     def diagnose(self) -> dict:
         """지금 상태 (그려지지 않을 때 원인 찾기). 마커 층이 붙은 뷰포트, 연결, 타겟, 마커와 어긋나는 점"""
@@ -2048,10 +2039,8 @@ class Annotation:
         markers = [{"id": m["id"], "kind": m["kind"], "target": m.get("target", ""),
                     "visible": m.get("visible", True)} for m in self._markers]
         hints = []
-        if self._registration is None:
-            hints.append("뷰포트 레지스트리에 등록되지 않음: 어떤 뷰포트에도 그리지 못한다")
         if not self._views:
-            hints.append("마커 층이 붙은 뷰포트가 없음: 이 앱의 뷰포트가 omni.kit.viewport.registry 층을 안 쓰는 것")
+            hints.append("마커 층이 붙은 뷰포트가 없음: bind_viewport(vph, prim, usd) 가 아직 안 불림")
         bound_ids = set(self._bindings)
         seen_ids = {d["viewport_id"] for d in views}
         for vid in sorted(bound_ids - seen_ids):
@@ -2063,7 +2052,7 @@ class Annotation:
                              f"(마커 target: {sorted(targets)})")
         if not self._all_visible:
             hints.append("전체 표시가 꺼져 있음")
-        return {"registered": self._registration is not None, "target_usd": self._target_usd,
+        return {"target_usd": self._target_usd,
                 "bindings": copy.deepcopy(self._bindings), "views": views, "markers": markers, "hints": hints}
 
     def bindings(self) -> dict:
