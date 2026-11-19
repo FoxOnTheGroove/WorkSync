@@ -1488,6 +1488,7 @@ class Annotation:
         self._arrow_scale = 1.0  # 화살표 크기 배수 (모든 화살표 공통)
         self._all_visible = True  # 전체 표시. 마커는 자기 visible 과 이것이 둘 다 켜져야 보인다
         self._target_usd = ""  # 마커가 붙는 형상 USD 경로. 마커 파일은 그 옆 <이름>_marker.json
+        self._bindings = {}  # 뷰포트 id -> {"prim": 스테이지 프림 경로, "usd": 원본 USD 경로}. 없으면 지금처럼 다 보인다
         self._next_ids = {}  # 종류별 다음 번호. 늘기만 하고 지운 번호는 다시 안 쓴다 (id 는 웹 파라미터와 1:1)
         self._closed = False
         self._arrows = _Arrows()
@@ -1563,7 +1564,7 @@ class Annotation:
         self._views.append(view)
         for m in self._markers:
             view.add(m, self._layout(m), m["id"] == self._selected)
-            view.set_wanted(m["id"], self._shown(m))
+            view.set_wanted(m["id"], self._shown(m) and self._shown_in(view, m))
         if self._creating:
             view.arm(True)
 
@@ -1586,7 +1587,7 @@ class Annotation:
     def add_listener(self, fn) -> None:
         """바뀔 때마다 fn(reason, marker_id). marker_id 는 바뀐 마커 (전체에 걸친 변경이면 None).
         reason: add, remove, select(새로 고른 id), click(패널 클릭), text, font, panel, plane, move, visible,
-        arrow(전체), target, save, load(전체), create, status"""
+        arrow(전체), target, bind(뷰포트 연결), save, load(전체), create, status"""
         if fn not in self._listeners:
             self._listeners.append(fn)
 
@@ -1764,6 +1765,7 @@ class Annotation:
             "font_px": FONT_PX,
             "shift": [0.0, 0.0],
             "visible": True,
+            "target": self._target_usd,
         }
         marker["position"] = _plane_of(marker)["center"]
         self._markers.append(marker)
@@ -1951,6 +1953,7 @@ class Annotation:
         marker["box"] = None
         marker["font_px"] = FONT_PX
         marker["visible"] = True
+        marker["target"] = self._target_of_api(api)
         return marker
 
     # -- 고르기와 고치기 ------------------------------------------------------------
@@ -1985,11 +1988,61 @@ class Annotation:
     def _shown(self, m) -> bool:
         return self._all_visible and m.get("visible", True)
 
+    @staticmethod
+    def _view_id(view) -> str:
+        """그 뷰포트의 id (viewport_api.id). 못 구하면 빈 칸"""
+        try:
+            return str(view.api.id)
+        except Exception:
+            return ""
+
+    def _shown_in(self, view, m) -> bool:
+        """그 뷰포트에 그 마커를 보이나. 연결(bind) 안 된 뷰포트는 다 보이고, 연결된 뷰포트는
+        그 뷰포트가 비추는 형상(원본 USD) 의 마커만"""
+        bound = self._bindings.get(self._view_id(view))
+        return bound is None or m.get("target", "") == bound["usd"]
+
     def _apply_visible(self, m) -> None:
         """그 마커의 패널(뷰포트마다)과 USD 몸체(화살표, 평면)를 지금 표시 상태로"""
         on = self._shown(m)
-        self._each(lambda v: v.set_wanted(m["id"], on))
+        self._each(lambda v: v.set_wanted(m["id"], on and self._shown_in(v, m)))
         self._arrows.show(m["id"], on)
+
+    # -- 뷰포트 연결: 뷰포트는 형상 하나를 비춘다. 마커는 형상 것이고 뷰포트와는 상관없다 ------------
+
+    def bind_viewport(self, viewport_id, prim_path: str, usd_path: str) -> bool:
+        """그 뷰포트가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에는 그 형상의 마커만 보이고,
+        그 뷰포트에서 찍은 마커는 그 형상 것이 된다. 다른 형상으로 바뀌면 다시 부른다"""
+        vid = str(viewport_id) if viewport_id is not None else ""
+        if not vid or not isinstance(prim_path, str) or not isinstance(usd_path, str) or not usd_path.strip():
+            self._say("bind_viewport: 뷰포트 id, 프림 경로, USD 경로가 필요합니다")
+            return False
+        self._bindings[vid] = {"prim": prim_path.strip(), "usd": usd_path.strip()}
+        for m in self._markers:
+            self._apply_visible(m)
+        self._notify("bind", None)
+        return True
+
+    def unbind_viewport(self, viewport_id) -> bool:
+        """그 뷰포트 연결을 푼다 (다시 다 보인다)"""
+        if self._bindings.pop(str(viewport_id), None) is None:
+            return False
+        for m in self._markers:
+            self._apply_visible(m)
+        self._notify("bind", None)
+        return True
+
+    def bindings(self) -> dict:
+        """뷰포트 id -> {"prim", "usd"} (사본)"""
+        return copy.deepcopy(self._bindings)
+
+    def _target_of_api(self, api) -> str:
+        """그 뷰포트에서 찍은 마커의 형상: 연결돼 있으면 그 USD, 아니면 지금 타겟 (없으면 빈 칸)"""
+        try:
+            bound = self._bindings.get(str(api.id))
+        except Exception:
+            bound = None
+        return bound["usd"] if bound else self._target_usd
 
     def set_visible(self, marker_id, on) -> bool:
         """마커 하나 보이기 / 숨기기. 전체 표시가 꺼져 있으면 켜도 안 보인다 (값은 기억)"""
@@ -2117,9 +2170,25 @@ class Annotation:
             if self._markers:
                 self.clear()  # 다른 형상으로 바뀜. 처음 정할 때는 지금 마커를 그 형상 것으로 둔다
             self._next_ids = {}  # 번호는 형상마다 따로
-        self._target_usd = path
+        self._adopt(path)
         self._say(f"형상: {path}  (마커 파일: {marker_file_of(path)})", "target")
         return True
+
+    def _mine(self, m) -> bool:
+        """지금 타겟 형상의 마커인가 (타겟 없이 만든 것도 지금 형상 것으로 본다)"""
+        return m.get("target", "") in (self._target_usd, "")
+
+    def _drop_mine(self) -> None:
+        """지금 타겟 형상의 마커만 지운다"""
+        for m in [m for m in self._markers if self._mine(m)]:
+            self.remove(m["id"])
+
+    def _adopt(self, path: str) -> None:
+        """타겟을 정하고, 타겟 없이 만든 마커를 그 형상 것으로"""
+        self._target_usd = path
+        for m in self._markers:
+            if not m.get("target"):
+                m["target"] = path
 
     def target_usd(self) -> str:
         """마커가 붙는 형상 USD 경로. 없으면 빈 칸"""
@@ -2129,13 +2198,26 @@ class Annotation:
         """저장, 불러오기에 쓰는 마커 파일 경로 (형상 USD 옆 <이름>_marker.json). 없으면 빈 칸"""
         return marker_file_of(self._target_usd)
 
-    def save(self) -> bool:
-        """지금 마커를 형상 USD 옆 마커 파일에 쓴다"""
+    def save(self, target_usd: str = None) -> bool:
+        """지금 형상의 마커를 형상 USD 옆 마커 파일에 쓴다 (다른 형상 마커는 안 쓴다).
+        target_usd 를 주면 그 형상으로 정하면서 저장한다: 타겟 없이 찍어 둔 마커를 첫 저장 때 형상에 붙이는 순서.
+        다른 형상이 이미 정해져 있으면 지금 마커를 그 형상 것으로 옮겨 저장한다 (다른 이름으로 저장)"""
+        if target_usd is not None:
+            target = (target_usd or "").strip() if isinstance(target_usd, str) else ""
+            if not target:
+                self._say("저장할 형상 USD 경로가 비었습니다")
+                return False
+            if self._target_usd and target != self._target_usd:
+                for m in self._markers:
+                    if m.get("target") == self._target_usd:
+                        m["target"] = target
+            self._adopt(target)
+            self._notify("target", None)
         path = self.marker_file()
         if not path:
-            self._say("형상 USD 경로를 먼저 정하세요")
+            self._say("형상 USD 경로를 먼저 정하세요 (또는 저장할 때 경로를 주세요)")
             return False
-        keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px", "visible",
+        keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px", "visible", "target",
                 "position", "direction", "axis", "at", "size", "shift")
         data = {
             "version": MARKER_FILE_VERSION,
@@ -2144,18 +2226,19 @@ class Annotation:
             "next_ids": dict(self._next_ids),
             "all_visible": self._all_visible,
             "markers": [{k: copy.deepcopy(m[k]) for k in keep if k in m and not (m["kind"] == "plane" and k == "position")}
-                        for m in self._markers],
+                        for m in self._markers if self._mine(m)],
         }
         try:
             _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         except Exception as e:
             self._say(f"저장 실패: {type(e).__name__}: {e}")
             return False
-        self._say(f"저장했습니다: {len(self._markers)}개 -> {path}", "save")
+        self._say(f"저장했습니다: {len(data['markers'])}개 -> {path}", "save")
         return True
 
     def load(self) -> bool:
-        """형상 USD 옆 마커 파일을 읽어 지금 마커를 바꾼다. 파일이 없거나 깨졌으면 지금 것을 그대로 둔다.
+        """형상 USD 옆 마커 파일을 읽어 지금 형상의 마커를 바꾼다 (다른 형상 마커는 그대로).
+        파일이 없거나 깨졌으면 지금 것을 그대로 둔다.
         잘못된 마커 하나는 건너뛰고 몇 개를 건너뛰었는지 알린다"""
         path = self.marker_file()
         if not path:
@@ -2188,7 +2271,7 @@ class Annotation:
             except ValueError as e:
                 skipped.append(f"#{i}: {e}")
         self.cancel_create()
-        self.clear()
+        self._drop_mine()  # 이 형상의 마커만 바꾼다 (다른 형상 마커는 그대로)
         # 번호: 파일의 카운터와 파일에 있는 id 중 큰 쪽부터. id 가 없거나 겹치면 새 id 를 주고 알린다
         self._next_ids = {}
         saved = data.get("next_ids")
@@ -2196,7 +2279,7 @@ class Annotation:
             for kind, n in saved.items():
                 if isinstance(kind, str) and isinstance(n, int) and not isinstance(n, bool) and n >= 1:
                     self._next_ids[kind] = n
-        taken, renamed = set(), []
+        taken, renamed = {m["id"] for m in self._markers}, []
         for m in loaded:
             if m["id"] is not None and m["id"] not in taken:
                 taken.add(m["id"])
@@ -2215,6 +2298,7 @@ class Annotation:
         if isinstance(scale, (int, float)) and not isinstance(scale, bool) and MIN_ARROW_SCALE <= scale <= MAX_ARROW_SCALE:
             self._arrow_scale = float(scale)
         for m in loaded:
+            m["target"] = self._target_usd  # 이 파일은 이 형상 것
             self._markers.append(m)
             if m["kind"] in ARROW_KINDS:
                 self._arrows.draw(m, False, self.arrow_length())

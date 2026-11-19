@@ -103,9 +103,24 @@ class AnnotationService:
         return instance().marker_file()
 
     @classmethod
-    def save(cls):
-        """마커 파일에 저장"""
-        return instance().save()
+    def bind_viewport(cls, viewport_id, prim_path, usd_path):
+        """그 뷰포트가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에는 그 형상의 마커만"""
+        return instance().bind_viewport(viewport_id, prim_path, usd_path)
+
+    @classmethod
+    def unbind_viewport(cls, viewport_id):
+        """뷰포트 연결을 푼다"""
+        return instance().unbind_viewport(viewport_id)
+
+    @classmethod
+    def bindings(cls):
+        """뷰포트 id -> {"prim", "usd"}"""
+        return instance().bindings()
+
+    @classmethod
+    def save(cls, target_usd=None):
+        """마커 파일에 저장. target_usd 를 주면 그 형상으로 정하면서 저장 (타겟 없이 찍어 둔 마커의 첫 저장)"""
+        return instance().save(target_usd)
 
     @classmethod
     def load(cls):

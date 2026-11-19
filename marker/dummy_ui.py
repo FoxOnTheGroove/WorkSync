@@ -70,7 +70,7 @@ class AnnotationDummyUI:
                 with ui.HStack(height=0, spacing=4):
                     self._file = ui.Label("마커 파일: (형상 USD 없음)", elided_text=True,
                                           style={"color": STATUS_COLOR})
-                    ui.Button("저장", width=60, clicked_fn=AnnotationService.save)
+                    ui.Button("저장", width=60, clicked_fn=self._save)
                     ui.Button("불러오기", width=80, clicked_fn=AnnotationService.load)
                 self._status = ui.Label("", height=0, word_wrap=True,
                                         style={"color": STATUS_COLOR})
@@ -136,6 +136,11 @@ class AnnotationDummyUI:
             self._status.text = f"열지 못했습니다: {why}"
             return
         AnnotationService.set_target_usd(path)
+
+    def _save(self):
+        """저장. 타겟이 아직 없으면 형상 USD 칸의 경로를 타겟으로 정하면서 저장한다 (찍어 둔 마커의 첫 저장)"""
+        field = self._usd.model.get_value_as_string().strip()
+        AnnotationService.save(field if field and not AnnotationService.target_usd() else None)
 
     def _apply(self):
         """칸의 글을 고른 마커에"""
