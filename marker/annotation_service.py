@@ -104,7 +104,7 @@ class AnnotationService:
 
     @classmethod
     def bind_viewport(cls, vph, prim_path, usd_path):
-        """그 뷰포트(vph: viewport_api, ui_frame) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에 마커 층을 깔고 그 형상 마커를 그린다"""
+        """그 뷰포트(vph: viewport_api, ui_zstack) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트에 마커 층을 깔고 그 형상 마커를 그린다"""
         return instance().bind_viewport(vph, prim_path, usd_path)
 
     @classmethod

@@ -1268,8 +1268,8 @@ def _clip_frame(ui):
 
 
 class _View:
-    """뷰포트 하나의 마커 층. 호스트가 주는 vph 의 ui_frame 위에 SceneView 를 깔고 그 뷰포트 카메라에 잇는다
-    (ui_frame -> 자르는 Frame -> SceneView, viewport_api.add_scene_view)"""
+    """뷰포트 하나의 마커 층. 호스트가 주는 vph 의 ui_zstack 위에 SceneView 를 깔고 그 뷰포트 카메라에 잇는다
+    (ui_zstack -> 자르는 Frame -> SceneView, viewport_api.add_scene_view). ZStack 이라 다른 기능 층 위에 겹쳐 쌓인다"""
 
     def __init__(self, owner, viewport_api, frame):
         """층을 짓고 주인에게 알린다"""
@@ -1985,17 +1985,17 @@ class Annotation:
     # -- 뷰포트 연결: 뷰포트는 형상 하나를 비춘다. 마커는 형상 것이고 뷰포트와는 상관없다 ------------
 
     def bind_viewport(self, vph, prim_path: str, usd_path: str) -> bool:
-        """그 뷰포트(vph) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트 ui_frame 위에 마커 층을 깔고
+        """그 뷰포트(vph) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트 ui_zstack 위에 마커 층을 깔고
         (처음 한 번), 그 형상의 마커를 그린다. 그 뷰포트에서 찍은 마커는 그 형상 것.
         같은 뷰포트를 다시 부르면 층은 두고 연결만 바꾼다 (다른 형상으로 바뀔 때)"""
         try:
-            api, frame = vph.viewport_api, vph.ui_frame
+            api, frame = vph.viewport_api, vph.ui_zstack
             vid = str(getattr(api, "id", "") or "")
         except Exception as e:
-            self._say(f"bind_viewport: vph 에서 viewport_api / ui_frame 을 못 얻었습니다: {e}")
+            self._say(f"bind_viewport: vph 에서 viewport_api / ui_zstack 을 못 얻었습니다: {e}")
             return False
         if not vid or frame is None:
-            self._say("bind_viewport: viewport_api.id 나 ui_frame 이 없습니다")
+            self._say("bind_viewport: viewport_api.id 나 ui_zstack 이 없습니다")
             return False
         if not isinstance(prim_path, str) or not isinstance(usd_path, str) or not usd_path.strip():
             self._say("bind_viewport: 프림 경로, USD 경로가 필요합니다")
