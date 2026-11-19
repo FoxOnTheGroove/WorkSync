@@ -15,7 +15,7 @@ class AnnotationService:
 
     @classmethod
     def create_plane(cls, axis):
-        """원점을 지나는 축 평면 (xy / yz / zx) 을 바로 만든다"""
+        """축 평면 (xy / yz / zx) 을 바로 만든다. 가운데는 타겟 프림 바운드 중점 (못 구하면 원점)"""
         return instance().create_plane(axis)
 
     @classmethod
@@ -62,7 +62,7 @@ class AnnotationService:
 
     @classmethod
     def set_plane_at(cls, marker_id, at):
-        """평면 위치 (법선 축 방향 거리)"""
+        """평면 위치 (기준점 = 바운드 중점에서 법선 축 방향 거리)"""
         return instance().set_plane_at(marker_id, at)
 
     @classmethod

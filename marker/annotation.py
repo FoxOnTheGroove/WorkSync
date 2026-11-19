@@ -9,7 +9,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane",
+           "resize_rect", "move_rect", "leader_end", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane", "prim_center",
            "marker_file_of", "clean_marker", "id_number"]
 
 
@@ -221,6 +221,7 @@ def clean_marker(raw) -> dict:
         m["at"] = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at) else 0.0
         m["size"] = _floats(raw.get("size"), 2, positive=True) or list(PLANE_SIZE)
         m["shift"] = _floats(raw.get("shift"), 2) or [0.0, 0.0]
+        m["origin"] = _floats(raw.get("origin"), 3) or [0.0, 0.0, 0.0]
         m["position"] = _plane_of(m)["center"]
         return m
     pos = _floats(raw.get("position"), 3)
@@ -312,15 +313,15 @@ def _arrow_ends(marker, length: float):
     return list(p), _add(p, _mul(d, length))
 
 
-def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0)) -> dict:
-    """축 평면 (월드). axis 는 xy / yz / zx, at 은 법선 축 위치, size 는 [가로, 세로],
-    shift 는 평면 안에서 옮긴 [가로 축, 세로 축] 거리. 원점을 지나는 축 위에 가운데를 두고 at 만큼
-    법선 방향으로, shift 만큼 평면 안에서 옮긴다.
+def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0), origin=(0.0, 0.0, 0.0)) -> dict:
+    """축 평면 (월드). axis 는 xy / yz / zx, origin 은 기준점 (타겟 프림 바운드 중점),
+    at 은 기준점에서 법선 축 방향 거리, size 는 [가로, 세로], shift 는 평면 안에서 옮긴 [가로 축, 세로 축] 거리.
+    기준점에 가운데를 두고 at 만큼 법선 방향으로, shift 만큼 평면 안에서 옮긴다.
     돌려주는 것: center, corners (4점, 둘레 순), top (위쪽 변 가운데, 패널 자리), normal"""
     n, u, v = PLANE_AXES[axis]
     w, h = float(size[0]), float(size[1])
-    center = [0.0, 0.0, 0.0]
-    center[n] = float(at)
+    center = [float(origin[i]) for i in range(3)]
+    center[n] += float(at)
     center[u] += float(shift[0])
     center[v] += float(shift[1])
 
@@ -337,7 +338,32 @@ def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0)) -> dict:
 
 
 def _plane_of(marker) -> dict:
-    return plane_geometry(marker["axis"], marker["at"], marker["size"], marker.get("shift", (0.0, 0.0)))
+    return plane_geometry(marker["axis"], marker["at"], marker["size"], marker.get("shift", (0.0, 0.0)),
+                          marker.get("origin", (0.0, 0.0, 0.0)))
+
+
+def plane_level(marker) -> float:
+    """그 평면의 법선 축 월드 좌표 (기준점 + at)"""
+    n = PLANE_AXES[marker["axis"]][0]
+    return float(marker.get("origin", (0.0, 0.0, 0.0))[n]) + float(marker["at"])
+
+
+def prim_center(stage, prim_path: str):
+    """그 프림의 월드 바운드 (축 정렬) 중점 [x, y, z]. 프림이 없거나 바운드가 비면 None"""
+    try:
+        from pxr import Usd, UsdGeom
+        prim = stage.GetPrimAtPath(prim_path) if stage is not None and prim_path else None
+        if prim is None or not prim.IsValid():
+            return None
+        cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+        box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        if box.IsEmpty():
+            return None
+        c = box.GetMidpoint()
+        out = [float(c[0]), float(c[1]), float(c[2])]
+        return out if all(math.isfinite(x) for x in out) else None
+    except Exception:
+        return None
 
 
 def plane_matrix(marker) -> list:
@@ -1721,10 +1747,12 @@ class Annotation:
         self._say("찍기를 취소했습니다", "create")
 
     def create_plane(self, axis: str) -> bool:
-        """원점을 지나는 축 평면 하나를 바로 만든다 (xy / yz / zx). 위치 0, 크기 PLANE_SIZE"""
+        """축 평면 하나를 바로 만든다 (xy / yz / zx). 가운데는 타겟 프림 바운드 중점 (연결된 뷰포트의 프림,
+        못 구하면 원점). 위치 0, 크기 PLANE_SIZE"""
         if axis not in PLANE_AXES:
             self._say(f"모르는 평면: {axis!r} (xy, yz, zx)")
             return False
+        origin, prim_path = self._plane_origin()
         marker = {
             "id": self._new_id("plane"),
             "kind": "plane",
@@ -1738,6 +1766,7 @@ class Annotation:
             "box": None,
             "font_px": FONT_PX,
             "shift": [0.0, 0.0],
+            "origin": origin,
             "visible": True,
             "target": self._target_usd,
         }
@@ -1749,8 +1778,28 @@ class Annotation:
         self._apply_visible(marker)
         self._notify("add", marker["id"])
         self.select(marker["id"])
-        self._say(f"만들었습니다: {marker['id']} ({axis.upper()} 평면)", "status", marker["id"])
+        where = f"{prim_path} 바운드 중점" if prim_path else "원점 (타겟 프림 바운드를 못 구함)"
+        self._say(f"만들었습니다: {marker['id']} ({axis.upper()} 평면, 가운데 {where})", "status", marker["id"])
         return True
+
+    def _plane_prim(self):
+        """새 평면의 기준 프림: 지금 타겟 USD 로 연결된 뷰포트의 프림. 없고 연결이 하나뿐이면 그 프림"""
+        binds = list(self._bindings.values())
+        hit = next((b["prim"] for b in binds if b["usd"] == self._target_usd), None)
+        if hit is None and len(binds) == 1:
+            hit = binds[0]["prim"]
+        return hit or ""
+
+    def _plane_origin(self):
+        """새 평면의 가운데와 그 프림 경로. 못 구하면 ([0, 0, 0], "")"""
+        prim_path = self._plane_prim()
+        try:
+            import omni.usd
+            stage = omni.usd.get_context().get_stage()
+        except Exception:
+            stage = None
+        c = prim_center(stage, prim_path) if prim_path else None
+        return (c, prim_path) if c is not None else ([0.0, 0.0, 0.0], "")
 
     def _plane(self, marker_id):
         m = self._find(marker_id)
@@ -1760,7 +1809,7 @@ class Annotation:
         return m
 
     def set_plane_at(self, marker_id, at) -> bool:
-        """평면 위치. 원점에서 법선 축 방향으로 at 만큼 (xy 면 z, yz 면 x, zx 면 y)"""
+        """평면 위치. 기준점 (만들 때의 타겟 프림 바운드 중점) 에서 법선 축 방향으로 at 만큼 (xy 면 z, yz 면 x, zx 면 y)"""
         m = self._plane(marker_id)
         if m is None:
             return False
@@ -1906,7 +1955,7 @@ class Annotation:
     def _plane_point(m, payload):
         """제스처 광선이 그 평면과 만나는 점"""
         try:
-            return ray_on_plane(m["axis"], m["at"], payload.ray_origin, payload.ray_direction)
+            return ray_on_plane(m["axis"], plane_level(m), payload.ray_origin, payload.ray_direction)
         except Exception:
             return None
 
@@ -2241,7 +2290,7 @@ class Annotation:
             self._say("형상 USD 경로를 먼저 정하세요 (또는 저장할 때 경로를 주세요)")
             return False
         keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px", "visible", "target",
-                "position", "direction", "axis", "at", "size", "shift")
+                "position", "direction", "axis", "at", "size", "shift", "origin")
         data = {
             "version": MARKER_FILE_VERSION,
             "target_usd": self._target_usd,
