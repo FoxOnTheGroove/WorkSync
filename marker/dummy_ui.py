@@ -142,7 +142,7 @@ class AnnotationDummyUI:
         """지금 상태를 콘솔에 찍는다"""
         info = AnnotationService.diagnose()
         print("[annotation] ---- 진단 ----")
-        print(f"[annotation] target_usd={info['target_usd']!r}")
+        print(f"[annotation] instance={info['instance']} target_usd={info['target_usd']!r}")
         print(f"[annotation] bindings={info['bindings']}")
         for v in info["views"]:
             print(f"[annotation] view {v}")
@@ -226,6 +226,8 @@ class AnnotationDummyUI:
             sel = AnnotationService.selected()
             self._fill_font(AnnotationService.get(sel) if sel else None)
             return
+        if reason == "target":  # 코드에서 set_target_usd 를 불러도 칸에 보이게
+            self._usd.model.set_value(AnnotationService.target_usd())
         self._refresh(fill=reason in ("text", "click"), rebuild=reason in LIST_REASONS)
 
     def _refresh(self, fill: bool = False, rebuild: bool = True):

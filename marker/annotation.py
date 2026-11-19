@@ -2101,7 +2101,7 @@ class Annotation:
                              f"(마커 target: {sorted(targets)})")
         if not self._all_visible:
             hints.append("전체 표시가 꺼져 있음")
-        return {"target_usd": self._target_usd,
+        return {"instance": f"{__name__}@{id(self):x}", "target_usd": self._target_usd,
                 "bindings": copy.deepcopy(self._bindings), "views": views, "markers": markers, "hints": hints}
 
     def bindings(self) -> dict:
@@ -2305,7 +2305,9 @@ class Annotation:
         except Exception as e:
             self._say(f"저장 실패: {type(e).__name__}: {e}")
             return False
-        self._say(f"저장했습니다: {len(data['markers'])}개 -> {path}", "save")
+        others = sorted({m.get("target", "") for m in self._markers if not self._mine(m)})
+        note = f" (다른 형상 마커 {len(self._markers) - len(data['markers'])}개는 안 씀, 그 target: {others[:3]})" if others else ""
+        self._say(f"저장했습니다: {len(data['markers'])}개 -> {path}{note}", "save")
         return True
 
     def load(self) -> bool:
