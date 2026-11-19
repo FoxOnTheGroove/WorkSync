@@ -2032,6 +2032,40 @@ class Annotation:
         self._notify("bind", None)
         return True
 
+    def diagnose(self) -> dict:
+        """지금 상태 (그려지지 않을 때 원인 찾기). 마커 층이 붙은 뷰포트, 연결, 타겟, 마커와 어긋나는 점"""
+        views = []
+        for v in self._views:
+            vid = self._view_id(v)
+            views.append({
+                "viewport_id": vid,
+                "api": type(v.api).__name__ if v.api is not None else None,
+                "bound": self._bindings.get(vid),
+                "drawn": len(v.marks),
+                "visible": sum(1 for mv in v.marks.values() if mv.top.visible),
+                "armed": v.armed,
+            })
+        markers = [{"id": m["id"], "kind": m["kind"], "target": m.get("target", ""),
+                    "visible": m.get("visible", True)} for m in self._markers]
+        hints = []
+        if self._registration is None:
+            hints.append("뷰포트 레지스트리에 등록되지 않음: 어떤 뷰포트에도 그리지 못한다")
+        if not self._views:
+            hints.append("마커 층이 붙은 뷰포트가 없음: 이 앱의 뷰포트가 omni.kit.viewport.registry 층을 안 쓰는 것")
+        bound_ids = set(self._bindings)
+        seen_ids = {d["viewport_id"] for d in views}
+        for vid in sorted(bound_ids - seen_ids):
+            hints.append(f"bind 한 뷰포트 {vid!r} 에 마커 층이 없음 (마커 층이 붙은 뷰포트 id: {sorted(seen_ids)})")
+        targets = {m.get("target", "") for m in self._markers}
+        for vid, b in self._bindings.items():
+            if self._markers and b["usd"] not in targets:
+                hints.append(f"뷰포트 {vid!r} 의 usd {b['usd']!r} 와 같은 target 을 가진 마커가 없음 "
+                             f"(마커 target: {sorted(targets)})")
+        if not self._all_visible:
+            hints.append("전체 표시가 꺼져 있음")
+        return {"registered": self._registration is not None, "target_usd": self._target_usd,
+                "bindings": copy.deepcopy(self._bindings), "views": views, "markers": markers, "hints": hints}
+
     def bindings(self) -> dict:
         """뷰포트 id -> {"prim", "usd"} (사본)"""
         return copy.deepcopy(self._bindings)

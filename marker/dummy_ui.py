@@ -72,6 +72,7 @@ class AnnotationDummyUI:
                                           style={"color": STATUS_COLOR})
                     ui.Button("저장", width=60, clicked_fn=self._save)
                     ui.Button("불러오기", width=80, clicked_fn=AnnotationService.load)
+                    ui.Button("진단", width=50, clicked_fn=self._diagnose)
                 self._status = ui.Label("", height=0, word_wrap=True,
                                         style={"color": STATUS_COLOR})
                 ui.Separator(height=6)
@@ -136,6 +137,21 @@ class AnnotationDummyUI:
             self._status.text = f"열지 못했습니다: {why}"
             return
         AnnotationService.set_target_usd(path)
+
+    def _diagnose(self):
+        """지금 상태를 콘솔에 찍는다"""
+        info = AnnotationService.diagnose()
+        print("[annotation] ---- 진단 ----")
+        print(f"[annotation] registered={info['registered']} target_usd={info['target_usd']!r}")
+        print(f"[annotation] bindings={info['bindings']}")
+        for v in info["views"]:
+            print(f"[annotation] view {v}")
+        for m in info["markers"]:
+            print(f"[annotation] marker {m}")
+        for h in info["hints"] or ["(어긋나는 점 없음)"]:
+            print(f"[annotation] hint: {h}")
+        self._status.text = (info["hints"][0] if info["hints"] else
+                             f"뷰포트 {len(info['views'])}개, 마커 {len(info['markers'])}개. 콘솔 확인")
 
     def _save(self):
         """저장. 타겟이 아직 없으면 형상 USD 칸의 경로를 타겟으로 정하면서 저장한다 (찍어 둔 마커의 첫 저장)"""

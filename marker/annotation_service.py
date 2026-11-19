@@ -113,6 +113,11 @@ class AnnotationService:
         return instance().unbind_viewport(viewport_id)
 
     @classmethod
+    def diagnose(cls):
+        """지금 상태: 마커 층이 붙은 뷰포트, 연결, 타겟, 마커, 어긋나는 점 (hints)"""
+        return instance().diagnose()
+
+    @classmethod
     def bindings(cls):
         """뷰포트 id -> {"prim", "usd"}"""
         return instance().bindings()
