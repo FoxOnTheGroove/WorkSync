@@ -72,7 +72,7 @@ class AnnotationService:
 
     @classmethod
     def set_gizmo(cls, mode):
-        """고른 마커 (화살표, 평면) 에 Kit 기즈모: move / rotate / off. 평면은 가운데, 화살표는 표면 끝에서 돈다"""
+        """고른 마커 (화살표, 평면) 에 Kit 기즈모: move / rotate / off. 평면은 가운데, 화살표는 표면 끝에서 돈다. 선택이 바뀌면 꺼진다"""
         return instance().set_gizmo(mode)
 
     @classmethod

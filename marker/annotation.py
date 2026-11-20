@@ -2618,17 +2618,17 @@ class Annotation:
     # (평면 = 가운데, 화살표 = 표면에 닿는 끝). 기즈모가 바꾼 것은 USD 알림으로 받아 마커 데이터에 담는다
 
     def set_gizmo(self, mode: str) -> bool:
-        """move / rotate / off. 켜 두면 마커를 고를 때마다 그 마커에 뜬다 (label 은 몸체가 없어 안 뜬다)"""
+        """move / rotate / off. 지금 고른 화살표나 평면에 뜬다 (label 은 몸체가 없어 안 된다).
+        선택을 풀거나 다른 마커를 고르면 꺼진다"""
         if mode not in GIZMO_MODES:
             self._say(f"모르는 기즈모: {mode!r} ({', '.join(GIZMO_MODES)})")
             return False
+        if mode != "off" and self._body_path(self._selected) is None:
+            self._say("기즈모: 화살표나 평면을 먼저 고르세요")
+            return False
         self._gizmo_mode = mode
         self._gizmo_attach(self._selected if mode != "off" else None)
-        m = self._find(self._selected) if self._selected else None
-        if mode != "off" and (m is None or self._body_path(m["id"]) is None):
-            self._say(f"기즈모: {mode} (화살표나 평면을 고르면 뜹니다)", "gizmo")
-        else:
-            self._say(f"기즈모: {mode}", "gizmo")
+        self._say(f"기즈모: {mode}", "gizmo")
         return True
 
     def gizmo(self) -> str:
@@ -2814,8 +2814,10 @@ class Annotation:
         for mid in (was, marker_id):
             if mid is not None:
                 self._restyle(mid)
-        if self._gizmo_mode != "off":
-            self._gizmo_attach(marker_id)
+        if self._gizmo_mode != "off":  # 선택을 풀거나 바꾸면 기즈모는 꺼진다 (다시 쓰려면 버튼)
+            self._gizmo_mode = "off"
+            self._gizmo_attach(None)
+            self._notify("gizmo", None)
         self._notify("select", marker_id)
         return True
 
