@@ -482,55 +482,59 @@ def _later(fn) -> None:
 
 
 class _OrbitYield:
-    """orbit 익스텐션(카메라)이 독점한 마우스를 양보받는다. 메시지 버스로
-    click_enable False (양보 요청) / True (돌려주기) 를 보낸다. 앱 전체에 하나라 뷰포트마다가 아니라
-    쥔 쪽(뷰포트) 을 세서, 처음 쥘 때 한 번 요청하고 모두 놓을 때 한 번 돌려준다"""
+    """orbit 익스텐션(카메라 조작)을 그 뷰포트에서 잠시 끈다. 마커가 마우스를 쓰는 동안 (패널 위, 끌기, 찍기 대기)
+    그 뷰포트 orbit manipulator 의 enable 을 False, 다 놓으면 True. 뷰포트 id 마다 따로.
+    orbit 이 없거나 모양이 다르면 아무것도 안 한다 (마커는 그대로 돈다)"""
 
-    _holders = set()
-    _type = None
+    _off = set()      # 우리가 끈 뷰포트 id
     _warned = False
 
     @classmethod
-    def hold(cls, who) -> None:
-        first = not cls._holders
-        cls._holders.add(who)
-        if first:
-            cls._push(False)
+    def hold(cls, viewport_id) -> None:
+        if not ORBIT_YIELD or viewport_id in cls._off:
+            return
+        if cls._set(viewport_id, False):
+            cls._off.add(viewport_id)
 
     @classmethod
-    def release(cls, who) -> None:
-        if who in cls._holders:
-            cls._holders.discard(who)
-            if not cls._holders:
-                cls._push(True)
+    def release(cls, viewport_id) -> None:
+        if viewport_id in cls._off:
+            cls._off.discard(viewport_id)
+            cls._set(viewport_id, True)
 
     @classmethod
     def release_all(cls) -> None:
-        """익스텐션이 꺼질 때. 쥐고 있었으면 반드시 돌려준다"""
-        if cls._holders:
-            cls._holders = set()
-            cls._push(True)
+        """익스텐션이 꺼질 때. 끈 것은 반드시 켠다"""
+        for vid in list(cls._off):
+            cls.release(vid)
 
     @classmethod
-    def holding(cls) -> bool:
-        return bool(cls._holders)
+    def holding(cls, viewport_id=None) -> bool:
+        return bool(cls._off) if viewport_id is None else viewport_id in cls._off
 
     @classmethod
-    def _push(cls, click_enable: bool) -> None:
-        if not ORBIT_YIELD:
-            return
+    def _manipulator(cls, viewport_id):
+        import importlib
+        ext = getattr(importlib.import_module(ORBIT_MODULE), ORBIT_CLASS)
+        scenes = getattr(ext, ORBIT_SCENES)
+        scene = scenes.get(viewport_id)
+        if scene is None:
+            raise LookupError(f"no orbit scene for viewport {viewport_id!r} (keys: {list(scenes)[:5]})")
+        return getattr(scene, ORBIT_MANIPULATOR)
+
+    @classmethod
+    def _set(cls, viewport_id, enable: bool) -> bool:
+        """그 뷰포트 orbit 을 켜고 끈다. 됐으면 True"""
         try:
-            import carb.events
-            import omni.kit.app
-            if cls._type is None:
-                cls._type = carb.events.type_from_string(ORBIT_CLICK_EVENT)
-            omni.kit.app.get_app().get_message_bus_event_stream().push(
-                cls._type, payload={"click_enable": bool(click_enable), "feature": ORBIT_FEATURE})
+            m = cls._manipulator(viewport_id)
+            if m.enable != enable:
+                m.enable = enable
+            return True
         except Exception as e:
             if not cls._warned:
                 cls._warned = True
-                print(f"{TAG} could not tell the orbit extension (click_enable={click_enable}): "
-                      f"{type(e).__name__}: {e}")
+                print(f"{TAG} could not set orbit enable={enable} on viewport {viewport_id!r}: {type(e).__name__}: {e}")
+            return False
 
 
 class _Cursor:
@@ -1304,6 +1308,7 @@ class _View:
         self.ui, self.sc = ui, sc
         self.owner = owner
         self.api = viewport_api
+        self._orbit_id = getattr(viewport_api, "id", None)  # orbit scene dict 의 키 (뷰포트 id 그대로)
         self.frame = frame
         with frame:
             self._clip = _clip_frame(ui)
@@ -1396,7 +1401,7 @@ class _View:
             if not self._blocked:
                 self._blocked = True
                 self._token = _block_selection(self.api)
-                _OrbitYield.hold(id(self))  # orbit 이 쥔 마우스도 양보받는다 (누르기 전에)
+                _OrbitYield.hold(self._orbit_id)  # 그 뷰포트 orbit 을 끈다 (누르기 전에)
             return
         if not self._blocked:
             return
@@ -1413,7 +1418,7 @@ class _View:
         if not self._holds and self._blocked:
             self._blocked = False
             self._token = None
-            _OrbitYield.release(id(self))
+            _OrbitYield.release(self._orbit_id)
 
     # -- 찍기 대기 ---------------------------------------------------------------
 
@@ -2084,6 +2089,7 @@ class Annotation:
                 "drawn": len(v.marks),
                 "visible": sum(1 for mv in v.marks.values() if mv.top.visible),
                 "armed": v.armed,
+                "orbit_off": _OrbitYield.holding(v._orbit_id),
             })
         markers = [{"id": m["id"], "kind": m["kind"], "target": m.get("target", ""),
                     "visible": m.get("visible", True)} for m in self._markers]
