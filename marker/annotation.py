@@ -1125,7 +1125,8 @@ class _Arrows:
                 return False
             tail, tip = _arrow_ends(marker, length)
             mesh_data = arrow_mesh(tail, tip, length)
-            color = _bright(marker["color"]) if picked else marker["color"]
+            base = [float(c) * ARROW_SHADE for c in marker["color"][:3]]  # 머티리얼은 마커 색보다 진하게
+            color = _bright(base) if picked else base
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 self._root(stage, UsdGeom)
                 mesh = UsdGeom.Mesh.Define(stage, f"{ARROW_SCOPE}/{marker['id']}")
@@ -1442,7 +1443,10 @@ class _MarkerView:
         self._leader.thickness = LEADER_PX * (PICKED_LINE_SCALE if picked else 1.0)
         self._border.color = ink
         self._border.thickness = BORDER_PICKED_PX if picked else BORDER_PX
-        self._title.color = ink if marker["label"] else ui.color(*DIM_COLOR)
+        if marker["kind"] == "plane":
+            self._title.color = ui.color(*PLANE_TITLE_COLOR)  # 평면 패널 글자는 고정 색 (고를 때도 그대로)
+        else:
+            self._title.color = ink if marker["label"] else ui.color(*DIM_COLOR)
         self.relayout(marker, layout, picked)
 
     def relayout(self, marker, layout, picked: bool) -> None:

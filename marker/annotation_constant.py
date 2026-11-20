@@ -40,6 +40,7 @@ DEFAULT_OFFSET = (32.0, 40.0)           # 앵커에서 본 새 상자의 왼쪽 
 BOX_BG = (0.08, 0.08, 0.08, 0.72)       # 상자 바탕색 (rgba)
 DESC_COLOR = (0.85, 0.85, 0.85, 1.0)    # description 글자색
 DIM_COLOR = (0.6, 0.6, 0.6, 1.0)        # 이름 없는 마커의 id 글자색
+PLANE_TITLE_COLOR = DIM_COLOR           # 평면 패널 글자색. inlet / outlet 패널 (이름 없으면 이 색) 과 같게, 골라도 안 바뀐다
 ZONES = (None, (-1, 0), (1, 0), (0, 1), (0, -1))  # 잡는 사각형: 몸통(None) + 변 띠 (왼, 오, 위, 아래). 안 겹친다
 EDGE_IN_PX = 0.0                        # 변에서 안쪽으로 크기 조절이 들어오는 폭. 0 = 상자 안은 전부 이동
 EDGE_OUT_PX = 12.0                      # 크기 조절 띠 폭. 테두리 바로 바깥에만 있다 (커서 <-> / 위아래)
@@ -69,6 +70,7 @@ ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길�
 ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
 ARROW_SHAFT = 0.025                     # 몸통 반지름 = 화살표 길이 x 이 값
 ARROW_RINGS = 32                        # 몸통, 원뿔 둘레 조각 수
+ARROW_SHADE = 0.55                      # 화살표 머티리얼 색 = 마커 색 x 이 값 (진하게). 패널 색은 그대로
 ARROW_ROUGHNESS = 0.4                   # 화살표 표면 거칠기 (0 매끈 .. 1 무광)
 ARROW_EMISSION = 0.0                    # 평소 발광 세기 (0 = 조명만 받음)
 ARROW_PICKED_EMISSION = 600.0           # 고른 화살표 발광 세기 (OmniPBR emissive_intensity)
