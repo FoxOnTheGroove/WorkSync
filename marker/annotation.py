@@ -645,6 +645,8 @@ class _OrbitWatch:
 
     @classmethod
     def _began(cls) -> None:
+        if _OrbitYield.holding():
+            return  # 우리가 orbit 을 꺼 둔 동안의 시작 신호는 진짜 카메라 끌기가 아니다 (우리 끌기에 orbit 제스처도 반응)
         cls._dragging = True
 
     @classmethod
@@ -2164,13 +2166,19 @@ class Annotation:
         고른 평면이면 끌기, 아니면 고르기만 (다음 누름부터 끌린다)"""
         marker_id = self._hot.get(view)
         m = self._find(marker_id) if marker_id else None
-        if (m is None or m["kind"] != "plane" or self._creating or _OrbitWatch.busy()
+        dbg = self._plane_dbg.setdefault(view, {"moves": 0})
+        dbg["drag_began"] = dbg.get("drag_began", 0) + 1
+        mine = _OrbitYield.holding(view._orbit_id)  # orbit 을 우리가 꺼 뒀으면 orbit 끌기일 수 없다
+        if (m is None or m["kind"] != "plane" or self._creating or (_OrbitWatch.busy() and not mine)
                 or self._plane_drag is not None):
+            dbg["drag_skip"] = ("no plane" if m is None else "creating" if self._creating
+                                else "dragging" if self._plane_drag is not None else "orbit busy")
             return  # 가려진 자리 (orbit 이 받는다), 패널 앞, 찍기 대기, 이미 끄는 중
         if self._selected != marker_id:
             self.select(marker_id)
             return
-        start = self._plane_point(m, payload)  # None 이면 제스처 이동량(moved)으로 따라간다
+        start = self._plane_point(m, payload, view)  # None 이면 제스처 이동량(moved)으로 따라간다
+        dbg.update(drag_skip=None, drag_start=start, drag_moves=0)
         self._plane_drag = {"view": view, "id": marker_id, "by": by, "start": start, "moved": [0.0, 0.0, 0.0],
                             "shift": list(m.get("shift", [0.0, 0.0]))}
         view.hold("plane_drag")
@@ -2185,7 +2193,9 @@ class Annotation:
             self._plane_release(view)
             return
         _n, u, v = PLANE_AXES[m["axis"]]
-        now = self._plane_point(m, payload) if d["start"] is not None else None
+        dbg = self._plane_dbg.setdefault(view, {"moves": 0})
+        dbg["drag_moves"] = dbg.get("drag_moves", 0) + 1
+        now = self._plane_point(m, payload, view) if d["start"] is not None else None
         if now is not None:
             du, dv = now[u] - d["start"][u], now[v] - d["start"][v]
         else:
@@ -2405,12 +2415,17 @@ class Annotation:
                     asking["timer"].cancel()
 
     @staticmethod
-    def _plane_point(m, payload):
-        """제스처 광선이 그 평면과 만나는 점"""
+    def _plane_point(m, payload, view=None):
+        """제스처 광선이 그 평면과 만나는 점. payload 에 광선이 없으면 마우스 NDC 와 카메라로 만든 광선"""
         try:
             return ray_on_plane(m["axis"], plane_level(m), payload.ray_origin, payload.ray_direction)
         except Exception:
-            return None
+            pass
+        try:
+            made = _ndc_ray(view.api, _xy(payload.mouse))
+        except Exception:
+            made = None
+        return ray_on_plane(m["axis"], plane_level(m), made[0], made[1]) if made else None
 
     def _new_marker(self, kind: str, hit: dict, api) -> dict:
         """찍은 점으로 마커 하나. inlet 은 -법선, outlet 은 +법선 방향"""
