@@ -84,10 +84,10 @@ PLANE_COLORS = {                        # 평면 색 = 법선 축의 기즈모 �
 }
 PLANE_BOUND_SCALE = 1.4                 # 새 평면 크기 = 타겟 프림 바운드의 그 평면 두 축 길이 x 이 값
 PLANE_SIZE = (100.0, 100.0)             # 바운드를 못 구할 때 새 평면 크기 [가로, 세로] (스테이지 단위)
-PLANE_OPACITY = 0.4                     # 평면 불투명도 (0 투명 .. 1 불투명)
-PLANE_PICKED_OPACITY = 0.6              # 고른 평면 불투명도
-PLANE_HOVER_OPACITY = 0.65              # 마우스 아래 평면 불투명도
-PLANE_PRESS_OPACITY = 0.8               # 누르고 있는 / 끄는 평면 불투명도
+PLANE_OPACITY = 0.8                     # 평면 불투명도 (0 투명 .. 1 불투명)
+PLANE_PICKED_OPACITY = 0.88             # 고른 평면 불투명도
+PLANE_HOVER_OPACITY = 0.85              # 마우스 아래 평면 불투명도
+PLANE_PRESS_OPACITY = 0.95              # 누르고 있는 / 끄는 평면 불투명도
 PLANE_LOOKS = {                         # 평면 상태별 (불투명도, 흰색 섞기). 겹치면 press > hover > selected > idle
     "idle": (PLANE_OPACITY, 0.0),
     "selected": (PLANE_PICKED_OPACITY, 0.15),
@@ -99,7 +99,7 @@ PLANE_PRESS_AT_DOWN = True              # 평면 끌기를 누르는 순간 시�
 PLANE_DEPTH_EPS = 1e-3                  # 깊이 비교 여유 = 평면까지 거리 x 이 값. 모델 표면이 이만큼 더 가까워야 가린 것
 CLICK_SLOP_NDC = 0.01                   # 누른 자리에서 이만큼(NDC) 넘게 움직이고 떼면 클릭이 아니다 (카메라 끌기). 빈 곳 클릭으로 선택 풀기에 쓴다
 PLANE_GAP_RATIO = 1e-4                  # 평면 뒷면을 앞면에서 띄우는 거리 = 평면 큰 변 x 이 값 (겹치면 X 자 무늬)
-PLANE_EMISSION = 10000.0                # 평면 발광 세기. 평면은 조명을 안 받고 이 빛으로만 보인다 (그림자 안 탐, ebs 판과 같은 값)
+PLANE_EMISSION = 2000.0                 # 평면 발광 세기. 평면은 조명을 안 받고 이 빛으로만 보인다. 너무 세면 톤매핑이 색을 흰 쪽으로 날린다 (파스텔). 전 값 10000
 
 # -- 찍기와 손짓 ---------------------------------------------------------------------
 

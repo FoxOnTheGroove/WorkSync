@@ -785,6 +785,15 @@ def _hover_in(view, key, take) -> None:
     take()
 
 
+def _clear_kit_selection() -> None:
+    """Kit 선택 (형상) 을 푼다. 마커 패널이나 평면을 잡을 때. orbit 은 그때 꺼져 있어 그 클릭을 못 본다"""
+    try:
+        import omni.usd
+        omni.usd.get_context().get_selection().clear_selected_prim_paths()
+    except Exception:
+        pass
+
+
 def _plane_named(args):
     """쿼리 답이 우리 평면이면 그 id"""
     try:
@@ -2026,7 +2035,7 @@ class Annotation:
             "axis": axis,
             "at": 0.0,
             "size": size,
-            "label": f"{axis}_plane_{id_number(mid, 'plane') or 1}",
+            "label": f"{axis}_plane",
             "description": "",
             "color": list(PLANE_COLORS[axis]),
             "offset": list(DEFAULT_OFFSET),
@@ -2197,6 +2206,7 @@ class Annotation:
                                 else "dragging" if self._plane_drag is not None else "orbit busy")
             return  # 가려진 자리 (orbit 이 받는다), 패널 앞, 찍기 대기, 이미 끄는 중
         if self._selected != marker_id:
+            _clear_kit_selection()
             self.select(marker_id)
             return
         start = self._plane_point(m, payload, view)  # None 이면 제스처 이동량(moved)으로 따라간다
@@ -2297,6 +2307,7 @@ class Annotation:
             return
         hot = self._hot.get(view)
         if hot is not None:
+            _clear_kit_selection()
             if self._selected != hot:
                 self.select(hot)
         elif self._selected is not None:
@@ -2928,6 +2939,7 @@ class Annotation:
         def clicked():
             if self._find(marker_id) is None:
                 return
+            _clear_kit_selection()  # 마커를 잡으면 형상 선택은 푼다
             self.select(marker_id)
             self._clicked = marker_id
             self._notify("click", marker_id)
