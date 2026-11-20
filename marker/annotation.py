@@ -217,6 +217,7 @@ def clean_marker(raw) -> dict:
         if raw.get("axis") not in PLANE_AXES:
             raise ValueError(f"plane axis {raw.get('axis')!r}")
         m["axis"] = raw["axis"]
+        m["color"] = list(PLANE_COLORS[m["axis"]])  # 평면 색은 축 색 (파일 값은 안 씀)
         at = raw.get("at", 0.0)
         m["at"] = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at) else 0.0
         m["size"] = _floats(raw.get("size"), 2, positive=True) or list(PLANE_SIZE)
@@ -1422,6 +1423,7 @@ class _View:
         self._blocked = False
         self._token = None
         self._unblock = None
+        self._orbit_back = None  # orbit 을 돌려줄 타이머
         self._visible = True
         self._view_sub = None
         api = self.api
@@ -1493,11 +1495,23 @@ class _View:
             if self._unblock is not None:
                 self._unblock.cancel()
                 self._unblock = None
+            if self._orbit_back is not None:
+                self._orbit_back.cancel()
+                self._orbit_back = None
+            _OrbitYield.hold(self._orbit_id)  # 그 뷰포트 orbit 을 끈다 (누르기 전에). 이미 껐으면 그대로
             if not self._blocked:
                 self._blocked = True
                 self._token = _block_selection(self.api)
-                _OrbitYield.hold(self._orbit_id)  # 그 뷰포트 orbit 을 끈다 (누르기 전에)
             return
+        # orbit 은 거의 바로 (ORBIT_RELEASE_S) 돌려준다. 빠져나오자마자 카메라를 돌릴 수 있게.
+        # 0 이 아닌 것은 누르는 순간 hover 끝 -> drag 시작 사이 빈틈에 orbit 이 누름을 가져가지 않게
+        if now:
+            if self._orbit_back is not None:
+                self._orbit_back.cancel()
+                self._orbit_back = None
+            _OrbitYield.release(self._orbit_id)
+        elif self._orbit_back is None and _OrbitYield.holding(self._orbit_id):
+            self._orbit_back = asyncio.get_event_loop().call_later(ORBIT_RELEASE_S, self._orbit_back_now)
         if not self._blocked:
             return
         if now:
@@ -1508,12 +1522,16 @@ class _View:
         elif self._unblock is None:
             self._unblock = asyncio.get_event_loop().call_later(SELECT_RELEASE_S, self._unblock_now)
 
+    def _orbit_back_now(self) -> None:
+        self._orbit_back = None
+        if not self._holds:
+            _OrbitYield.release(self._orbit_id)
+
     def _unblock_now(self) -> None:
         self._unblock = None
         if not self._holds and self._blocked:
             self._blocked = False
             self._token = None
-            _OrbitYield.release(self._orbit_id)
 
     # -- 찍기 대기 ---------------------------------------------------------------
 
@@ -1863,7 +1881,7 @@ class Annotation:
             "size": list(PLANE_SIZE),
             "label": "",
             "description": "",
-            "color": list(DEFAULT_COLORS["plane"]),
+            "color": list(PLANE_COLORS[axis]),
             "offset": list(DEFAULT_OFFSET),
             "box": None,
             "font_px": FONT_PX,
