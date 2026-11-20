@@ -45,7 +45,7 @@
 - 평면에 보이는 그림자: 비쳐 보이는 것인지 (`PLANE_OPACITY = 1.0` 으로 시험), 재질 연결이 안 된 것인지
 - 평면 뒤 모델 찍기가 막히는지 (`set_pickable` 을 렌더 쿼리가 따르는지)
 - 평면 끌기 (`sc.Rectangle`), 앞뒤 면 X 무늬 (`PLANE_GAP_RATIO`)
-- 평면 본체 조작: hover payload 에 ray_origin / ray_direction / mouse 가 오는지. 겹친 평면은 광선으로 직접 재서 가까운 쪽, 깊이 쿼리 답이 평면 경로면 그 평면이 맨 앞. 우리 GestureManager (priority 높은 쪽만 막음, hover 는 안 막음) 가 Kit 에서 먹는지 (`gesture_types` 의 Manager). 패널이 평면 위에서 이기는지. `PLANE_PRESS_AT_DOWN`. 진단 `plane_hot`
+- 평면 본체 조작: 뷰포트마다 맨 뒤 `sc.Screen` 하나로 hover / 누름 / 끌기. 평면은 광선 + 깊이 쿼리로 판정. 확인: Screen hover 가 마우스 움직임마다 오는지 (진단 `plane_probe.moves` 가 늘어나는지), payload 에 광선이 있는지 (`ray`: payload / camera / none), 쿼리 답 (`query`, `model_dist`, `plane_dist`). 화면 전체 Screen 이 orbit / Kit 선택을 막지 않는지. `PLANE_PRESS_AT_DOWN`
 - 화살표 / 평면 클릭이 Kit 선택에 잡히지 않는지
 - 커서 모양, 네 변 크기 조절
 - `DRAG_SCALE` 2.0 의 실제 원인

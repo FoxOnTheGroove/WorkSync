@@ -394,6 +394,29 @@ def plane_matrix(marker) -> list:
     return rows + [c[0], c[1], c[2], 1.0]
 
 
+def _ndc_ray(api, ndc):
+    """뷰포트 NDC 의 월드 광선 (시작, 방향). 카메라 행렬로. 못 구하면 None"""
+    try:
+        from pxr import Gf
+        to_world = Gf.Matrix4d(api.ndc_to_world)
+        a = to_world.Transform(Gf.Vec3d(float(ndc[0]), float(ndc[1]), 0.0))
+        b = to_world.Transform(Gf.Vec3d(float(ndc[0]), float(ndc[1]), 0.5))
+        d = [b[i] - a[i] for i in range(3)]
+        inv = Gf.Matrix4d(api.view).GetInverse()
+        ahead = inv.TransformDir(Gf.Vec3d(0.0, 0.0, -1.0))
+        if _dot(d, [ahead[0], ahead[1], ahead[2]]) < 0:
+            d = [-c for c in d]
+        cam = inv.Transform(Gf.Vec3d(0.0, 0.0, 0.0))
+        if abs(api.projection[3][3]) < 1e-9:  # 원근: 카메라에서
+            o = [cam[0], cam[1], cam[2]]
+        else:
+            o = [a[i] - d[i] * 1e6 for i in range(3)]
+        d = _unit(d)
+        return (o, d) if d is not None else None
+    except Exception:
+        return None
+
+
 def ray_in_plane(marker, origin, direction):
     """광선이 그 평면 사각형 안에 닿으면 시작점에서의 거리, 아니면 None"""
     n, u, v = PLANE_AXES[marker["axis"]]
@@ -1291,26 +1314,6 @@ class _MarkerView:
         with view.root:
             self.top = sc.Transform()
         with self.top:
-            self._plane_hit_xf = self._plane_hit = None
-            if marker["kind"] == "plane":
-                # 평면 본체(USD)는 손짓을 못 받는다. 같은 자리 투명 사각형으로 hover, 누름, 끌기를 받는다.
-                # 이 사각형은 깊이를 모르니, 정말 평면이 보이는 자리인지는 owner 가 깊이 쿼리로 가린다
-                Click, Drag, Hover = _gesture_types()
-                self._plane_hit_xf = sc.Transform()
-                with self._plane_hit_xf:
-                    self._plane_hit = sc.Rectangle(
-                        1.0, 1.0, color=view.ui.color(*HIT_COLOR),
-                        gesture=[
-                            Hover(lambda p: owner._plane_over(view, mid, p),
-                                  lambda p: owner._plane_over(view, mid, p),
-                                  lambda: owner._plane_out(view, mid), name="plane_hover", raw=True),
-                            Drag(lambda p: owner._plane_grab(view, mid, p),
-                                 lambda p: owner._plane_move(view, p, mid),
-                                 lambda: owner._plane_release(view, mid), priority=PLANE_PRIORITY,
-                                 name="plane_move", raw=True, at_down=PLANE_PRESS_AT_DOWN),
-                            Click(lambda _m: owner._plane_click(view, mid), priority=PLANE_PRIORITY,
-                                  name="plane_click"),
-                        ])
             self._anchor_xf = sc.Transform()
             with self._anchor_xf:
                 with sc.Transform(scale_to=sc.Space.SCREEN):
@@ -1420,10 +1423,6 @@ class _MarkerView:
         self._border.color = ink
         self._border.thickness = BORDER_PICKED_PX if picked else BORDER_PX
         self._title.color = ink if marker["label"] else ui.color(*DIM_COLOR)
-        if self._plane_hit is not None:
-            self._plane_hit_xf.transform = sc.Matrix44(*plane_matrix(marker))
-            self._plane_hit.width, self._plane_hit.height = marker["size"]
-            self._plane_hit_xf.visible = True  # 고르지 않은 평면도 눌러서 고른다
         self.relayout(marker, layout, picked)
 
     def relayout(self, marker, layout, picked: bool) -> None:
@@ -1519,8 +1518,21 @@ class _View:
             with self._clip:
                 self._scene_view = sc.SceneView()
         with self._scene_view.scene:
+            self._plane_root = sc.Transform()
             self.root = sc.Transform()
             self._pick_root = sc.Transform()
+        # 평면 조작: 화면 전체 하나 (sc.Screen 은 어떤 도형보다 뒤라 패널이 늘 먼저 받는다).
+        # 어느 평면이 마우스 아래 보이는지는 owner 가 광선 + 깊이 쿼리로 정한다
+        Click, Drag, Hover = _gesture_types()
+        with self._plane_root:
+            self._plane_screen = sc.Screen(gesture=[
+                Hover(lambda p: owner._plane_over(self, p), lambda p: owner._plane_over(self, p),
+                      lambda: owner._plane_out(self), name="plane_hover", raw=True),
+                Drag(lambda p: owner._plane_grab(self, "screen", p), lambda p: owner._plane_move(self, p, "screen"),
+                     lambda: owner._plane_release(self, "screen"), priority=PLANE_PRIORITY,
+                     name="plane_move", raw=True, at_down=PLANE_PRESS_AT_DOWN),
+                Click(lambda _m: owner._plane_click(self), priority=PLANE_PRIORITY, name="plane_click"),
+            ])
         try:
             viewport_api.add_scene_view(self._scene_view)
         except Exception as e:
@@ -1575,6 +1587,9 @@ class _View:
                 clip.destroy()
             except Exception:
                 pass
+        if getattr(self, "_plane_root", None) is not None:
+            self._plane_root.clear()
+        self._plane_root = self._plane_screen = None
         self._pick_root = None
         self.root = None
         self.api = None
@@ -1746,7 +1761,8 @@ class Annotation:
         self._creating: str = ""
         self._relocating = None  # 위치 재설정을 기다리는 마커 id
         self._plane_drag = None
-        self._over = {}       # view -> {평면 id: 마우스가 그 판정 사각형 위} (깊이 모름)
+        self._over = {}       # view -> 마우스가 그 뷰포트 위인가
+        self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
         self._depth = {}      # view -> 묻는 중인 깊이 쿼리
@@ -2212,25 +2228,34 @@ class Annotation:
         if m is not None and m["kind"] == "plane":
             self._arrows.plane_look(m, self._plane_state(marker_id))
 
-    def _plane_over(self, view, marker_id: str, payload) -> None:
-        """평면 판정 사각형 위 (들어옴 / 움직임)"""
-        self._over.setdefault(view, set()).add(marker_id)
+    def _plane_over(self, view, payload) -> None:
+        """마우스가 그 뷰포트 위 (들어옴 / 움직임)"""
+        self._over[view] = True
+        dbg = self._plane_dbg.setdefault(view, {"moves": 0})
+        dbg["moves"] += 1
+        ndc = None
         try:
-            ray = ([float(c) for c in payload.ray_origin], [float(c) for c in payload.ray_direction],
-                   _xy(payload.mouse))
+            ndc = _xy(payload.mouse)
         except Exception:
-            ray = None
+            pass
+        ray, source = None, "none"
+        try:
+            ray = ([float(c) for c in payload.ray_origin], [float(c) for c in payload.ray_direction], ndc)
+            source = "payload"
+        except Exception:
+            made = _ndc_ray(view.api, ndc) if ndc is not None else None
+            if made is not None:
+                ray, source = (made[0], made[1], ndc), "camera"
+        dbg.update(ray=source, ndc=ndc)
         self._ray[view] = ray
         self._probe(view)
 
-    def _plane_out(self, view, marker_id: str) -> None:
-        over = self._over.get(view)
-        if over is not None:
-            over.discard(marker_id)
+    def _plane_out(self, view) -> None:
+        self._over.pop(view, None)
         self._probe(view)
 
-    def _plane_click(self, view, marker_id: str) -> None:
-        """움직이지 않고 뗀 클릭. 마우스 아래 보이는 평면을 고른다 (보낸 사각형과 상관없이)"""
+    def _plane_click(self, view) -> None:
+        """움직이지 않고 뗀 클릭. 마우스 아래 보이는 평면을 고른다"""
         hot = self._hot.get(view)
         if not self._creating and hot is not None and self._selected != hot:
             self.select(hot)
@@ -2238,6 +2263,18 @@ class Annotation:
     def _plane_recheck(self, view) -> None:
         if self._over.get(view):
             self._probe(view)
+
+    def _plane_candidate(self, view, ray):
+        """광선이 사각형 안에 먼저 닿는 보이는 평면 (id, 거리). 없으면 None"""
+        o, d, _ndc = ray
+        best = None
+        for m in self._markers:
+            if m["kind"] != "plane" or not self._plane_seen_in(view, m["id"]):
+                continue
+            dist = ray_in_plane(m, o, d)
+            if dist is not None and (best is None or dist < best[1]):
+                best = (m["id"], dist)
+        return best
 
     def _plane_seen_in(self, view, marker_id) -> bool:
         m = self._find(marker_id)
@@ -2252,7 +2289,7 @@ class Annotation:
         그 자리 모델 표면이 그보다 가까우면 (가려짐) 없음"""
         if view not in self._views:
             return
-        over = self._over.get(view) or set()
+        over = self._over.get(view)
         if not over or self._creating or self._closed or self._panel_under(view):
             self._set_hot(view, None)
             return
@@ -2263,25 +2300,13 @@ class Annotation:
             _OrbitWatch.later((id(view), "plane_probe"), lambda: self._probe(view))
             return
         ray = self._ray.get(view)
-        best = None
-        if ray is None:  # 광선이 없으면 사각형이 알려준 것 중 하나
-            mid = next((x for x in sorted(over) if self._plane_seen_in(view, x)), None)
-            best = (mid, 0.0) if mid else None
-        else:
-            # 사각형 hover 는 Kit 이 고른 하나만 올 수 있다. 그래서 이 뷰포트의 보이는 평면 전부를
-            # 광선으로 직접 재서 가장 먼저 닿는 평면을 고른다
-            o, d, _ndc = ray
-            for m in self._markers:
-                if m["kind"] != "plane" or not self._plane_seen_in(view, m["id"]):
-                    continue
-                dist = ray_in_plane(m, o, d)
-                if dist is not None and (best is None or dist < best[1]):
-                    best = (m["id"], dist)
+        if ray is None or ray[2] is None:
+            self._set_hot(view, None)  # 광선을 못 받으면 평면을 못 고른다 (orbit 에 둔다)
+            return
+        best = self._plane_candidate(view, ray)
+        self._plane_dbg.setdefault(view, {"moves": 0}).update(candidate=best)
         if best is None:
             self._set_hot(view, None)
-            return
-        if ray is None or ray[2] is None:
-            self._set_hot(view, best[0])  # 광선을 못 받으면 깊이는 못 본다
             return
         asking = self._depth.get(view)
         if asking is not None:
@@ -2297,6 +2322,7 @@ class Annotation:
             return
         loop = asyncio.get_event_loop()
         asking = {"id": marker_id, "dist": dist, "origin": ray[0], "dirty": False, "timer": None}
+        self._plane_dbg.setdefault(view, {"moves": 0}).update(pixel=pixel)
         self._depth[view] = asking
 
         def on_query(*args):
@@ -2327,9 +2353,12 @@ class Annotation:
         self._depth.pop(view, None)
         if asking["timer"] is not None:
             asking["timer"].cancel()
+        dbg = self._plane_dbg.setdefault(view, {"moves": 0})
         if args is None:
+            dbg.update(query="timeout")
             self._set_hot(view, None)
         else:
+            dbg.update(query=str(args[0]) if args else "", query_at=list(args[1]) if len(args) > 1 else None)
             front = _plane_named(args)
             if front is not None:
                 # 렌더 쿼리가 평면을 집었다 (pickable 을 안 따르는 경우): 그 평면이 맨 앞이다
@@ -2340,6 +2369,7 @@ class Annotation:
                     seen = True  # 뒤에 모델 없음
                 else:
                     gap = _sub(hit[1], asking["origin"])
+                    dbg.update(model_dist=round(math.sqrt(_dot(gap, gap)), 4), plane_dist=round(asking["dist"], 4))
                     seen = math.sqrt(_dot(gap, gap)) >= asking["dist"] * (1.0 - PLANE_DEPTH_EPS)
                 self._set_hot(view, asking["id"] if seen else None)
         if asking["dirty"]:
@@ -2369,11 +2399,10 @@ class Annotation:
             if marker_id is None:
                 self._over.pop(v, None)
                 self._ray.pop(v, None)
+                self._plane_dbg.pop(v, None)
                 asking = self._depth.pop(v, None)
                 if asking is not None and asking["timer"] is not None:
                     asking["timer"].cancel()
-            elif v in self._over:
-                self._over[v].discard(marker_id)
 
     @staticmethod
     def _plane_point(m, payload):
@@ -2513,6 +2542,7 @@ class Annotation:
                 "orbit_off": _OrbitYield.holding(v._orbit_id),
                 "orbit_dragging": _OrbitWatch.busy(),
                 "plane_hot": self._hot.get(v),
+                "plane_probe": copy.deepcopy(self._plane_dbg.get(v)),
             })
         markers = [{"id": m["id"], "kind": m["kind"], "target": m.get("target", ""),
                     "visible": m.get("visible", True)} for m in self._markers]
