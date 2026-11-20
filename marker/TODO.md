@@ -45,6 +45,7 @@
 - 평면에 보이는 그림자: 비쳐 보이는 것인지 (`PLANE_OPACITY = 1.0` 으로 시험), 재질 연결이 안 된 것인지
 - 평면 뒤 모델 찍기가 막히는지 (`set_pickable` 을 렌더 쿼리가 따르는지)
 - 평면 끌기 (`sc.Rectangle`), 앞뒤 면 X 무늬 (`PLANE_GAP_RATIO`)
+- 평면 본체 조작: 판정 사각형 hover 의 payload 에 ray_origin / ray_direction / mouse 가 오는지, 깊이 쿼리(request_query 한 픽셀)가 마우스 움직임을 따라가는지, 겹친 평면에서 가까운 쪽이 잡히는지. `check_mouse_moved = False` 로 누르는 순간 끌기가 시작되는지 (`PLANE_PRESS_AT_DOWN`). 진단 views 의 `plane_hot`
 - 화살표 / 평면 클릭이 Kit 선택에 잡히지 않는지
 - 커서 모양, 네 변 크기 조절
 - `DRAG_SCALE` 2.0 의 실제 원인

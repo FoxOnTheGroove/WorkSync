@@ -85,6 +85,17 @@ PLANE_COLORS = {                        # 평면 색 = 법선 축의 기즈모 �
 PLANE_SIZE = (100.0, 100.0)             # 새 평면 크기 [가로, 세로] (스테이지 단위)
 PLANE_OPACITY = 0.4                     # 평면 불투명도 (0 투명 .. 1 불투명)
 PLANE_PICKED_OPACITY = 0.6              # 고른 평면 불투명도
+PLANE_HOVER_OPACITY = 0.65              # 마우스 아래 평면 불투명도
+PLANE_PRESS_OPACITY = 0.8               # 누르고 있는 / 끄는 평면 불투명도
+PLANE_LOOKS = {                         # 평면 상태별 (불투명도, 흰색 섞기). 겹치면 press > hover > selected > idle
+    "idle": (PLANE_OPACITY, 0.0),
+    "selected": (PLANE_PICKED_OPACITY, 0.45),
+    "hover": (PLANE_HOVER_OPACITY, 0.2),
+    "press": (PLANE_PRESS_OPACITY, 0.6),
+}
+PLANE_PRIORITY = 500                    # 평면 누름, 끌기 제스처 우선순위 (패널보다 아래, Kit 선택보다 위)
+PLANE_PRESS_AT_DOWN = True              # 평면 끌기를 누르는 순간 시작 (누름 색이 바로). Kit 이 못 하면 움직인 뒤
+PLANE_DEPTH_EPS = 1e-3                  # 깊이 비교 여유 = 평면까지 거리 x 이 값. 모델 표면이 이만큼 더 가까워야 가린 것
 PLANE_GAP_RATIO = 1e-4                  # 평면 뒷면을 앞면에서 띄우는 거리 = 평면 큰 변 x 이 값 (겹치면 X 자 무늬)
 PLANE_EMISSION = 10000.0                # 평면 발광 세기. 평면은 조명을 안 받고 이 빛으로만 보인다 (그림자 안 탐, ebs 판과 같은 값)
 
