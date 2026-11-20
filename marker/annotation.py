@@ -300,6 +300,19 @@ def _rgba(color, alpha: float = 1.0):
     return [float(color[0]), float(color[1]), float(color[2]), float(alpha)]
 
 
+def _set_translate(xformable, at) -> None:
+    """xformOp:translate 를 그 값으로 (없으면 만든다). 같으면 쓰지 않는다 (기즈모가 끄는 중 되먹임 방지)"""
+    from pxr import Gf, UsdGeom
+    xf = UsdGeom.Xformable(xformable.GetPrim())
+    op = next((o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate), None)
+    if op is None:
+        op = xf.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble)
+    value = Gf.Vec3d(*[float(c) for c in at])
+    old = op.Get()
+    if old is None or any(abs(float(old[i]) - value[i]) > 1e-9 for i in range(3)):
+        op.Set(value)
+
+
 def _plane_state_name(state) -> str:
     if state is True:
         return "selected"
@@ -785,6 +798,25 @@ def _hover_in(view, key, take) -> None:
     take()
 
 
+def _near_on_screen(api, point, payload, px: float) -> bool:
+    """그 월드 점이 화면에서 마우스와 px 안인가 (뷰포트 렌더 픽셀). 못 재면 False"""
+    if px <= 0:
+        return False
+    try:
+        ndc = _xy(payload.mouse)
+        try:
+            from pxr import Gf
+            q = Gf.Matrix4d(api.world_to_ndc).Transform(Gf.Vec3d(*[float(c) for c in point]))
+        except ImportError:
+            q = api.world_to_ndc.Transform(point)
+        res = _resolution(api) or (1000, 1000)
+        dx = (float(q[0]) - ndc[0]) / 2.0 * res[0]
+        dy = (float(q[1]) - ndc[1]) / 2.0 * res[1]
+        return dx * dx + dy * dy <= px * px
+    except Exception:
+        return False
+
+
 def _clear_kit_selection() -> None:
     """Kit 선택 (형상) 을 푼다. 마커 패널이나 평면을 잡을 때. orbit 은 그때 꺼져 있어 그 클릭을 못 본다"""
     try:
@@ -1166,10 +1198,13 @@ class _Arrows:
             # 뒷면은 법선 반대쪽으로 조금 띄운다. 같은 자리에 겹치면 두 면의 대각선이 X 자로 보였다
             gap = PLANE_GAP_RATIO * max(marker["size"])
             back = [_sub(p, _mul(plane["normal"], gap)) for p in plane["corners"]]
-            pts = plane["corners"] + back
+            # 점은 평면 가운데 기준 (지역), 가운데는 xformOp:translate. Kit 기즈모가 이 translate 를 옮긴다
+            centre = plane["center"]
+            pts = [_sub(p, centre) for p in plane["corners"] + back]
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 self._root(stage, UsdGeom)
                 mesh = UsdGeom.Mesh.Define(stage, f"{PLANE_SCOPE}/{marker['id']}")
+                _set_translate(mesh, centre)
                 mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
                 # 앞면과 뒷면을 따로 둔다. doubleSided 만으로는 RTX 가 뒤에서 안 그렸다 (ebs 판도 같은 방식)
                 mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
@@ -1789,6 +1824,11 @@ class Annotation:
         self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
         self._press_ndc = {}  # view -> 누른 자리 NDC (클릭 판정)
         self._panel_dbg = None  # 마지막 패널 끌기 시작 (진단용)
+        self._plane_notice = None        # 평면 USD 변경 알림 (Kit 기즈모)
+        self._edit_was = None            # (스테이지, 원래 편집 대상). 평면을 고른 동안 세션 레이어로 바꿔 둔다
+        self._plane_notice_stage = None
+        self._gizmo_pending = set()
+        self._gizmo_warned = False
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
         self._depth = {}      # view -> 묻는 중인 깊이 쿼리
@@ -1828,6 +1868,8 @@ class Annotation:
         self._views = []
         _OrbitYield.release_all()
         _OrbitWatch.stop()
+        self._edit_session(False)
+        self._unwatch_planes()
         self._arrows.teardown()
         self._listeners = []
         self._markers = []
@@ -2213,6 +2255,9 @@ class Annotation:
             _clear_kit_selection()
             self.select(marker_id)
             return
+        if PLANE_KIT_GIZMO and _near_on_screen(view.api, m["position"], payload, GIZMO_KEEP_PX):
+            dbg["drag_skip"] = "kit gizmo zone"
+            return  # 가운데는 Kit 기즈모 자리: 평면 끌기는 안 한다
         start = self._plane_point(m, payload, view)  # None 이면 제스처 이동량(moved)으로 따라간다
         dbg.update(drag_skip=None, drag_start=start, drag_moves=0)
         self._plane_drag = {"view": view, "id": marker_id, "by": by, "start": start, "moved": [0.0, 0.0, 0.0],
@@ -2513,8 +2558,117 @@ class Annotation:
         for mid in (was, marker_id):
             if mid is not None:
                 self._restyle(mid)
+        self._gizmo_follow(was, marker_id)
         self._notify("select", marker_id)
         return True
+
+    # -- 평면 Kit 기즈모: 고른 평면을 Kit 선택에 넣어 기본 이동 기즈모를 띄운다 ---------------------
+    # 기즈모가 평면 메시의 translate 를 옮기면 USD 변경 알림으로 받아 마커 (위치, 패널, 지시선) 를 맞춘다
+
+    def _gizmo_follow(self, was, now) -> None:
+        if not PLANE_KIT_GIZMO:
+            return
+        try:
+            import omni.usd
+            selection = omni.usd.get_context().get_selection()
+        except Exception:
+            return
+        m = self._find(now) if now else None
+        try:
+            if m is not None and m["kind"] == "plane":
+                self._watch_planes()
+                self._edit_session(True)
+                selection.set_selected_prim_paths([f"{PLANE_SCOPE}/{now}"], True)
+            else:
+                self._edit_session(False)
+                if was is not None and f"{PLANE_SCOPE}/{was}" in (selection.get_selected_prim_paths() or []):
+                    selection.clear_selected_prim_paths()
+        except Exception as e:
+            if not self._gizmo_warned:
+                self._gizmo_warned = True
+                print(f"{TAG} cannot put the plane into the Kit selection: {type(e).__name__}: {e}")
+
+    def _edit_session(self, on: bool) -> None:
+        """평면을 고른 동안만 스테이지 편집 대상을 세션 레이어로. 평면은 세션 레이어에 있어서,
+        기즈모가 루트 레이어에 쓰면 세션 값에 덮여 안 움직이고 파일만 더러워진다. 풀면 원래 대상으로"""
+        try:
+            stage = self._arrows._stage()
+        except Exception:
+            return
+        if stage is None:
+            return
+        if on:
+            if self._edit_was is None:
+                self._edit_was = (stage, stage.GetEditTarget())
+                stage.SetEditTarget(stage.GetSessionLayer())
+            return
+        was, self._edit_was = self._edit_was, None
+        if was is not None and was[0] is stage:
+            try:
+                stage.SetEditTarget(was[1])
+            except Exception as e:
+                print(f"{TAG} cannot restore the edit target: {type(e).__name__}: {e}")
+
+    def _watch_planes(self) -> None:
+        """평면 prim 의 USD 변경을 듣는다 (스테이지가 바뀌면 다시)"""
+        try:
+            import omni.usd
+            from pxr import Tf, Usd
+            stage = omni.usd.get_context().get_stage()
+        except Exception:
+            return
+        if stage is None or (self._plane_notice is not None and self._plane_notice_stage is stage):
+            return
+        self._unwatch_planes()
+        self._plane_notice_stage = stage
+        self._plane_notice = Tf.Notice.Register(Usd.Notice.ObjectsChanged, self._on_usd_changed, stage)
+
+    def _unwatch_planes(self) -> None:
+        notice, self._plane_notice, self._plane_notice_stage = self._plane_notice, None, None
+        if notice is not None:
+            try:
+                notice.Revoke()
+            except Exception:
+                pass
+
+    def _on_usd_changed(self, notice, _stage) -> None:
+        """USD 알림 안에서는 USD 를 안 쓴다. 바뀐 평면 id 만 모아 다음 루프에"""
+        head = PLANE_SCOPE + "/"
+        try:
+            paths = list(notice.GetChangedInfoOnlyPaths()) + list(notice.GetResyncedPaths())
+        except Exception:
+            return
+        ids = {str(p.GetPrimPath())[len(head):].split("/")[0] for p in paths if str(p).startswith(head)}
+        for mid in ids - {""}:
+            if mid not in self._gizmo_pending:
+                self._gizmo_pending.add(mid)
+                _later(lambda mid=mid: self._plane_from_usd(mid))
+
+    def _plane_from_usd(self, marker_id: str) -> None:
+        """평면 메시의 월드 가운데를 읽어 마커 at / shift 로. 패널과 지시선만 다시 맞춘다 (메시는 안 씀)"""
+        self._gizmo_pending.discard(marker_id)
+        m = self._find(marker_id)
+        if m is None or m["kind"] != "plane" or self._plane_drag is not None:
+            return
+        try:
+            from pxr import Usd, UsdGeom
+            prim = self._arrows._stage().GetPrimAtPath(f"{PLANE_SCOPE}/{marker_id}")
+            if not prim.IsValid():
+                return
+            c = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+        except Exception:
+            return
+        n, u, v = PLANE_AXES[m["axis"]]
+        o = m.get("origin", [0.0, 0.0, 0.0])
+        at, shift = float(c[n]) - o[n], [float(c[u]) - o[u], float(c[v]) - o[v]]
+        if abs(at - m["at"]) < 1e-9 and all(abs(shift[i] - m["shift"][i]) < 1e-9 for i in range(2)):
+            return  # 우리가 쓴 값
+        m["at"], m["shift"] = at, shift
+        m["position"] = _plane_of(m)["center"]
+        layout = self._layout(m)
+        picked = marker_id == self._selected
+        self._each(lambda v: v.restyle(m, layout, picked))
+        self._notify("plane", marker_id)
 
     def _restyle(self, marker_id: str) -> None:
         m = self._find(marker_id)
@@ -2744,6 +2898,7 @@ class Annotation:
         self._each(lambda v: v.drop(marker_id))
         if self._selected == marker_id:
             self._selected = None
+            self._gizmo_follow(marker_id, None)
             self._notify("select", None)
         self._notify("remove", marker_id)
         return True
@@ -2759,6 +2914,7 @@ class Annotation:
         self._arrows.clear()
         self._each(lambda v: v.drop_all())
         if self._selected is not None:
+            self._gizmo_follow(self._selected, None)
             self._selected = None
             self._notify("select", None)
         self._notify("remove", None)
