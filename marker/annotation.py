@@ -9,7 +9,7 @@ from .annotation_constant import *
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
-           "resize_rect", "move_rect", "leader_end", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane", "prim_center",
+           "resize_rect", "move_rect", "leader_end", "surface_normal", "arrow_mesh", "plane_geometry", "plane_matrix", "ray_on_plane", "ray_in_plane", "prim_center",
            "marker_file_of", "clean_marker", "id_number"]
 
 
@@ -394,6 +394,22 @@ def plane_matrix(marker) -> list:
     return rows + [c[0], c[1], c[2], 1.0]
 
 
+def ray_in_plane(marker, origin, direction):
+    """광선이 그 평면 사각형 안에 닿으면 시작점에서의 거리, 아니면 None"""
+    n, u, v = PLANE_AXES[marker["axis"]]
+    p = ray_on_plane(marker["axis"], plane_level(marker), origin, direction)
+    if p is None:
+        return None
+    gap = [p[i] - float(origin[i]) for i in range(3)]
+    if _dot(gap, [float(c) for c in direction]) <= 0:
+        return None  # 카메라 뒤
+    c = _plane_of(marker)["center"]
+    w, h = float(marker["size"][0]), float(marker["size"][1])
+    if abs(p[u] - c[u]) > w / 2.0 or abs(p[v] - c[v]) > h / 2.0:
+        return None
+    return math.sqrt(_dot(gap, gap))
+
+
 def ray_on_plane(axis: str, at: float, origin, direction):
     """광선이 그 축 평면(법선 축 = at)과 만나는 월드 점. 나란하면 None"""
     n = PLANE_AXES[axis][0]
@@ -737,6 +753,18 @@ def _hover_in(view, key, take) -> None:
     take()
 
 
+def _plane_named(args):
+    """쿼리 답이 우리 평면이면 그 id"""
+    try:
+        path = str(args[0] or "")
+    except Exception:
+        return None
+    head = PLANE_SCOPE + "/"
+    if not path.startswith(head):
+        return None
+    return path[len(head):].split("/")[0] or None
+
+
 def _hit(args):
     """쿼리 콜백 값을 (prim 경로, [x, y, z]) 로. 빈 곳이거나 우리 화살표면 None"""
     if not args or not args[0] or str(args[0]).startswith(MARKER_ROOT):
@@ -886,9 +914,39 @@ def _gesture_types():
         except Exception:
             return None
 
+    class Manager(sc.GestureManager):
+        """우리 제스처끼리 누가 이기나. 기본 매니저는 먼저 시작한 것이 다른 것을 다 막는다
+        (평면 사각형 끌기가 그 위 패널 끌기를 막았다). 여기서는 priority 가 높은 쪽만 막는다.
+        hover 는 막지도, 막히지도 않는다 (겹친 평면 사각형 hover 가 다 들어와야 가까운 평면을 고른다)"""
+
+        def can_be_prevented(self, gesture):
+            return not isinstance(gesture, sc.HoverGesture)
+
+        def should_prevent(self, gesture, preventer):
+            if isinstance(gesture, sc.HoverGesture) or isinstance(preventer, sc.HoverGesture):
+                return False
+            if preventer.state not in (sc.GestureState.BEGAN, sc.GestureState.CHANGED):
+                return False
+            return getattr(preventer, "priority", 0) >= getattr(gesture, "priority", 0)
+
+    try:
+        manager = Manager()
+    except Exception as e:
+        manager = None
+        print(f"{TAG} no gesture manager, Kit default decides: {type(e).__name__}: {e}")
+
+    def base(gesture_cls, obj):
+        if manager is None:
+            gesture_cls.__init__(obj)
+            return
+        try:
+            gesture_cls.__init__(obj, manager=manager)
+        except TypeError:
+            gesture_cls.__init__(obj)
+
     class Click(sc.ClickGesture):
         def __init__(self, fn, priority=GESTURE_PRIORITY, name="click"):
-            super().__init__()
+            base(sc.ClickGesture, self)
             self._fn, self._priority, self._name = fn, priority, name
 
         def on_ended(self, *_args):
@@ -906,7 +964,7 @@ def _gesture_types():
 
     class Drag(sc.DragGesture):
         def __init__(self, began, changed, ended, priority=GESTURE_PRIORITY, name="drag", raw=False, at_down=False):
-            super().__init__()
+            base(sc.DragGesture, self)
             if at_down:  # 움직이기 전, 누르는 순간 시작 (누름 색). 없는 Kit 이면 움직인 뒤 시작
                 try:
                     self.check_mouse_moved = False
@@ -935,7 +993,7 @@ def _gesture_types():
 
     class Hover(sc.HoverGesture):
         def __init__(self, began, changed, ended, name="hover", raw=False):
-            super().__init__()
+            base(sc.HoverGesture, self)
             self._began, self._changed, self._ended, self._name = began, changed, ended, name
             self._take = payload_of if raw else mouse_of  # raw: 광선까지 든 payload 를 넘긴다
 
@@ -1247,8 +1305,8 @@ class _MarkerView:
                                   lambda p: owner._plane_over(view, mid, p),
                                   lambda: owner._plane_out(view, mid), name="plane_hover", raw=True),
                             Drag(lambda p: owner._plane_grab(view, mid, p),
-                                 lambda p: owner._plane_move(view, p),
-                                 lambda: owner._plane_release(view), priority=PLANE_PRIORITY,
+                                 lambda p: owner._plane_move(view, p, mid),
+                                 lambda: owner._plane_release(view, mid), priority=PLANE_PRIORITY,
                                  name="plane_move", raw=True, at_down=PLANE_PRESS_AT_DOWN),
                             Click(lambda _m: owner._plane_click(view, mid), priority=PLANE_PRIORITY,
                                   name="plane_click"),
@@ -2085,22 +2143,26 @@ class Annotation:
 
     # -- 평면 끌기: 마우스 광선이 평면과 만나는 점을 따라, 평면 안에서만 ------------------------
 
-    def _plane_grab(self, view, marker_id: str, payload) -> None:
-        m = self._find(marker_id)
+    def _plane_grab(self, view, by: str, payload) -> None:
+        """평면 사각형 누름. 어느 사각형이 보냈든 마우스 아래 정말 보이는 평면 (hot) 을 쓴다 (겹친 자리).
+        고른 평면이면 끌기, 아니면 고르기만 (다음 누름부터 끌린다)"""
+        marker_id = self._hot.get(view)
+        m = self._find(marker_id) if marker_id else None
         if (m is None or m["kind"] != "plane" or self._creating or _OrbitWatch.busy()
-                or self._hot.get(view) != marker_id or self._plane_drag is not None):
-            return  # 가려진 자리 (orbit 이 받는다), 패널 앞, 찍기 대기
+                or self._plane_drag is not None):
+            return  # 가려진 자리 (orbit 이 받는다), 패널 앞, 찍기 대기, 이미 끄는 중
         if self._selected != marker_id:
-            self.select(marker_id)  # 누르면 고른다
+            self.select(marker_id)
+            return
         start = self._plane_point(m, payload)  # None 이면 제스처 이동량(moved)으로 따라간다
-        self._plane_drag = {"view": view, "id": marker_id, "start": start, "moved": [0.0, 0.0, 0.0],
+        self._plane_drag = {"view": view, "id": marker_id, "by": by, "start": start, "moved": [0.0, 0.0, 0.0],
                             "shift": list(m.get("shift", [0.0, 0.0]))}
         view.hold("plane_drag")
         self._paint_plane(marker_id)
 
-    def _plane_move(self, view, payload) -> None:
+    def _plane_move(self, view, payload, by=None) -> None:
         d = self._plane_drag
-        if d is None or d["view"] is not view:
+        if d is None or d["view"] is not view or (by is not None and d["by"] != by):
             return
         m = self._find(d["id"])
         if m is None:
@@ -2121,10 +2183,11 @@ class Annotation:
         m["position"] = _plane_of(m)["center"]
         self._restyle(d["id"])
 
-    def _plane_release(self, view) -> None:
-        d, self._plane_drag = self._plane_drag, None
-        if d is None:
-            return
+    def _plane_release(self, view, by=None) -> None:
+        d = self._plane_drag
+        if d is None or (by is not None and d["by"] != by):
+            return  # 다른 사각형 제스처의 끝 (취소) 은 이 끌기와 상관없다
+        self._plane_drag = None
         if d["view"] in self._views:
             d["view"].release("plane_drag")
         self._each(lambda v: v.cull())
@@ -2167,13 +2230,18 @@ class Annotation:
         self._probe(view)
 
     def _plane_click(self, view, marker_id: str) -> None:
-        """움직이지 않고 뗀 클릭. 보이는 자리면 고른다"""
-        if not self._creating and self._hot.get(view) == marker_id and self._selected != marker_id:
-            self.select(marker_id)
+        """움직이지 않고 뗀 클릭. 마우스 아래 보이는 평면을 고른다 (보낸 사각형과 상관없이)"""
+        hot = self._hot.get(view)
+        if not self._creating and hot is not None and self._selected != hot:
+            self.select(hot)
 
     def _plane_recheck(self, view) -> None:
         if self._over.get(view):
             self._probe(view)
+
+    def _plane_seen_in(self, view, marker_id) -> bool:
+        m = self._find(marker_id)
+        return m is not None and m["kind"] == "plane" and self._shown(m) and self._shown_in(view, m)
 
     def _panel_under(self, view) -> bool:
         """그 뷰포트에서 마우스가 패널 위인가 (패널이 평면보다 앞)"""
@@ -2196,20 +2264,19 @@ class Annotation:
             return
         ray = self._ray.get(view)
         best = None
-        for mid in over:
-            m = self._find(mid)
-            if m is None or m["kind"] != "plane" or not self._shown(m):
-                continue
-            if ray is None:
-                best = best or (mid, 0.0)
-                continue
+        if ray is None:  # 광선이 없으면 사각형이 알려준 것 중 하나
+            mid = next((x for x in sorted(over) if self._plane_seen_in(view, x)), None)
+            best = (mid, 0.0) if mid else None
+        else:
+            # 사각형 hover 는 Kit 이 고른 하나만 올 수 있다. 그래서 이 뷰포트의 보이는 평면 전부를
+            # 광선으로 직접 재서 가장 먼저 닿는 평면을 고른다
             o, d, _ndc = ray
-            p = ray_on_plane(m["axis"], plane_level(m), o, d)
-            if p is None or _dot(_sub(p, o), d) <= 0:
-                continue
-            dist = math.sqrt(_dot(_sub(p, o), _sub(p, o)))
-            if best is None or dist < best[1]:
-                best = (mid, dist)
+            for m in self._markers:
+                if m["kind"] != "plane" or not self._plane_seen_in(view, m["id"]):
+                    continue
+                dist = ray_in_plane(m, o, d)
+                if dist is not None and (best is None or dist < best[1]):
+                    best = (m["id"], dist)
         if best is None:
             self._set_hot(view, None)
             return
@@ -2263,13 +2330,18 @@ class Annotation:
         if args is None:
             self._set_hot(view, None)
         else:
-            hit = _hit(args)
-            if hit is None:
-                seen = True  # 뒤에 모델 없음
+            front = _plane_named(args)
+            if front is not None:
+                # 렌더 쿼리가 평면을 집었다 (pickable 을 안 따르는 경우): 그 평면이 맨 앞이다
+                self._set_hot(view, front if self._plane_seen_in(view, front) else None)
             else:
-                gap = _sub(hit[1], asking["origin"])
-                seen = math.sqrt(_dot(gap, gap)) >= asking["dist"] * (1.0 - PLANE_DEPTH_EPS)
-            self._set_hot(view, asking["id"] if seen else None)
+                hit = _hit(args)
+                if hit is None:
+                    seen = True  # 뒤에 모델 없음
+                else:
+                    gap = _sub(hit[1], asking["origin"])
+                    seen = math.sqrt(_dot(gap, gap)) >= asking["dist"] * (1.0 - PLANE_DEPTH_EPS)
+                self._set_hot(view, asking["id"] if seen else None)
         if asking["dirty"]:
             self._probe(view)
 
