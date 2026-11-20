@@ -223,6 +223,9 @@ def clean_marker(raw) -> dict:
         m["size"] = _floats(raw.get("size"), 2, positive=True) or list(PLANE_SIZE)
         m["shift"] = _floats(raw.get("shift"), 2) or [0.0, 0.0]
         m["origin"] = _floats(raw.get("origin"), 3) or [0.0, 0.0, 0.0]
+        rot = _floats(raw.get("rot"), 9)
+        if rot is not None:
+            m["rot"] = rot
         m["position"] = _plane_of(m)["center"]
         return m
     pos = _floats(raw.get("position"), 3)
@@ -300,6 +303,17 @@ def _rgba(color, alpha: float = 1.0):
     return [float(color[0]), float(color[1]), float(color[2]), float(alpha)]
 
 
+def _place_body(mesh, pivot) -> None:
+    """몸체 prim 을 피봇 자리에: xformOp:translate 하나만 (기즈모가 더한 회전 / 크기는 데이터에 담겼으니 걷는다)"""
+    from pxr import Gf, UsdGeom
+    xf = UsdGeom.Xformable(mesh.GetPrim())
+    op = next((o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate), None)
+    if op is None:
+        op = xf.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble)
+    op.Set(Gf.Vec3d(*[float(c) for c in pivot]))
+    xf.SetXformOpOrder([op])
+
+
 def _plane_state_name(state) -> str:
     if state is True:
         return "selected"
@@ -328,7 +342,7 @@ def _arrow_ends(marker, length: float):
     return list(p), _add(p, _mul(d, length))
 
 
-def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0), origin=(0.0, 0.0, 0.0)) -> dict:
+def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0), origin=(0.0, 0.0, 0.0), rot=None) -> dict:
     """축 평면 (월드). axis 는 xy / yz / zx, origin 은 기준점 (타겟 프림 바운드 중점),
     at 은 기준점에서 법선 축 방향 거리, size 는 [가로, 세로], shift 는 평면 안에서 옮긴 [가로 축, 세로 축] 거리.
     기준점에 가운데를 두고 at 만큼 법선 방향으로, shift 만큼 평면 안에서 옮긴다.
@@ -340,21 +354,46 @@ def plane_geometry(axis: str, at: float, size, shift=(0.0, 0.0), origin=(0.0, 0.
     center[u] += float(shift[0])
     center[v] += float(shift[1])
 
-    def point(su, sv):
-        p = list(center)
-        p[u] += su * w / 2.0
-        p[v] += sv * h / 2.0
-        return p
+    U, V, N = _frame(axis, rot)  # 가로, 세로, 법선 (회전했으면 돌아간 축)
 
-    normal = [0.0, 0.0, 0.0]
-    normal[n] = 1.0
+    def point(su, sv):
+        return [center[i] + U[i] * su * w / 2.0 + V[i] * sv * h / 2.0 for i in range(3)]
+
     return {"center": center, "corners": [point(-1, -1), point(1, -1), point(1, 1), point(-1, 1)],
-            "top": point(0, 1), "normal": normal}
+            "top": point(0, 1), "normal": list(N), "frame": (list(U), list(V), list(N))}
+
+
+def _frame(axis: str, rot=None):
+    """평면의 (가로, 세로, 법선) 단위 벡터. rot (9 값: 세 벡터) 가 있으면 그것, 아니면 축 그대로"""
+    if rot is not None and len(rot) == 9:
+        vs = [_unit([float(c) for c in rot[i:i + 3]]) for i in (0, 3, 6)]
+        if all(x is not None for x in vs):
+            return vs
+    n, u, v = PLANE_AXES[axis]
+    out = []
+    for k in (u, v, n):
+        e = [0.0, 0.0, 0.0]
+        e[k] = 1.0
+        out.append(e)
+    return out
 
 
 def _plane_of(marker) -> dict:
     return plane_geometry(marker["axis"], marker["at"], marker["size"], marker.get("shift", (0.0, 0.0)),
-                          marker.get("origin", (0.0, 0.0, 0.0)))
+                          marker.get("origin", (0.0, 0.0, 0.0)), marker.get("rot"))
+
+
+def ray_plane_point(marker, origin, direction):
+    """광선이 그 평면 (회전 포함) 과 만나는 월드 점. 나란하면 None"""
+    g = _plane_of(marker)
+    nrm = g["normal"]
+    o = [float(c) for c in origin]
+    d = [float(c) for c in direction]
+    den = _dot(d, nrm)
+    if abs(den) < 1e-12:
+        return None
+    t = _dot(_sub(g["center"], o), nrm) / den
+    return [o[i] + t * d[i] for i in range(3)]
 
 
 def plane_level(marker) -> float:
@@ -448,16 +487,17 @@ def ray_near_segment(origin, direction, a, b, radius: float):
 
 def ray_in_plane(marker, origin, direction):
     """광선이 그 평면 사각형 안에 닿으면 시작점에서의 거리, 아니면 None"""
-    n, u, v = PLANE_AXES[marker["axis"]]
-    p = ray_on_plane(marker["axis"], plane_level(marker), origin, direction)
+    p = ray_plane_point(marker, origin, direction)
     if p is None:
         return None
     gap = [p[i] - float(origin[i]) for i in range(3)]
     if _dot(gap, [float(c) for c in direction]) <= 0:
         return None  # 카메라 뒤
-    c = _plane_of(marker)["center"]
+    g = _plane_of(marker)
+    U, V, _N = g["frame"]
+    rel = _sub(p, g["center"])
     w, h = float(marker["size"][0]), float(marker["size"][1])
-    if abs(p[u] - c[u]) > w / 2.0 or abs(p[v] - c[v]) > h / 2.0:
+    if abs(_dot(rel, U)) > w / 2.0 or abs(_dot(rel, V)) > h / 2.0:
         return None
     return math.sqrt(_dot(gap, gap))
 
@@ -807,6 +847,10 @@ def _hover_in(view, key, take) -> None:
     take()
 
 
+def _close(a, b, eps: float = 1e-7) -> bool:
+    return len(a) == len(b) and all(abs(float(a[i]) - float(b[i])) <= eps for i in range(len(a)))
+
+
 def _clear_kit_selection() -> None:
     """Kit 선택 (형상) 을 푼다. 마커 패널이나 평면을 잡을 때. orbit 은 그때 꺼져 있어 그 클릭을 못 본다"""
     try:
@@ -1128,6 +1172,7 @@ class _Arrows:
 
     def __init__(self):
         self._warned = False
+        self.authored = {}  # id -> 마지막으로 쓴 피봇, 방향 (화살표) / 축 (평면). 기즈모가 바꾼 것을 되읽는 기준
 
     def _fail(self, what: str, e: Exception) -> None:
         if not self._warned:
@@ -1148,12 +1193,15 @@ class _Arrows:
                 return False
             tail, tip = _arrow_ends(marker, length)
             mesh_data = arrow_mesh(tail, tip, length)
+            pivot = list(marker["position"])  # 표면에 닿는 끝 (inlet 머리, outlet 꼬리): 회전 중심
             base = [float(c) * ARROW_SHADE for c in marker["color"][:3]]  # 머티리얼은 마커 색보다 진하게
             color = _bright(base) if picked else base
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 self._root(stage, UsdGeom)
                 mesh = UsdGeom.Mesh.Define(stage, f"{ARROW_SCOPE}/{marker['id']}")
-                pts = mesh_data["points"]
+                pts = [_sub(p, pivot) for p in mesh_data["points"]]  # 지역 (피봇 기준)
+                _place_body(mesh, pivot)
+                self.authored[marker["id"]] = {"pivot": pivot, "dir": _unit(marker["direction"]) or [0.0, 0.0, 1.0]}
                 mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
                 mesh.CreateFaceVertexCountsAttr(Vt.IntArray(mesh_data["counts"]))
                 mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(mesh_data["indices"]))
@@ -1189,10 +1237,13 @@ class _Arrows:
             # 뒷면은 법선 반대쪽으로 조금 띄운다. 같은 자리에 겹치면 두 면의 대각선이 X 자로 보였다
             gap = PLANE_GAP_RATIO * max(marker["size"])
             back = [_sub(p, _mul(plane["normal"], gap)) for p in plane["corners"]]
-            pts = plane["corners"] + back
+            centre = plane["center"]  # 회전 중심
+            pts = [_sub(p, centre) for p in plane["corners"] + back]  # 지역 (가운데 기준)
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 self._root(stage, UsdGeom)
                 mesh = UsdGeom.Mesh.Define(stage, f"{PLANE_SCOPE}/{marker['id']}")
+                _place_body(mesh, centre)
+                self.authored[marker["id"]] = {"pivot": list(centre), "frame": plane["frame"]}
                 mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
                 # 앞면과 뒷면을 따로 둔다. doubleSided 만으로는 RTX 가 뒤에서 안 그렸다 (ebs 판도 같은 방식)
                 mesh.CreateFaceVertexCountsAttr(Vt.IntArray([4, 4]))
@@ -1313,6 +1364,7 @@ class _Arrows:
         """그 마커의 화살표나 평면을 지운다"""
         self._remove(f"{ARROW_SCOPE}/{marker_id}")
         self._remove(f"{PLANE_SCOPE}/{marker_id}")
+        self.authored.pop(marker_id, None)
 
     def clear(self) -> None:
         """화살표와 평면을 다 지운다"""
@@ -1811,6 +1863,14 @@ class Annotation:
         self._over = {}       # view -> 마우스가 그 뷰포트 위인가
         self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
         self._press_ndc = {}  # view -> 누른 자리 NDC (클릭 판정)
+        self._gizmo_mode = "off"      # Kit 기즈모: move / rotate / off
+        self._gizmo_target = None     # 기즈모가 붙은 마커
+        self._gizmo_pending = False
+        self._body_notice = None
+        self._body_notice_stage = None
+        self._edit_was = None         # (스테이지, 원래 편집 대상)
+        self._op_was = None           # 원래 Kit 변환 도구
+        self._gizmo_warned = False
         self._panel_dbg = None  # 마지막 패널 끌기 시작 (진단용)
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
@@ -1851,6 +1911,9 @@ class Annotation:
         self._views = []
         _OrbitYield.release_all()
         _OrbitWatch.stop()
+        self._gizmo_mode = "off"
+        self._gizmo_attach(None)
+        self._unwatch_bodies()
         self._arrows.teardown()
         self._listeners = []
         self._markers = []
@@ -2229,7 +2292,7 @@ class Annotation:
         mine = _OrbitYield.holding(view._orbit_id)  # orbit 을 우리가 꺼 뒀으면 orbit 끌기일 수 없다
         if m is not None and m["kind"] in ARROW_KINDS and not self._creating:
             if self._selected != marker_id:  # 화살표: 누르면 고르기만 (끌기는 없다)
-                _clear_kit_selection()
+                self._kit_take(marker_id)
                 self.select(marker_id)
             return
         if (m is None or m["kind"] != "plane" or self._creating or (_OrbitWatch.busy() and not mine)
@@ -2238,13 +2301,15 @@ class Annotation:
                                 else "dragging" if self._plane_drag is not None else "orbit busy")
             return  # 가려진 자리 (orbit 이 받는다), 패널 앞, 찍기 대기, 이미 끄는 중
         if self._selected != marker_id:
-            _clear_kit_selection()
+            self._kit_take(marker_id)
             self.select(marker_id)
             return
+        if self._gizmo_target == marker_id:
+            return  # Kit 기즈모가 붙어 있다: 평면 끌기는 기즈모가 맡는다
         start = self._plane_point(m, payload, view)  # None 이면 제스처 이동량(moved)으로 따라간다
         dbg.update(drag_skip=None, drag_start=start, drag_moves=0)
         self._plane_drag = {"view": view, "id": marker_id, "by": by, "start": start, "moved": [0.0, 0.0, 0.0],
-                            "shift": list(m.get("shift", [0.0, 0.0]))}
+                            "shift": list(m.get("shift", [0.0, 0.0])), "at0": m["at"]}
         view.hold("plane_drag")
         self._paint_plane(marker_id)
 
@@ -2256,20 +2321,23 @@ class Annotation:
         if m is None:
             self._plane_release(view)
             return
-        _n, u, v = PLANE_AXES[m["axis"]]
+        n, u, v = PLANE_AXES[m["axis"]]
         dbg = self._plane_dbg.setdefault(view, {"moves": 0})
         dbg["drag_moves"] = dbg.get("drag_moves", 0) + 1
         now = self._plane_point(m, payload, view) if d["start"] is not None else None
         if now is not None:
-            du, dv = now[u] - d["start"][u], now[v] - d["start"][v]
+            delta = _sub(now, d["start"])
         else:
             try:  # 광선을 못 받으면 제스처가 주는 월드 이동량을 쌓는다 (평면 안 성분만)
                 step = [float(c) for c in payload.moved]
             except Exception:
                 return
             d["moved"] = [d["moved"][i] + step[i] for i in range(3)]
-            du, dv = d["moved"][u], d["moved"][v]
-        m["shift"] = [d["shift"][0] + du, d["shift"][1] + dv]
+            nrm = _plane_of(m)["normal"]
+            delta = _sub(d["moved"], _mul(nrm, _dot(d["moved"], nrm)))
+        # 월드 이동을 기준 축 성분으로 (돌린 평면이면 법선 축 성분도 생긴다)
+        m["shift"] = [d["shift"][0] + delta[u], d["shift"][1] + delta[v]]
+        m["at"] = d["at0"] + delta[n]
         m["position"] = _plane_of(m)["center"]
         self._restyle(d["id"])
 
@@ -2339,7 +2407,7 @@ class Annotation:
             return
         hot = self._hot.get(view)
         if hot is not None:
-            _clear_kit_selection()
+            self._kit_take(hot)
             if self._selected != hot:
                 self.select(hot)
         elif self._selected is not None:
@@ -2491,7 +2559,7 @@ class Annotation:
     def _paint_arrow(self, marker_id) -> None:
         """화살표 hover: 고른 것과 같은 밝은 머티리얼"""
         m = self._find(marker_id)
-        if m is not None and m["kind"] in ARROW_KINDS:
+        if m is not None and m["kind"] in ARROW_KINDS and marker_id != self._gizmo_target:
             lit = marker_id == self._selected or marker_id in self._hot.values()
             self._arrows.draw(m, lit, self.arrow_length())
 
@@ -2514,14 +2582,14 @@ class Annotation:
     def _plane_point(m, payload, view=None):
         """제스처 광선이 그 평면과 만나는 점. payload 에 광선이 없으면 마우스 NDC 와 카메라로 만든 광선"""
         try:
-            return ray_on_plane(m["axis"], plane_level(m), payload.ray_origin, payload.ray_direction)
+            return ray_plane_point(m, payload.ray_origin, payload.ray_direction)
         except Exception:
             pass
         try:
             made = _ndc_ray(view.api, _xy(payload.mouse))
         except Exception:
             made = None
-        return ray_on_plane(m["axis"], plane_level(m), made[0], made[1]) if made else None
+        return ray_plane_point(m, made[0], made[1]) if made else None
 
     def _new_marker(self, kind: str, hit: dict, api) -> dict:
         """찍은 점으로 마커 하나. inlet 은 -법선, outlet 은 +법선 방향"""
@@ -2545,6 +2613,196 @@ class Annotation:
 
     # -- 고르기와 고치기 ------------------------------------------------------------
 
+    # -- Kit 기즈모: 고른 마커의 USD 몸체 (화살표, 평면) 에 Kit 기본 이동 / 회전 기즈모를 띄운다 ----------
+    # 몸체를 Kit 선택에 넣고 변환 도구를 바꾼다. 몸체는 피봇 자리 translate + 지역 점이라 회전 중심이 맞다
+    # (평면 = 가운데, 화살표 = 표면에 닿는 끝). 기즈모가 바꾼 것은 USD 알림으로 받아 마커 데이터에 담는다
+
+    def set_gizmo(self, mode: str) -> bool:
+        """move / rotate / off. 켜 두면 마커를 고를 때마다 그 마커에 뜬다 (label 은 몸체가 없어 안 뜬다)"""
+        if mode not in GIZMO_MODES:
+            self._say(f"모르는 기즈모: {mode!r} ({', '.join(GIZMO_MODES)})")
+            return False
+        self._gizmo_mode = mode
+        self._gizmo_attach(self._selected if mode != "off" else None)
+        m = self._find(self._selected) if self._selected else None
+        if mode != "off" and (m is None or self._body_path(m["id"]) is None):
+            self._say(f"기즈모: {mode} (화살표나 평면을 고르면 뜹니다)", "gizmo")
+        else:
+            self._say(f"기즈모: {mode}", "gizmo")
+        return True
+
+    def gizmo(self) -> str:
+        return self._gizmo_mode
+
+    def _body_path(self, marker_id):
+        m = self._find(marker_id) if marker_id else None
+        if m is None:
+            return None
+        if m["kind"] in ARROW_KINDS:
+            return f"{ARROW_SCOPE}/{marker_id}"
+        if m["kind"] == "plane":
+            return f"{PLANE_SCOPE}/{marker_id}"
+        return None
+
+    def _kit_take(self, marker_id) -> None:
+        """마커를 화면에서 잡았을 때 Kit 선택: 기즈모가 켜져 있으면 그 몸체, 아니면 비운다 (형상 선택 풀기)"""
+        path = self._body_path(marker_id) if self._gizmo_mode != "off" else None
+        if path is None:
+            _clear_kit_selection()
+            return
+        try:
+            import omni.usd
+            omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
+        except Exception:
+            pass
+
+    def _gizmo_attach(self, marker_id) -> None:
+        """기즈모를 그 마커로 (None 이면 뗀다)"""
+        path = self._body_path(marker_id) if self._gizmo_mode != "off" else None
+        was = self._gizmo_target
+        if was is not None and was != marker_id:
+            self._gizmo_target = None
+            try:
+                import omni.usd
+                sel = omni.usd.get_context().get_selection()
+                if self._body_path(was) in (sel.get_selected_prim_paths() or []):
+                    sel.clear_selected_prim_paths()
+            except Exception:
+                pass
+        if path is None:
+            self._gizmo_target = None
+            self._edit_session(False)
+            self._transform_op(None)
+            return
+        self._gizmo_target = marker_id
+        self._watch_bodies()
+        self._edit_session(True)
+        self._transform_op(self._gizmo_mode)
+        try:
+            import omni.usd
+            omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
+        except Exception as e:
+            print(f"{TAG} cannot put the marker into the Kit selection: {type(e).__name__}: {e}")
+
+    def _transform_op(self, mode) -> None:
+        """Kit 변환 도구 (move / rotate). None 이면 처음 값으로"""
+        if mode is None and self._op_was is None:
+            return  # 바꾼 적 없다
+        try:
+            import carb.settings
+            settings = carb.settings.get_settings()
+            if mode is None:
+                if self._op_was is not None:
+                    settings.set(KIT_TRANSFORM_OP, self._op_was)
+                    self._op_was = None
+                return
+            if self._op_was is None:
+                self._op_was = settings.get(KIT_TRANSFORM_OP) or "select"
+            settings.set(KIT_TRANSFORM_OP, mode)
+        except Exception as e:
+            if not self._gizmo_warned:
+                self._gizmo_warned = True
+                print(f"{TAG} cannot set the Kit transform tool: {type(e).__name__}: {e}")
+
+    def _edit_session(self, on: bool) -> None:
+        """기즈모가 붙은 동안만 스테이지 편집 대상을 세션 레이어로. 몸체가 세션 레이어에 있어서
+        루트 레이어에 쓰면 세션 값에 덮여 안 움직이고 파일만 더러워진다. 떼면 원래 대상으로"""
+        try:
+            stage = self._arrows._stage()
+        except Exception:
+            stage = None
+        if stage is None:
+            return
+        if on:
+            if self._edit_was is None:
+                self._edit_was = (stage, stage.GetEditTarget())
+                stage.SetEditTarget(stage.GetSessionLayer())
+            return
+        was, self._edit_was = self._edit_was, None
+        if was is not None and was[0] is stage:
+            try:
+                stage.SetEditTarget(was[1])
+            except Exception as e:
+                print(f"{TAG} cannot restore the edit target: {type(e).__name__}: {e}")
+
+    def _watch_bodies(self) -> None:
+        """몸체 prim 의 USD 변경을 듣는다 (스테이지가 바뀌면 다시)"""
+        try:
+            from pxr import Tf, Usd
+            stage = self._arrows._stage()
+        except Exception:
+            return
+        if stage is None or (self._body_notice is not None and self._body_notice_stage is stage):
+            return
+        self._unwatch_bodies()
+        self._body_notice_stage = stage
+        self._body_notice = Tf.Notice.Register(Usd.Notice.ObjectsChanged, self._on_usd_changed, stage)
+
+    def _unwatch_bodies(self) -> None:
+        notice, self._body_notice, self._body_notice_stage = self._body_notice, None, None
+        if notice is not None:
+            try:
+                notice.Revoke()
+            except Exception:
+                pass
+
+    def _on_usd_changed(self, notice, _stage) -> None:
+        """알림 안에서는 USD 를 안 쓴다. 기즈모가 붙은 몸체가 바뀌었으면 다음 루프에 되읽는다"""
+        target = self._gizmo_target
+        path = self._body_path(target) if target else None
+        if path is None or self._gizmo_pending:
+            return
+        try:
+            changed = list(notice.GetChangedInfoOnlyPaths()) + list(notice.GetResyncedPaths())
+        except Exception:
+            return
+        if any(str(p.GetPrimPath()) == path for p in changed):
+            self._gizmo_pending = True
+            _later(self._body_from_usd)
+
+    def _body_from_usd(self) -> None:
+        """기즈모가 옮기거나 돌린 몸체의 월드 변환을 마커 데이터로. 패널, 지시선만 다시 맞춘다 (메시는 안 씀)"""
+        self._gizmo_pending = False
+        mid = self._gizmo_target
+        m = self._find(mid) if mid else None
+        base = self._arrows.authored.get(mid) if m else None
+        if m is None or base is None:
+            return
+        try:
+            from pxr import Gf, Usd, UsdGeom
+            prim = self._arrows._stage().GetPrimAtPath(self._body_path(mid))
+            M = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            pivot = M.Transform(Gf.Vec3d(0.0, 0.0, 0.0))
+            turn = lambda v: _unit([float(c) for c in M.TransformDir(Gf.Vec3d(*v))])
+        except Exception:
+            return
+        pivot = [float(c) for c in pivot]
+        if m["kind"] in ARROW_KINDS:
+            direction = turn(base["dir"]) or m["direction"]
+            if _close(pivot, m["position"]) and _close(direction, _unit(m["direction"])):
+                return
+            m["position"], m["direction"] = pivot, direction
+        else:
+            frame = [turn(v) for v in base["frame"]]
+            if any(f is None for f in frame):
+                return
+            n, u, v = PLANE_AXES[m["axis"]]
+            o = m.get("origin", [0.0, 0.0, 0.0])
+            at, shift = pivot[n] - o[n], [pivot[u] - o[u], pivot[v] - o[v]]
+            rot = frame[0] + frame[1] + frame[2]
+            if (abs(at - m["at"]) < 1e-9 and _close(shift, m["shift"])
+                    and _close(rot, sum(_plane_of(m)["frame"], []))):
+                return
+            m["at"], m["shift"] = at, shift
+            m["rot"] = None if _close(rot, sum(_frame(m["axis"]), [])) else rot
+            if m["rot"] is None:
+                m.pop("rot")
+            m["position"] = _plane_of(m)["center"]
+        layout = self._layout(m)
+        picked = mid == self._selected
+        self._each(lambda v: v.restyle(m, layout, picked))
+        self._notify("gizmo", mid)
+
     def select(self, marker_id) -> bool:
         """그 마커를 고른다 (None 이면 풀기). 고른 것은 밝게, 모서리 손잡이가 나온다"""
         if marker_id is not None and self._find(marker_id) is None:
@@ -2556,6 +2814,8 @@ class Annotation:
         for mid in (was, marker_id):
             if mid is not None:
                 self._restyle(mid)
+        if self._gizmo_mode != "off":
+            self._gizmo_attach(marker_id)
         self._notify("select", marker_id)
         return True
 
@@ -2785,6 +3045,8 @@ class Annotation:
         self._markers.remove(m)
         self._arrows.drop(marker_id)
         self._each(lambda v: v.drop(marker_id))
+        if self._gizmo_target == marker_id:
+            self._gizmo_attach(None)
         if self._selected == marker_id:
             self._selected = None
             self._notify("select", None)
@@ -2798,6 +3060,7 @@ class Annotation:
         if self._plane_drag is not None:
             self._plane_release(self._plane_drag["view"])
         self._forget_planes()
+        self._gizmo_attach(None)
         self._markers = []
         self._arrows.clear()
         self._each(lambda v: v.drop_all())
@@ -2867,7 +3130,7 @@ class Annotation:
             self._say("형상 USD 경로를 먼저 정하세요 (또는 저장할 때 경로를 주세요)")
             return False
         keep = ("id", "kind", "label", "description", "color", "offset", "box", "font_px", "visible", "target",
-                "position", "direction", "axis", "at", "size", "shift", "origin")
+                "position", "direction", "axis", "at", "size", "shift", "origin", "rot")
         data = {
             "version": MARKER_FILE_VERSION,
             "target_usd": self._target_usd,
@@ -2986,7 +3249,7 @@ class Annotation:
         def clicked():
             if self._find(marker_id) is None:
                 return
-            _clear_kit_selection()  # 마커를 잡으면 형상 선택은 푼다
+            self._kit_take(marker_id)  # 마커를 잡으면 형상 선택은 푼다 (기즈모가 켜져 있으면 그 몸체로)
             self.select(marker_id)
             self._clicked = marker_id
             self._notify("click", marker_id)

@@ -112,6 +112,11 @@ class AnnotationDummyUI:
                     ui.Button("위치 재설정", clicked_fn=lambda: AnnotationService.relocate(AnnotationService.selected()))
                     ui.Button("삭제", clicked_fn=self._remove)
                     ui.Button("선택 해제", clicked_fn=functools.partial(AnnotationService.select, None))
+                with ui.HStack(height=0, spacing=4):
+                    ui.Label("기즈모", width=FIELD_LABEL_WIDE)
+                    ui.Button("이동", clicked_fn=functools.partial(AnnotationService.set_gizmo, "move"))
+                    ui.Button("회전", clicked_fn=functools.partial(AnnotationService.set_gizmo, "rotate"))
+                    ui.Button("끄기", clicked_fn=functools.partial(AnnotationService.set_gizmo, "off"))
         AnnotationService.add_listener(self._on_change)
         self._arrow.model.set_value(AnnotationService.arrow_scale())
         self._refresh(fill=True)
@@ -218,7 +223,7 @@ class AnnotationDummyUI:
             self._arrow.model.set_value(AnnotationService.arrow_scale())
             self._status.text = AnnotationService.status()
             return
-        if reason == "plane":
+        if reason in ("plane", "gizmo"):
             sel = AnnotationService.selected()
             self._fill_plane(AnnotationService.get(sel) if sel else None)
             self._status.text = AnnotationService.status()

@@ -71,6 +71,16 @@ class AnnotationService:
         return instance().set_plane_size(marker_id, w, h)
 
     @classmethod
+    def set_gizmo(cls, mode):
+        """고른 마커 (화살표, 평면) 에 Kit 기즈모: move / rotate / off. 평면은 가운데, 화살표는 표면 끝에서 돈다"""
+        return instance().set_gizmo(mode)
+
+    @classmethod
+    def gizmo(cls):
+        """지금 기즈모 모드"""
+        return instance().gizmo()
+
+    @classmethod
     def reset_panel(cls, marker_id):
         """패널을 처음 자리, 글에 맞춘 크기로"""
         return instance().reset_panel(marker_id)
