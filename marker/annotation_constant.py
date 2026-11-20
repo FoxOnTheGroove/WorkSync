@@ -69,6 +69,7 @@ MAX_ARROW_SCALE = 10.0                  # 화살표 크기 배수 최대
 ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
 ARROW_RADIUS = 0.08                     # 원뿔 머리 반지름 = 화살표 길이 x 이 값
 ARROW_SHAFT = 0.025                     # 몸통 반지름 = 화살표 길이 x 이 값
+ARROW_HIT_SCALE = 1.5                   # 화살표 잡히는 굵기 = 원뿔 머리 반지름 x 이 값 (광선 판정)
 ARROW_RINGS = 32                        # 몸통, 원뿔 둘레 조각 수
 ARROW_SHADE = 0.55                      # 화살표 머티리얼 색 = 마커 색 x 이 값 (진하게). 패널 색은 그대로
 ARROW_ROUGHNESS = 0.4                   # 화살표 표면 거칠기 (0 매끈 .. 1 무광)

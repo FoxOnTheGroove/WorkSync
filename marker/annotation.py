@@ -424,6 +424,28 @@ def _ndc_ray(api, ndc):
         return None
 
 
+def ray_near_segment(origin, direction, a, b, radius: float):
+    """광선이 선분 a-b 에 radius 안으로 지나가면 그 가장 가까운 자리까지의 광선 거리, 아니면 None"""
+    d = _unit([float(c) for c in direction])
+    if d is None:
+        return None
+    o = [float(c) for c in origin]
+    u = _sub(b, a)
+    uu = _dot(u, u)
+    if uu <= 0:
+        return None
+    w = _sub(o, a)
+    du, dw, uw = _dot(d, u), _dot(d, w), _dot(u, w)
+    denom = uu - du * du
+    s = 0.0 if denom < 1e-12 else max(0.0, min(1.0, (uw - du * dw) / denom))  # 선분 위 자리
+    q = _add(a, _mul(u, s))
+    t = _dot(_sub(q, o), d)  # 그 점에 가장 가까운 광선 자리
+    if t <= 0:
+        return None
+    gap = _sub(_add(o, _mul(d, t)), q)
+    return t if _dot(gap, gap) <= radius * radius else None
+
+
 def ray_in_plane(marker, origin, direction):
     """광선이 그 평면 사각형 안에 닿으면 시작점에서의 거리, 아니면 None"""
     n, u, v = PLANE_AXES[marker["axis"]]
@@ -795,15 +817,16 @@ def _clear_kit_selection() -> None:
 
 
 def _plane_named(args):
-    """쿼리 답이 우리 평면이면 그 id"""
+    """쿼리 답이 우리 평면이나 화살표면 그 id"""
     try:
         path = str(args[0] or "")
     except Exception:
         return None
-    head = PLANE_SCOPE + "/"
-    if not path.startswith(head):
-        return None
-    return path[len(head):].split("/")[0] or None
+    for scope in (PLANE_SCOPE, ARROW_SCOPE):
+        head = scope + "/"
+        if path.startswith(head):
+            return path[len(head):].split("/")[0] or None
+    return None
 
 
 def _hit(args):
@@ -2204,6 +2227,11 @@ class Annotation:
         dbg = self._plane_dbg.setdefault(view, {"moves": 0})
         dbg["drag_began"] = dbg.get("drag_began", 0) + 1
         mine = _OrbitYield.holding(view._orbit_id)  # orbit 을 우리가 꺼 뒀으면 orbit 끌기일 수 없다
+        if m is not None and m["kind"] in ARROW_KINDS and not self._creating:
+            if self._selected != marker_id:  # 화살표: 누르면 고르기만 (끌기는 없다)
+                _clear_kit_selection()
+                self.select(marker_id)
+            return
         if (m is None or m["kind"] != "plane" or self._creating or (_OrbitWatch.busy() and not mine)
                 or self._plane_drag is not None):
             dbg["drag_skip"] = ("no plane" if m is None else "creating" if self._creating
@@ -2322,20 +2350,27 @@ class Annotation:
             self._probe(view)
 
     def _plane_candidate(self, view, ray):
-        """광선이 사각형 안에 먼저 닿는 보이는 평면 (id, 거리). 없으면 None"""
+        """광선이 먼저 닿는 보이는 마커 몸체 (id, 거리): 평면 사각형, inlet / outlet 화살표. 없으면 None"""
         o, d, _ndc = ray
         best = None
+        length = self.arrow_length()
         for m in self._markers:
-            if m["kind"] != "plane" or not self._plane_seen_in(view, m["id"]):
+            if not self._plane_seen_in(view, m["id"]):
                 continue
-            dist = ray_in_plane(m, o, d)
+            if m["kind"] == "plane":
+                dist = ray_in_plane(m, o, d)
+            else:
+                tail, tip = _arrow_ends(m, length)
+                dist = ray_near_segment(o, d, tail, tip, ARROW_RADIUS * length * ARROW_HIT_SCALE)
             if dist is not None and (best is None or dist < best[1]):
                 best = (m["id"], dist)
         return best
 
     def _plane_seen_in(self, view, marker_id) -> bool:
+        """USD 몸체가 있고 지금 보이는 마커 (평면, 화살표)"""
         m = self._find(marker_id)
-        return m is not None and m["kind"] == "plane" and self._shown(m) and self._shown_in(view, m)
+        return (m is not None and (m["kind"] == "plane" or m["kind"] in ARROW_KINDS)
+                and self._shown(m) and self._shown_in(view, m))
 
     def _panel_under(self, view) -> bool:
         """그 뷰포트에서 마우스가 패널 위인가 (패널이 평면보다 앞)"""
@@ -2451,6 +2486,14 @@ class Annotation:
             view.hold("plane_hot")
         for mid in {was, marker_id} - {None}:
             self._paint_plane(mid)
+            self._paint_arrow(mid)
+
+    def _paint_arrow(self, marker_id) -> None:
+        """화살표 hover: 고른 것과 같은 밝은 머티리얼"""
+        m = self._find(marker_id)
+        if m is not None and m["kind"] in ARROW_KINDS:
+            lit = marker_id == self._selected or marker_id in self._hot.values()
+            self._arrows.draw(m, lit, self.arrow_length())
 
     def _forget_planes(self, view=None, marker_id=None) -> None:
         """뷰포트가 떨어지거나 평면이 지워질 때"""
@@ -2523,7 +2566,7 @@ class Annotation:
         layout = self._layout(m)
         picked = marker_id == self._selected
         if m["kind"] in ARROW_KINDS:
-            self._arrows.draw(m, picked, self.arrow_length())
+            self._arrows.draw(m, picked or marker_id in self._hot.values(), self.arrow_length())
         elif m["kind"] == "plane":
             self._arrows.draw_plane(m, self._plane_state(marker_id))
         self._each(lambda v: v.restyle(m, layout, picked))
