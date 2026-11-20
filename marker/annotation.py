@@ -1060,7 +1060,7 @@ class _Arrows:
                 mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*low), Gf.Vec3f(*high)]))
                 mesh.GetPrim().CreateAttribute("primvars:doNotCastShadows",
                                                Sdf.ValueTypeNames.Bool).Set(True)
-                look = self._material(stage, f"plane{'_picked' if picked else ''}", color,
+                look = self._material(stage, f"plane_{marker['axis']}{'_picked' if picked else ''}", color,
                                       PLANE_EMISSION, opacity, unlit=True)  # 그림자, 조명과 무관한 색
                 UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(look)
             return True
