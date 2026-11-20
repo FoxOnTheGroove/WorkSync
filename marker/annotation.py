@@ -785,6 +785,35 @@ def _hover_in(view, key, take) -> None:
     take()
 
 
+GIZMO_HEAD_POINTS = 12  # 손잡이 화살촉 꼭짓점 수 (양끝 x 엇갈린 삼각형 둘 x 3)
+
+
+def _gesture_ray(api, payload):
+    """제스처 payload 의 월드 광선 (시작, 단위 방향). 없으면 마우스 NDC 와 카메라로. 못 구하면 None"""
+    try:
+        o = [float(c) for c in payload.ray_origin]
+        d = _unit([float(c) for c in payload.ray_direction])
+        if d is not None:
+            return o, d
+    except Exception:
+        pass
+    try:
+        return _ndc_ray(api, _xy(payload.mouse))
+    except Exception:
+        return None
+
+
+def _axis_param(point, axis, ray):
+    """점 point 를 지나는 axis (단위) 직선 위에서 광선에 가장 가까운 점의 매개변수. 거의 나란하면 None"""
+    o, d = ray
+    b = _dot(axis, d)
+    denom = 1.0 - b * b
+    if denom < 1e-6:
+        return None
+    w0 = _sub(point, o)
+    return (b * _dot(d, w0) - _dot(axis, w0)) / denom
+
+
 def _clear_kit_selection() -> None:
     """Kit 선택 (형상) 을 푼다. 마커 패널이나 평면을 잡을 때. orbit 은 그때 꺼져 있어 그 클릭을 못 본다"""
     try:
@@ -1335,6 +1364,8 @@ class _MarkerView:
         with view.root:
             self.top = sc.Transform()
         with self.top:
+            # 고른 평면의 네 꼭짓점: 법선 양방향 손잡이 (끌면 법선 방향으로만)
+            self._gizmos = [self._gizmo(i, marker) for i in range(4)] if marker["kind"] == "plane" else []
             self._anchor_xf = sc.Transform()
             with self._anchor_xf:
                 with sc.Transform(scale_to=sc.Space.SCREEN):
@@ -1369,6 +1400,77 @@ class _MarkerView:
                             for zone in ZONES:
                                 self._zones[zone] = self._zone_rect(zone)
         self.restyle(marker, layout, picked)
+
+    def _gizmo(self, i: int, marker):
+        """꼭짓점 하나의 법선 손잡이. 화면 크기 기준 (줌과 무관) 선 + 양끝 화살촉"""
+        sc, ui, view = self._view.sc, self._view.ui, self._view
+        Click, Drag, Hover = _gesture_types()
+        owner, mid = view.owner, self.id
+        key = f"h:{mid}:gizmo{i}"
+        n, u, v = PLANE_AXES[marker["axis"]]
+
+        def axis(k, length):
+            p = [0.0, 0.0, 0.0]
+            p[k] = length
+            return p
+
+        def take():
+            view.hold(key)
+            owner._plane_recheck(view)  # 손잡이가 평면 앞이다
+            owner._gizmo_hover(mid, i, True)
+
+        def enter(_m):
+            _hover_in(view, key, take)
+
+        def leave():
+            _OrbitWatch.forget((id(view), key))
+            view.release(key)
+            owner._plane_recheck(view)
+            owner._gizmo_hover(mid, i, False)
+
+        L, H, W = GIZMO_LEN_PX, GIZMO_HEAD_PX, GIZMO_HEAD_PX * 0.45
+        gestures = [
+            Hover(enter, lambda _m: None, leave, name=f"{mid}/gizmo{i}"),
+            Drag(lambda p: owner._gizmo_grab(view, mid, p), lambda p: owner._gizmo_move(view, p),
+                 lambda: owner._gizmo_release(view), priority=GIZMO_PRIORITY, name=f"{mid}/gizmo{i}", raw=True),
+        ]
+        white = ui.color(1.0, 1.0, 1.0, 1.0)
+        xf = sc.Transform()
+        with xf:
+            with sc.Transform(scale_to=sc.Space.SCREEN):
+                try:
+                    line = sc.Line(axis(n, -L), axis(n, L), color=white, thickness=GIZMO_LINE_PX,
+                                   intersection_thickness=GIZMO_HIT_PX, gesture=gestures)
+                except TypeError:
+                    line = sc.Line(axis(n, -L), axis(n, L), color=white, thickness=GIZMO_LINE_PX, gesture=gestures)
+                pts = []
+                for sign in (1.0, -1.0):
+                    tip, base = axis(n, sign * (L + H)), axis(n, sign * L)
+                    for k in (u, v):  # 엇갈린 두 삼각형: 어느 쪽에서 봐도 화살촉이 보인다
+                        pts += [tip, _add(base, axis(k, W)), _add(base, axis(k, -W))]
+                heads = sc.PolygonMesh(pts, [[1.0, 1.0, 1.0, 1.0]] * len(pts), [3] * (len(pts) // 3),
+                                       list(range(len(pts))))
+        return xf, line, heads
+
+    def place_gizmos(self, marker, picked: bool) -> None:
+        """손잡이를 네 꼭짓점에. 고른 평면에만 보인다"""
+        if not self._gizmos:
+            return
+        sc = self._view.sc
+        corners = _plane_of(marker)["corners"]
+        for (xf, _line, _heads), corner in zip(self._gizmos, corners):
+            xf.transform = _move(sc, *corner)
+            xf.visible = bool(picked)
+        self.paint_gizmos(marker)
+
+    def paint_gizmos(self, marker) -> None:
+        ui = self._view.ui
+        owner = self._view.owner
+        for i, (_xf, line, heads) in enumerate(self._gizmos):
+            mix = GIZMO_LOOKS[owner._gizmo_state(self.id, i)]
+            rgb = [float(c) + (1.0 - float(c)) * mix for c in marker["color"][:3]]
+            line.color = ui.color(*rgb, 1.0)
+            heads.colors = [rgb + [1.0]] * GIZMO_HEAD_POINTS
 
     def _zone_rect(self, zone):
         """잡는 사각형 하나. zone None = 몸통 (클릭 고르기, 끌기 이동), 변 = 그 변 (커서, 끌기 크기).
@@ -1443,6 +1545,7 @@ class _MarkerView:
         self._leader.thickness = LEADER_PX * (PICKED_LINE_SCALE if picked else 1.0)
         self._border.color = ink
         self._border.thickness = BORDER_PICKED_PX if picked else BORDER_PX
+        self.place_gizmos(marker, picked)
         if marker["kind"] == "plane":
             self._title.color = ui.color(*PLANE_TITLE_COLOR)  # 평면 패널 글자는 고정 색 (고를 때도 그대로)
         else:
@@ -1508,6 +1611,7 @@ class _MarkerView:
         self._view.release_prefix(f"h:{self.id}:")
         _Cursor.release_prefix(f"h:{self.id}:")
         self._zones = {}
+        self._gizmos = []
         self._desc = []
         self.top.clear()
         self.top.visible = False
@@ -1788,6 +1892,8 @@ class Annotation:
         self._over = {}       # view -> 마우스가 그 뷰포트 위인가
         self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
         self._press_ndc = {}  # view -> 누른 자리 NDC (클릭 판정)
+        self._gizmo_drag = None  # 법선 손잡이로 끄는 중
+        self._gizmo_over = None  # (평면 id, 꼭짓점) 마우스 아래 손잡이
         self._panel_dbg = None  # 마지막 패널 끌기 시작 (진단용)
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
@@ -2258,6 +2364,74 @@ class Annotation:
             self._probe(d["view"])  # 뗀 자리가 아직 그 평면 위인가
         self._notify("plane", d["id"])
 
+    # -- 평면 법선 손잡이 (고른 평면의 꼭짓점): 마우스 광선과 법선 축의 가장 가까운 점을 따라 at 만 바꾼다 --
+
+    def _gizmo_state(self, marker_id, i) -> str:
+        d = self._gizmo_drag
+        if d is not None and d["id"] == marker_id:
+            return "press"
+        return "hover" if self._gizmo_over == (marker_id, i) else "idle"
+
+    def _paint_gizmos(self, marker_id) -> None:
+        m = self._find(marker_id)
+        if m is None:
+            return
+        for v in self._views:
+            mv = v.marks.get(marker_id)
+            if mv is not None:
+                mv.paint_gizmos(m)
+
+    def _gizmo_hover(self, marker_id, i, on: bool) -> None:
+        if on:
+            self._gizmo_over = (marker_id, i)
+        elif self._gizmo_over == (marker_id, i):
+            self._gizmo_over = None
+        self._paint_gizmos(marker_id)
+
+    def _gizmo_grab(self, view, marker_id, payload) -> None:
+        m = self._find(marker_id)
+        mine = _OrbitYield.holding(view._orbit_id)
+        if (m is None or m["kind"] != "plane" or marker_id != self._selected or self._creating
+                or (_OrbitWatch.busy() and not mine) or self._gizmo_drag is not None or self._plane_drag is not None):
+            return
+        ray = _gesture_ray(view.api, payload)
+        n = PLANE_AXES[m["axis"]][0]
+        axis = [0.0, 0.0, 0.0]
+        axis[n] = 1.0
+        centre = list(m["position"])
+        t0 = _axis_param(centre, axis, ray) if ray else None
+        if t0 is None:
+            return  # 법선을 정면으로 보고 있으면 못 끈다
+        self._gizmo_drag = {"view": view, "id": marker_id, "centre": centre, "axis": axis, "t0": t0, "at0": m["at"]}
+        view.hold("gizmo_drag")
+        self._paint_gizmos(marker_id)
+
+    def _gizmo_move(self, view, payload) -> None:
+        d = self._gizmo_drag
+        if d is None or d["view"] is not view:
+            return
+        m = self._find(d["id"])
+        if m is None:
+            self._gizmo_release(view)
+            return
+        ray = _gesture_ray(view.api, payload)
+        t = _axis_param(d["centre"], d["axis"], ray) if ray else None
+        if t is None:
+            return
+        m["at"] = d["at0"] + (t - d["t0"])
+        m["position"] = _plane_of(m)["center"]
+        self._restyle(d["id"])
+
+    def _gizmo_release(self, view) -> None:
+        d, self._gizmo_drag = self._gizmo_drag, None
+        if d is None:
+            return
+        if d["view"] in self._views:
+            d["view"].release("gizmo_drag")
+        self._each(lambda v: v.cull())
+        self._paint_gizmos(d["id"])
+        self._notify("plane", d["id"])
+
     # -- 평면 hover / 누름: 판정 사각형 위 + 카메라 기준 깊이로 정말 보이는 평면만 ------------------
     # 보이는 평면 위면 orbit 을 끈다 (클릭이 orbit 으로 안 감). 다른 오브젝트에 가려진 자리는 orbit 에 둔다
 
@@ -2350,7 +2524,7 @@ class Annotation:
         if not over or self._creating or self._closed or self._panel_under(view):
             self._set_hot(view, None)
             return
-        if self._plane_drag is not None:
+        if self._plane_drag is not None or self._gizmo_drag is not None:
             return  # 끄는 동안은 그대로
         if _OrbitWatch.busy():
             self._set_hot(view, None)
