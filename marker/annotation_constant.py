@@ -21,7 +21,7 @@ MAX_DESCRIPTION = 1000                  # description 최대 글자 수
 # -- 패널 글자 (화면 px) ------------------------------------------------------------
 
 TEXT_SCALE = 1.0                        # 패널 글자 배율. 글자 크기 조절이 붙을 자리
-FONT_PX = 14.0                          # 첫 줄(label) 기본 글자 크기. 마커마다 font_px 로 바꾼다
+FONT_PX = 35.0                          # 첫 줄(label) 기본 글자 크기. 마커마다 font_px 로 바꾼다
 MIN_FONT_PX = 6.0                       # 마커 글자 크기 최소
 MAX_FONT_PX = 72.0                      # 마커 글자 크기 최대
 DESC_RATIO = 0.8                        # description 글자 크기 = FONT_PX x 이 값
@@ -62,7 +62,7 @@ MARKER_ROOT = "/AnnotationMarkers"      # 마커 3D 몸체를 담는 뿌리 (세
 ARROW_SCOPE = f"{MARKER_ROOT}/Arrows"   # 화살표 메시 자리
 PLANE_SCOPE = f"{MARKER_ROOT}/Planes"   # 평면 메시 자리
 LOOKS_SCOPE = f"{MARKER_ROOT}/Looks"    # 화살표, 평면 머티리얼 자리
-ARROW_LENGTH_M = 0.3                    # 화살표 기본 길이 (m), 배수 1 일 때. 모든 inlet, outlet 이 같고, 장면 단위로 환산한다
+ARROW_LENGTH_M = 0.12                   # 화살표 기본 길이 (m), 배수 1 일 때 (전의 0.3 x 0.4). 모든 inlet, outlet 이 같고, 장면 단위로 환산한다
 MIN_ARROW_SCALE = 0.1                   # 화살표 크기 배수 최소
 MAX_ARROW_SCALE = 10.0                  # 화살표 크기 배수 최대
 ARROW_HEAD = 0.25                       # 원뿔 머리 길이 = 화살표 길이 x 이 값
@@ -78,20 +78,21 @@ ARROW_PREVIEW_GLOW = 0.5                # 고른 화살표 preview 셰이더 발
 
 PLANE_AXES = {"xy": (2, 0, 1), "yz": (0, 1, 2), "zx": (1, 2, 0)}  # 평면별 (법선 축, 가로 축, 세로 축). 0=x 1=y 2=z
 PLANE_COLORS = {                        # 평면 색 = 법선 축의 기즈모 색 (x 빨강, y 초록, z 파랑)
-    "xy": [0.25, 0.45, 1.0],
-    "yz": [1.0, 0.25, 0.25],
-    "zx": [0.3, 0.85, 0.3],
+    "xy": [0.0, 0.2, 0.9],
+    "yz": [0.85, 0.0, 0.0],
+    "zx": [0.0, 0.6, 0.05],
 }
-PLANE_SIZE = (100.0, 100.0)             # 새 평면 크기 [가로, 세로] (스테이지 단위)
+PLANE_BOUND_SCALE = 1.4                 # 새 평면 크기 = 타겟 프림 바운드의 그 평면 두 축 길이 x 이 값
+PLANE_SIZE = (100.0, 100.0)             # 바운드를 못 구할 때 새 평면 크기 [가로, 세로] (스테이지 단위)
 PLANE_OPACITY = 0.4                     # 평면 불투명도 (0 투명 .. 1 불투명)
 PLANE_PICKED_OPACITY = 0.6              # 고른 평면 불투명도
 PLANE_HOVER_OPACITY = 0.65              # 마우스 아래 평면 불투명도
 PLANE_PRESS_OPACITY = 0.8               # 누르고 있는 / 끄는 평면 불투명도
 PLANE_LOOKS = {                         # 평면 상태별 (불투명도, 흰색 섞기). 겹치면 press > hover > selected > idle
     "idle": (PLANE_OPACITY, 0.0),
-    "selected": (PLANE_PICKED_OPACITY, 0.45),
-    "hover": (PLANE_HOVER_OPACITY, 0.2),
-    "press": (PLANE_PRESS_OPACITY, 0.6),
+    "selected": (PLANE_PICKED_OPACITY, 0.15),
+    "hover": (PLANE_HOVER_OPACITY, 0.08),
+    "press": (PLANE_PRESS_OPACITY, 0.3),
 }
 PLANE_PRIORITY = 500                    # 평면 누름, 끌기 제스처 우선순위 (패널보다 아래, Kit 선택보다 위)
 PLANE_PRESS_AT_DOWN = True              # 평면 끌기를 누르는 순간 시작 (누름 색이 바로). Kit 이 못 하면 움직인 뒤

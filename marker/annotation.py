@@ -365,6 +365,12 @@ def plane_level(marker) -> float:
 
 def prim_center(stage, prim_path: str):
     """그 프림의 월드 바운드 (축 정렬) 중점 [x, y, z]. 프림이 없거나 바운드가 비면 None"""
+    got = prim_bounds(stage, prim_path)
+    return got[0] if got else None
+
+
+def prim_bounds(stage, prim_path: str):
+    """그 프림의 월드 바운드 (축 정렬) (중점, 크기 [x, y, z]). 프림이 없거나 바운드가 비면 None"""
     try:
         from pxr import Usd, UsdGeom
         prim = stage.GetPrimAtPath(prim_path) if stage is not None and prim_path else None
@@ -374,9 +380,10 @@ def prim_center(stage, prim_path: str):
         box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
         if box.IsEmpty():
             return None
-        c = box.GetMidpoint()
+        c, size = box.GetMidpoint(), box.GetSize()
         out = [float(c[0]), float(c[1]), float(c[2])]
-        return out if all(math.isfinite(x) for x in out) else None
+        dims = [float(size[0]), float(size[1]), float(size[2])]
+        return (out, dims) if all(math.isfinite(x) for x in out + dims) else None
     except Exception:
         return None
 
@@ -2007,14 +2014,19 @@ class Annotation:
         if axis not in PLANE_AXES:
             self._say(f"모르는 평면: {axis!r} (xy, yz, zx)")
             return False
-        origin, prim_path = self._plane_origin()
+        origin, dims, prim_path = self._plane_origin()
+        size = list(PLANE_SIZE)
+        if dims is not None:  # 그 평면의 두 축 바운드 길이 x PLANE_BOUND_SCALE (0 인 축은 기본 크기)
+            _n, u, v = PLANE_AXES[axis]
+            size = [dims[k] * PLANE_BOUND_SCALE if dims[k] > 0 else PLANE_SIZE[i] for i, k in enumerate((u, v))]
+        mid = self._new_id("plane")
         marker = {
-            "id": self._new_id("plane"),
+            "id": mid,
             "kind": "plane",
             "axis": axis,
             "at": 0.0,
-            "size": list(PLANE_SIZE),
-            "label": "",
+            "size": size,
+            "label": f"{axis}_plane_{id_number(mid, 'plane') or 1}",
             "description": "",
             "color": list(PLANE_COLORS[axis]),
             "offset": list(DEFAULT_OFFSET),
@@ -2046,15 +2058,15 @@ class Annotation:
         return hit or ""
 
     def _plane_origin(self):
-        """새 평면의 가운데와 그 프림 경로. 못 구하면 ([0, 0, 0], "")"""
+        """새 평면의 (가운데, 바운드 크기 [x, y, z], 프림 경로). 못 구하면 ([0, 0, 0], None, "")"""
         prim_path = self._plane_prim()
         try:
             import omni.usd
             stage = omni.usd.get_context().get_stage()
         except Exception:
             stage = None
-        c = prim_center(stage, prim_path) if prim_path else None
-        return (c, prim_path) if c is not None else ([0.0, 0.0, 0.0], "")
+        got = prim_bounds(stage, prim_path) if prim_path else None
+        return (got[0], got[1], prim_path) if got is not None else ([0.0, 0.0, 0.0], None, "")
 
     def _plane(self, marker_id):
         m = self._find(marker_id)
