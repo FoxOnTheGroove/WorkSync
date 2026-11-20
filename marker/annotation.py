@@ -1813,69 +1813,7 @@ class Annotation:
         """시작. 그리는 자리는 bind_viewport(vph, ...) 로 받은 뷰포트에만 깐다"""
         self._closed = False
         _OrbitWatch.start()
-        self._watch_selection()
         return True
-
-    # -- Kit 선택에서 마커 몸체 빼기: 화살표, 평면 (USD) 이 orbit / Kit 클릭으로 선택되면 바로 뺀다 --------
-    # 화살표가 잡혔으면 그 마커를 고른 것으로 본다
-
-    def _watch_selection(self) -> None:
-        self._unwatch_selection()
-        try:
-            import omni.usd
-            ctx = omni.usd.get_context()
-            kind = omni.usd.StageEventType.SELECTION_CHANGED
-        except Exception as e:
-            print(f"{TAG} cannot watch the Kit selection: {type(e).__name__}: {e}")
-            return
-        try:  # Kit 106+ : 이벤트 디스패처
-            import carb.eventdispatcher
-            self._selection_sub = carb.eventdispatcher.get_eventdispatcher().observe_event(
-                observer_name=f"{NAME}.selection", event_name=ctx.stage_event_name(kind),
-                on_event=lambda _e: self._on_kit_selection())
-            return
-        except Exception:
-            pass
-        try:  # 예전 방식: 스테이지 이벤트 스트림
-            self._selection_sub = ctx.get_stage_event_stream().create_subscription_to_pop(
-                lambda e: self._on_kit_selection() if e.type == int(kind) else None, name=f"{NAME}.selection")
-        except Exception as e:
-            print(f"{TAG} cannot watch the Kit selection: {type(e).__name__}: {e}")
-
-    def _unwatch_selection(self) -> None:
-        sub, self._selection_sub = getattr(self, "_selection_sub", None), None
-        for name in ("unsubscribe", "reset", "destroy"):
-            if sub is not None and callable(getattr(sub, name, None)):
-                try:
-                    getattr(sub, name)()
-                except Exception:
-                    pass
-                break
-
-    def _on_kit_selection(self) -> None:
-        if self._closed:
-            return
-        try:
-            import omni.usd
-            selection = omni.usd.get_context().get_selection()
-            paths = [str(p) for p in (selection.get_selected_prim_paths() or [])]
-        except Exception:
-            return
-        head = MARKER_ROOT + "/"
-        ours = [p for p in paths if p == MARKER_ROOT or p.startswith(head)]
-        if not ours:
-            return
-        try:
-            selection.set_selected_prim_paths([p for p in paths if p not in ours], True)
-        except Exception as e:
-            print(f"{TAG} cannot drop markers from the Kit selection: {type(e).__name__}: {e}")
-        for scope in (ARROW_SCOPE, PLANE_SCOPE):
-            for p in ours:
-                if p.startswith(scope + "/"):
-                    mid = p[len(scope) + 1:].split("/")[0]
-                    if self._find(mid) is not None and not self._creating:
-                        _later(lambda mid=mid: self.select(mid))  # 화살표를 눌렀다 = 그 마커를 고른다
-                        return
 
     def teardown(self) -> None:
         """뷰포트에서 떼고 들고 있던 것을 놓는다"""
@@ -1890,7 +1828,6 @@ class Annotation:
         self._views = []
         _OrbitYield.release_all()
         _OrbitWatch.stop()
-        self._unwatch_selection()
         self._arrows.teardown()
         self._listeners = []
         self._markers = []
