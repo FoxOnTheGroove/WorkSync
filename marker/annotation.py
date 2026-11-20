@@ -1533,7 +1533,7 @@ class _View:
                 Drag(lambda p: owner._plane_grab(self, "screen", p), lambda p: owner._plane_move(self, p, "screen"),
                      lambda: owner._plane_release(self, "screen"), priority=PLANE_PRIORITY,
                      name="plane_move", raw=True, at_down=PLANE_PRESS_AT_DOWN),
-                Click(lambda _m: owner._plane_click(self), priority=PLANE_PRIORITY, name="plane_click"),
+                Click(lambda m: owner._plane_click(self, m), priority=PLANE_PRIORITY, name="plane_click"),
             ])
         try:
             viewport_api.add_scene_view(self._scene_view)
@@ -1765,6 +1765,7 @@ class Annotation:
         self._plane_drag = None
         self._over = {}       # view -> 마우스가 그 뷰포트 위인가
         self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
+        self._press_ndc = {}  # view -> 누른 자리 NDC (클릭 판정)
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
         self._depth = {}      # view -> 묻는 중인 깊이 쿼리
@@ -2164,6 +2165,12 @@ class Annotation:
     def _plane_grab(self, view, by: str, payload) -> None:
         """평면 사각형 누름. 어느 사각형이 보냈든 마우스 아래 정말 보이는 평면 (hot) 을 쓴다 (겹친 자리).
         고른 평면이면 끌기, 아니면 고르기만 (다음 누름부터 끌린다)"""
+        try:
+            self._press_ndc[view] = _xy(payload.mouse)  # 클릭 판정용 누른 자리
+        except Exception:
+            self._press_ndc.pop(view, None)
+        if self._panel_under(view):
+            return  # 패널 위: 패널이 맡는다
         marker_id = self._hot.get(view)
         m = self._find(marker_id) if marker_id else None
         dbg = self._plane_dbg.setdefault(view, {"moves": 0})
@@ -2264,11 +2271,21 @@ class Annotation:
         self._over.pop(view, None)
         self._probe(view)
 
-    def _plane_click(self, view) -> None:
-        """움직이지 않고 뗀 클릭. 마우스 아래 보이는 평면을 고른다"""
+    def _plane_click(self, view, ndc=None) -> None:
+        """패널 밖 클릭 (뗄 때). 마우스 아래 보이는 평면이면 고르고, 마커 아닌 오브젝트나 빈 곳이면 고른 것을 푼다.
+        패널 위 클릭은 패널이 맡는다. 누른 자리에서 움직였으면 (카메라 끌기 등) 클릭이 아니다"""
+        if self._creating or self._closed or self._panel_under(view):
+            return
+        pressed = self._press_ndc.pop(view, None)
+        at = _xy(ndc)
+        if pressed is not None and at is not None and max(abs(at[0] - pressed[0]), abs(at[1] - pressed[1])) > CLICK_SLOP_NDC:
+            return
         hot = self._hot.get(view)
-        if not self._creating and hot is not None and self._selected != hot:
-            self.select(hot)
+        if hot is not None:
+            if self._selected != hot:
+                self.select(hot)
+        elif self._selected is not None:
+            self.select(None)
 
     def _plane_recheck(self, view) -> None:
         if self._over.get(view):
@@ -2364,6 +2381,11 @@ class Annotation:
         if asking["timer"] is not None:
             asking["timer"].cancel()
         dbg = self._plane_dbg.setdefault(view, {"moves": 0})
+        if view not in self._views or self._panel_under(view) or not self._over.get(view):
+            self._set_hot(view, None)  # 묻는 사이 패널 위로 갔거나 뷰포트를 나갔다: 늦은 답은 버린다
+            if asking["dirty"]:
+                self._probe(view)
+            return
         if args is None:
             dbg.update(query="timeout")
             self._set_hot(view, None)
@@ -2410,6 +2432,7 @@ class Annotation:
                 self._over.pop(v, None)
                 self._ray.pop(v, None)
                 self._plane_dbg.pop(v, None)
+                self._press_ndc.pop(v, None)
                 asking = self._depth.pop(v, None)
                 if asking is not None and asking["timer"] is not None:
                     asking["timer"].cancel()
