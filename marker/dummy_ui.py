@@ -144,6 +144,7 @@ class AnnotationDummyUI:
         print("[annotation] ---- 진단 ----")
         print(f"[annotation] instance={info['instance']} target_usd={info['target_usd']!r}")
         print(f"[annotation] bindings={info['bindings']}")
+        print(f"[annotation] selected={info['selected']} panel_drag={info['panel_drag']}")
         for v in info["views"]:
             print(f"[annotation] view {v}")
         for m in info["markers"]:

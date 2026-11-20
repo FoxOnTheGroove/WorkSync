@@ -1768,6 +1768,7 @@ class Annotation:
         self._over = {}       # view -> 마우스가 그 뷰포트 위인가
         self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
         self._press_ndc = {}  # view -> 누른 자리 NDC (클릭 판정)
+        self._panel_dbg = None  # 마지막 패널 끌기 시작 (진단용)
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
         self._depth = {}      # view -> 묻는 중인 깊이 쿼리
@@ -2601,6 +2602,7 @@ class Annotation:
         if not self._all_visible:
             hints.append("전체 표시가 꺼져 있음")
         return {"instance": f"{__name__}@{id(self):x}", "target_usd": self._target_usd,
+                "panel_drag": copy.deepcopy(self._panel_dbg), "selected": self._selected,
                 "bindings": copy.deepcopy(self._bindings), "views": views, "markers": markers, "hints": hints}
 
     def bindings(self) -> dict:
@@ -2923,7 +2925,11 @@ class Annotation:
     def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
         """끌기 시작. 변 띠에서 시작하면 그 변 크기 조절, 몸통이면 이동. 먼저 클릭해서 고른 패널만"""
         m = self._find(marker_id)
-        if m is None or self._creating or marker_id != self._selected or _OrbitWatch.busy():
+        skip = ("no marker" if m is None else "creating" if self._creating
+                else f"not selected (selected: {self._selected})" if marker_id != self._selected
+                else "orbit busy" if _OrbitWatch.busy() else None)
+        self._panel_dbg = {"id": marker_id, "zone": None if edge is None else list(edge), "skip": skip, "moves": 0}
+        if skip:
             return
         zone = edge  # 끌기를 보낸 영역 (None = 몸통)
         h = self._hover_edge
@@ -2952,6 +2958,8 @@ class Annotation:
 
     def _drag_changed(self, view, ndc, zone=None) -> None:
         """끄는 중. 끝 위치 기준으로 다시 계산해 뷰포트마다 그 패널만 고친다"""
+        if self._panel_dbg is not None:
+            self._panel_dbg["moves"] += 1
         d = self._drag
         if d is None or d["view"] is not view:
             return
