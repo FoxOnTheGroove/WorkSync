@@ -537,6 +537,73 @@ class _OrbitYield:
             return False
 
 
+class _OrbitWatch:
+    """orbit 이 카메라를 끄는 중인가. 메시지 버스의 orbit 드래그 시작 (on_began_first) / 끝 (on_ended) 을 구독한다.
+    끄는 동안 마커 위로 마우스가 지나가도 마커는 아무것도 안 한다 (orbit 을 끄지 않는다).
+    그동안 들어온 hover 는 기억했다가, orbit 이 끝났을 때 아직 그 위면 그때 들인다"""
+
+    _dragging = False
+    _subs = []
+    _waiting = {}     # key -> 들일 함수 (hover 들어옴)
+
+    @classmethod
+    def start(cls) -> None:
+        cls.stop()
+        try:
+            import carb.events
+            import omni.kit.app
+            bus = omni.kit.app.get_app().get_message_bus_event_stream()
+            cls._subs = [
+                bus.create_subscription_to_pop_by_type(carb.events.type_from_string(ORBIT_DRAG_BEGAN),
+                                                       lambda _e: cls._began(), name=f"{NAME}.orbit_began"),
+                bus.create_subscription_to_pop_by_type(carb.events.type_from_string(ORBIT_DRAG_ENDED),
+                                                       lambda _e: cls._ended(), name=f"{NAME}.orbit_ended"),
+            ]
+        except Exception as e:
+            cls._subs = []
+            print(f"{TAG} cannot watch the orbit drag: {type(e).__name__}: {e}")
+
+    @classmethod
+    def stop(cls) -> None:
+        for sub in cls._subs:
+            try:
+                sub.unsubscribe()
+            except Exception:
+                pass
+        cls._subs = []
+        cls._dragging = False
+        cls._waiting = {}
+
+    @classmethod
+    def busy(cls) -> bool:
+        """orbit 이 끄는 중인가. 끝 신호를 못 받았는데 마우스 버튼이 다 떨어져 있으면 끝난 것으로 본다"""
+        if cls._dragging and _Mouse.pressed() is False:
+            cls._ended()
+        return cls._dragging
+
+    @classmethod
+    def later(cls, key, fn) -> None:
+        cls._waiting[key] = fn
+
+    @classmethod
+    def forget(cls, key) -> None:
+        cls._waiting.pop(key, None)
+
+    @classmethod
+    def _began(cls) -> None:
+        cls._dragging = True
+
+    @classmethod
+    def _ended(cls) -> None:
+        cls._dragging = False
+        waiting, cls._waiting = cls._waiting, {}
+        for fn in waiting.values():
+            try:
+                fn()
+            except Exception as e:
+                print(f"{TAG} hover after orbit failed: {type(e).__name__}: {e}")
+
+
 class _Cursor:
     """앱 창 커서 모양. 변 손잡이 위에서는 <-> / 위아래 화살표, 끝나면 되돌린다.
     여럿이 잡을 수 있게 key 별로 쥐고, 마지막에 잡은 모양을 쓴다. 바꿀 수 없으면 조용히 그대로 둔다"""
@@ -631,6 +698,28 @@ class _Mouse:
             cls._cursor = False
             print(f"{TAG} cannot ask the cursor, dragging falls back to NDC: {type(e).__name__}: {e}")
             return None
+
+    @classmethod
+    def pressed(cls):
+        """마우스 버튼 (왼, 오른, 가운데) 중 하나라도 눌려 있나. 못 물으면 None"""
+        try:
+            import carb.input
+            import omni.appwindow
+            reader = carb.input.acquire_input_interface()
+            mouse = omni.appwindow.get_default_app_window().get_mouse()
+            M = carb.input.MouseInput
+            return any(reader.get_mouse_button_flags(mouse, b) & carb.input.BUTTON_FLAG_DOWN
+                       for b in (M.LEFT_BUTTON, M.RIGHT_BUTTON, M.MIDDLE_BUTTON))
+        except Exception:
+            return None
+
+
+def _hover_in(view, key, take) -> None:
+    """마커 위에 마우스가 들어옴. orbit 이 끄는 중이면 들이지 않고 (orbit 을 안 끈다), 끝나면 들인다"""
+    if _OrbitWatch.busy():
+        _OrbitWatch.later((id(view), key), take)
+        return
+    take()
 
 
 def _hit(args):
@@ -1107,8 +1196,10 @@ class _MarkerView:
                     self._plane_hit = sc.Rectangle(
                         1.0, 1.0, color=view.ui.color(*HIT_COLOR),
                         gesture=[
-                            Hover(lambda _m: view.hold(plane_key), lambda _m: None,
-                                  lambda: view.release(plane_key), name="plane_hover"),
+                            Hover(lambda _m: _hover_in(view, plane_key, lambda: view.hold(plane_key)),
+                                  lambda _m: None,
+                                  lambda: (_OrbitWatch.forget((id(view), plane_key)), view.release(plane_key)),
+                                  name="plane_hover"),
                             Drag(lambda p: owner._plane_grab(view, mid, p),
                                  lambda p: owner._plane_move(view, p),
                                  lambda: owner._plane_release(view), name="plane_move", raw=True),
@@ -1158,13 +1249,17 @@ class _MarkerView:
         shape = None if zone is None else ("h" if zone[0] else "v")
         tag = f"{mid}/{ZONE_NAMES[zone]}"
 
-        def enter(_m):
+        def take():
             view.hold(key)
             owner._hover_on(view, mid, zone)
             if shape and mid == owner.selected():
                 _Cursor.hold(key, shape)
 
+        def enter(_m):
+            _hover_in(view, key, take)
+
         def leave():
+            _OrbitWatch.forget((id(view), key))
             view.release(key)
             owner._hover_off(view, mid, zone)
             _Cursor.release(key)
@@ -1545,6 +1640,7 @@ class Annotation:
     def start(self) -> bool:
         """시작. 그리는 자리는 bind_viewport(vph, ...) 로 받은 뷰포트에만 깐다"""
         self._closed = False
+        _OrbitWatch.start()
         return True
 
     def teardown(self) -> None:
@@ -1559,6 +1655,7 @@ class Annotation:
             view.destroy()
         self._views = []
         _OrbitYield.release_all()
+        _OrbitWatch.stop()
         self._arrows.teardown()
         self._listeners = []
         self._markers = []
@@ -1917,7 +2014,7 @@ class Annotation:
 
     def _plane_grab(self, view, marker_id: str, payload) -> None:
         m = self._find(marker_id)
-        if m is None or m["kind"] != "plane" or marker_id != self._selected or self._creating:
+        if m is None or m["kind"] != "plane" or marker_id != self._selected or self._creating or _OrbitWatch.busy():
             return
         start = self._plane_point(m, payload)  # None 이면 제스처 이동량(moved)으로 따라간다
         self._plane_drag = {"view": view, "id": marker_id, "start": start, "moved": [0.0, 0.0, 0.0],
@@ -2090,6 +2187,7 @@ class Annotation:
                 "visible": sum(1 for mv in v.marks.values() if mv.top.visible),
                 "armed": v.armed,
                 "orbit_off": _OrbitYield.holding(v._orbit_id),
+                "orbit_dragging": _OrbitWatch.busy(),
             })
         markers = [{"id": m["id"], "kind": m["kind"], "target": m.get("target", ""),
                     "visible": m.get("visible", True)} for m in self._markers]
@@ -2424,7 +2522,7 @@ class Annotation:
     def _drag_began(self, view, marker_id: str, edge, ndc) -> None:
         """끌기 시작. 변 띠에서 시작하면 그 변 크기 조절, 몸통이면 이동. 먼저 클릭해서 고른 패널만"""
         m = self._find(marker_id)
-        if m is None or self._creating or marker_id != self._selected:
+        if m is None or self._creating or marker_id != self._selected or _OrbitWatch.busy():
             return
         zone = edge  # 끌기를 보낸 영역 (None = 몸통)
         h = self._hover_edge

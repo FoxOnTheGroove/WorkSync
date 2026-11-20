@@ -97,3 +97,5 @@ ORBIT_CLASS = "OrbitExtension"          # 그 안의 익스텐션 클래스
 ORBIT_SCENES = "_orbit_scene_dict"      # 클래스 속성: 뷰포트 id -> orbit scene
 ORBIT_MANIPULATOR = "_OrbitOnlyScene__manipulator"  # orbit scene 의 manipulator 속성
 ORBIT_ENABLED = "enabled"               # 그 manipulator 의 켜기 / 끄기 속성 (bool)
+ORBIT_DRAG_BEGAN = "hyview_eqp_orbit_extension:gesture:drag:on_began_first"  # orbit 이 카메라 끌기를 시작함 (메시지 버스)
+ORBIT_DRAG_ENDED = "hyview_eqp_orbit_extension:gesture:drag:on_ended"        # orbit 이 카메라 끌기를 끝냄 (메시지 버스)

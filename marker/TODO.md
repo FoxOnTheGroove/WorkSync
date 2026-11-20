@@ -41,7 +41,7 @@
 - hytwin vph 의 `ui_zstack` 에 마커 층이 다른 기능 층 위에 겹쳐 보이는지, 눌림이 아래 층에 막히지 않는지
 - orbit 양보 뒤 ui.scene 제스처가 hytwin 뷰포트에서 눌림을 받는지
 - orbit 끄기: 마커가 마우스를 쓰는 동안 (패널 / 변 / 평면 hover, 끌기, 찍기 대기) 그 뷰포트 orbit manipulator `enabled = False`, 놓으면 True (메시지 버스 click_enable 은 뺌). 확인: 패널 끌 때 카메라 안 도는지, 놓으면 돌아오는지, 휠도 같이 막히는지. 진단 views 의 `orbit_off`
-- orbit 드래그 중 패널 위를 지날 때: orbit `gesture:drag:on_began_first` ~ `on_ended` 를 구독해 그동안 hover 로 끄지 않기 (아직 안 함)
+- orbit 드래그 중 마커 위를 지날 때: `drag:on_began_first` ~ `on_ended` 구독 (`_OrbitWatch`). 그동안 hover 는 orbit 을 안 끄고, 끝났을 때 아직 위면 그때 끈다. 확인: 메시지 버스 pop 구독이 한 프레임 늦게 와도 괜찮은지, 진단 `orbit_dragging`
 - 평면에 보이는 그림자: 비쳐 보이는 것인지 (`PLANE_OPACITY = 1.0` 으로 시험), 재질 연결이 안 된 것인지
 - 평면 뒤 모델 찍기가 막히는지 (`set_pickable` 을 렌더 쿼리가 따르는지)
 - 평면 끌기 (`sc.Rectangle`), 앞뒤 면 X 무늬 (`PLANE_GAP_RATIO`)
