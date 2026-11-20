@@ -483,7 +483,7 @@ def _later(fn) -> None:
 
 class _OrbitYield:
     """orbit 익스텐션(카메라 조작)을 그 뷰포트에서 잠시 끈다. 마커가 마우스를 쓰는 동안 (패널 위, 끌기, 찍기 대기)
-    그 뷰포트 orbit manipulator 의 enable 을 False, 다 놓으면 True. 뷰포트 id 마다 따로.
+    그 뷰포트 orbit manipulator 의 enabled 를 False, 다 놓으면 True. 뷰포트 id 마다 따로.
     orbit 이 없거나 모양이 다르면 아무것도 안 한다 (마커는 그대로 돈다)"""
 
     _off = set()      # 우리가 끈 뷰포트 id
@@ -527,8 +527,8 @@ class _OrbitYield:
         """그 뷰포트 orbit 을 켜고 끈다. 됐으면 True"""
         try:
             m = cls._manipulator(viewport_id)
-            if m.enable != enable:
-                m.enable = enable
+            if bool(getattr(m, ORBIT_ENABLED)) != enable:
+                setattr(m, ORBIT_ENABLED, enable)
             return True
         except Exception as e:
             if not cls._warned:

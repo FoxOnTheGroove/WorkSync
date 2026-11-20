@@ -95,4 +95,5 @@ ORBIT_YIELD = True                      # 마커가 마우스를 쓰는 동안 �
 ORBIT_MODULE = "sk.hyview_eqp_orbit_extension"  # orbit 익스텐션 모듈
 ORBIT_CLASS = "OrbitExtension"          # 그 안의 익스텐션 클래스
 ORBIT_SCENES = "_orbit_scene_dict"      # 클래스 속성: 뷰포트 id -> orbit scene
-ORBIT_MANIPULATOR = "_OrbitOnlyScene__manipulator"  # orbit scene 의 manipulator 속성 (enable 을 켜고 끈다)
+ORBIT_MANIPULATOR = "_OrbitOnlyScene__manipulator"  # orbit scene 의 manipulator 속성
+ORBIT_ENABLED = "enabled"               # 그 manipulator 의 켜기 / 끄기 속성 (bool)
