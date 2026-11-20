@@ -940,8 +940,8 @@ def _gesture_types():
             return None
 
     class Manager(sc.GestureManager):
-        """우리 제스처끼리 누가 이기나. 기본 매니저는 먼저 시작한 것이 다른 것을 다 막는다
-        (평면 사각형 끌기가 그 위 패널 끌기를 막았다). 여기서는 priority 가 높은 쪽만 막는다.
+        """우리 제스처끼리 누가 이기나. 기본 매니저는 먼저 시작한 것이 다른 것을 다 막는다.
+        여기서는 priority 가 더 높은 쪽만 낮은 쪽을 막는다 (찍기 대기 > 패널 > 평면).
         hover 는 막지도, 막히지도 않는다 (겹친 평면 사각형 hover 가 다 들어와야 가까운 평면을 고른다)"""
 
         def can_be_prevented(self, gesture):
@@ -952,7 +952,9 @@ def _gesture_types():
                 return False
             if preventer.state not in (sc.GestureState.BEGAN, sc.GestureState.CHANGED):
                 return False
-            return getattr(preventer, "priority", 0) >= getattr(gesture, "priority", 0)
+            # 같은 priority 끼리는 막지 않는다. 겹친 패널에서 고르지 않은 패널의 끌기가 먼저 시작해
+            # (owner 는 거절해도 제스처는 살아 있어) 위 패널 끌기를 막았다. 같은 패널의 클릭과 끌기도 서로 안 막는다
+            return getattr(preventer, "priority", 0) > getattr(gesture, "priority", 0)
 
     try:
         manager = Manager()
