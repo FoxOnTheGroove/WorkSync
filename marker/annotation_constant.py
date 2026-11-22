@@ -101,8 +101,10 @@ PLANE_PRIORITY = 500                    # 평면 누름, 끌기 제스처 우선
 PLANE_PRESS_AT_DOWN = True              # 평면 끌기를 누르는 순간 시작 (누름 색이 바로). Kit 이 못 하면 움직인 뒤
 PLANE_DEPTH_EPS = 1e-3                  # 깊이 비교 여유 = 평면까지 거리 x 이 값. 모델 표면이 이만큼 더 가까워야 가린 것
 CLICK_SLOP_NDC = 0.01                   # 누른 자리에서 이만큼(NDC) 넘게 움직이고 떼면 클릭이 아니다 (카메라 끌기). 빈 곳 클릭으로 선택 풀기에 쓴다
-GIZMO_MODES = ("move", "rotate", "off")  # Kit 기즈모 모드 (set_gizmo)
-KIT_TRANSFORM_OP = "/app/transform/operation"  # Kit 변환 도구 설정 (move / rotate / select ...)
+GIZMO_MODES = ("move", "rotate", "off")  # 기즈모 모드 (set_gizmo). 평면은 move 만
+GIZMO_SIZE = 1.0                        # Kit 변환 기즈모 크기 (TransformManipulator size)
+GIZMO_ZONE_PX = 110.0                   # 기즈모 피봇에서 이 px 안이면 그 뷰포트 orbit 을 끈다 (기즈모 끌기가 카메라로 안 가게)
+PLANE_BODY_DRAG = False                 # 평면 본체를 끌어 평면 안에서 옮기기. 끔: 평면은 기즈모로 옮긴다
 PLANE_GAP_RATIO = 1e-4                  # 평면 뒷면을 앞면에서 띄우는 거리 = 평면 큰 변 x 이 값 (겹치면 X 자 무늬)
 PLANE_EMISSION = 2000.0                 # 평면 발광 세기. 평면은 조명을 안 받고 이 빛으로만 보인다. 너무 세면 톤매핑이 색을 흰 쪽으로 날린다 (파스텔). 전 값 10000
 

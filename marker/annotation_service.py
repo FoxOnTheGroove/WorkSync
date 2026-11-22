@@ -72,13 +72,18 @@ class AnnotationService:
 
     @classmethod
     def set_gizmo(cls, mode):
-        """고른 마커 (화살표, 평면) 에 Kit 기즈모: move / rotate / off. 평면은 가운데, 화살표는 표면 끝에서 돈다. 선택이 바뀌면 꺼진다"""
+        """고른 마커에 기즈모: move / rotate / off. 평면은 move 만 (가운데), 화살표는 이동 + 회전 (표면 끝 피봇). 선택이 바뀌면 꺼진다"""
         return instance().set_gizmo(mode)
 
     @classmethod
     def gizmo(cls):
         """지금 기즈모 모드"""
         return instance().gizmo()
+
+    @classmethod
+    def gizmo_info(cls):
+        """진단: 기즈모 클래스와 모델 항목"""
+        return instance().gizmo_info()
 
     @classmethod
     def reset_panel(cls, marker_id):

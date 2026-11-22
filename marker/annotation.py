@@ -851,6 +851,45 @@ def _close(a, b, eps: float = 1e-7) -> bool:
     return len(a) == len(b) and all(abs(float(a[i]) - float(b[i])) <= eps for i in range(len(a)))
 
 
+def _euler_xyz(rx, ry, rz):
+    """XYZ 순서 (X 먼저) 오일러 각 (도) 의 회전 행렬, 행 순서 (v' = v x R)"""
+    def rot(axis, deg):
+        c, s_ = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+        if axis == 0:
+            return [[1, 0, 0], [0, c, s_], [0, -s_, c]]
+        if axis == 1:
+            return [[c, 0, -s_], [0, 1, 0], [s_, 0, c]]
+        return [[c, s_, 0], [-s_, c, 0], [0, 0, 1]]
+
+    def mul(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+    return mul(mul(rot(0, rx), rot(1, ry)), rot(2, rz))
+
+
+def _near_on_screen(api, point, ndc, px: float) -> bool:
+    """그 월드 점이 화면에서 NDC 마우스와 px 안인가 (렌더 픽셀). 못 재면 False"""
+    if px <= 0 or ndc is None:
+        return False
+    try:
+        try:
+            from pxr import Gf
+            q = Gf.Matrix4d(api.world_to_ndc).Transform(Gf.Vec3d(*[float(c) for c in point]))
+        except ImportError:
+            q = api.world_to_ndc.Transform(point)
+        res = _resolution(api) or (1000, 1000)
+        dx = (float(q[0]) - ndc[0]) / 2.0 * res[0]
+        dy = (float(q[1]) - ndc[1]) / 2.0 * res[1]
+        return dx * dx + dy * dy <= px * px
+    except Exception:
+        return False
+
+
+def _kit_take(_marker_id=None) -> None:
+    """마커를 화면에서 잡았다: 형상 (Kit) 선택은 푼다"""
+    _clear_kit_selection()
+
+
 def _clear_kit_selection() -> None:
     """Kit 선택 (형상) 을 푼다. 마커 패널이나 평면을 잡을 때. orbit 은 그때 꺼져 있어 그 클릭을 못 본다"""
     try:
@@ -1619,7 +1658,14 @@ class _View:
         with self._scene_view.scene:
             self._plane_root = sc.Transform()
             self.root = sc.Transform()
+            self._gizmo_root = sc.Transform()  # Kit 변환 기즈모 (고른 마커에만)
             self._pick_root = sc.Transform()
+        self._gizmo = None
+        self._gizmo_sub = None
+        self._gizmo_error = None
+        self._gizmo_quiet = False
+        self._gizmo_base = None
+        self._gizmo_how = {}
         # 평면 조작: 화면 전체 하나 (sc.Screen 은 어떤 도형보다 뒤라 패널이 늘 먼저 받는다).
         # 어느 평면이 마우스 아래 보이는지는 owner 가 광선 + 깊이 쿼리로 정한다
         Click, Drag, Hover = _gesture_types()
@@ -1652,6 +1698,175 @@ class _View:
             except Exception as e:
                 print(f"{TAG} view change subscription failed: {e}")
         owner._attach(self)
+
+    # -- 기즈모 (omni.kit.manipulator.transform.TransformManipulator) ----------------------
+
+    def _gizmo_make(self):
+        """처음 쓸 때 한 번 만든다. 못 만들면 이유를 남기고 None"""
+        if self._gizmo is not None or self._gizmo_error is not None:
+            return self._gizmo
+        try:
+            import omni.kit.manipulator.transform as kt
+            cls = kt.TransformManipulator
+            with self._gizmo_root:
+                try:
+                    g = cls(size=GIZMO_SIZE)
+                    self._gizmo_how["init"] = "size"
+                except TypeError:
+                    g = cls()
+                    self._gizmo_how["init"] = "()"
+            self._gizmo_sub = g.model.add_item_changed_fn(self._gizmo_item_changed)
+            self._gizmo = g
+        except Exception as e:
+            self._gizmo_error = f"{type(e).__name__}: {e}"
+            print(f"{TAG} no transform gizmo: {self._gizmo_error}")
+        return self._gizmo
+
+    def _gizmo_set_operation(self, g, mode: str) -> None:
+        """이동 / 회전. Kit 판마다 방법이 달라 되는 것을 찾아 남긴다"""
+        try:
+            import omni.kit.manipulator.transform as kt
+            ops = getattr(kt, "Operation", None)
+        except Exception:
+            ops = None
+        name = {"move": "TRANSLATE", "rotate": "ROTATE"}[mode]
+        value = getattr(ops, name, None) if ops is not None else None
+        tries = []
+        if value is not None:
+            tries += [("operation", value), ("op", value)]
+        tries += [("operation", mode)]
+        for attr, val in tries:
+            if hasattr(g, attr):
+                try:
+                    setattr(g, attr, val)
+                    self._gizmo_how["operation"] = f"{attr}={val}"
+                    return
+                except Exception:
+                    pass
+        for setter in ("set_operation",):
+            if value is not None and callable(getattr(g.model, setter, None)):
+                try:
+                    getattr(g.model, setter)(value)
+                    self._gizmo_how["operation"] = f"model.{setter}({value})"
+                    return
+                except Exception:
+                    pass
+        self._gizmo_how["operation"] = "not found"
+
+    def _gizmo_item(self, model, name):
+        try:
+            return model.get_item(name)
+        except Exception:
+            return None
+
+    def _gizmo_floats(self, model, name):
+        item = self._gizmo_item(model, name)
+        if item is None:
+            return None
+        try:
+            v = list(model.get_as_floats(item))
+            return v if v else None
+        except Exception:
+            return None
+
+    def _gizmo_rotation(self, model):
+        """모델의 지금 회전 3x3 (행 순서, v' = v x R). transform (16) 이 있으면 그것, 아니면 rotate (XYZ 도)"""
+        t = self._gizmo_floats(model, "transform")
+        if t is not None and len(t) == 16:
+            rows = [t[0:3], t[4:7], t[8:11]]
+            scale = [math.sqrt(_dot(r, r)) or 1.0 for r in rows]
+            return [[c / scale[i] for c in rows[i]] for i in range(3)]
+        r = self._gizmo_floats(model, "rotate")
+        if r is not None and len(r) >= 3:
+            return _euler_xyz(r[0], r[1], r[2])
+        return None
+
+    def _gizmo_translate(self, model):
+        v = self._gizmo_floats(model, "translate")
+        if v is not None and len(v) >= 3:
+            return v[:3]
+        t = self._gizmo_floats(model, "transform")
+        return t[12:15] if t is not None and len(t) == 16 else None
+
+    def gizmo_show(self, pivot, mode: str) -> None:
+        g = self._gizmo_make()
+        if g is None:
+            return
+        self._gizmo_set_operation(g, mode)
+        model = g.model
+        self._gizmo_quiet = True
+        try:
+            item = self._gizmo_item(model, "translate")
+            if item is not None:
+                model.set_floats(item, [float(c) for c in pivot])
+                self._gizmo_how["place"] = "translate"
+            rot = self._gizmo_item(model, "rotate")
+            if rot is not None:
+                model.set_floats(rot, [0.0, 0.0, 0.0])
+            if item is None:
+                tf = self._gizmo_item(model, "transform")
+                if tf is not None:
+                    model.set_floats(tf, [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0] + [float(c) for c in pivot] + [1.0])
+                    self._gizmo_how["place"] = "transform"
+        except Exception as e:
+            self._gizmo_how["place"] = f"failed: {type(e).__name__}: {e}"
+        finally:
+            self._gizmo_quiet = False
+        self._gizmo_base = self._gizmo_rotation(model)
+        for attr in ("enabled", "visible"):
+            if hasattr(g, attr):
+                try:
+                    setattr(g, attr, True)
+                except Exception:
+                    pass
+        self._gizmo_root.visible = True
+
+    def gizmo_hide(self) -> None:
+        if self._gizmo_root is not None:
+            self._gizmo_root.visible = False
+        g = self._gizmo
+        if g is not None and hasattr(g, "enabled"):
+            try:
+                g.enabled = False
+            except Exception:
+                pass
+        self.release("gizmo_zone")
+
+    def gizmo_visible(self) -> bool:
+        return self._gizmo is not None and self._gizmo_root is not None and bool(self._gizmo_root.visible)
+
+    def _gizmo_item_changed(self, model, _item) -> None:
+        if self._gizmo_quiet or not self.gizmo_visible():
+            return
+        translate = self._gizmo_translate(model)
+        now = self._gizmo_rotation(model)
+        base = self._gizmo_base
+        delta = None
+        if now is not None:
+            if base is None:
+                delta = now
+            else:  # 붙일 때 회전 기준: delta = base^T x now (회전 행렬)
+                delta = [[sum(base[k][i] * now[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+        self.owner._gizmo_changed(self, translate, delta)
+
+    def gizmo_probe(self) -> dict:
+        """진단: 실제 Kit 의 기즈모 API 가 무엇인지"""
+        out = {"viewport_id": self.owner._view_id(self), "error": self._gizmo_error, "how": dict(self._gizmo_how),
+               "visible": self.gizmo_visible()}
+        try:
+            import inspect
+            import omni.kit.manipulator.transform as kt
+            out["module"] = [n for n in dir(kt) if not n.startswith("_")]
+            out["init"] = str(inspect.signature(kt.TransformManipulator.__init__))
+        except Exception as e:
+            out["module_error"] = f"{type(e).__name__}: {e}"
+        g = self._gizmo
+        if g is not None:
+            model = g.model
+            out["model"] = type(model).__name__
+            out["items"] = {n: self._gizmo_floats(model, n) for n in ("transform", "translate", "rotate", "scale")}
+            out["attrs"] = [n for n in dir(g) if not n.startswith("_")]
+        return out
 
     def destroy(self) -> None:
         """뷰포트 연결을 풀 때. 층을 걷고 카메라 연결도 끊는다"""
@@ -1689,6 +1904,23 @@ class _View:
         if getattr(self, "_plane_root", None) is not None:
             self._plane_root.clear()
         self._plane_root = self._plane_screen = None
+        sub, self._gizmo_sub = self._gizmo_sub, None
+        for name in ("unsubscribe", "destroy"):
+            if sub is not None and callable(getattr(sub, name, None)):
+                try:
+                    getattr(sub, name)()
+                except Exception:
+                    pass
+                break
+        g, self._gizmo = self._gizmo, None
+        if g is not None and callable(getattr(g, "destroy", None)):
+            try:
+                g.destroy()
+            except Exception:
+                pass
+        if self._gizmo_root is not None:
+            self._gizmo_root.clear()
+        self._gizmo_root = None
         self._pick_root = None
         self.root = None
         self.api = None
@@ -1863,14 +2095,9 @@ class Annotation:
         self._over = {}       # view -> 마우스가 그 뷰포트 위인가
         self._plane_dbg = {}  # view -> 마지막 평면 판정 (진단용)
         self._press_ndc = {}  # view -> 누른 자리 NDC (클릭 판정)
-        self._gizmo_mode = "off"      # Kit 기즈모: move / rotate / off
+        self._gizmo_mode = "off"      # 기즈모: move / rotate / off
         self._gizmo_target = None     # 기즈모가 붙은 마커
-        self._gizmo_pending = False
-        self._body_notice = None
-        self._body_notice_stage = None
-        self._edit_was = None         # (스테이지, 원래 편집 대상)
-        self._op_was = None           # 원래 Kit 변환 도구
-        self._gizmo_warned = False
+        self._gizmo_start = None      # 붙일 때의 피봇, 방향
         self._panel_dbg = None  # 마지막 패널 끌기 시작 (진단용)
         self._ray = {}        # view -> (광선 시작, 방향, 마우스 NDC). 마지막 hover
         self._hot = {}        # view -> 마우스 아래 정말 보이는 평면 id (깊이까지 확인)
@@ -1913,7 +2140,6 @@ class Annotation:
         _OrbitWatch.stop()
         self._gizmo_mode = "off"
         self._gizmo_attach(None)
-        self._unwatch_bodies()
         self._arrows.teardown()
         self._listeners = []
         self._markers = []
@@ -2292,7 +2518,7 @@ class Annotation:
         mine = _OrbitYield.holding(view._orbit_id)  # orbit 을 우리가 꺼 뒀으면 orbit 끌기일 수 없다
         if m is not None and m["kind"] in ARROW_KINDS and not self._creating:
             if self._selected != marker_id:  # 화살표: 누르면 고르기만 (끌기는 없다)
-                self._kit_take(marker_id)
+                _kit_take(marker_id)
                 self.select(marker_id)
             return
         if (m is None or m["kind"] != "plane" or self._creating or (_OrbitWatch.busy() and not mine)
@@ -2301,11 +2527,11 @@ class Annotation:
                                 else "dragging" if self._plane_drag is not None else "orbit busy")
             return  # 가려진 자리 (orbit 이 받는다), 패널 앞, 찍기 대기, 이미 끄는 중
         if self._selected != marker_id:
-            self._kit_take(marker_id)
+            _kit_take(marker_id)
             self.select(marker_id)
             return
-        if self._gizmo_target == marker_id:
-            return  # Kit 기즈모가 붙어 있다: 평면 끌기는 기즈모가 맡는다
+        if not PLANE_BODY_DRAG:
+            return  # 평면은 고르기만. 옮기기는 기즈모로
         start = self._plane_point(m, payload, view)  # None 이면 제스처 이동량(moved)으로 따라간다
         dbg.update(drag_skip=None, drag_start=start, drag_moves=0)
         self._plane_drag = {"view": view, "id": marker_id, "by": by, "start": start, "moved": [0.0, 0.0, 0.0],
@@ -2399,15 +2625,15 @@ class Annotation:
     def _plane_click(self, view, ndc=None) -> None:
         """패널 밖 클릭 (뗄 때). 마우스 아래 보이는 평면이면 고르고, 마커 아닌 오브젝트나 빈 곳이면 고른 것을 푼다.
         패널 위 클릭은 패널이 맡는다. 누른 자리에서 움직였으면 (카메라 끌기 등) 클릭이 아니다"""
-        if self._creating or self._closed or self._panel_under(view):
-            return
         pressed = self._press_ndc.pop(view, None)
+        if self._creating or self._closed or self._panel_under(view) or "gizmo_zone" in view._holds:
+            return  # 패널 / 기즈모 위 클릭은 그쪽이 맡는다
         at = _xy(ndc)
         if pressed is not None and at is not None and max(abs(at[0] - pressed[0]), abs(at[1] - pressed[1])) > CLICK_SLOP_NDC:
             return
         hot = self._hot.get(view)
         if hot is not None:
-            self._kit_take(hot)
+            _kit_take(hot)
             if self._selected != hot:
                 self.select(hot)
         elif self._selected is not None:
@@ -2440,6 +2666,17 @@ class Annotation:
         return (m is not None and (m["kind"] == "plane" or m["kind"] in ARROW_KINDS)
                 and self._shown(m) and self._shown_in(view, m))
 
+    def _gizmo_zone(self, view, ndc) -> bool:
+        """마우스가 기즈모 가까이인가. 그러면 그 뷰포트 orbit 을 꺼 둔다 (누른 채 벗어나도 놓을 때까지)"""
+        m = self._find(self._gizmo_target) if self._gizmo_target else None
+        near = (m is not None and view.gizmo_visible()
+                and _near_on_screen(view.api, self._gizmo_pivot(m), ndc, GIZMO_ZONE_PX))
+        if near:
+            view.hold("gizmo_zone")
+        elif "gizmo_zone" in view._holds and _Mouse.pressed() is not True:
+            view.release("gizmo_zone")
+        return near or "gizmo_zone" in view._holds
+
     def _panel_under(self, view) -> bool:
         """그 뷰포트에서 마우스가 패널 위인가 (패널이 평면보다 앞)"""
         return any(k.startswith("h:") for k in view._holds)
@@ -2451,6 +2688,8 @@ class Annotation:
             return
         over = self._over.get(view)
         if not over or self._creating or self._closed or self._panel_under(view):
+            if not over and _Mouse.pressed() is not True:
+                view.release("gizmo_zone")
             self._set_hot(view, None)
             return
         if self._plane_drag is not None:
@@ -2462,6 +2701,9 @@ class Annotation:
         ray = self._ray.get(view)
         if ray is None or ray[2] is None:
             self._set_hot(view, None)  # 광선을 못 받으면 평면을 못 고른다 (orbit 에 둔다)
+            return
+        if self._gizmo_zone(view, ray[2]):
+            self._set_hot(view, None)  # 기즈모 자리: orbit 을 끄고 (끌기가 카메라로 안 가게) 기즈모가 받는다
             return
         best = self._plane_candidate(view, ray)
         self._plane_dbg.setdefault(view, {"moves": 0}).update(candidate=best)
@@ -2559,7 +2801,7 @@ class Annotation:
     def _paint_arrow(self, marker_id) -> None:
         """화살표 hover: 고른 것과 같은 밝은 머티리얼"""
         m = self._find(marker_id)
-        if m is not None and m["kind"] in ARROW_KINDS and marker_id != self._gizmo_target:
+        if m is not None and m["kind"] in ARROW_KINDS:
             lit = marker_id == self._selected or marker_id in self._hot.values()
             self._arrows.draw(m, lit, self.arrow_length())
 
@@ -2613,19 +2855,25 @@ class Annotation:
 
     # -- 고르기와 고치기 ------------------------------------------------------------
 
-    # -- Kit 기즈모: 고른 마커의 USD 몸체 (화살표, 평면) 에 Kit 기본 이동 / 회전 기즈모를 띄운다 ----------
-    # 몸체를 Kit 선택에 넣고 변환 도구를 바꾼다. 몸체는 피봇 자리 translate + 지역 점이라 회전 중심이 맞다
-    # (평면 = 가운데, 화살표 = 표면에 닿는 끝). 기즈모가 바꾼 것은 USD 알림으로 받아 마커 데이터에 담는다
+    # -- 기즈모: Kit 기본 변환 기즈모 클래스 (omni.kit.manipulator.transform.TransformManipulator) 를
+    # 우리 마커 층에 직접 띄운다. Kit 선택 / 편집 대상 / 전역 변환 도구 설정과 상관없다.
+    # 기즈모 모델의 translate / rotate 가 바뀌면 그 값을 마커 데이터로 (평면 = 이동만, 화살표 = 이동 + 회전).
+    # 피봇: 평면 가운데, 화살표 표면에 닿는 끝
 
     def set_gizmo(self, mode: str) -> bool:
-        """move / rotate / off. 지금 고른 화살표나 평면에 뜬다 (label 은 몸체가 없어 안 된다).
+        """move / rotate / off. 지금 고른 화살표나 평면에 뜬다. 평면은 move 만.
         선택을 풀거나 다른 마커를 고르면 꺼진다"""
         if mode not in GIZMO_MODES:
             self._say(f"모르는 기즈모: {mode!r} ({', '.join(GIZMO_MODES)})")
             return False
-        if mode != "off" and self._body_path(self._selected) is None:
-            self._say("기즈모: 화살표나 평면을 먼저 고르세요")
-            return False
+        m = self._find(self._selected) if self._selected else None
+        if mode != "off":
+            if m is None or not (m["kind"] == "plane" or m["kind"] in ARROW_KINDS):
+                self._say("기즈모: 화살표나 평면을 먼저 고르세요")
+                return False
+            if m["kind"] == "plane" and mode != "move":
+                self._say("기즈모: 평면은 이동만 됩니다")
+                return False
         self._gizmo_mode = mode
         self._gizmo_attach(self._selected if mode != "off" else None)
         self._say(f"기즈모: {mode}", "gizmo")
@@ -2634,174 +2882,48 @@ class Annotation:
     def gizmo(self) -> str:
         return self._gizmo_mode
 
-    def _body_path(self, marker_id):
-        m = self._find(marker_id) if marker_id else None
-        if m is None:
-            return None
-        if m["kind"] in ARROW_KINDS:
-            return f"{ARROW_SCOPE}/{marker_id}"
-        if m["kind"] == "plane":
-            return f"{PLANE_SCOPE}/{marker_id}"
-        return None
-
-    def _kit_take(self, marker_id) -> None:
-        """마커를 화면에서 잡았을 때 Kit 선택: 기즈모가 켜져 있으면 그 몸체, 아니면 비운다 (형상 선택 풀기)"""
-        path = self._body_path(marker_id) if self._gizmo_mode != "off" else None
-        if path is None:
-            _clear_kit_selection()
-            return
-        try:
-            import omni.usd
-            omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
-        except Exception:
-            pass
+    def _gizmo_pivot(self, m):
+        return list(m["position"])  # 평면 가운데 / 화살표 표면 끝
 
     def _gizmo_attach(self, marker_id) -> None:
-        """기즈모를 그 마커로 (None 이면 뗀다)"""
-        path = self._body_path(marker_id) if self._gizmo_mode != "off" else None
-        was = self._gizmo_target
-        if was is not None and was != marker_id:
-            self._gizmo_target = None
-            try:
-                import omni.usd
-                sel = omni.usd.get_context().get_selection()
-                if self._body_path(was) in (sel.get_selected_prim_paths() or []):
-                    sel.clear_selected_prim_paths()
-            except Exception:
-                pass
-        if path is None:
-            self._gizmo_target = None
-            self._edit_session(False)
-            self._transform_op(None)
+        """기즈모를 그 마커로 (None 이면 뗀다). 뷰포트마다 그 마커가 보이는 곳에"""
+        m = self._find(marker_id) if marker_id else None
+        self._gizmo_target = marker_id if m is not None else None
+        if m is None:
+            self._each(lambda v: v.gizmo_hide())
             return
-        self._gizmo_target = marker_id
-        self._watch_bodies()
-        self._edit_session(True)
-        self._transform_op(self._gizmo_mode)
-        try:
-            import omni.usd
-            omni.usd.get_context().get_selection().set_selected_prim_paths([path], True)
-        except Exception as e:
-            print(f"{TAG} cannot put the marker into the Kit selection: {type(e).__name__}: {e}")
+        self._gizmo_start = {"pivot": self._gizmo_pivot(m), "dir": list(m.get("direction") or [0.0, 0.0, 1.0]),
+                             "at": m.get("at"), "shift": list(m.get("shift") or [0.0, 0.0])}
+        pivot, mode = self._gizmo_start["pivot"], self._gizmo_mode
+        self._each(lambda v: v.gizmo_show(pivot, mode) if self._shown_in(v, m) else v.gizmo_hide())
 
-    def _transform_op(self, mode) -> None:
-        """Kit 변환 도구 (move / rotate). None 이면 처음 값으로"""
-        if mode is None and self._op_was is None:
-            return  # 바꾼 적 없다
-        try:
-            import carb.settings
-            settings = carb.settings.get_settings()
-            if mode is None:
-                if self._op_was is not None:
-                    settings.set(KIT_TRANSFORM_OP, self._op_was)
-                    self._op_was = None
-                return
-            if self._op_was is None:
-                self._op_was = settings.get(KIT_TRANSFORM_OP) or "select"
-            settings.set(KIT_TRANSFORM_OP, mode)
-        except Exception as e:
-            if not self._gizmo_warned:
-                self._gizmo_warned = True
-                print(f"{TAG} cannot set the Kit transform tool: {type(e).__name__}: {e}")
-
-    def _edit_session(self, on: bool) -> None:
-        """기즈모가 붙은 동안만 스테이지 편집 대상을 세션 레이어로. 몸체가 세션 레이어에 있어서
-        루트 레이어에 쓰면 세션 값에 덮여 안 움직이고 파일만 더러워진다. 떼면 원래 대상으로"""
-        try:
-            stage = self._arrows._stage()
-        except Exception:
-            stage = None
-        if stage is None:
-            return
-        if on:
-            if self._edit_was is None:
-                self._edit_was = (stage, stage.GetEditTarget())
-                stage.SetEditTarget(stage.GetSessionLayer())
-            return
-        was, self._edit_was = self._edit_was, None
-        if was is not None and was[0] is stage:
-            try:
-                stage.SetEditTarget(was[1])
-            except Exception as e:
-                print(f"{TAG} cannot restore the edit target: {type(e).__name__}: {e}")
-
-    def _watch_bodies(self) -> None:
-        """몸체 prim 의 USD 변경을 듣는다 (스테이지가 바뀌면 다시)"""
-        try:
-            from pxr import Tf, Usd
-            stage = self._arrows._stage()
-        except Exception:
-            return
-        if stage is None or (self._body_notice is not None and self._body_notice_stage is stage):
-            return
-        self._unwatch_bodies()
-        self._body_notice_stage = stage
-        self._body_notice = Tf.Notice.Register(Usd.Notice.ObjectsChanged, self._on_usd_changed, stage)
-
-    def _unwatch_bodies(self) -> None:
-        notice, self._body_notice, self._body_notice_stage = self._body_notice, None, None
-        if notice is not None:
-            try:
-                notice.Revoke()
-            except Exception:
-                pass
-
-    def _on_usd_changed(self, notice, _stage) -> None:
-        """알림 안에서는 USD 를 안 쓴다. 기즈모가 붙은 몸체가 바뀌었으면 다음 루프에 되읽는다"""
-        target = self._gizmo_target
-        path = self._body_path(target) if target else None
-        if path is None or self._gizmo_pending:
-            return
-        try:
-            changed = list(notice.GetChangedInfoOnlyPaths()) + list(notice.GetResyncedPaths())
-        except Exception:
-            return
-        if any(str(p.GetPrimPath()) == path for p in changed):
-            self._gizmo_pending = True
-            _later(self._body_from_usd)
-
-    def _body_from_usd(self) -> None:
-        """기즈모가 옮기거나 돌린 몸체의 월드 변환을 마커 데이터로. 패널, 지시선만 다시 맞춘다 (메시는 안 씀)"""
-        self._gizmo_pending = False
+    def _gizmo_changed(self, view, translate, rotate_m) -> None:
+        """기즈모가 움직였다. translate = 피봇 월드 자리, rotate_m = 붙인 뒤 돌아간 3x3 (행 순서, 없으면 None)"""
         mid = self._gizmo_target
         m = self._find(mid) if mid else None
-        base = self._arrows.authored.get(mid) if m else None
-        if m is None or base is None:
+        st = self._gizmo_start
+        if m is None or st is None or translate is None:
             return
-        try:
-            from pxr import Gf, Usd, UsdGeom
-            prim = self._arrows._stage().GetPrimAtPath(self._body_path(mid))
-            M = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-            pivot = M.Transform(Gf.Vec3d(0.0, 0.0, 0.0))
-            turn = lambda v: _unit([float(c) for c in M.TransformDir(Gf.Vec3d(*v))])
-        except Exception:
-            return
-        pivot = [float(c) for c in pivot]
-        if m["kind"] in ARROW_KINDS:
-            direction = turn(base["dir"]) or m["direction"]
-            if _close(pivot, m["position"]) and _close(direction, _unit(m["direction"])):
-                return
-            m["position"], m["direction"] = pivot, direction
-        else:
-            frame = [turn(v) for v in base["frame"]]
-            if any(f is None for f in frame):
-                return
+        pivot = [float(c) for c in translate]
+        if m["kind"] == "plane":
             n, u, v = PLANE_AXES[m["axis"]]
             o = m.get("origin", [0.0, 0.0, 0.0])
-            at, shift = pivot[n] - o[n], [pivot[u] - o[u], pivot[v] - o[v]]
-            rot = frame[0] + frame[1] + frame[2]
-            if (abs(at - m["at"]) < 1e-9 and _close(shift, m["shift"])
-                    and _close(rot, sum(_plane_of(m)["frame"], []))):
-                return
-            m["at"], m["shift"] = at, shift
-            m["rot"] = None if _close(rot, sum(_frame(m["axis"]), [])) else rot
-            if m["rot"] is None:
-                m.pop("rot")
+            m["at"], m["shift"] = pivot[n] - o[n], [pivot[u] - o[u], pivot[v] - o[v]]
             m["position"] = _plane_of(m)["center"]
-        layout = self._layout(m)
-        picked = mid == self._selected
-        self._each(lambda v: v.restyle(m, layout, picked))
+        else:
+            m["position"] = pivot
+            if rotate_m is not None:
+                d = st["dir"]
+                m["direction"] = _unit([sum(d[k] * rotate_m[k][i] for k in range(3)) for i in range(3)]) or d
+        self._restyle(mid)
         self._notify("gizmo", mid)
+
+    def gizmo_info(self) -> dict:
+        """진단: 기즈모 클래스, 모델 항목 (Kit 에서 API 가 맞는지 보려고)"""
+        info = {"mode": self._gizmo_mode, "target": self._gizmo_target}
+        for v in self._views:
+            info.setdefault("views", []).append(v.gizmo_probe())
+        return info
 
     def select(self, marker_id) -> bool:
         """그 마커를 고른다 (None 이면 풀기). 고른 것은 밝게, 모서리 손잡이가 나온다"""
@@ -2935,6 +3057,7 @@ class Annotation:
             hints.append("전체 표시가 꺼져 있음")
         return {"instance": f"{__name__}@{id(self):x}", "target_usd": self._target_usd,
                 "panel_drag": copy.deepcopy(self._panel_dbg), "selected": self._selected,
+                "gizmo": self.gizmo_info(),
                 "bindings": copy.deepcopy(self._bindings), "views": views, "markers": markers, "hints": hints}
 
     def bindings(self) -> dict:
@@ -3251,7 +3374,7 @@ class Annotation:
         def clicked():
             if self._find(marker_id) is None:
                 return
-            self._kit_take(marker_id)  # 마커를 잡으면 형상 선택은 푼다 (기즈모가 켜져 있으면 그 몸체로)
+            _kit_take(marker_id)  # 마커를 잡으면 형상 선택은 푼다 (기즈모가 켜져 있으면 그 몸체로)
             self.select(marker_id)
             self._clicked = marker_id
             self._notify("click", marker_id)

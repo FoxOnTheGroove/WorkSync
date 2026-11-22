@@ -38,7 +38,7 @@
 - **같은 마커 파일을 웹과 Kit 이 함께 저장** 할 때 누가 맡을지
 
 ## Kit 에서 확인할 것
-- Kit 기즈모 API (`set_gizmo` move / rotate / off): 몸체를 Kit 선택에 넣고 `/app/transform/operation` 을 바꾸며, 붙은 동안 편집 대상을 세션 레이어로. 확인: 기즈모가 뜨는지 (pickable 꺼진 몸체도), 루트 레이어가 안 더러워지는지, 끄는 동안 orbit 이 같이 도는지, 기즈모 붙은 채 다른 편집은 세션으로 가는 문제, 회전 평면의 hover / 끌기
+- 기즈모 (`set_gizmo`): Kit `omni.kit.manipulator.transform.TransformManipulator` 를 우리 마커 층에 직접 띄움 (Kit 선택 / 편집 대상 안 씀). API 가 판마다 달라 되는 방법을 찾아 씀 -> [진단] 의 `gizmo.views[].how` / `init` / `items` / `attrs` 로 실제 API 확인. 확인: 기즈모가 뜨는지, 피봇 자리 (평면 가운데, 화살표 표면 끝), 이동 / 회전이 마커로 들어오는지, `GIZMO_ZONE_PX` 안에서 orbit 이 꺼지는지, 회전 각 해석 (rotate 가 XYZ 도인지)
 - hytwin vph 의 `ui_zstack` 에 마커 층이 다른 기능 층 위에 겹쳐 보이는지, 눌림이 아래 층에 막히지 않는지
 - orbit 양보 뒤 ui.scene 제스처가 hytwin 뷰포트에서 눌림을 받는지
 - orbit 끄기: 마커가 마우스를 쓰는 동안 (패널 / 변 / 평면 hover, 끌기, 찍기 대기) 그 뷰포트 orbit manipulator `enabled = False`, 놓으면 True (메시지 버스 click_enable 은 뺌). 확인: 패널 끌 때 카메라 안 도는지, 놓으면 돌아오는지, 휠도 같이 막히는지. 진단 views 의 `orbit_off`
