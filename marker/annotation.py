@@ -2538,6 +2538,9 @@ class Annotation:
         if self._gizmo_zone(view, ray[2]):
             self._set_hot(view, None)  # 기즈모 자리: orbit 을 끄고 (끌기가 카메라로 안 가게) 기즈모가 받는다
             return
+        if not BODY_PICK:
+            self._set_hot(view, None)  # 평면 / 화살표 몸체는 안 잡는다 (orbit 그대로). 마커는 패널과 기즈모로만
+            return
         best = self._plane_candidate(view, ray)
         self._plane_dbg.setdefault(view, {"moves": 0}).update(candidate=best)
         if best is None:
