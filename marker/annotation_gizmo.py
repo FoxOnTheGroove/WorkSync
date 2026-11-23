@@ -58,84 +58,6 @@ def _kit():
     return kt, kg
 
 
-def _make_model(view_gizmo):
-    """기즈모 모델. 기본 클래스 (AbstractTransformManipulatorModel) 의 항목 (operation 등) 은 그대로 두고,
-    transform (피봇 행렬) 만 우리가 들고 답한다. 끌기 변화량은 손짓 (_make_gestures) 이 apply_* 로 넣는다"""
-    from omni.ui import scene as sc
-    try:
-        kt, _kg = _kit()
-        base = getattr(kt, "AbstractTransformManipulatorModel", None) or sc.AbstractManipulatorModel
-    except Exception:
-        base = sc.AbstractManipulatorModel
-
-    class Model(base):
-        def __init__(self):
-            super().__init__()
-            self._own = {}   # 기본 클래스에 없는 항목만 (덮어쓰지 않는다)
-            self.matrix = list(_IDENTITY)
-            self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-
-        def get_item(self, name):
-            try:
-                item = super().get_item(name)
-            except Exception:
-                item = None
-            if item is None:
-                item = self._own.get(name)
-                if item is None:
-                    item = sc.AbstractManipulatorItem()
-                    self._own[name] = item
-            return item
-
-        def get_as_floats(self, item):
-            if item is self.get_item("transform"):
-                return list(self.matrix)
-            try:
-                return super().get_as_floats(item)
-            except Exception:
-                return []
-
-        def set_floats(self, item, value):
-            if item is self.get_item("transform") and len(value) == 16:
-                self.matrix = [float(c) for c in value]
-                self.rot = [self.matrix[0:3], self.matrix[4:7], self.matrix[8:11]]
-                self._item_changed(item)
-                return
-            try:
-                super().set_floats(item, value)
-            except Exception:
-                pass
-
-        def place(self, pivot) -> None:
-            self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-            self.matrix = list(_IDENTITY)
-            self.matrix[12:15] = [float(c) for c in pivot]
-            self._item_changed(self.get_item("transform"))
-
-        def apply_translate(self, delta) -> None:
-            self.matrix[12:15] = [self.matrix[12 + i] + float(delta[i]) for i in range(3)]
-            self._item_changed(self.get_item("transform"))
-
-        def apply_rotate(self, axis, deg) -> None:
-            self.rot = _mul3(self.rot, axis_angle(axis, deg))
-            self.matrix[0:3], self.matrix[4:7], self.matrix[8:11] = (list(r) for r in self.rot)
-            self._item_changed(self.get_item("transform"))
-
-        def widget_enabled(self):
-            try:
-                super().widget_enabled()
-            except Exception:
-                pass
-
-        def widget_disabled(self):
-            try:
-                super().widget_disabled()
-            except Exception:
-                pass
-
-    return Model()
-
-
 def _make_gestures(view_gizmo):
     """끌기 변화량을 받는 손짓 (Kit 변환 기즈모는 gestures=[...] 로 받은 변경 손짓에 payload 를 넘긴다)"""
     kt, kg = _kit()
@@ -183,27 +105,28 @@ class ViewGizmo:
         self._view = view      # _View: owner, release() 에 쓴다
         self._root = root      # 기즈모를 담는 sc.Transform
         self._gizmo = None
-        self._model = None
+        self.matrix = list(_IDENTITY)   # 피봇 행렬 (우리가 들고, 기즈모 기본 모델에 써 넣는다)
+        self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
         self._error = None
         self._last_moved = None
         self._last_angle = {}
         self.how = {}
 
     def _make(self):
+        """기즈모 모델은 TransformManipulator 가 만드는 기본 모델 그대로 (이동 / 회전 표시가 그 모델에 달려 있다).
+        끌기 변화량은 우리 손짓이 받아 그 모델의 transform 에 써 넣는다"""
         if self._gizmo is not None or self._error is not None:
             return self._gizmo
         try:
             kt, _kg = _kit()
-            model = _make_model(self)
             gestures, names = _make_gestures(self)
             self.how["gestures"] = names
-            self.how["model_base"] = type(model).__mro__[1].__name__
             with self._root:
                 g = None
-                for kwargs, label in (({"model": model, "size": GIZMO_SIZE, "gestures": gestures}, "model, size, gestures"),
-                                      ({"model": model, "gestures": gestures}, "model, gestures"),
-                                      ({"model": model, "size": GIZMO_SIZE}, "model, size"),
-                                      ({"model": model}, "model")):
+                for kwargs, label in (({"size": GIZMO_SIZE, "gestures": gestures}, "size, gestures"),
+                                      ({"gestures": gestures}, "gestures"),
+                                      ({"size": GIZMO_SIZE}, "size"),
+                                      ({}, "()")):
                     try:
                         g = kt.TransformManipulator(**kwargs)
                         self.how["init"] = label
@@ -218,12 +141,32 @@ class ViewGizmo:
                     self.how["init"] += " + gestures attr"
                 except Exception as e:
                     self.how["init"] += f" (gestures not attached: {type(e).__name__})"
-            self._model = model
+            self.how["model"] = type(g.model).__name__
             self._gizmo = g
         except Exception as e:
             self._error = f"{type(e).__name__}: {e}"
             print(f"{TAG} no transform gizmo: {self._error}")
         return self._gizmo
+
+    def _push(self) -> None:
+        """피봇 자리를 기즈모 기본 모델에 (회전 기즈모가 나오던 판처럼 translate 먼저, 없으면 transform).
+        기즈모 축은 월드 그대로 두고, 회전 누적은 우리가 rot 에 든다"""
+        model = self._gizmo.model
+        plain = list(_IDENTITY)
+        plain[12:15] = list(self.matrix[12:15])
+        for name, value in (("translate", list(self.matrix[12:15])), ("transform", plain)):
+            try:
+                item = model.get_item(name)
+            except Exception:
+                item = None
+            if item is not None:
+                try:
+                    model.set_floats(item, value)
+                    self.how["place"] = name
+                    return
+                except Exception:
+                    continue
+        self.how["place"] = "no transform / translate item"
 
     def _set_mode(self, mode: str) -> None:
         """이동 / 회전: 기즈모의 operation 에 Operation 값을 넣는다 (회전 기즈모가 나오던 판과 같은 방법)"""
@@ -275,7 +218,8 @@ class ViewGizmo:
             return
         d = _vec(delta)
         if len(d) >= 3:
-            self._model.apply_translate(d)
+            self.matrix[12:15] = [self.matrix[12 + i] + d[i] for i in range(3)]
+            self._push()
             self._moved()
 
     def _on_rotate(self, p) -> None:
@@ -292,12 +236,13 @@ class ViewGizmo:
             step, self._last_angle[key] = now - self._last_angle.get(key, 0.0), now
         if step is None or len(a) < 3:
             return
-        self._model.apply_rotate(a, float(_vec(step)[0]))
+        self.rot = _mul3(self.rot, axis_angle(a, float(_vec(step)[0])))
+        self.matrix[0:3], self.matrix[4:7], self.matrix[8:11] = (list(r) for r in self.rot)
+        self._push()
         self._moved()
 
     def _moved(self) -> None:
-        m = self._model
-        self._view.owner._gizmo_changed(self._view, list(m.matrix[12:15]), [list(r) for r in m.rot])
+        self._view.owner._gizmo_changed(self._view, list(self.matrix[12:15]), [list(r) for r in self.rot])
 
     # -- 보이기 / 숨기기 -------------------------------------------------------------
 
@@ -307,7 +252,11 @@ class ViewGizmo:
         if g is None:
             return
         self._set_mode(mode)
-        self._model.place(pivot)
+        self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        self.matrix = list(_IDENTITY)
+        self.matrix[12:15] = [float(c) for c in pivot]
+        self._last_moved, self._last_angle = None, {}
+        self._push()
         for attr in ("enabled", "visible"):
             if hasattr(g, attr):
                 try:
@@ -344,8 +293,8 @@ class ViewGizmo:
             out["init"] = str(inspect.signature(kt.TransformManipulator.__init__))
         except Exception as e:
             out["module_error"] = f"{type(e).__name__}: {e}"
-        if self._model is not None:
-            out["transform"] = list(self._model.matrix)
+        if self._gizmo is not None:
+            out["transform"] = list(self.matrix)
         if self._gizmo is not None:
             g = self._gizmo
             out["attrs"] = [n for n in dir(g) if not n.startswith("__")]
