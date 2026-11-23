@@ -661,6 +661,51 @@ class _OrbitYield:
             return False
 
 
+class _OrbitClick:
+    """orbit 의 클릭만 끈다 (드래그는 그대로). 메시지 버스 click_enable False / True.
+    앱 전체에 하나라 쥔 쪽을 세서, 처음 쥘 때 False 한 번, 모두 놓을 때 True 한 번"""
+
+    _holders = set()
+    _type = None
+    _warned = False
+
+    @classmethod
+    def hold(cls, who) -> None:
+        first = not cls._holders
+        cls._holders.add(who)
+        if first:
+            cls._push(False)
+
+    @classmethod
+    def release(cls, who) -> None:
+        if who in cls._holders:
+            cls._holders.discard(who)
+            if not cls._holders:
+                cls._push(True)
+
+    @classmethod
+    def release_all(cls) -> None:
+        if cls._holders:
+            cls._holders = set()
+            cls._push(True)
+
+    @classmethod
+    def _push(cls, click_enable: bool) -> None:
+        if not ORBIT_YIELD:
+            return
+        try:
+            import carb.events
+            import omni.kit.app
+            if cls._type is None:
+                cls._type = carb.events.type_from_string(ORBIT_CLICK_EVENT)
+            omni.kit.app.get_app().get_message_bus_event_stream().push(
+                cls._type, payload={"click_enable": bool(click_enable), "feature": ORBIT_FEATURE})
+        except Exception as e:
+            if not cls._warned:
+                cls._warned = True
+                print(f"{TAG} could not tell the orbit (click_enable={click_enable}): {type(e).__name__}: {e}")
+
+
 class _OrbitWatch:
     """orbit 이 카메라를 끄는 중인가. 메시지 버스의 orbit 드래그 시작 (on_began_first) / 끝 (on_ended) 을 구독한다.
     끄는 동안 마커 위로 마우스가 지나가도 마커는 아무것도 안 한다 (orbit 을 끄지 않는다).
@@ -1960,6 +2005,7 @@ class Annotation:
             view.destroy()
         self._views = []
         _OrbitYield.release_all()
+        _OrbitClick.release_all()
         _OrbitWatch.stop()
         self._gizmo_mode = "off"
         self._gizmo_attach(None)
@@ -2341,6 +2387,8 @@ class Annotation:
             self._press_ndc.pop(view, None)
         if self._panel_under(view):
             return  # 패널 위: 패널이 맡는다
+        if not BODY_PICK:
+            return  # 몸체는 고르지 않는다 (클릭만 orbit 에서 막아 둔다)
         marker_id = self._hot.get(view)
         m = self._find(marker_id) if marker_id else None
         dbg = self._plane_dbg.setdefault(view, {"moves": 0})
@@ -2417,7 +2465,7 @@ class Annotation:
         """press > hover > selected > idle"""
         if self._plane_drag is not None and self._plane_drag["id"] == marker_id:
             return "press"
-        if marker_id in self._hot.values():
+        if BODY_PICK and marker_id in self._hot.values():
             return "hover"
         return "selected" if marker_id == self._selected else "idle"
 
@@ -2462,6 +2510,8 @@ class Annotation:
         if pressed is not None and at is not None and max(abs(at[0] - pressed[0]), abs(at[1] - pressed[1])) > CLICK_SLOP_NDC:
             return
         hot = self._hot.get(view)
+        if hot is not None and not BODY_PICK:
+            return  # 몸체 클릭: 고르지도 풀지도 않는다
         if hot is not None:
             _kit_take(hot)
             if self._selected != hot:
@@ -2538,8 +2588,8 @@ class Annotation:
         if self._gizmo_zone(view, ray[2]):
             self._set_hot(view, None)  # 기즈모 자리: orbit 을 끄고 (끌기가 카메라로 안 가게) 기즈모가 받는다
             return
-        if not BODY_PICK:
-            self._set_hot(view, None)  # 평면 / 화살표 몸체는 안 잡는다 (orbit 그대로). 마커는 패널과 기즈모로만
+        if not BODY_PICK and not BODY_CLICK_BLOCK:
+            self._set_hot(view, None)  # 몸체는 아무것도 안 한다 (orbit 그대로)
             return
         best = self._plane_candidate(view, ray)
         self._plane_dbg.setdefault(view, {"moves": 0}).update(candidate=best)
@@ -2623,13 +2673,18 @@ class Annotation:
         was = self._hot.get(view)
         if was == marker_id:
             return
+        key = ("body", id(view))
         if marker_id is None:
             self._hot.pop(view, None)
             if view in self._views:
                 view.release("plane_hot")
+            _OrbitClick.release(key)
         else:
             self._hot[view] = marker_id
-            view.hold("plane_hot")
+            if BODY_PICK:
+                view.hold("plane_hot")  # orbit 통째로 끔 (몸체를 눌러 고르기)
+            else:
+                _OrbitClick.hold(key)   # orbit 클릭만 끔 (몸체가 orbit 선택에 안 잡히게), 드래그는 그대로
         for mid in {was, marker_id} - {None}:
             self._paint_plane(mid)
             self._paint_arrow(mid)
@@ -2638,7 +2693,7 @@ class Annotation:
         """화살표 hover: 고른 것과 같은 밝은 머티리얼"""
         m = self._find(marker_id)
         if m is not None and m["kind"] in ARROW_KINDS:
-            lit = marker_id == self._selected or marker_id in self._hot.values()
+            lit = marker_id == self._selected or (BODY_PICK and marker_id in self._hot.values())
             self._arrows.draw(m, lit, self.arrow_length())
 
     def _forget_planes(self, view=None, marker_id=None) -> None:
@@ -2790,7 +2845,7 @@ class Annotation:
         layout = self._layout(m)
         picked = marker_id == self._selected
         if m["kind"] in ARROW_KINDS:
-            self._arrows.draw(m, picked or marker_id in self._hot.values(), self.arrow_length())
+            self._arrows.draw(m, picked or (BODY_PICK and marker_id in self._hot.values()), self.arrow_length())
         elif m["kind"] == "plane":
             self._arrows.draw_plane(m, self._plane_state(marker_id))
         self._each(lambda v: v.restyle(m, layout, picked))

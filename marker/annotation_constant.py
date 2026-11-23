@@ -106,6 +106,7 @@ GIZMO_SIZE = 1.0                        # Kit 변환 기즈모 크기 (Transform
 GIZMO_ZONE_PX = 110.0                   # 기즈모 피봇에서 이 px 안이면 그 뷰포트 orbit 을 끈다 (기즈모 끌기가 카메라로 안 가게)
 PLANE_BODY_DRAG = False                 # 평면 본체를 끌어 평면 안에서 옮기기. 끔: 평면은 기즈모로 옮긴다
 BODY_PICK = False                       # 평면 / 화살표 몸체 위에서 orbit 을 끄고 클릭으로 고르기. 끔: 패널과 기즈모만 잡는다
+BODY_CLICK_BLOCK = True                 # 보이는 평면 / 화살표 몸체 위에서 orbit 클릭만 막는다 (드래그는 그대로). BODY_PICK 이 꺼져 있을 때
 PLANE_GAP_RATIO = 1e-4                  # 평면 뒷면을 앞면에서 띄우는 거리 = 평면 큰 변 x 이 값 (겹치면 X 자 무늬)
 PLANE_EMISSION = 2000.0                 # 평면 발광 세기. 평면은 조명을 안 받고 이 빛으로만 보인다. 너무 세면 톤매핑이 색을 흰 쪽으로 날린다 (파스텔). 전 값 10000
 
@@ -124,5 +125,7 @@ ORBIT_CLASS = "OrbitExtension"          # 그 안의 익스텐션 클래스
 ORBIT_SCENES = "_orbit_scene_dict"      # 클래스 속성: 뷰포트 id -> orbit scene
 ORBIT_MANIPULATOR = "_OrbitOnlyScene__manipulator"  # orbit scene 의 manipulator 속성
 ORBIT_ENABLED = "enabled"               # 그 manipulator 의 켜기 / 끄기 속성 (bool)
+ORBIT_CLICK_EVENT = "hyview_eqp_orbit_extension:gesture:click_enable"  # orbit 클릭만 끄기 / 돌려주기 (메시지 버스)
+ORBIT_FEATURE = "marker"                # 그 payload 의 feature
 ORBIT_DRAG_BEGAN = "hyview_eqp_orbit_extension:gesture:drag:on_began_first"  # orbit 이 카메라 끌기를 시작함 (메시지 버스)
 ORBIT_DRAG_ENDED = "hyview_eqp_orbit_extension:gesture:drag:on_ended"        # orbit 이 카메라 끌기를 끝냄 (메시지 버스)
