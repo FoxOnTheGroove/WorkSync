@@ -48,6 +48,27 @@ def euler_xyz(rx, ry, rz):
     return _mul3(_mul3(rot(0, rx), rot(1, ry)), rot(2, rz))
 
 
+def _one_axis(v, rel: float = 1e-4) -> bool:
+    """벡터가 월드 축 하나 방향인가 (한 성분만 0 이 아님)"""
+    big = max(abs(c) for c in v)
+    return big > 0 and sum(1 for c in v if abs(c) > big * rel) == 1
+
+
+def _single_axes(kt):
+    """Axis enum 에서 X | Y | Z. 없으면 None"""
+    axis = getattr(kt, "Axis", None)
+    if axis is None:
+        try:
+            from omni.kit.manipulator.transform import types as kty
+            axis = getattr(kty, "Axis", None)
+        except Exception:
+            axis = None
+    try:
+        return axis.X | axis.Y | axis.Z
+    except Exception:
+        return None
+
+
 def _kit():
     """(transform 모듈, gestures 모듈). 없으면 예외"""
     import omni.kit.manipulator.transform as kt
@@ -121,12 +142,19 @@ class ViewGizmo:
             kt, _kg = _kit()
             gestures, names = _make_gestures(self)
             self.how["gestures"] = names
+            axes = _single_axes(kt)  # X | Y | Z 만: 평면 손잡이, 화면 이동, 바깥 (화면) 회전 고리를 뺀다
+            self.how["axes"] = str(axes) if axes is not None else "no Axis enum"
+            combos = []
+            if axes is not None:
+                combos += [({"size": GIZMO_SIZE, "axes": axes, "gestures": gestures}, "size, axes, gestures"),
+                           ({"axes": axes, "gestures": gestures}, "axes, gestures")]
+            combos += [({"size": GIZMO_SIZE, "gestures": gestures}, "size, gestures"),
+                       ({"gestures": gestures}, "gestures"),
+                       ({"size": GIZMO_SIZE}, "size"),
+                       ({}, "()")]
             with self._root:
                 g = None
-                for kwargs, label in (({"size": GIZMO_SIZE, "gestures": gestures}, "size, gestures"),
-                                      ({"gestures": gestures}, "gestures"),
-                                      ({"size": GIZMO_SIZE}, "size"),
-                                      ({}, "()")):
+                for kwargs, label in combos:
                     try:
                         g = kt.TransformManipulator(**kwargs)
                         self.how["init"] = label
@@ -217,6 +245,9 @@ class ViewGizmo:
         if delta is None:
             return
         d = _vec(delta)
+        if len(d) >= 3 and not _one_axis(d[:3]):
+            self.how["ignored_translate"] = self.how.get("ignored_translate", 0) + 1
+            return  # 평면 손잡이 / 화면 이동 (두 축 이상): 안 받는다. 축 화살표만
         if len(d) >= 3:
             self.matrix[12:15] = [self.matrix[12 + i] + d[i] for i in range(3)]
             self._push()
@@ -234,6 +265,9 @@ class ViewGizmo:
             key = tuple(round(c, 6) for c in a)
             now = float(_vec(p.angle)[0])
             step, self._last_angle[key] = now - self._last_angle.get(key, 0.0), now
+        if len(a) >= 3 and not _one_axis(a[:3]):
+            self.how["ignored_rotate"] = self.how.get("ignored_rotate", 0) + 1
+            return  # 바깥 (화면) 고리 / 자유 회전 (월드 축이 아닌 축): 안 받는다
         if step is None or len(a) < 3:
             return
         self.rot = _mul3(self.rot, axis_angle(a, float(_vec(step)[0])))
