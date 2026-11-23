@@ -2510,9 +2510,7 @@ class Annotation:
         if pressed is not None and at is not None and max(abs(at[0] - pressed[0]), abs(at[1] - pressed[1])) > CLICK_SLOP_NDC:
             return
         hot = self._hot.get(view)
-        if hot is not None and not BODY_PICK:
-            return  # 몸체 클릭: 고르지도 풀지도 않는다
-        if hot is not None:
+        if hot is not None:  # 보이는 몸체 클릭 (움직이지 않고 뗌): 그 마커를 고른다. 끌기는 orbit 그대로
             _kit_take(hot)
             if self._selected != hot:
                 self.select(hot)
