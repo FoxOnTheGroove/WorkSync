@@ -6,6 +6,7 @@ import os
 import unicodedata
 
 from .annotation_constant import *
+from .annotation_gizmo import ViewGizmo, euler_xyz
 
 __all__ = ["Annotation", "instance", "forget",
            "text_width", "one_line", "desc_lines", "clip_line", "panel_layout",
@@ -851,20 +852,7 @@ def _close(a, b, eps: float = 1e-7) -> bool:
     return len(a) == len(b) and all(abs(float(a[i]) - float(b[i])) <= eps for i in range(len(a)))
 
 
-def _euler_xyz(rx, ry, rz):
-    """XYZ 순서 (X 먼저) 오일러 각 (도) 의 회전 행렬, 행 순서 (v' = v x R)"""
-    def rot(axis, deg):
-        c, s_ = math.cos(math.radians(deg)), math.sin(math.radians(deg))
-        if axis == 0:
-            return [[1, 0, 0], [0, c, s_], [0, -s_, c]]
-        if axis == 1:
-            return [[c, 0, -s_], [0, 1, 0], [s_, 0, c]]
-        return [[c, s_, 0], [-s_, c, 0], [0, 0, 1]]
-
-    def mul(a, b):
-        return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
-
-    return mul(mul(rot(0, rx), rot(1, ry)), rot(2, rz))
+_euler_xyz = euler_xyz  # 시험 스크립트가 쓰는 이름
 
 
 def _near_on_screen(api, point, ndc, px: float) -> bool:
@@ -1660,12 +1648,7 @@ class _View:
             self.root = sc.Transform()
             self._gizmo_root = sc.Transform()  # Kit 변환 기즈모 (고른 마커에만)
             self._pick_root = sc.Transform()
-        self._gizmo = None
-        self._gizmo_sub = None
-        self._gizmo_error = None
-        self._gizmo_quiet = False
-        self._gizmo_base = None
-        self._gizmo_how = {}
+        self.gizmo = ViewGizmo(self, self._gizmo_root)
         # 평면 조작: 화면 전체 하나 (sc.Screen 은 어떤 도형보다 뒤라 패널이 늘 먼저 받는다).
         # 어느 평면이 마우스 아래 보이는지는 owner 가 광선 + 깊이 쿼리로 정한다
         Click, Drag, Hover = _gesture_types()
@@ -1699,174 +1682,19 @@ class _View:
                 print(f"{TAG} view change subscription failed: {e}")
         owner._attach(self)
 
-    # -- 기즈모 (omni.kit.manipulator.transform.TransformManipulator) ----------------------
-
-    def _gizmo_make(self):
-        """처음 쓸 때 한 번 만든다. 못 만들면 이유를 남기고 None"""
-        if self._gizmo is not None or self._gizmo_error is not None:
-            return self._gizmo
-        try:
-            import omni.kit.manipulator.transform as kt
-            cls = kt.TransformManipulator
-            with self._gizmo_root:
-                try:
-                    g = cls(size=GIZMO_SIZE)
-                    self._gizmo_how["init"] = "size"
-                except TypeError:
-                    g = cls()
-                    self._gizmo_how["init"] = "()"
-            self._gizmo_sub = g.model.add_item_changed_fn(self._gizmo_item_changed)
-            self._gizmo = g
-        except Exception as e:
-            self._gizmo_error = f"{type(e).__name__}: {e}"
-            print(f"{TAG} no transform gizmo: {self._gizmo_error}")
-        return self._gizmo
-
-    def _gizmo_set_operation(self, g, mode: str) -> None:
-        """이동 / 회전. Kit 판마다 방법이 달라 되는 것을 찾아 남긴다"""
-        try:
-            import omni.kit.manipulator.transform as kt
-            ops = getattr(kt, "Operation", None)
-        except Exception:
-            ops = None
-        name = {"move": "TRANSLATE", "rotate": "ROTATE"}[mode]
-        value = getattr(ops, name, None) if ops is not None else None
-        tries = []
-        if value is not None:
-            tries += [("operation", value), ("op", value)]
-        tries += [("operation", mode)]
-        for attr, val in tries:
-            if hasattr(g, attr):
-                try:
-                    setattr(g, attr, val)
-                    self._gizmo_how["operation"] = f"{attr}={val}"
-                    return
-                except Exception:
-                    pass
-        for setter in ("set_operation",):
-            if value is not None and callable(getattr(g.model, setter, None)):
-                try:
-                    getattr(g.model, setter)(value)
-                    self._gizmo_how["operation"] = f"model.{setter}({value})"
-                    return
-                except Exception:
-                    pass
-        self._gizmo_how["operation"] = "not found"
-
-    def _gizmo_item(self, model, name):
-        try:
-            return model.get_item(name)
-        except Exception:
-            return None
-
-    def _gizmo_floats(self, model, name):
-        item = self._gizmo_item(model, name)
-        if item is None:
-            return None
-        try:
-            v = list(model.get_as_floats(item))
-            return v if v else None
-        except Exception:
-            return None
-
-    def _gizmo_rotation(self, model):
-        """모델의 지금 회전 3x3 (행 순서, v' = v x R). transform (16) 이 있으면 그것, 아니면 rotate (XYZ 도)"""
-        t = self._gizmo_floats(model, "transform")
-        if t is not None and len(t) == 16:
-            rows = [t[0:3], t[4:7], t[8:11]]
-            scale = [math.sqrt(_dot(r, r)) or 1.0 for r in rows]
-            return [[c / scale[i] for c in rows[i]] for i in range(3)]
-        r = self._gizmo_floats(model, "rotate")
-        if r is not None and len(r) >= 3:
-            return _euler_xyz(r[0], r[1], r[2])
-        return None
-
-    def _gizmo_translate(self, model):
-        v = self._gizmo_floats(model, "translate")
-        if v is not None and len(v) >= 3:
-            return v[:3]
-        t = self._gizmo_floats(model, "transform")
-        return t[12:15] if t is not None and len(t) == 16 else None
+    # -- 기즈모 (annotation_gizmo.ViewGizmo) ------------------------------------------
 
     def gizmo_show(self, pivot, mode: str) -> None:
-        g = self._gizmo_make()
-        if g is None:
-            return
-        self._gizmo_set_operation(g, mode)
-        model = g.model
-        self._gizmo_quiet = True
-        try:
-            item = self._gizmo_item(model, "translate")
-            if item is not None:
-                model.set_floats(item, [float(c) for c in pivot])
-                self._gizmo_how["place"] = "translate"
-            rot = self._gizmo_item(model, "rotate")
-            if rot is not None:
-                model.set_floats(rot, [0.0, 0.0, 0.0])
-            if item is None:
-                tf = self._gizmo_item(model, "transform")
-                if tf is not None:
-                    model.set_floats(tf, [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0] + [float(c) for c in pivot] + [1.0])
-                    self._gizmo_how["place"] = "transform"
-        except Exception as e:
-            self._gizmo_how["place"] = f"failed: {type(e).__name__}: {e}"
-        finally:
-            self._gizmo_quiet = False
-        self._gizmo_base = self._gizmo_rotation(model)
-        for attr in ("enabled", "visible"):
-            if hasattr(g, attr):
-                try:
-                    setattr(g, attr, True)
-                except Exception:
-                    pass
-        self._gizmo_root.visible = True
+        self.gizmo.show(pivot, mode)
 
     def gizmo_hide(self) -> None:
-        if self._gizmo_root is not None:
-            self._gizmo_root.visible = False
-        g = self._gizmo
-        if g is not None and hasattr(g, "enabled"):
-            try:
-                g.enabled = False
-            except Exception:
-                pass
-        self.release("gizmo_zone")
+        self.gizmo.hide()
 
     def gizmo_visible(self) -> bool:
-        return self._gizmo is not None and self._gizmo_root is not None and bool(self._gizmo_root.visible)
-
-    def _gizmo_item_changed(self, model, _item) -> None:
-        if self._gizmo_quiet or not self.gizmo_visible():
-            return
-        translate = self._gizmo_translate(model)
-        now = self._gizmo_rotation(model)
-        base = self._gizmo_base
-        delta = None
-        if now is not None:
-            if base is None:
-                delta = now
-            else:  # 붙일 때 회전 기준: delta = base^T x now (회전 행렬)
-                delta = [[sum(base[k][i] * now[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
-        self.owner._gizmo_changed(self, translate, delta)
+        return self.gizmo.visible()
 
     def gizmo_probe(self) -> dict:
-        """진단: 실제 Kit 의 기즈모 API 가 무엇인지"""
-        out = {"viewport_id": self.owner._view_id(self), "error": self._gizmo_error, "how": dict(self._gizmo_how),
-               "visible": self.gizmo_visible()}
-        try:
-            import inspect
-            import omni.kit.manipulator.transform as kt
-            out["module"] = [n for n in dir(kt) if not n.startswith("_")]
-            out["init"] = str(inspect.signature(kt.TransformManipulator.__init__))
-        except Exception as e:
-            out["module_error"] = f"{type(e).__name__}: {e}"
-        g = self._gizmo
-        if g is not None:
-            model = g.model
-            out["model"] = type(model).__name__
-            out["items"] = {n: self._gizmo_floats(model, n) for n in ("transform", "translate", "rotate", "scale")}
-            out["attrs"] = [n for n in dir(g) if not n.startswith("_")]
-        return out
+        return self.gizmo.probe()
 
     def destroy(self) -> None:
         """뷰포트 연결을 풀 때. 층을 걷고 카메라 연결도 끊는다"""
@@ -1904,22 +1732,7 @@ class _View:
         if getattr(self, "_plane_root", None) is not None:
             self._plane_root.clear()
         self._plane_root = self._plane_screen = None
-        sub, self._gizmo_sub = self._gizmo_sub, None
-        for name in ("unsubscribe", "destroy"):
-            if sub is not None and callable(getattr(sub, name, None)):
-                try:
-                    getattr(sub, name)()
-                except Exception:
-                    pass
-                break
-        g, self._gizmo = self._gizmo, None
-        if g is not None and callable(getattr(g, "destroy", None)):
-            try:
-                g.destroy()
-            except Exception:
-                pass
-        if self._gizmo_root is not None:
-            self._gizmo_root.clear()
+        self.gizmo.destroy()
         self._gizmo_root = None
         self._pick_root = None
         self.root = None
