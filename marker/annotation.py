@@ -1653,9 +1653,13 @@ class _View:
         # 어느 평면이 마우스 아래 보이는지는 owner 가 광선 + 깊이 쿼리로 정한다
         Click, Drag, Hover = _gesture_types()
         with self._plane_root:
+            # hover 만 받는 화면 (늘 켜짐) 과 누름 / 끌기를 받는 화면 (기즈모 근처에서는 끈다:
+            # 누르는 순간 시작하는 우리 끌기가 Kit 기즈모 끌기를 막았다)
             self._plane_screen = sc.Screen(gesture=[
                 Hover(lambda p: owner._plane_over(self, p), lambda p: owner._plane_over(self, p),
                       lambda: owner._plane_out(self), name="plane_hover", raw=True),
+            ])
+            self._press_screen = sc.Screen(gesture=[
                 Drag(lambda p: owner._plane_grab(self, "screen", p), lambda p: owner._plane_move(self, p, "screen"),
                      lambda: owner._plane_release(self, "screen"), priority=PLANE_PRIORITY,
                      name="plane_move", raw=True, at_down=PLANE_PRESS_AT_DOWN),
@@ -1689,6 +1693,12 @@ class _View:
 
     def gizmo_hide(self) -> None:
         self.gizmo.hide()
+        self.press_enabled(True)
+
+    def press_enabled(self, on: bool) -> None:
+        """누름 / 끌기 화면 켜기 끄기 (기즈모 근처에서 끈다)"""
+        if self._press_screen is not None and bool(self._press_screen.visible) != bool(on):
+            self._press_screen.visible = bool(on)
 
     def gizmo_visible(self) -> bool:
         return self.gizmo.visible()
@@ -1731,7 +1741,7 @@ class _View:
                 pass
         if getattr(self, "_plane_root", None) is not None:
             self._plane_root.clear()
-        self._plane_root = self._plane_screen = None
+        self._plane_root = self._plane_screen = self._press_screen = None
         self.gizmo.destroy()
         self._gizmo_root = None
         self._pick_root = None
@@ -2488,7 +2498,9 @@ class Annotation:
             view.hold("gizmo_zone")
         elif "gizmo_zone" in view._holds and _Mouse.pressed() is not True:
             view.release("gizmo_zone")
-        return near or "gizmo_zone" in view._holds
+        inside = "gizmo_zone" in view._holds
+        view.press_enabled(not inside)  # 기즈모 근처: 우리 누름 화면을 꺼서 기즈모 끌기를 안 막게
+        return inside
 
     def _panel_under(self, view) -> bool:
         """그 뷰포트에서 마우스가 패널 위인가 (패널이 평면보다 앞)"""
@@ -2503,6 +2515,7 @@ class Annotation:
         if not over or self._creating or self._closed or self._panel_under(view):
             if not over and _Mouse.pressed() is not True:
                 view.release("gizmo_zone")
+                view.press_enabled(True)
             self._set_hot(view, None)
             return
         if self._plane_drag is not None:

@@ -178,9 +178,14 @@ class ViewGizmo:
 
     # -- 움직임 -> owner --------------------------------------------------------------
 
-    def _changed(self, model, _item) -> None:
+    def _changed(self, model, item) -> None:
+        self.how["changes"] = self.how.get("changes", 0) + 1  # 진단: 기즈모 끌기가 모델까지 오는지
         if self._quiet or not self.visible():
             return
+        try:
+            self.how["last_item"] = str(getattr(item, "name", None) or item)
+        except Exception:
+            pass
         translate = self._translate(model)
         now = self._rotation(model)
         base = self._base
