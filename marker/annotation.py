@@ -1458,12 +1458,12 @@ class _MarkerView:
                             self._title_xf = sc.Transform()
                             with self._title_xf:
                                 self._title = sc.Label("", color=white, size=FONT_PX,
-                                                       alignment=ui.Alignment.LEFT_CENTER)
+                                                       alignment=ui.Alignment.CENTER)
                             for _ in range(MAX_PANEL_LINES):
                                 xf = sc.Transform()
                                 with xf:
                                     label = sc.Label("", color=ui.color(*DESC_COLOR), size=FONT_PX,
-                                                     alignment=ui.Alignment.LEFT_CENTER)
+                                                     alignment=ui.Alignment.CENTER)
                                 self._desc.append((xf, label))
                             # 잡는 곳: 겹치지 않게 타일로 나눈 사각형 다섯 (몸통 + 변 띠 넷).
                             # 어느 사각형 위인가가 곧 판정이라, 커서와 동작이 늘 같다
@@ -1560,14 +1560,14 @@ class _MarkerView:
             rect.width, rect.height = w, h
         self._place_zones(layout)
         y = -pad
-        self._title_xf.transform = _move(sc, pad, y - layout["th"] / 2.0)
+        self._title_xf.transform = _move(sc, w / 2.0, y - layout["th"] / 2.0)  # 가운데 정렬
         self._title.text = layout["title"]
         self._title.size = layout["fs"]
         y -= layout["th"]
         lines = layout["lines"]
         for i, (xf, label) in enumerate(self._desc):
             if i < len(lines):
-                xf.transform = _move(sc, pad, y - layout["dh"] / 2.0)
+                xf.transform = _move(sc, w / 2.0, y - layout["dh"] / 2.0)
                 label.text = lines[i]
                 label.size = layout["ds"]
                 xf.visible = True
@@ -2061,6 +2061,7 @@ class Annotation:
 
     def set_arrow_scale(self, scale) -> bool:
         """화살표 크기 배수. 모든 inlet, outlet 이 함께 바뀌어 늘 같은 크기다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(float(scale)):
             self._say("화살표 배수는 숫자여야 합니다")
             return False
@@ -2105,6 +2106,7 @@ class Annotation:
 
     def create(self, kind: str) -> bool:
         """그 종류를 만들 준비. 다음 클릭한 모델 표면에 생긴다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         if kind not in KINDS:
             self._say(f"모르는 종류: {kind!r}")
             return False
@@ -2121,6 +2123,7 @@ class Annotation:
 
     def relocate(self, marker_id) -> bool:
         """그 label / inlet / outlet 을 다음 클릭한 모델 표면으로 옮길 준비. 빈 곳을 찍으면 아무것도 안 바꾸고 취소"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._find(marker_id)
         if m is None:
             self._say("옮길 마커를 고르세요")
@@ -2146,6 +2149,7 @@ class Annotation:
 
     def cancel_create(self) -> None:
         """찍기 대기(만들기, 위치 재설정)를 거둔다. 묻는 중이던 답도 버린다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         if not self._creating and not self._relocating:
             return
         self._creating = ""
@@ -2159,6 +2163,7 @@ class Annotation:
     def create_plane(self, axis: str) -> bool:
         """축 평면 하나를 바로 만든다 (xy / yz / zx). 가운데는 타겟 프림 바운드 중점 (연결된 뷰포트의 프림,
         못 구하면 원점). 위치 0, 크기 PLANE_SIZE"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         if axis not in PLANE_AXES:
             self._say(f"모르는 평면: {axis!r} (xy, yz, zx)")
             return False
@@ -2225,6 +2230,7 @@ class Annotation:
 
     def set_plane_at(self, marker_id, at) -> bool:
         """평면 위치. 기준점 (만들 때의 타겟 프림 바운드 중점) 에서 법선 축 방향으로 at 만큼 (xy 면 z, yz 면 x, zx 면 y)"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._plane(marker_id)
         if m is None:
             return False
@@ -2239,6 +2245,7 @@ class Annotation:
 
     def set_plane_size(self, marker_id, w, h) -> bool:
         """평면 크기 [가로, 세로] (스테이지 단위, 0 보다 크게)"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._plane(marker_id)
         if m is None:
             return False
@@ -2708,6 +2715,13 @@ class Annotation:
     def gizmo(self) -> str:
         return self._gizmo_mode
 
+    def _gizmo_off(self) -> None:
+        """기즈모를 끈다 (선택이 바뀌거나 다른 동작 API 를 부를 때)"""
+        if self._gizmo_mode != "off":
+            self._gizmo_mode = "off"
+            self._gizmo_attach(None)
+            self._notify("gizmo", None)
+
     def _gizmo_pivot(self, m):
         return list(m["position"])  # 평면 가운데 / 화살표 표면 끝
 
@@ -2762,10 +2776,7 @@ class Annotation:
         for mid in (was, marker_id):
             if mid is not None:
                 self._restyle(mid)
-        if self._gizmo_mode != "off":  # 선택을 풀거나 바꾸면 기즈모는 꺼진다 (다시 쓰려면 버튼)
-            self._gizmo_mode = "off"
-            self._gizmo_attach(None)
-            self._notify("gizmo", None)
+        self._gizmo_off()  # 선택을 풀거나 바꾸면 기즈모는 꺼진다 (다시 쓰려면 버튼)
         self._notify("select", marker_id)
         return True
 
@@ -2813,6 +2824,7 @@ class Annotation:
         """그 뷰포트(vph) 가 이 프림(원본 USD) 을 비춘다. 그 뷰포트 ui_zstack 위에 마커 층을 깔고
         (처음 한 번), 그 형상의 마커를 그린다. 그 뷰포트에서 찍은 마커는 그 형상 것.
         같은 뷰포트를 다시 부르면 층은 두고 연결만 바꾼다 (다른 형상으로 바뀔 때)"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         try:
             api, frame = vph.viewport_api, vph.ui_zstack
             vid = str(getattr(api, "id", "") or "")
@@ -2839,6 +2851,7 @@ class Annotation:
 
     def unbind_viewport(self, viewport_id) -> bool:
         """그 뷰포트 연결을 풀고 마커 층도 걷는다 (뷰포트가 없어질 때)"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         vid = str(viewport_id)
         found = self._bindings.pop(vid, None) is not None
         for v in [v for v in self._views if self._view_id(v) == vid]:
@@ -2900,6 +2913,7 @@ class Annotation:
 
     def set_visible(self, marker_id, on) -> bool:
         """마커 하나 보이기 / 숨기기. 전체 표시가 꺼져 있으면 켜도 안 보인다 (값은 기억)"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._find(marker_id)
         if m is None:
             self._say("보이기 / 숨기기할 마커가 없습니다")
@@ -2919,6 +2933,7 @@ class Annotation:
 
     def set_all_visible(self, on) -> bool:
         """전체 보이기 / 숨기기. 마커마다의 보이기 값은 그대로 둔다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         if not isinstance(on, bool):
             self._say("보이기 값은 True / False 입니다")
             return False
@@ -2934,6 +2949,7 @@ class Annotation:
 
     def set_text(self, marker_id, label: str, description: str) -> bool:
         """패널 글. 상자 크기를 정해 둔 마커는 그 안에 들어가는 만큼만 보인다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._find(marker_id)
         if m is None:
             self._say("고친 마커가 없습니다" if marker_id is None else f"마커 {marker_id!r} 이(가) 없습니다")
@@ -2952,6 +2968,7 @@ class Annotation:
     def set_font_size(self, marker_id, px) -> bool:
         """그 마커 패널의 글자 크기 (첫 줄 px, description 은 DESC_RATIO 배). 상자 크기를 정해 뒀으면
         그 안에 들어가는 만큼만 보인다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._find(marker_id)
         if m is None:
             self._say("글자 크기를 바꿀 마커가 없습니다")
@@ -2969,6 +2986,7 @@ class Annotation:
 
     def reset_panel(self, marker_id) -> bool:
         """패널을 처음 자리, 글에 맞춘 크기로"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._find(marker_id)
         if m is None:
             self._say("되돌릴 마커가 없습니다")
@@ -2984,6 +3002,7 @@ class Annotation:
 
     def remove(self, marker_id) -> bool:
         """마커 하나를 지운다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         m = self._find(marker_id)
         if m is None:
             self._say("지울 마커가 없습니다")
@@ -3006,6 +3025,7 @@ class Annotation:
 
     def clear(self) -> None:
         """모두 지운다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         if self._drag is not None:
             self._end_drag()
         if self._plane_drag is not None:
@@ -3025,6 +3045,7 @@ class Annotation:
     def set_target_usd(self, path: str) -> bool:
         """마커가 붙는 형상 USD 경로 (omniverse:// 나 로컬). 익스텐션은 열지 않고 경로만 든다.
         다른 형상으로 바뀌면 지금 마커는 그 형상 것이 아니므로 비운다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         path = (path or "").strip()
         if not isinstance(path, str) or not path:
             self._say("형상 USD 경로가 비었습니다")
@@ -3105,6 +3126,7 @@ class Annotation:
         """형상 USD 옆 마커 파일을 읽어 지금 형상의 마커를 바꾼다 (다른 형상 마커는 그대로).
         파일이 없거나 깨졌으면 지금 것을 그대로 둔다.
         잘못된 마커 하나는 건너뛰고 몇 개를 건너뛰었는지 알린다"""
+        self._gizmo_off()  # 다른 동작이면 기즈모는 꺼진다
         path = self.marker_file()
         if not path:
             self._say("형상 USD 경로를 먼저 정하세요")
