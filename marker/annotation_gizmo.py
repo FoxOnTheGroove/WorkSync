@@ -6,7 +6,128 @@ import math
 
 from .annotation_constant import GIZMO_SIZE, TAG
 
-__all__ = ["ViewGizmo", "euler_xyz"]
+__all__ = ["ViewGizmo", "euler_xyz", "axis_angle"]
+
+_IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+def axis_angle(axis, deg):
+    """축 (단위로 맞춘다) 둘레 deg 도 회전, 행 순서 (v' = v x R). USD Gf.Rotation 과 같은 방향"""
+    n = math.sqrt(sum(float(c) * float(c) for c in axis)) or 1.0
+    x, y, z = (float(c) / n for c in axis)
+    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    t = 1.0 - c
+    col = [[t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+           [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+           [t * x * z - s * y, t * y * z + s * x, t * z * z + c]]  # 열 벡터 관례 (v' = R v)
+    return [[col[j][i] for j in range(3)] for i in range(3)]  # 행 순서로 뒤집는다
+
+
+def _mul3(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def _vec(v):
+    """payload 값 하나를 float 목록으로 (Gf 벡터, 목록, 숫자)"""
+    try:
+        return [float(c) for c in v]
+    except TypeError:
+        return [float(v)]
+
+
+def _make_model(view_gizmo):
+    """기즈모 모델: 끌기 변화량 (on_began / on_changed / on_ended 의 payload) 을 받아 transform 을 직접 바꾼다.
+    Kit 변환 기즈모는 값을 스스로 안 바꾸고 모델에 변화량만 넘긴다 (prim 기즈모는 자기 모델이 USD 에 쓴다)"""
+    from omni.ui import scene as sc
+    try:
+        import omni.kit.manipulator.transform as kt
+        base = getattr(kt, "AbstractTransformManipulatorModel", None) or sc.AbstractManipulatorModel
+    except Exception:
+        base = sc.AbstractManipulatorModel
+
+    class Model(base):
+        def __init__(self):
+            super().__init__()
+            self._items = {}
+            self.matrix = list(_IDENTITY)
+            self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            self._angle = {}  # 각 축의 지난 누적 각 (payload 가 누적 각만 줄 때)
+
+        def get_item(self, name):
+            item = self._items.get(name)
+            if item is None:
+                item = sc.AbstractManipulatorItem()
+                self._items[name] = item
+            return item
+
+        def get_as_floats(self, item):
+            if item is self._items.get("transform"):
+                return list(self.matrix)
+            if item is self._items.get("translate"):
+                return list(self.matrix[12:15])
+            return []
+
+        def set_floats(self, item, value):
+            if item is self._items.get("transform") and len(value) == 16:
+                self.matrix = [float(c) for c in value]
+                self.rot = [self.matrix[0:3], self.matrix[4:7], self.matrix[8:11]]
+            elif item is self._items.get("translate") and len(value) >= 3:
+                self.matrix[12:15] = [float(c) for c in value[:3]]
+            self._item_changed(self._items.get("transform"))
+
+        def place(self, pivot) -> None:
+            self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            self.matrix = list(_IDENTITY)
+            self.matrix[12:15] = [float(c) for c in pivot]
+            self._angle = {}
+            self._item_changed(self.get_item("transform"))
+
+        def _rebuild(self) -> None:
+            r = self.rot
+            self.matrix[0:3], self.matrix[4:7], self.matrix[8:11] = list(r[0]), list(r[1]), list(r[2])
+
+        # 끌기: Kit 판마다 인자가 달라 (sender, payload) / (payload) 모두 받는다
+        def on_began(self, *args):
+            self._angle = {}
+            view_gizmo._payload_seen("began", args)
+
+        def on_changed(self, *args):
+            payload = args[-1] if args else None
+            view_gizmo._payload_seen("changed", args)
+            if payload is None:
+                return
+            moved = getattr(payload, "moved_delta", None)
+            if moved is not None:
+                d = _vec(moved)
+                if len(d) >= 3:
+                    self.matrix[12:15] = [self.matrix[12 + i] + d[i] for i in range(3)]
+            axis = getattr(payload, "axis", None)
+            step = getattr(payload, "angle_delta", None)
+            if axis is not None and step is None and getattr(payload, "angle", None) is not None:
+                key = tuple(round(c, 6) for c in _vec(axis))
+                now = float(getattr(payload, "angle"))
+                step, self._angle[key] = now - self._angle.get(key, 0.0), now
+            if axis is not None and step is not None and moved is None:
+                a = _vec(axis)
+                if len(a) >= 3:
+                    self.rot = _mul3(self.rot, axis_angle(a, float(_vec(step)[0])))
+                    self._rebuild()
+            self._item_changed(self.get_item("transform"))
+            view_gizmo._moved()
+
+        def on_ended(self, *args):
+            view_gizmo._payload_seen("ended", args)
+
+        def on_canceled(self, *args):
+            view_gizmo._payload_seen("canceled", args)
+
+        def widget_enabled(self):
+            pass
+
+        def widget_disabled(self):
+            pass
+
+    return Model()
 
 
 def euler_xyz(rx, ry, rz):
@@ -46,14 +167,18 @@ class ViewGizmo:
         try:
             import omni.kit.manipulator.transform as kt
             cls = kt.TransformManipulator
+            model = _make_model(self)
             with self._root:
                 try:
-                    g = cls(size=GIZMO_SIZE)
-                    self.how["init"] = "size"
+                    g = cls(model=model, size=GIZMO_SIZE)
+                    self.how["init"] = "model, size"
                 except TypeError:
-                    g = cls()
-                    self.how["init"] = "()"
-            self._sub = g.model.add_item_changed_fn(self._changed)
+                    g = cls(model=model)
+                    self.how["init"] = "model"
+            if g.model is not model:
+                g.model = model
+            self.how["model_base"] = type(model).__mro__[1].__name__
+            self._model = model
             self._gizmo = g
         except Exception as e:
             self._error = f"{type(e).__name__}: {e}"
@@ -134,26 +259,8 @@ class ViewGizmo:
         if g is None:
             return
         self._set_operation(g, mode)
-        model = g.model
-        self._quiet = True
-        try:
-            item = self._item(model, "translate")
-            if item is not None:
-                model.set_floats(item, [float(c) for c in pivot])
-                self.how["place"] = "translate"
-            rot = self._item(model, "rotate")
-            if rot is not None:
-                model.set_floats(rot, [0.0, 0.0, 0.0])
-            if item is None:
-                tf = self._item(model, "transform")
-                if tf is not None:
-                    model.set_floats(tf, [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0] + [float(c) for c in pivot] + [1.0])
-                    self.how["place"] = "transform"
-        except Exception as e:
-            self.how["place"] = f"failed: {type(e).__name__}: {e}"
-        finally:
-            self._quiet = False
-        self._base = self._rotation(model)
+        self._model.place(pivot)
+        self._base = None
         for attr in ("enabled", "visible"):
             if hasattr(g, attr):
                 try:
@@ -178,24 +285,19 @@ class ViewGizmo:
 
     # -- 움직임 -> owner --------------------------------------------------------------
 
-    def _changed(self, model, item) -> None:
-        self.how["changes"] = self.how.get("changes", 0) + 1  # 진단: 기즈모 끌기가 모델까지 오는지
-        if self._quiet or not self.visible():
+    def _payload_seen(self, phase: str, args) -> None:
+        """진단: 끌기 신호가 오는지, payload 가 무엇인지 (처음 것만 남긴다)"""
+        self.how[phase] = self.how.get(phase, 0) + 1
+        if args and f"payload_{phase}" not in self.how:
+            p = args[-1]
+            self.how[f"payload_{phase}"] = (type(p).__name__, [n for n in dir(p) if not n.startswith("_")][:20])
+
+    def _moved(self) -> None:
+        """기즈모 끌기 -> owner (피봇 자리, 붙인 뒤 회전)"""
+        if not self.visible():
             return
-        try:
-            self.how["last_item"] = str(getattr(item, "name", None) or item)
-        except Exception:
-            pass
-        translate = self._translate(model)
-        now = self._rotation(model)
-        base = self._base
-        delta = None
-        if now is not None:
-            if base is None:
-                delta = now
-            else:  # 붙일 때 기준: delta = base^T x now (회전 행렬)
-                delta = [[sum(base[k][i] * now[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
-        self._view.owner._gizmo_changed(self._view, translate, delta)
+        m = self._model
+        self._view.owner._gizmo_changed(self._view, list(m.matrix[12:15]), [list(r) for r in m.rot])
 
     # -- 진단 / 치우기 ----------------------------------------------------------------
 
