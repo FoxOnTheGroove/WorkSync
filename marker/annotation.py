@@ -1717,6 +1717,7 @@ class _View:
         self._screen = None
         self.marks = {}
         self._holds = set()
+        self._select_holds = set()  # Kit 선택만 끄는 쪽 (몸체 위)
         self._blocked = False
         self._token = None
         self._unblock = None
@@ -1756,6 +1757,7 @@ class _View:
         self.arm(False)
         self.drop_all()
         self._holds = set()
+        self._select_holds = set()
         self._sync_block(now=True)
         sub, self._view_sub = self._view_sub, None
         if sub is not None and callable(getattr(sub, "destroy", None)):
@@ -1809,31 +1811,41 @@ class _View:
         self._holds = {k for k in self._holds if not k.startswith(prefix)}
         self._sync_block()
 
+    def hold_select(self, key: str) -> None:
+        """Kit 클릭 선택만 끈다 (orbit 은 그대로). 보이는 평면 / 화살표 몸체 위"""
+        self._select_holds.add(key)
+        self._sync_block()
+
+    def release_select(self, key: str) -> None:
+        self._select_holds.discard(key)
+        self._sync_block()
+
     def _sync_block(self, now: bool = False) -> None:
-        """쥔 것이 있으면 Kit 선택을 끄고, 다 놓으면 SELECT_RELEASE_S 뒤에 되살린다.
-        바로 되살리지 않는 것은: 누르는 순간 hover 끝이 drag 시작보다 먼저 오면 잠금이 한순간 비는데,
+        """쥔 것이 있으면 Kit 선택을 끄고 (패널 / 기즈모면 orbit 도), 다 놓으면 되살린다.
+        선택은 SELECT_RELEASE_S 뒤에: 누르는 순간 hover 끝이 drag 시작보다 먼저 오면 잠금이 한순간 비는데,
         그때 껐다 켜면 Kit 이 선택 레이어를 다시 지으면서 막 시작한 끌기가 끊긴다"""
         if self._holds:
-            if self._unblock is not None:
-                self._unblock.cancel()
-                self._unblock = None
             if self._orbit_back is not None:
                 self._orbit_back.cancel()
                 self._orbit_back = None
             _OrbitYield.hold(self._orbit_id)  # 그 뷰포트 orbit 을 끈다 (누르기 전에). 이미 껐으면 그대로
-            if not self._blocked:
-                self._blocked = True
-                self._token = _block_selection(self.api)
-            return
-        # orbit 은 거의 바로 (ORBIT_RELEASE_S) 돌려준다. 빠져나오자마자 카메라를 돌릴 수 있게.
-        # 0 이 아닌 것은 누르는 순간 hover 끝 -> drag 시작 사이 빈틈에 orbit 이 누름을 가져가지 않게
-        if now:
+        elif now:
+            # orbit 은 거의 바로 (ORBIT_RELEASE_S) 돌려준다. 빠져나오자마자 카메라를 돌릴 수 있게.
+            # 0 이 아닌 것은 누르는 순간 hover 끝 -> drag 시작 사이 빈틈에 orbit 이 누름을 가져가지 않게
             if self._orbit_back is not None:
                 self._orbit_back.cancel()
                 self._orbit_back = None
             _OrbitYield.release(self._orbit_id)
         elif self._orbit_back is None and _OrbitYield.holding(self._orbit_id):
             self._orbit_back = asyncio.get_event_loop().call_later(ORBIT_RELEASE_S, self._orbit_back_now)
+        if self._holds or self._select_holds:
+            if self._unblock is not None:
+                self._unblock.cancel()
+                self._unblock = None
+            if not self._blocked:
+                self._blocked = True
+                self._token = _block_selection(self.api)
+            return
         if not self._blocked:
             return
         if now:
@@ -1851,7 +1863,7 @@ class _View:
 
     def _unblock_now(self) -> None:
         self._unblock = None
-        if not self._holds and self._blocked:
+        if not self._holds and not self._select_holds and self._blocked:
             self._blocked = False
             self._token = None
 
@@ -2676,6 +2688,7 @@ class Annotation:
             self._hot.pop(view, None)
             if view in self._views:
                 view.release("plane_hot")
+                view.release_select("body")
             _OrbitClick.release(key)
         else:
             self._hot[view] = marker_id
@@ -2683,6 +2696,7 @@ class Annotation:
                 view.hold("plane_hot")  # orbit 통째로 끔 (몸체를 눌러 고르기)
             else:
                 _OrbitClick.hold(key)   # orbit 클릭만 끔 (몸체가 orbit 선택에 안 잡히게), 드래그는 그대로
+                view.hold_select("body")  # Kit 뷰포트 클릭 선택도 끈다 (orbit 은 그대로)
         for mid in {was, marker_id} - {None}:
             self._paint_plane(mid)
             self._paint_arrow(mid)
