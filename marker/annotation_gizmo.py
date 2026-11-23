@@ -6,8 +6,6 @@ import math
 
 from .annotation_constant import GIZMO_SIZE, TAG
 
-KIT_TRANSFORM_OP = "/app/transform/operation"  # Kit 전역 변환 도구 설정 (move / rotate / ...)
-
 __all__ = ["ViewGizmo", "euler_xyz", "axis_angle"]
 
 _IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
@@ -74,7 +72,6 @@ def _make_model(view_gizmo):
         def __init__(self):
             super().__init__()
             self._own = {}   # 기본 클래스에 없는 항목만 (덮어쓰지 않는다)
-            self._op = None
             self.matrix = list(_IDENTITY)
             self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 
@@ -108,36 +105,6 @@ def _make_model(view_gizmo):
                 super().set_floats(item, value)
             except Exception:
                 pass
-
-        def get_operation(self):
-            item = self.get_item("operation")
-            op = getattr(item, "operation", None)
-            if op is not None:
-                return op
-            try:
-                return super().get_operation()
-            except Exception:
-                return self._op
-
-        def set_mode(self, op) -> str:
-            """기즈모 모드 (Operation). 되는 방법을 돌려준다"""
-            self._op = op
-            item = self.get_item("operation")
-            how = "own"
-            if hasattr(item, "operation"):
-                try:
-                    item.operation = op
-                    how = "operation item"
-                except Exception:
-                    pass
-            elif callable(getattr(super(), "set_operation", None)):
-                try:
-                    super().set_operation(op)
-                    how = "model.set_operation"
-                except Exception:
-                    pass
-            self._item_changed(item)
-            return how
 
         def place(self, pivot) -> None:
             self.rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
@@ -220,7 +187,6 @@ class ViewGizmo:
         self._error = None
         self._last_moved = None
         self._last_angle = {}
-        self._op_was = None    # 바꾸기 전 Kit 전역 변환 도구 값
         self.how = {}
 
     def _make(self):
@@ -260,43 +226,32 @@ class ViewGizmo:
         return self._gizmo
 
     def _set_mode(self, mode: str) -> None:
-        """이동 / 회전. Kit 판마다 모드를 읽는 곳이 달라 다 넣고, 다시 그리게 한다"""
+        """이동 / 회전: 기즈모의 operation 에 Operation 값을 넣는다 (회전 기즈모가 나오던 판과 같은 방법)"""
         g = self._gizmo
-        ways = []
         try:
             kt, _kg = _kit()
-            op = getattr(kt.Operation, {"move": "TRANSLATE", "rotate": "ROTATE"}[mode])
-        except Exception as e:
-            op = None
-            ways.append(f"no Operation: {type(e).__name__}")
-        if op is not None:
-            ways.append(f"model: {self._model.set_mode(op)}")
-            # 기즈모 클래스에 있는 모드 속성 (클래스에 정의된 property 만. 새 속성을 붙이지 않는다)
-            for name in ("op", "operation", "_op", "_operation", "transform_op"):
-                attr = getattr(type(g), name, None)
-                if isinstance(attr, property) and attr.fset is not None:
-                    try:
-                        setattr(g, name, op)
-                        ways.append(f"gizmo.{name}")
-                    except Exception:
-                        pass
-        # Kit 전역 변환 도구 설정 (기즈모가 이걸 읽는 판). 숨길 때 되돌린다
-        try:
-            import carb.settings
-            settings = carb.settings.get_settings()
-            if self._op_was is None:
-                self._op_was = settings.get(KIT_TRANSFORM_OP) or "select"
-            settings.set(KIT_TRANSFORM_OP, mode)
-            ways.append(f"setting {KIT_TRANSFORM_OP}={mode}")
-        except Exception as e:
-            ways.append(f"setting failed: {type(e).__name__}")
-        if callable(getattr(g, "invalidate", None)):
+            ops = getattr(kt, "Operation", None)
+        except Exception:
+            ops = None
+        value = getattr(ops, {"move": "TRANSLATE", "rotate": "ROTATE"}[mode], None) if ops is not None else None
+        tries = [("operation", value), ("op", value)] if value is not None else []
+        tries.append(("operation", mode))
+        for attr, val in tries:
+            if hasattr(g, attr):
+                try:
+                    setattr(g, attr, val)
+                    self.how["operation"] = f"{attr}={val}"
+                    return
+                except Exception:
+                    pass
+        if value is not None and callable(getattr(g.model, "set_operation", None)):
             try:
-                g.invalidate()
-                ways.append("invalidate")
+                g.model.set_operation(value)
+                self.how["operation"] = f"model.set_operation({value})"
+                return
             except Exception:
                 pass
-        self.how["operation"] = ways
+        self.how["operation"] = "not found"
 
     # -- 끌기 (손짓 payload) ----------------------------------------------------------
 
@@ -362,13 +317,6 @@ class ViewGizmo:
         self._root.visible = True
 
     def hide(self) -> None:
-        if self._op_was is not None:
-            try:
-                import carb.settings
-                carb.settings.get_settings().set(KIT_TRANSFORM_OP, self._op_was)
-            except Exception:
-                pass
-            self._op_was = None
         if self._root is not None:
             self._root.visible = False
         g = self._gizmo
@@ -398,19 +346,9 @@ class ViewGizmo:
             out["module_error"] = f"{type(e).__name__}: {e}"
         if self._model is not None:
             out["transform"] = list(self._model.matrix)
-            try:
-                out["operation_now"] = str(self._model.get_operation())
-            except Exception:
-                pass
         if self._gizmo is not None:
             g = self._gizmo
             out["attrs"] = [n for n in dir(g) if not n.startswith("__")]
-            out["op_props"] = [n for n in dir(type(g)) if "op" in n.lower() and isinstance(getattr(type(g), n, None), property)]
-            try:
-                import carb.settings
-                out["setting_now"] = carb.settings.get_settings().get(KIT_TRANSFORM_OP)
-            except Exception:
-                pass
         return out
 
     def destroy(self) -> None:
