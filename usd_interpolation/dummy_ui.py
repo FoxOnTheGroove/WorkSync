@@ -1,145 +1,10 @@
-import asyncio
-import numpy as np
-
-from pxr import Usd, UsdGeom, Vt, Sdf
-import omni.kit.app
 import omni.usd
 import omni.ui as ui
 
+from . import UVMixer as _uv_mod
+from .UVMixer_service import UVMixerService
 
-def _get_attr(attr) -> object:
-    val = attr.Get(Usd.TimeCode.Default())
-    if val is None:
-        samples = attr.GetTimeSamples()
-        if samples:
-            val = attr.Get(samples[0])
-    return val
-
-
-def load_st_map(usd_file_path: str) -> dict[str, np.ndarray] | None:
-    stage = Usd.Stage.Open(usd_file_path)
-    if not stage:
-        print(f"[usd_interpolation] ERROR: Failed to open: {usd_file_path}")
-        return None
-
-    result = {}
-    for prim in stage.Traverse():
-        if not prim.IsA(UsdGeom.Mesh):
-            continue
-        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-        if not st_pv or not st_pv.GetAttr().IsValid():
-            continue
-        tc = Usd.TimeCode.Default()
-        st_raw = st_pv.ComputeFlattened(tc)
-        if st_raw is None:
-            samples = st_pv.GetTimeSamples()
-            if samples:
-                st_raw = st_pv.ComputeFlattened(samples[0])
-        if st_raw is not None:
-            result[str(prim.GetPath())] = np.array(st_raw, dtype=np.float32).reshape(-1, 2)
-            print(f"[usd_interpolation] Loaded st from {prim.GetPath()}, count={len(st_raw)}")
-
-    if not result:
-        print(f"[usd_interpolation] ERROR: No mesh with st found in {usd_file_path}")
-        return None
-
-    print(f"[usd_interpolation] Loaded {len(result)} mesh(es) from {usd_file_path}")
-    return result
-
-
-def validate_mesh_compatibility(maps: list, stage) -> None:
-    """로드된 모든 map의 UV 배열 길이와 stage faceVertex 수를 비교 출력."""
-    all_paths: set = set()
-    for m in maps:
-        if m is not None:
-            all_paths.update(m.keys())
-    if not all_paths:
-        return
-
-    for prim_path in sorted(all_paths):
-        prim = stage.GetPrimAtPath(prim_path)
-        stage_fvc = None
-        if prim.IsValid() and prim.IsA(UsdGeom.Mesh):
-            fvc = UsdGeom.Mesh(prim).GetFaceVertexCountsAttr().Get()
-            if fvc:
-                stage_fvc = int(sum(fvc))
-
-        uv_lengths = []
-        parts = [f"stage_fvc={stage_fvc}"]
-        for i, m in enumerate(maps):
-            if m is not None and prim_path in m:
-                n = len(m[prim_path])
-                uv_lengths.append(n)
-                parts.append(f"map{i}={n}")
-            else:
-                parts.append(f"map{i}=-")
-
-        all_same = len(set(uv_lengths)) <= 1
-        match_stage = stage_fvc is None or all(n == stage_fvc for n in uv_lengths)
-        tag = "OK" if (all_same and match_stage) else "MISMATCH"
-        print(f"[usd_interpolation] VALIDATE {prim_path}: {' | '.join(parts)} → {tag}")
-
-
-def apply_lerped_st_all(map_a: dict, map_b: dict, t: float) -> list:
-    stage = omni.usd.get_context().get_stage()
-    if stage is None:
-        print("[usd_interpolation] ERROR: No editor stage found")
-        return []
-
-    writes = []
-    for prim_path, st_a in map_a.items():
-        st_b = map_b.get(prim_path)
-        if st_b is None:
-            print(f"[usd_interpolation] SKIP {prim_path}: not in map_b")
-            continue
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim.IsValid():
-            continue
-        st_pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
-        if not st_pv or not st_pv.GetAttr().IsValid():
-            continue
-        if len(st_a) != len(st_b):
-            print(f"[usd_interpolation] SNAP {prim_path}: len_a={len(st_a)} len_b={len(st_b)} t={t:.3f}")
-            chosen = st_a if t < 0.5 else st_b
-            writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(np.ascontiguousarray(chosen))))
-            continue
-        t32 = np.float32(t)
-        lerped = np.ascontiguousarray(st_a + t32 * (st_b - st_a))
-        writes.append((st_pv, prim, Vt.Vec2fArray.FromNumpy(lerped)))
-
-    if not writes:
-        return []
-
-    session_layer = stage.GetSessionLayer()
-
-    # CB1: Remove primvars:st spec from session layer.
-    # Closing this ChangeBlock sends a structural (non-changedInfoOnly) notification to
-    # Hydra, which marks the rprim for full repopulation at the next render tick.
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for _, prim, _ in writes:
-                prim_spec = session_layer.GetPrimAtPath(prim.GetPath())
-                if prim_spec and "primvars:st" in prim_spec.attributes:
-                    prim_spec.RemoveProperty(prim_spec.attributes["primvars:st"])
-
-    # CB2: Re-author primvars:st with new values.
-    # Because the spec was just removed, this Set() creates a brand-new spec →
-    # another structural notification. Both notifications are queued before the
-    # render tick, so Hydra re-reads the final state (new UV) in one pass.
-    with Usd.EditContext(stage, session_layer):
-        with Sdf.ChangeBlock():
-            for st_pv, _, uv_data in writes:
-                st_pv.GetAttr().Set(uv_data)
-                indices_attr = st_pv.GetIndicesAttr()
-                if indices_attr and indices_attr.IsValid():
-                    indices_attr.Set(Vt.IntArray(list(range(len(uv_data)))))
-
-    written_prims = [p for _, p, _ in writes]
-    print(f"[usd_interpolation] Applied lerp t={t:.2f} to {len(writes)} mesh(es)")
-    return written_prims
-
-
-NUM_FILES = 5
+_CORRECTION_MODES = ['none', 'boundary', 'all']
 
 
 class UsdInterpolationUI:
@@ -147,152 +12,189 @@ class UsdInterpolationUI:
     def __init__(self):
         self._window: ui.Window | None = None
         self._status_label: ui.Label | None = None
-        self._slider: ui.FloatSlider | None = None
-        self._t_label: ui.Label | None = None
+        self._field: ui.StringField | None = None
+        self._correction_combo: ui.ComboBox | None = None
+        self._target_path_field: ui.StringField | None = None
+        self._tab_id_field: ui.StringField | None = None
+        self._mode_timeline_btn: ui.Button | None = None
+        self._mode_direct_btn: ui.Button | None = None
+        self._sync_cb: ui.CheckBox | None = None
 
-        self._fields: list[ui.StringField] = []
-        self._maps: list[dict | None] = [None] * NUM_FILES
-
-        self._pending_t: float = 0.0
-        self._is_animating: bool = False
-        self._play_task: asyncio.Task | None = None
-        self._btn_play: ui.Button | None = None
-        self._btn_reverse: ui.Button | None = None
+        self._correction_idx: int = 1
+        self._in_sync_change: bool = False
 
     def build_ui(self):
-        self._window = ui.Window("USD UV Interpolator", width=500, height=60 * NUM_FILES + 100)
+        self._window = ui.Window("USD UV Interpolator", width=420, height=230)
         with self._window.frame:
             with ui.VStack(spacing=6, style={"margin": 8}):
-                for i in range(NUM_FILES):
-                    with ui.HStack(height=24, spacing=4):
-                        ui.Label(f"File {i}:", width=50)
-                        field = ui.StringField()
-                        field.model.set_value(f"/path/to/file{i}.usd")
-                        self._fields.append(field)
-                        idx = i
-                        ui.Button("Load", width=50,
-                                  clicked_fn=lambda _idx=idx: self._on_load(_idx))
 
+                # ── Target Path ───────────────────────────────────────
+                ui.Label("Target Path:", height=18)
+                self._target_path_field = ui.StringField(height=24)
+                self._target_path_field.model.set_value("")
+
+                # ── Tab ID ────────────────────────────────────────────
+                ui.Label("Tab ID:", height=18)
+                self._tab_id_field = ui.StringField(height=24)
+                self._tab_id_field.model.set_value("default")
+
+                # ── UV Paths ──────────────────────────────────────────
+                ui.Label("UV Paths (space or newline separated):", height=18)
+                self._field = ui.StringField(height=24)
+                self._field.model.set_value("/path/to/file0.usd /path/to/file1.usd")
+
+                # ── Load All + Correction ─────────────────────────────
+                with ui.HStack(height=24, spacing=4):
+                    ui.Button("Load All", width=80, clicked_fn=self._on_load_all)
+                    ui.Spacer(width=8)
+                    ui.Label("Correction:", width=70, height=24)
+                    self._correction_combo = ui.ComboBox(
+                        1, "None", "Boundary", "All",
+                        width=90, height=24,
+                    )
+                    self._correction_combo.model.add_item_changed_fn(
+                        self._on_correction_changed)
+
+                # ── Status ────────────────────────────────────────────
                 self._status_label = ui.Label("Status: Not loaded", height=20)
 
+                # ── Mode & Sync ───────────────────────────────────────
                 with ui.HStack(height=24, spacing=8):
-                    self._t_label = ui.Label("t: 0.00", width=60)
-                    self._slider = ui.FloatSlider(min=0.0, max=1.0, step=0.005)
-                    self._slider.enabled = False
-                    self._slider.model.add_value_changed_fn(self._on_slider_changed)
+                    ui.Label("Mode:", width=40, height=24)
+                    self._mode_timeline_btn = ui.Button(
+                        "Timeline", width=86, clicked_fn=self._on_mode_timeline)
+                    self._mode_direct_btn = ui.Button(
+                        "Direct", width=72, clicked_fn=self._on_mode_direct)
+                    ui.Spacer()
+                    self._sync_cb = ui.CheckBox(width=20, height=20)
+                    self._sync_cb.model.set_value(True)
+                    self._sync_cb.model.add_value_changed_fn(self._on_sync_changed)
+                    ui.Label("Sync", width=36, height=20)
+                self._refresh_mode_buttons()
 
-                with ui.HStack(height=24, spacing=8):
-                    self._btn_play = ui.Button("Play ▶", width=80,
-                                               clicked_fn=self._on_play_clicked)
-                    self._btn_reverse = ui.Button("Reverse ◄", width=90,
-                                                  clicked_fn=self._on_reverse_clicked)
-                    ui.Button("Refresh", width=70,
-                              clicked_fn=self._on_refresh_clicked)
+                ui.Spacer()
 
-    def _on_load(self, idx: int):
-        path = self._fields[idx].model.get_value_as_string().strip()
-        if idx == 0:
-            omni.usd.get_context().open_stage(path)
-        st_map = load_st_map(path)
-        if st_map is None:
-            self._set_status(f"ERROR: Failed to load File {idx}")
-            return
-        self._maps[idx] = st_map
-        loaded = [i for i, m in enumerate(self._maps) if m is not None]
-        self._set_status(f"File {idx} loaded ({len(st_map)} mesh(es))  |  Loaded: {loaded}")
-        stage = omni.usd.get_context().get_stage()
-        if stage:
-            validate_mesh_compatibility(self._maps, stage)
-        self._try_enable_slider()
+                # ── Clear ─────────────────────────────────────────────
+                ui.Button("Clear All Mixers", height=28, clicked_fn=self._on_clear)
 
-    def _try_enable_slider(self):
-        for i in range(NUM_FILES - 1):
-            if self._maps[i] is not None and self._maps[i + 1] is not None:
-                self._slider.enabled = True
-                return
-        self._slider.enabled = False
+    # ── 헬퍼 ─────────────────────────────────────────────────────────
 
-    def _on_refresh_clicked(self):
-        self._refresh(self._pending_t)
-
-    def _on_play_clicked(self):
-        if self._play_task and not self._play_task.done():
-            self._stop_play()
-        else:
-            self._play_task = asyncio.ensure_future(self._animate(forward=True))
-
-    def _on_reverse_clicked(self):
-        if self._play_task and not self._play_task.done():
-            self._stop_play()
-        else:
-            self._play_task = asyncio.ensure_future(self._animate(forward=False))
-
-    def _stop_play(self):
-        if self._play_task:
-            self._play_task.cancel()
-            self._play_task = None
-        if self._btn_play:
-            self._btn_play.text = "Play ▶"
-        if self._btn_reverse:
-            self._btn_reverse.text = "Reverse ◄"
-
-    async def _animate(self, forward: bool):
-        DURATION = 2.5
-        if self._btn_play:
-            self._btn_play.text = "Stop ■" if forward else "Play ▶"
-        if self._btn_reverse:
-            self._btn_reverse.text = "Reverse ◄" if forward else "Stop ■"
-
-        start_t = self._pending_t
-        target = 1.0 if forward else 0.0
-        travel = abs(target - start_t)
-        elapsed = 0.0
-        dt_scale = travel / DURATION if travel > 0.0 else 0.0
-
-        self._is_animating = True
-        try:
-            while True:
-                await omni.kit.app.get_app().next_update_async()
-                elapsed += 1.0 / 60.0
-                frac = min(elapsed * dt_scale, travel) if dt_scale > 0 else travel
-                new_t = start_t + (frac if forward else -frac)
-                new_t = max(0.0, min(1.0, new_t))
-
-                self._slider.model.set_value(new_t)
-
-                if new_t == target or (forward and new_t >= 1.0) or (not forward and new_t <= 0.0):
-                    break
-        except asyncio.CancelledError:
-            return
-        finally:
-            self._is_animating = False
-            self._stop_play()
-
-    def _on_slider_changed(self, model):
-        t = model.get_value_as_float()
-        if self._t_label:
-            self._t_label.text = f"t: {t:.3f}"
-        self._pending_t = t
-        self._refresh(t)
-
-    def _refresh(self, t: float) -> list:
-        raw = t * (NUM_FILES - 1)
-        seg = min(int(raw), NUM_FILES - 2)
-        local_t = min(raw - seg, 1.0)
-        print(f"[usd_interpolation] t={t:.4f} | seg={seg}→{seg+1} | local_t={local_t:.4f}")
-        map_a = self._maps[seg]
-        map_b = self._maps[seg + 1]
-        if map_a is None or map_b is None:
-            self._set_status(f"Segment {seg}→{seg+1} not loaded yet")
-            return []
-        return apply_lerped_st_all(map_a, map_b, local_t)
-
-    def _set_status(self, text: str):
+    def _set_status(self, text: str) -> None:
         if self._status_label:
             self._status_label.text = f"Status: {text}"
 
+    def _current_correction_mode(self) -> str:
+        return _CORRECTION_MODES[self._correction_idx]
+
+    def _refresh_mode_buttons(self) -> None:
+        is_tl = (_uv_mod.UV_INTERP_MODE == 'timeline')
+        if self._mode_timeline_btn:
+            self._mode_timeline_btn.text = "● Timeline" if is_tl else "Timeline"
+            self._mode_timeline_btn.enabled = not is_tl
+        if self._mode_direct_btn:
+            self._mode_direct_btn.text = "● Direct" if not is_tl else "Direct"
+            self._mode_direct_btn.enabled = is_tl
+        if self._sync_cb:
+            self._sync_cb.enabled = not is_tl
+
+    # ── 콜백: 로드 ───────────────────────────────────────────────────
+
+    def _on_load_all(self):
+        raw = self._field.model.get_value_as_string()
+        paths = [p for p in raw.split() if p]
+        if not paths:
+            self._set_status("ERROR: no paths")
+            return
+        if len(paths) < 2:
+            self._set_status("ERROR: need at least 2 paths")
+            return
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            self._set_status("ERROR: no active stage")
+            return
+
+        target_path = self._target_path_field.model.get_value_as_string().strip() \
+            if self._target_path_field else None
+        target_path = target_path or None
+
+        tab_id = self._tab_id_field.model.get_value_as_string().strip() \
+            if self._tab_id_field else ""
+        tab_id = tab_id or "default"
+
+        key = target_path or f"mixer_{len(UVMixerService.keys())}"
+
+        prim_changed = (
+            UVMixerService.get_instance(key) is not None
+            and (UVMixerService.get_target_path(key) != target_path
+                 or UVMixerService.get_tab_id(key) != tab_id)
+        )
+        if prim_changed:
+            UVMixerService.destroy(key)
+
+        if UVMixerService.get_instance(key) is None:
+            UVMixerService.create(target_path, key=key, tab_id=tab_id)
+
+        warnings = UVMixerService.load(key, paths, panel_on=True)
+        UVMixerService.set_correction_mode(key, self._current_correction_mode())
+        UVMixerService.get_shared_player(tab_id).set_t(0.0)
+
+        n_meshes = len(UVMixerService.get_mesh_paths(key))
+        all_keys = UVMixerService.keys()
+        status = f"{len(all_keys)} mixer(s) — {n_meshes} mesh(es), {len(paths)} src"
+        if warnings:
+            status += f" | {len(warnings)} skipped"
+        self._set_status(status)
+
+    def _on_correction_changed(self, model, item) -> None:
+        idx = model.get_item_value_model(item).get_value_as_int()
+        self._correction_idx = idx
+        mode = _CORRECTION_MODES[idx]
+        tab_ids = set()
+        for k in UVMixerService.keys():
+            UVMixerService.set_correction_mode(k, mode)
+            tab_ids.add(UVMixerService.get_tab_id(k))
+        for tab_id in tab_ids:
+            if tab_id is not None:
+                UVMixerService.reapply(tab_id)
+
+    # ── 콜백: 모드 ───────────────────────────────────────────────────
+
+    def _on_mode_timeline(self) -> None:
+        _uv_mod.UV_INTERP_MODE = 'timeline'
+        self._refresh_mode_buttons()
+
+    def _on_mode_direct(self) -> None:
+        _uv_mod.UV_INTERP_MODE = 'direct'
+        self._refresh_mode_buttons()
+
+    # ── 콜백: sync ───────────────────────────────────────────────────
+
+    def _on_sync_changed(self, model) -> None:
+        if self._in_sync_change:
+            return
+        synced = model.get_value_as_bool()
+        tab_id = self._tab_id_field.model.get_value_as_string().strip() \
+            if self._tab_id_field else ""
+        tab_id = tab_id or "default"
+        ref_key = self._target_path_field.model.get_value_as_string().strip() \
+            if self._target_path_field else ""
+        ok = UVMixerService.set_sync(tab_id, synced, ref_key=ref_key)
+        if not ok:
+            self._in_sync_change = True
+            model.set_value(False)
+            self._in_sync_change = False
+
+    # ── 콜백: clear ──────────────────────────────────────────────────
+
+    def _on_clear(self) -> None:
+        UVMixerService.destroy_all()
+        self._set_status("Cleared")
+
+    # ── 라이프사이클 ─────────────────────────────────────────────────
+
     def destroy(self):
-        self._stop_play()
+        # 서비스 라이프사이클은 extension이 책임진다. UI는 자기 윈도우만 정리.
         if self._window:
             self._window.destroy()
             self._window = None
